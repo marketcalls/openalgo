@@ -1,0 +1,798 @@
+---
+title: Constants & Helpers
+description: Complete reference for every exported constant, default object, and pure utility function in openalgo-charts.
+---
+
+import { Callout } from 'nextra/components'
+
+# Constants & Helpers
+
+Every value and function on this page is part of the public API exported from `openalgo-charts`
+and can be imported directly:
+
+```ts
+import {
+  VERSION, darkTheme, DEFAULT_CANDLE_STYLE,
+  clamp, niceTicks, generateBars,
+} from 'openalgo-charts';
+```
+
+---
+
+## Part 1 -- Constants
+
+### VERSION and version()
+
+```ts
+export const VERSION = '2.2.0';
+export function version(): string;
+```
+
+`VERSION` is the string literal; `version()` returns the same string.
+Both are replaced with the published semver at release time.
+
+---
+
+### Themes
+
+The full set of palette keys that make up a `ChartTheme`:
+
+```ts
+interface ChartTheme {
+  background: string;
+  grid: string;
+  axisText: string;
+  axisLine: string;
+  crosshair: string;
+  // candle / bar / column
+  upColor: string;
+  downColor: string;
+  wickUpColor: string;
+  wickDownColor: string;
+  // line / area
+  lineColor: string;
+  areaTopColor: string;
+  areaBottomColor: string;
+  // baseline
+  baselineTopLine: string;
+  baselineTopFill: string;
+  baselineBottomLine: string;
+  baselineBottomFill: string;
+  // last-price tag
+  lastPriceUp: string;
+  lastPriceDown: string;
+  lastPriceText: string;
+  // trade layer
+  buy: string;
+  sell: string;
+  profit: string;
+  loss: string;
+}
+```
+
+`darkTheme` (the library default, re-exported as `DEFAULT_THEME`):
+
+```ts
+export const darkTheme: ChartTheme = {
+  background:          '#0d0e12',
+  grid:                '#161a26',
+  axisText:            '#8b91a7',
+  axisLine:            '#2a3046',
+  crosshair:           '#6b7280',
+  upColor:             '#26a69a',
+  downColor:           '#ef5350',
+  wickUpColor:         '#26a69a',
+  wickDownColor:       '#ef5350',
+  lineColor:           '#4f8cff',
+  areaTopColor:        'rgba(79,140,255,0.40)',
+  areaBottomColor:     'rgba(79,140,255,0.00)',
+  baselineTopLine:     '#26a69a',
+  baselineTopFill:     'rgba(38,166,154,0.20)',
+  baselineBottomLine:  '#ef5350',
+  baselineBottomFill:  'rgba(239,83,80,0.20)',
+  lastPriceUp:         '#26a69a',
+  lastPriceDown:       '#ef5350',
+  lastPriceText:       '#0d0e12',
+  buy:                 '#26a69a',
+  sell:                '#ef5350',
+  profit:              '#26a69a',
+  loss:                '#ef5350',
+};
+
+export const DEFAULT_THEME = darkTheme;
+```
+
+`lightTheme`:
+
+```ts
+export const lightTheme: ChartTheme = {
+  background:          '#ffffff',
+  grid:                '#eef1f6',
+  axisText:            '#5b6472',
+  axisLine:            '#d4dae3',
+  crosshair:           '#9aa3b2',
+  upColor:             '#089981',
+  downColor:           '#e0473e',
+  wickUpColor:         '#089981',
+  wickDownColor:       '#e0473e',
+  lineColor:           '#2962ff',
+  areaTopColor:        'rgba(41,98,255,0.30)',
+  areaBottomColor:     'rgba(41,98,255,0.00)',
+  baselineTopLine:     '#089981',
+  baselineTopFill:     'rgba(8,153,129,0.18)',
+  baselineBottomLine:  '#e0473e',
+  baselineBottomFill:  'rgba(224,71,62,0.18)',
+  lastPriceUp:         '#089981',
+  lastPriceDown:       '#e0473e',
+  lastPriceText:       '#ffffff',
+  buy:                 '#089981',
+  sell:                '#e0473e',
+  profit:              '#089981',
+  loss:                '#e0473e',
+};
+```
+
+Pass either theme to `createChart` via the `theme` option, or build your own object that satisfies
+`ChartTheme`. See [Themes](/docs/themes) for a step-by-step guide.
+
+---
+
+### DEFAULT_PRICE_SCALE_OPTIONS
+
+```ts
+export const DEFAULT_PRICE_SCALE_OPTIONS: PriceScaleOptions = {
+  marginTop:    0.1,   // 10 % of pane height kept empty above the highest bar
+  marginBottom: 0.1,   // 10 % kept empty below the lowest bar
+  minMove:      0,     // 0 = infer precision from the visible range
+  mode:         'linear',
+  inverted:     false,
+};
+```
+
+`mode` accepts `'linear'`, `'logarithmic'`, `'percentage'` or `'indexed-to-100'`; the last two
+rebase against the first visible bar. `minMove` is the instrument tick size (e.g. `0.05`
+for NSE equity options); when nonzero the axis labels snap to that step.
+
+---
+
+### DEFAULT_TIME_SCALE_OPTIONS
+
+```ts
+export const DEFAULT_TIME_SCALE_OPTIONS: TimeScaleOptions = {
+  barSpacing:    8,   // CSS px per bar at the default zoom level
+  minBarSpacing: 1,   // zoom-out floor
+  maxBarSpacing: 80,  // zoom-in ceiling
+  rightOffset:   4,   // empty bar slots to the right of the latest bar
+};
+```
+
+---
+
+### DEFAULT_CANDLE_STYLE
+
+```ts
+export const DEFAULT_CANDLE_STYLE: CandleStyle = {
+  upColor:        '#26a69a',
+  downColor:      '#ef5350',
+  borderUpColor:  '#26a69a',
+  borderDownColor:'#ef5350',
+  wickUpColor:    '#26a69a',
+  wickDownColor:  '#ef5350',
+  borderVisible:  true,
+  wickVisible:    true,
+};
+```
+
+`CandleStyle` also accepts optional `hollow?: boolean` (draw up-candle bodies as outlines) and
+`widthScale?: (bar: Bar) -> number` (per-bar body-width multiplier used by the `volume-candle` type).
+
+---
+
+### DEFAULT_HISTOGRAM_STYLE
+
+```ts
+export const DEFAULT_HISTOGRAM_STYLE: HistogramStyle = {
+  color: '#3a4666',
+  base:  0,          // baseline value; bars extend from base to bar.close
+};
+```
+
+---
+
+### DEFAULT_CANDLE_BUILDER_OPTIONS
+
+```ts
+export const DEFAULT_CANDLE_BUILDER_OPTIONS: CandleBuilderOptions = {
+  intervalSec:      60,              // one-minute bars
+  volumeMode:       'ltq-sum',       // accumulate last-traded-qty per tick
+  lateTickPolicy:   'foldIntoBar',   // merge late ticks into the current bar
+  sessionAnchorSec: 0,               // align buckets to epoch (override with session open)
+};
+```
+
+`volumeMode: 'day-delta'` diffs the cumulative day-volume instead. Use `CandleBuilder` directly to
+aggregate live WebSocket ticks into interval bars.
+
+---
+
+### DEFAULT_TRADING_COLORS
+
+```ts
+export const DEFAULT_TRADING_COLORS: TradingColors = {
+  long:  '#2f6df6',
+  short: '#ef5350',
+  order: '#3b82f6',
+  tp:    '#26a69a',
+  sl:    '#ef5350',
+  buy:   '#26a69a',
+  sell:  '#ef5350',
+};
+```
+
+Override any key via `TradingController.setSettings({ longColor: '...', ... })`.
+
+---
+
+### DEFAULT_KEYMAP, ALT_PRESET, BUILTIN_COMMANDS
+
+The built-in keyboard commands and their default combo bindings. Combos are expressed as
+physical key codes (layout-independent). See [Keyboard Shortcuts](/docs/keyboard-shortcuts) for
+rebinding and custom commands.
+
+| Command | Label | Default combos |
+|---|---|---|
+| `panLeft` | Pan left | `ArrowLeft` |
+| `panRight` | Pan right | `ArrowRight` |
+| `panLeftFast` | Pan left (fast) | `Mod+ArrowLeft` |
+| `panRightFast` | Pan right (fast) | `Mod+ArrowRight` |
+| `panUp` | Pan up | `ArrowUp` |
+| `panDown` | Pan down | `ArrowDown` |
+| `zoomIn` | Zoom in | `Equal`, `Shift+Equal`, `NumpadAdd` |
+| `zoomOut` | Zoom out | `Minus`, `NumpadSubtract` |
+| `resetScale` | Reset view | `Home`, `Digit0` |
+| `fitContent` | Fit all bars | `Alt+KeyF` |
+| `screenshot` | Screenshot (PNG) | `Alt+Shift+KeyS` |
+| `toggleGridVert` | Toggle vertical grid | `Alt+KeyV` |
+| `toggleGridHorz` | Toggle horizontal grid | `Alt+KeyH` |
+| `toggleCrosshairMagnet` | Toggle crosshair magnet | `Alt+KeyM` |
+
+`ALT_PRESET` overrides a subset of the above when `ShortcutManager` is constructed with
+`{ preset: 'alt' }`:
+
+```ts
+export const ALT_PRESET: Record<string, string[]> = {
+  panLeftFast:  ['Alt+ArrowLeft'],
+  panRightFast: ['Alt+ArrowRight'],
+  screenshot:   ['Mod+Shift+KeyS'],
+};
+```
+
+`BUILTIN_COMMANDS` is a `ReadonlySet<string>` containing all 14 command ids listed in the table.
+Use it to check whether a command string is built-in before registering a custom one with the
+same name.
+
+---
+
+### IST_OFFSET_SECONDS
+
+```ts
+export const IST_OFFSET_SECONDS = 19800; // 5 * 3600 + 30 * 60  (UTC+5:30)
+```
+
+India observes no DST, so this is a fixed constant, and it is why the default zone can stay
+on integer arithmetic instead of `Intl` on the per-bar paths. All internal time is UTC
+seconds; this offset is used at the feed boundary and on the default-zone fast paths.
+
+It is not the chart's display zone. That is `DEFAULT_TIMEZONE`, an IANA name you can change
+per chart. See [Timezones](/docs/timezones).
+
+---
+
+### DEFAULT_TIMEZONE
+
+```ts
+export const DEFAULT_TIMEZONE = 'Asia/Kolkata';
+```
+
+The IANA zone a chart labels time in when `ChartOptions.timezone` is not set, and the
+fallback every zoned helper and profile option takes. Its value is what makes the option
+additive: a caller who passes nothing gets exactly the labels and the calendar the engine
+produced before the option existed.
+
+---
+
+### Tier name constants
+
+Each opt-in tier exports a string literal constant that identifies it. These constants are useful for logging, feature detection, and avoiding bare string literals when checking which bundles have loaded. They are exported from the tier's own entry point, not from the base bundle.
+
+| Constant | Value | Entry point |
+|---|---|---|
+| `PROFILE_TIER` | `'profile'` | `openalgo-charts/profile` |
+| `TRANSFORM_TIER` | `'transform'` | `openalgo-charts/transform` |
+| `TRADE_TIER` | `'trade'` | `openalgo-charts/trade` |
+
+```ts
+import { PROFILE_TIER   } from 'openalgo-charts/profile';
+import { TRANSFORM_TIER } from 'openalgo-charts/transform';
+import { TRADE_TIER     } from 'openalgo-charts/trade';
+```
+
+---
+
+## Part 2 -- Helper Functions
+
+### Math helpers
+
+`src/helpers/math.ts`
+
+```ts
+function clamp(value: number, min: number, max: number): number
+```
+
+Clamps `value` into the inclusive range `[min, max]`.
+
+```ts
+function lerp(a: number, b: number, t: number): number
+```
+
+Linear interpolation between `a` and `b` by fraction `t` (0..1).
+
+```ts
+function roundToTick(value: number, step: number): number
+```
+
+Rounds `value` to the nearest multiple of `step` (the instrument tick size). Returns `value`
+unchanged when `step <= 0`. Used internally to snap dragged order/SL/TP prices to a valid tick.
+
+```ts
+function compactVolume(value: number): string
+```
+
+Compact number formatting for volume axes: `1.2K` / `3.4M` / `5.6B` (values under 1000 are
+rounded integers). This is what `addSeries(type, { priceFormat: { type: 'volume' } })` installs
+on the series' price scale.
+
+---
+
+### Tick generation
+
+`src/scale/ticks.ts`
+
+```ts
+function niceTicks(min: number, max: number, maxTicks?: number): number[]
+```
+
+Generates up to `maxTicks` (default `6`) nicely-rounded price axis labels spanning `[min, max]`.
+Steps follow the "nice number" sequence: 1, 2, 2.5, 5, 10 x 10^n. Returns a single midpoint
+for a degenerate (flat) range.
+
+```ts
+function precisionForStep(step: number): number
+```
+
+Returns the number of decimal places implied by a price step or tick size, capped at 8.
+Used to format axis labels. `precisionForStep(0.05)` -> `2`.
+
+---
+
+### Rendering helpers
+
+#### optimalBarWidth
+
+`src/render/candles.ts`
+
+```ts
+function optimalBarWidth(barSpacing: number, dpr: number): number
+```
+
+Returns the optimal candle body width in device pixels for a given bar spacing and device pixel
+ratio. Keeps a 1-px gap between candles, enforces a 1-px minimum, and matches odd/even parity
+with the wick so the body stays symmetric.
+
+#### markerSizePx, effectiveMarkerPx, drawShape
+
+`src/primitives/markers.ts`
+
+```ts
+function markerSizePx(size: MarkerSize): number
+```
+
+Base glyph size in CSS px for a marker size preset:
+`tiny` -> `6`, `small` -> `9`, `medium` -> `12`, `big` -> `16`.
+
+```ts
+function effectiveMarkerPx(size: MarkerSize, barSpacing: number): number
+```
+
+Same as `markerSizePx` but clamped so the glyph never exceeds the current bar spacing (minimum 4 px).
+
+```ts
+function drawShape(
+  ctx: CanvasRenderingContext2D,
+  shape: MarkerShape,
+  cx: number,
+  cy: number,
+  px: number,
+  color: string,
+): void
+```
+
+Draws one marker glyph onto a canvas context at center `(cx, cy)` with diameter `px`.
+`MarkerShape` is: `'arrowUp' | 'arrowDown' | 'circle' | 'square' | 'triangleUp' | 'triangleDown' | 'diamond' | 'flag' | 'text' | 'labelUp' | 'labelDown' | 'cross' | 'xcross'`.
+The `'text'`, `'labelUp'` and `'labelDown'` shapes are no-ops here; the caller renders the label separately (see `drawLabel`).
+
+---
+
+### Price scale
+
+`src/scale/price-scale.ts`
+
+```ts
+function autoscaleRange(
+  low: number,
+  high: number,
+  marginTop: number,
+  marginBottom: number,
+): PriceRange
+```
+
+Pure function: returns a `PriceRange { min, max }` in which `[low, high]` occupies the
+`1 - marginTop - marginBottom` of the pane left between the margins. Both are fractions of the
+**pane height**, so `{ marginTop: 0.82, marginBottom: 0 }` puts the data in the bottom 18%.
+Widens a degenerate (flat) range to ensure it is drawable, and keeps a sliver of room if the
+margins would total 1 or more.
+
+---
+
+### Conflation
+
+`src/model/conflation.ts`
+
+Conflation merges many sub-pixel bars into one drawn bar, preserving candle shape. The chart's
+level of detail (`ChartOptions.conflate`, on by default) merges by device-pixel column; see
+[Data loading](/docs/data-loading#large-datasets-level-of-detail). The helpers below merge
+fixed-size groups, for a host that downsamples bars itself, and the pane does not call them.
+
+```ts
+function conflationGroupSize(
+  barSpacing: number,
+  dpr: number,
+  minPx?: number,  // default 0.5
+  factor?: number, // default 1
+): number
+```
+
+Returns `1` (no conflation) while bars are at least `minPx` wide; otherwise returns the group
+size needed to bring each drawn bar above that threshold.
+
+```ts
+function mergeBars(group: readonly Bar[]): Bar
+```
+
+Merges a group of bars into one OHLC-preserving bar: open = first, close = last, high = max,
+low = min, volume = sum. Uses the first bar's time.
+
+```ts
+function conflateBars(bars: readonly Bar[], groupSize: number): Bar[]
+```
+
+Splits `bars` into consecutive groups of `groupSize` and merges each via `mergeBars`. Identity
+when `groupSize <= 1`.
+
+```ts
+function conflateItems<T extends { x: number; bar: Bar }>(
+  items: readonly T[],
+  groupSize: number,
+): { x: number; bar: Bar }[]
+```
+
+Same as `conflateBars` but operates on already-projected draw items (which carry an `x` position);
+`x` is set to the group center.
+
+---
+
+### Chart-type registry
+
+`src/model/chart-type-registry.ts`
+
+```ts
+function registerChartType(type: SeriesType | string, entry: RendererEntry): void
+```
+
+Registers a custom (or replacement) renderer for a series type name. `RendererEntry` carries
+`defaultStyle`, `isPriceSeries`, a `draw` function, and an `extents` function for autoscale.
+See [Primitives and Plugins](/docs/primitives-and-plugins).
+
+```ts
+function getChartType(type: SeriesType | string): RendererEntry
+```
+
+Looks up a registered renderer; throws if the type is unknown. Types `'point-figure'` and
+`'kagi'` require `import 'openalgo-charts/transform'` first.
+
+```ts
+function registeredChartTypes(): string[]
+```
+
+Returns an array of all currently registered type names.
+
+---
+
+### Gradient
+
+`src/render/gradient.ts`
+
+```ts
+function verticalGradient(
+  ctx: CanvasRenderingContext2D,
+  heightPx: number,
+  topColor: string,
+  bottomColor: string,
+): CanvasGradient
+```
+
+Returns a cached vertical `CanvasGradient` for area/baseline fills. Gradients are cached per
+context and per `(height, topColor, bottomColor)` triple so they are not recreated on every
+frame.
+
+---
+
+### Canvas
+
+`src/core/canvas.ts`
+
+```ts
+function bitmapSize(mediaWidth: number, mediaHeight: number, dpr: number): Size
+```
+
+Pure: returns `{ width: Math.round(mediaWidth * dpr), height: Math.round(mediaHeight * dpr) }`.
+The bitmap (backing buffer) size for a HiDPI canvas.
+
+```ts
+function snapToDevicePixel(mediaCoord: number, dpr: number): number
+```
+
+Pure: snaps a media-space coordinate to a crisp device-pixel edge. Avoids sub-pixel blurring
+on retina displays. `Math.round(mediaCoord * dpr) / dpr`.
+
+---
+
+### Indicators
+
+`src/indicators/ema.ts`, `rsi.ts`, `atr.ts`, `supertrend.ts`
+
+See [Indicators](/docs/indicators) for full usage examples. Signature quick-reference:
+
+```ts
+// EMA
+function ema(values: readonly number[], period: number): number[]
+function emaSeries(bars: readonly Bar[], period: number): Bar[]
+
+// RSI -- Wilder smoothing; NaN during warmup (first `period` slots)
+function rsi(values: readonly number[], period?: number /* default 14 */): number[]
+function rsiSeries(bars: readonly Bar[], period?: number /* default 14 */): Bar[]
+
+// ATR -- Wilder ATR; on complete data the first value lands at index period-1, earlier slots NaN;
+// a missing true range is a NaN slot, and the average resumes from where it stood
+function trueRange(high: readonly number[], low: readonly number[], close: readonly number[]): number[]
+function atr(high: readonly number[], low: readonly number[], close: readonly number[], period?: number /* default 14 */): number[]
+
+// Supertrend -- direction: -1 = uptrend (support below price), +1 = downtrend
+function supertrend(bars: readonly Bar[], period?: number /* default 10 */, multiplier?: number /* default 3 */): SupertrendPoint[]
+function supertrendSeries(bars: readonly Bar[], period?: number, multiplier?: number): { up: Bar[]; down: Bar[] }
+```
+
+`supertrendSeries` returns two separate `Bar[]` arrays where the inactive direction carries
+`NaN` for every bar, so each renders as its own segment that swaps color at trend flips.
+
+<Callout type="info">
+All series helpers return `Bar[]` (OHLC all set to the indicator value) so you can call
+`series.setData(emaSeries(bars, 20))` directly.
+</Callout>
+
+---
+
+### Feed helpers
+
+#### generateBars
+
+`src/feed/fake-feed.ts`
+
+```ts
+function generateBars(startTime: number, count: number, intervalSec: number): Bar[]
+```
+
+Deterministic synthetic bar generator using xorshift32. Produces a reproducible OHLC random
+walk from a fixed seed; no `Math.random` or `Date.now`. Used in demos and snapshot tests.
+
+#### intervalToSeconds
+
+`src/feed/openalgo-live.ts`
+
+```ts
+function intervalToSeconds(interval: string): number
+```
+
+Maps an interval token to seconds: `'1m'` -> `60`, `'5m'` -> `300`, `'1h'` -> `3600`,
+`'D'` -> `86400`, `'W'` -> `604800`. The bare daily/weekly tokens `D` and `W` are supported
+alongside `1d`/`1w`. Unknown tokens fall back to `60`. Accepts case-insensitive suffixes
+`s`, `m`, `h`, `d`, `w`.
+
+#### mapHistoryResponse, rowTimeToUtcSeconds
+
+`src/feed/openalgo-rest.ts`
+
+```ts
+function rowTimeToUtcSeconds(value: number | string): number
+```
+
+Coerces a row timestamp to UTC seconds. Accepts epoch seconds (integer), epoch milliseconds
+(heuristic: value > 1e12), or an IST date/time string (`YYYY-MM-DD[ HH:MM[:SS]]`).
+
+```ts
+function mapHistoryResponse(json: { data?: HistoryRow[] }): Bar[]
+```
+
+Maps an OpenAlgo `/api/v1/history` response envelope to a sorted `Bar[]`. Handles both
+`timestamp` and `time` field names, and all three timestamp formats via `rowTimeToUtcSeconds`.
+
+---
+
+### Time helpers
+
+`src/feed/time.ts`
+
+All internal time is UTC seconds. These functions convert at the feed boundary and format
+for display; nothing here mutates a bar.
+
+The `Ist` family below is the fixed-offset IST path, kept unchanged for the feed adapters
+and for back-compat. The `Zoned` family under it does the same jobs for **any** IANA zone
+and is what the chart uses once you set [`timezone`](/docs/timezones).
+
+```ts
+// Fixed offset in seconds for IST (UTC+5:30, no DST)
+const IST_OFFSET_SECONDS = 19800
+
+// Epoch milliseconds -> UTC seconds
+function epochMsToUtcSeconds(ms: number): number
+
+// IST wall-clock string ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM', 'YYYY-MM-DD HH:MM:SS') -> UTC seconds
+function istStringToUtcSeconds(input: string): number
+
+// UTC seconds -> IST calendar parts { year, month, day, hour, minute, second, weekday }
+function utcSecondsToIstParts(utcSeconds: number): IstParts
+
+// UTC seconds -> IST date string for OpenAlgo REST requests ('YYYY-MM-DD')
+function utcSecondsToIstDateString(utcSeconds: number): string
+
+// UTC seconds -> IST 'HH:MM' label
+function formatIstTime(utcSeconds: number): string
+
+// UTC seconds -> IST 'HH:MM:SS' label (sub-minute / tick timeframes)
+function formatIstTimeSeconds(utcSeconds: number): string
+
+// UTC seconds -> IST 'DD Mon' label (e.g. '21 May')
+function formatIstDate(utcSeconds: number): string
+
+// True when two UTC-second instants fall on different IST calendar days
+function isNewIstDay(prevUtcSeconds: number, utcSeconds: number): boolean
+
+// Bar indices that open a trading session, read back from the timestamps.
+// null when the series shows no readable break.
+function sessionStartIndices(times: readonly number[]): number[] | null
+
+// One flag per bar, true on the first bar of each session.
+// Falls back to calendar days in `zone` (default DEFAULT_TIMEZONE) when sessions
+// are unreadable.
+function sessionStartFlags(times: readonly number[], zone?: string): boolean[]
+
+// One flag per bar, true where `isNew` says a new week/month/year began.
+// Tested on session opens, so a session is never cut in half.
+function calendarPeriodFlags(
+  times: readonly number[],
+  isNew: (prevUtcSeconds: number, utcSeconds: number) => boolean,
+): boolean[]
+```
+
+#### Zoned helpers
+
+Every one takes an optional IANA `zone` that defaults to `DEFAULT_TIMEZONE`, so the
+zero-argument call is the IST answer and nothing had to change to gain the option. They are
+memoised per UTC second, so a repeated boundary test is a cache read rather than an `Intl`
+call. See [Timezones](/docs/timezones).
+
+```ts
+const DEFAULT_TIMEZONE = 'Asia/Kolkata'
+
+// True when the host runtime recognises the name. Guard user input with this
+// rather than catching the throw from createChart / setTimezone.
+function isValidTimezone(zone: string): boolean
+
+// Seconds east of UTC for that instant, so DST is resolved per instant
+// (New York is -18000 in January and -14400 in June).
+function zoneOffsetSeconds(utcSeconds: number, zone?: string): number
+
+// UTC seconds -> calendar parts { year, month, day, hour, minute, second, weekday }
+function utcSecondsToZonedParts(utcSeconds: number, zone?: string): ZonedParts
+
+// Labels: 'HH:MM', 'HH:MM:SS', 'DD Mon', "Ddd DD Mon 'YY HH:MM"
+function formatZonedTime(utcSeconds: number, zone?: string): string
+function formatZonedTimeSeconds(utcSeconds: number, zone?: string): string
+function formatZonedDate(utcSeconds: number, zone?: string): string
+function formatZonedCrosshairLabel(utcSeconds: number, zone?: string): string
+
+// UTC seconds -> 'YYYY-MM-DD' on that zone's calendar
+function utcSecondsToZonedDateString(utcSeconds: number, zone?: string): string
+
+// Wall clock -> UTC seconds. The string form takes
+// 'YYYY-MM-DD[ HH:MM[:SS]]'; the parts form takes explicit fields.
+function zonedStringToUtcSeconds(input: string, zone?: string): number
+function zonedWallClockToUtcSeconds(
+  year: number, month: number, day: number,
+  hour: number, minute: number, second: number, zone?: string,
+): number
+
+// Period starts, as UTC seconds
+function startOfZonedDay(utcSeconds: number, zone?: string): number
+function startOfZonedWeek(utcSeconds: number, zone?: string): number   // Monday-based
+function startOfZonedMonth(utcSeconds: number, zone?: string): number
+
+// Integer indices, for cheap "same period?" comparisons
+function zonedDayIndex(utcSeconds: number, zone?: string): number
+function zonedWeekIndex(utcSeconds: number, zone?: string): number
+
+// Boundary tests between two instants, on that zone's calendar
+function isNewZonedDay(prev: number, next: number, zone?: string): boolean
+function isNewZonedWeek(prev: number, next: number, zone?: string): boolean
+function isNewZonedMonth(prev: number, next: number, zone?: string): boolean
+function isNewZonedQuarter(prev: number, next: number, zone?: string): boolean
+function isNewZonedYear(prev: number, next: number, zone?: string): boolean
+function isNewZonedPeriod(
+  prev: number, next: number,
+  period: 'day' | 'week' | 'month' | 'quarter' | 'year', zone?: string,
+): boolean
+```
+
+**Sessions come from the bars, not from a timezone.** An exchange's overnight break is
+the widest recurring gap in an intraday series, and it is the only thing in the data
+that says where one trading day ends. A fixed midnight is mid-session for every
+exchange but the one it was chosen for: 00:00 IST is 18:30 UTC, which falls inside a
+New York session. Anything that accumulates within a day (VWAP, TWAP, daily pivots)
+should use these rather than `isNewIstDay` or `isNewZonedDay`. Setting the chart's zone
+narrows the problem to the cases the bars cannot answer; it does not replace reading them.
+
+The reading is declined, and `sessionStartFlags` falls back to the calendar, in exactly
+the cases where there is nothing to read: bars already a day or coarser, a market that
+never closes, or a feed whose only gaps are weekends. An intraday lunch break is
+shorter than the four-hour floor, so it is not mistaken for a close.
+
+---
+
+## Quick example
+
+Using `generateBars` for a demo chart, plus `clamp` and `roundToTick` for order price clamping:
+
+```ts
+import { createChart, generateBars, clamp, roundToTick } from 'openalgo-charts';
+
+const chart = createChart(document.getElementById('chart')!);
+const series = chart.addSeries('candlestick');
+
+// 300 bars of synthetic OHLC starting at a known epoch, 5-minute interval
+const bars = generateBars(1_700_000_000, 300, 300);
+series.setData(bars);
+
+// Snap a user-dragged price to the nearest 0.05 tick, bounded by the visible range
+function sanitizeOrderPrice(raw: number, lo: number, hi: number): number {
+  return clamp(roundToTick(raw, 0.05), lo, hi);
+}
+```
+
+To add a live EMA overlay from real data:
+
+```ts
+import { emaSeries } from 'openalgo-charts';
+
+const emaSeries20 = chart.addSeries('line', { style: { color: '#f59e0b' } });
+emaSeries20.setData(emaSeries(bars, 20));
+```

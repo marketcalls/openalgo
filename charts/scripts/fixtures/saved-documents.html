@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Saved documents harness</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; background: #10141a; }
+    .host { position: relative; width: 960px; height: 600px; }
+  </style>
+</head>
+<body>
+  <script type="module">
+    // Writes the five kinds of document a host persists, and loads them back,
+    // through the public API of one build: a published release or the working
+    // tree, named by ?lib=. scripts/generate-saved-documents.mjs drives it. It
+    // uses only what 2.5.1 already had, so one page runs on every release.
+    const label = new URLSearchParams(location.search).get('lib');
+    const tier = (name) => import(`/lib/${label}/openalgo-charts${name ? `.${name}` : ''}.mjs`);
+    const base = await tier('');
+    await tier('indicators');
+    const drawTier = await tier('draw');
+    const widgetTier = await tier('widget');
+    const workspaceTier = await tier('workspace');
+
+    const NOW_MS = Date.now();
+    const NOW = Math.floor(NOW_MS / 1000);
+
+    /** A seeded random walk in NSE sessions: 75 five-minute bars a day from 09:15 IST, weekdays only. */
+    function sessionBars({ seed, open, days, step = 300 }) {
+      let s = seed >>> 0;
+      const rand = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 2 ** 32; };
+      const tick = (p) => Math.round(p * 20) / 20;
+      const monday = Date.UTC(2026, 8, 7, 3, 45) / 1000; // 2026-09-07 09:15 IST
+      const bars = [];
+      let close = open;
+      for (let d = 0, day = 0; day < days; d++) {
+        if ((d % 7) >= 5) continue; // Saturday and Sunday
+        day++;
+        for (let i = 0; i < 375 / (step / 60); i++) {
+          const o = close;
+          close = Math.max(1, o * (1 + (rand() - 0.5) * 0.006));
+          const high = Math.max(o, close) * (1 + rand() * 0.0015);
+          const low = Math.min(o, close) * (1 - rand() * 0.0015);
+          bars.push({
+            time: monday + d * 86400 + i * step,
+            open: tick(o), high: tick(high), low: tick(low), close: tick(close),
+            volume: Math.round(40000 + rand() * 160000),
+          });
+        }
+      }
+      return bars;
+    }
+
+    const primaryBars = sessionBars({ seed: 20260907, open: 2911.4, days: 4 });
+    const secondBars = sessionBars({ seed: 20260908, open: 1542.8, days: 4, step: 900 });
+
+    function mount() {
+      const el = document.createElement('div');
+      el.className = 'host';
+      document.body.append(el);
+      return el;
+    }
+    const frames = (n = 2) => new Promise((done) => {
+      const next = (left) => (left === 0 ? done() : requestAnimationFrame(() => next(left - 1)));
+      next(n);
+    });
+    const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+
+    /** Settings for a study with its first numeric input set, whatever that input is called in this release. */
+    function studySettings(id, value) {
+      const descriptor = base.getIndicator(id);
+      if (!descriptor) throw new Error(`no indicator ${id} in ${label}`);
+      const input = descriptor.inputs.find((i) => i.type === 'number' || i.type === 'int' || typeof i.default === 'number');
+      return input && value !== undefined ? { [input.key]: value } : {};
+    }
+    const firstPlotKey = (id) => base.getIndicator(id).plots[0].key;
+
+    function requireTools(ids) {
+      const known = new Set(drawTier.registeredDrawingTools().map((t) => t.id));
+      const missing = ids.filter((id) => !known.has(id));
+      if (missing.length) throw new Error(`${label} has no drawing tool ${missing.join(', ')}`);
+    }
+
+    /** Drawings a trader leaves on a chart, anchored to the bars they were drawn on. */
+    function addDrawings(draw, bars) {
+      requireTools(['trend-line', 'horizontal-line', 'fib-retracement', 'rectangle', 'text']);
+      const at = (i, key = 'close') => ({ time: bars[i].time, price: bars[i][key] });
+      const lows = bars.slice(20, 120);
+      const low = lows.reduce((a, b) => (b.low < a.low ? b : a));
+      const high = bars.slice(120, 260).reduce((a, b) => (b.high > a.high ? b : a));
+      draw.add({ id: 'trend-1', tool: 'trend-line', points: [at(bars.indexOf(low), 'low'), at(bars.indexOf(high), 'high')], style: { color: '#2962ff', lineWidth: 2, extendRight: true }, paneIndex: 0 });
+      draw.add({ id: 'support-1', tool: 'horizontal-line', points: [{ time: bars[60].time, price: low.low }], style: { color: '#089981', lineStyle: 'dashed' }, paneIndex: 0, text: { value: 'Support' } });
+      draw.add({ id: 'fib-1', tool: 'fib-retracement', points: [at(bars.indexOf(low), 'low'), at(bars.indexOf(high), 'high')], style: { showLabels: true }, paneIndex: 0 });
+      draw.add({ id: 'box-1', tool: 'rectangle', points: [at(200, 'high'), at(240, 'low')], style: { color: '#ff9800', fill: true, fillOpacity: 0.1 }, paneIndex: 0, locked: true });
+      draw.add({ id: 'note-1', tool: 'text', points: [at(280, 'high')], style: { color: '#e0e3eb' }, text: { value: 'Results day', fontSize: 13, bold: true }, paneIndex: 0 });
+    }
+
+    /** Studies on the price pane and in panes of their own. */
+    function addStudies(chart) {
+      const fast = chart.addIndicator('ema', studySettings('ema', 20));
+      const slow = chart.addIndicator('ema', studySettings('ema', 50));
+      const bands = chart.addIndicator('bollinger', studySettings('bollinger', 20));
+      const rsi = chart.addIndicator('rsi', studySettings('rsi', 14));
+      const macd = chart.addIndicator('macd');
+      if (typeof slow.setVisible === 'function') slow.setVisible(false);
+      return { fast, slow, bands, rsi, macd };
+    }
+
+    /** Alerts of each source kind, on a price the walk reaches and on the studies and drawings above. */
+    function addAlerts(alerts, bars, studies) {
+      const last = bars[bars.length - 1].close;
+      const tick = (p) => Math.round(p * 20) / 20;
+      alerts.add({ id: 'alert-breakout', source: { kind: 'price', price: tick(last * 1.012) }, condition: 'crossingUp', title: 'Breakout', message: 'Above the week high', expiresAt: NOW + 7 * 86400 });
+      alerts.add({ id: 'alert-range', source: { kind: 'price', price: tick(last * 0.985), upperPrice: tick(last * 1.015) }, condition: 'leavingRange', policy: 'onTouch', repeat: 'everyTime', cooldownSeconds: 300 });
+      alerts.add({ id: 'alert-rsi', source: { kind: 'indicator', instanceId: studies.rsi.id, plotKey: firstPlotKey('rsi'), value: 70 }, condition: 'crossingDown', title: 'RSI turns down' });
+      alerts.add({ id: 'alert-trend', source: { kind: 'drawing', drawingId: 'trend-1' }, condition: 'crossing', title: 'Trend line' });
+      alerts.add({ id: 'alert-paused', source: { kind: 'price', price: tick(last * 0.95) }, condition: 'lessThan', state: 'disabled', payload: { route: 'desk' } });
+    }
+
+    /** A chart as a host builds one: series, studies, drawings, alerts and a few settings changed. */
+    async function buildChart(bars, withEverything) {
+      const chart = base.createChart(mount(), {});
+      chart.addSeries('candlestick').setData(bars);
+      const studies = withEverything ? addStudies(chart) : { fast: chart.addIndicator('ema', studySettings('ema', 34)) };
+      const draw = new drawTier.DrawingController(chart);
+      const alerts = new base.AlertController(chart, { drawings: draw, now: () => NOW });
+      if (withEverything) {
+        addDrawings(draw, bars);
+        addAlerts(alerts, bars, studies);
+        chart.applyOptions({ grid: { vertLines: false }, crosshairMode: 'magnet' });
+        chart.setPriceScaleOptions({ mode: 'logarithmic', minMove: 0.05 }, 'primary');
+        chart.setPaneWeight(1, 0.6);
+      }
+      chart.setVisibleLogicalRange({ from: bars.length - 120, to: bars.length - 1 });
+      await frames();
+      return { chart, draw, alerts, studies };
+    }
+
+    /** Only the values a workspace pane may hold: strings, numbers and booleans. */
+    const flatSettings = (values) => Object.fromEntries(Object.entries(values)
+      .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v)));
+
+    function memoryStorage(seed = {}) {
+      const map = new Map(Object.entries(seed).map(([k, v]) => [k, JSON.stringify(v)]));
+      return {
+        map,
+        getItem: (k) => (map.has(k) ? map.get(k) : null),
+        setItem: (k, v) => { map.set(k, String(v)); },
+        removeItem: (k) => { map.delete(k); },
+      };
+    }
+
+    function workspaceStorage(seed = null) {
+      let stored = seed === null ? null : clone(seed);
+      return {
+        get stored() { return stored; },
+        async read() { return stored === null ? null : clone(stored); },
+        async write(_namespace, catalog, expectedRevision) {
+          if ((stored?.revision ?? 0) !== expectedRevision) throw new workspaceTier.WorkspaceConflictError();
+          stored = clone(catalog);
+        },
+      };
+    }
+
+    async function write() {
+      const primary = await buildChart(primaryBars, true);
+      const second = await buildChart(secondBars, false);
+      const chartState = clone(primary.chart.getState());
+      const drawings = clone(primary.draw.toJSON());
+      const alerts = clone(primary.alerts.toJSON());
+
+      const store = memoryStorage();
+      const widget = widgetTier.createWidget(mount(), {
+        symbol: 'RELIANCE', exchange: 'NSE', interval: '5m', persist: 'compat', storage: store,
+        mobile: 'never', now: () => NOW_MS,
+      });
+      widget.series.setData(primaryBars);
+      const studies = addStudies(widget.chart);
+      addDrawings(widget.draw, primaryBars);
+      addAlerts(widget.alerts, primaryBars, studies);
+      widget.chart.setVisibleLogicalRange({ from: primaryBars.length - 90, to: primaryBars.length - 1 });
+      await frames();
+      await sleep(widgetTier.SAVE_DEBOUNCE_MS * 2 + 100);
+      const widgetStorage = Object.fromEntries([...store.map].map(([k, v]) => [k, JSON.parse(v)]));
+      const widgetState = clone(widget.getState());
+      widget.destroy();
+
+      const pane = (id, symbol, interval, built, state) => ({
+        id, symbol, exchange: 'NSE', interval, chartType: 'candlestick', chart: state,
+        settings: flatSettings(base.readChartSettings(built.chart)), volume: true, magnet: 'weak', stay: false,
+        comparisons: [{ id: 'cmp-nifty', symbol: 'NIFTY', exchange: 'NSE_INDEX', color: '#f5a623', visible: true }],
+        comparisonMode: 'percent',
+      });
+      const payload = {
+        layout: {
+          rows: 1, columns: 2,
+          slots: [
+            { paneId: 'p0', row: 0, column: 0, rowSpan: 1, columnSpan: 1 },
+            { paneId: 'p1', row: 0, column: 1, rowSpan: 1, columnSpan: 1 },
+          ],
+          columnWeights: [0.6, 0.4],
+        },
+        panes: [pane('p0', 'RELIANCE', '5m', primary, chartState), pane('p1', 'INFY', '15m', second, clone(second.chart.getState()))],
+        activePaneId: 'p0',
+        sync: { crosshair: true, viewport: false, symbol: false, interval: true },
+      };
+      const wsStore = workspaceStorage();
+      let n = 0;
+      const repo = new workspaceTier.WorkspaceRepository(wsStore, 'compat', { now: () => NOW_MS, id: () => `ws-${++n}` });
+      const created = await repo.createWorkspace('Morning desk', payload);
+      await repo.createTemplate('Trend kit', chartState.indicators);
+      const workspace = JSON.parse(await repo.exportDocument('workspace', created.id));
+
+      return {
+        version: base.version(),
+        documents: {
+          'chart-state': chartState,
+          drawings,
+          alerts,
+          'widget-storage': widgetStorage,
+          'widget-state': widgetState,
+          workspace,
+          'workspace-catalog': clone(wsStore.stored),
+        },
+        bars: { primary: primaryBars, second: secondBars },
+      };
+    }
+
+    /**
+     * What this build makes of documents a build wrote: each loaded the way a
+     * host loads it and saved again, or the reason it was refused. The steps
+     * are the ones tests/saved-documents.test.ts takes on the current code.
+     */
+    async function load(documents) {
+      const out = {};
+      const attempt = async (name, fn) => {
+        try { out[name] = await fn(); } catch (error) { out[name] = { refused: String((error && error.message) || error) }; }
+      };
+      const studiesOf = (state) => ({ version: state.version, indicators: state.indicators });
+      await attempt('chart-state', async () => {
+        const { chart, draw, alerts } = await buildChart(primaryBars, false);
+        chart.indicators().forEach((i) => chart.removeIndicator(i.id));
+        const report = chart.restoreState(documents['chart-state']);
+        await frames();
+        return {
+          summary: { applied: report.applied, reason: report.reason, indicators: chart.indicators().length, drawings: draw.drawings().length, alerts: alerts.list().length },
+          saved: clone(chart.getState()),
+        };
+      });
+      await attempt('drawings', async () => {
+        const { draw } = await buildChart(primaryBars, false);
+        draw.fromJSON(documents.drawings);
+        return { summary: { drawings: draw.drawings().length }, saved: clone(draw.toJSON()) };
+      });
+      await attempt('alerts', async () => {
+        const { chart, draw, alerts } = await buildChart(primaryBars, false);
+        chart.indicators().forEach((i) => chart.removeIndicator(i.id));
+        chart.restoreState(studiesOf(documents['chart-state']));
+        draw.fromJSON(documents.drawings);
+        alerts.fromJSON(documents.alerts);
+        return { summary: { alerts: alerts.list().length }, saved: clone(alerts.toJSON()) };
+      });
+      await attempt('widget-storage', async () => {
+        const store = memoryStorage(documents['widget-storage']);
+        const widget = widgetTier.createWidget(mount(), { persist: 'compat', storage: store, mobile: 'never', now: () => NOW_MS });
+        widget.series.setData(primaryBars);
+        await frames();
+        const summary = {
+          symbol: widget.symbol(), interval: widget.interval(), indicators: widget.chart.indicators().length,
+          drawings: widget.draw.drawings().length, alerts: widget.alerts.list().length,
+        };
+        widget.destroy();
+        return { summary, saved: Object.fromEntries([...store.map].map(([k, v]) => [k, JSON.parse(v)])) };
+      });
+      await attempt('widget-state', async () => {
+        const widget = widgetTier.createWidget(mount(), {
+          symbol: 'RELIANCE', exchange: 'NSE', interval: '5m', persist: 'compat', storage: memoryStorage(), mobile: 'never', now: () => NOW_MS,
+        });
+        widget.series.setData(primaryBars);
+        const report = widget.restoreState(documents['widget-state']);
+        await frames();
+        const saved = clone(widget.getState());
+        widget.destroy();
+        return { summary: { applied: report.applied, reason: report.reason }, saved };
+      });
+      await attempt('workspace', async () => {
+        const doc = workspaceTier.parseWorkspaceDocument(documents.workspace);
+        const repo = new workspaceTier.WorkspaceRepository(workspaceStorage(), 'compat', { now: () => NOW_MS, id: () => documents.workspace.id });
+        const imported = await repo.importDocument(documents.workspace);
+        return { summary: { panes: doc.panes.length }, saved: JSON.parse(await repo.exportDocument('workspace', imported.id)) };
+      });
+      await attempt('workspace-catalog', async () => {
+        const storage = workspaceStorage(documents['workspace-catalog']);
+        const repo = new workspaceTier.WorkspaceRepository(storage, 'compat', { now: () => NOW_MS });
+        const catalog = await repo.load();
+        await repo.openWorkspace(catalog.workspaces[0].id);
+        return { summary: { workspaces: catalog.workspaces.length, templates: catalog.templates.length }, saved: clone(storage.stored) };
+      });
+      return out;
+    }
+
+    window.harness = { write, load, version: base.version() };
+    window.harnessReady = true;
+  </script>
+</body>
+</html>

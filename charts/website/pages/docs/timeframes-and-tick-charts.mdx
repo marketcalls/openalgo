@@ -1,0 +1,136 @@
+---
+title: Timeframes & Tick Charts
+description: Second, minute, hourly, daily and weekly timeframes, plus tick and volume bars built live from a trade stream.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Timeframes & tick charts
+
+OpenAlgo Charts handles the full range of timeframes - from **seconds** and **ticks** up to
+**weeks** - because the time axis is a logical index, not a fixed grid.
+
+<Callout type="info">
+Time labels default to **`Asia/Kolkata`**, the Indian-market default, and nothing more:
+pass an IANA name to relabel for another market, at construction or at runtime.
+`createChart(el, { timezone: 'America/New_York' })` and `chart.setTimezone('Europe/London')`
+both drive the time-axis ticks and the crosshair pill. See [Timezones](/docs/timezones).
+A `timeFormatter` (UTC seconds -> string) is still there for a host that wants to format
+labels itself, and it outranks the zone.
+</Callout>
+
+There are two sources of bars:
+
+1. **Historical bars** come from your data feed at a chosen interval (`5s`, `1m`, `1h`,
+   `D`, `W`, ...). The chart just draws them.
+2. **Tick, volume, and sub-minute bars** are aggregated **live** from a trade/quote stream
+   using `TickBarAggregator` or `CandleBuilder` - OHLCV history alone cannot produce them.
+
+## History intervals
+
+The OpenAlgo REST adapter passes the interval through verbatim, so any interval your broker
+supports works. Fetch the exact list at runtime instead of hard-coding it:
+
+```ts
+// OpenAlgo exposes the supported intervals per broker:
+//   seconds:  5s, 10s, 15s, 30s, 45s, 60s ...
+//   minutes:  1m, 3m, 5m, 10m, 15m, 30m ...
+//   hours:    1h, 2h, 4h ...
+//   days+:    D, W, M
+const bars = await feed.getBars({
+  symbol: 'RELIANCE', exchange: 'NSE', interval: '5s',
+  from: dayStartUtcSeconds, to: nowUtcSeconds,
+});
+series.setData(bars);
+```
+
+<Callout type="info">
+The time axis automatically switches to **HH:MM:SS** labels when the visible bars are less
+than a minute apart, and the crosshair tag shows seconds on sub-minute bars - so a 5-second
+chart reads correctly without any configuration.
+</Callout>
+
+<Callout type="warning">
+An interval code resolves through a registry, and **an unrecognised code throws** rather
+than quietly meaning one minute. The built-in grammar covers `s`, `m`, `h`, `d` and `w` and
+is case-insensitive, so a bare `M` is a **minute**: register a calendar interval if your
+broker's `M` means a month, and register `1Q`, `T500` or `V10K` before you use them. See
+[Custom Intervals](/docs/custom-intervals).
+</Callout>
+
+To branch on the timeframe (does this need a session reset, does the axis need seconds), ask
+the registry rather than matching on the string. `intervalParts('120m')` and
+`intervalParts('2h')` both answer 2 hours, and `isIntradayInterval`, `isDailyInterval`,
+`isSecondsInterval` and `isTickInterval` answer the yes-or-no questions directly, for any
+registered code and not only for the built-in tokens. See
+[Reading a code back](/docs/custom-intervals#reading-a-code-back).
+
+## Second timeframes (live)
+
+`CandleBuilder` buckets a tick stream into interval OHLC. `intervalSec` can be any number of
+seconds - here, 5-second candles. Pass a `sessionAnchorSec` so buckets align to the session
+open (09:15) rather than an arbitrary epoch floor.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const series = chart.addSeries('candlestick');
+
+// Build 5-second candles from a simulated tick stream.
+const builder = new lib.CandleBuilder({ intervalSec: 5, volumeMode: 'ltq-sum' });
+const bars = [];
+let t = 1700000000, p = 100, seed = 99;
+for (let i = 0; i < 3000; i++) {
+  seed = (seed * 1103515245 + 12345) & 2147483647;
+  p = Math.max(1, p + (seed / 2147483647 - 0.5) * 0.4);
+  t += 1; // one tick per second
+  const u = builder.onTick({ time: t, price: p, ltq: 10 });
+  if (u) { if (u.isNew) bars.push(u.bar); else bars[bars.length - 1] = u.bar; }
+}
+series.setData(bars);
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="5-second candles aggregated from a per-second tick stream. Note the HH:MM:SS axis." />
+
+## Tick bars
+
+`TickBarAggregator` makes bars from **trade ticks** by clock interval, **calendar period**,
+**tick count**, or **traded volume**:
+
+```ts
+import { TickBarAggregator } from 'openalgo-charts';
+
+const agg = new TickBarAggregator({ mode: 'ticks', count: 100 });   // 100-tick bars
+// or { mode: 'volume', perBar: 5000 }   - constant-volume bars
+// or { mode: 'interval', seconds: 30 }  - 30-second bars
+// or { mode: 'calendar', unit: 'month' } - months, quarters and years, which have no
+//    fixed length; pass { timezone } so the boundary is local midnight where it should be
+
+ws.onTrade((t) => {
+  const u = agg.onTick({ time: t.timeSec, price: t.price, qty: t.qty });
+  if (u.isNew) series.setData([...bars, u.bar]);   // append
+  else series.update(u.bar);                       // mutate the forming bar
+});
+```
+
+Here is a **250-tick** chart built from a simulated trade stream:
+
+<RunnableExample height={300} code={`const chart = lib.createChart(el);
+const series = chart.addSeries('candlestick');
+const agg = new lib.TickBarAggregator({ mode: 'ticks', count: 250 });
+const bars = [];
+let t = 1700000000, p = 100, seed = 3;
+for (let i = 0; i < 12000; i++) {
+  seed = (seed * 1103515245 + 12345) & 2147483647;
+  p = Math.max(1, p + (seed / 2147483647 - 0.5) * 0.6);
+  t += 1;
+  const u = agg.onTick({ time: t, price: p, qty: 1 });
+  if (u.isNew) bars.push(u.bar); else bars[bars.length - 1] = u.bar;
+}
+series.setData(bars);
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+<Callout type="warning">
+Tick-count and volume bars require **real trade ticks**. A 1-minute OHLCV history cannot be
+re-bucketed into them - you need a tick feed (or a tick-recording backend). Bid/ask
+classification for [footprint / order flow](/docs/profiles-and-orderflow) needs the same.
+</Callout>

@@ -1,0 +1,754 @@
+---
+title: Settings & Menus
+description: Build your own settings dialog and price-axis menu from the engine's schema, its classified right-click, and readable axis state. Working code, no framework.
+---
+
+import { Callout } from 'nextra/components'
+
+# Settings & menus
+
+The base engine creates chart canvases and containers, but no dialog, menu or toolbar.
+A custom host therefore has to
+build this chrome itself, and the engine's job is to make that a rendering exercise rather
+than a research project. Three surfaces do it:
+
+| Surface | Answers |
+|---|---|
+| `chartSettingsSchema(chart)` | Which controls exist, what kind each is, and what they are worth. |
+| The `contextmenu` event | What the pointer was actually over, which a canvas cannot tell you. |
+| `chart.priceAxisState(pane, scale)` | Which items a price-axis menu should tick, and which it should grey. |
+
+Every snippet below is working code, not pseudocode. The reference host in
+`examples/yfinance/index.html` is the same code with styling attached.
+
+## The settings schema
+
+Three calls, and nothing in your dialog names a control:
+
+```ts
+import { chartSettingsSchema, readChartSettings, applyChartSettings } from 'openalgo-charts';
+
+const tabs   = chartSettingsSchema(chart);   // ChartSettingsTab[]: the dialog, described
+const values = readChartSettings(chart);     // { 'symbol.upColor': '#26a69a', ... }
+
+applyChartSettings(chart, { 'canvas.grid.vertColor': '#223047' });   // one key is a valid patch
+```
+
+Two display preferences are included: `scales.priceOnly` exposes **Fit primary
+prices only** in Axes, and `statusLine.indicatorsCollapsed` exposes **Collapse
+indicator legends** in Readout. Both default to false and participate in
+read/apply, Cancel and defaults. They remain local to each chart.
+
+A control the engine adds in a later release appears in your dialog on its own, because you
+rendered the schema rather than a list you wrote down.
+
+### The five tabs
+
+| `id` | Label | Covers |
+|---|---|---|
+| `price` | Price | The instrument's paint: body, border and wick colours, the previous-close verdict, precision, the last-price line and its axis tag. Generated from the primary series **type**. |
+| `readout` | Readout | What the pane's status line shows: logo, title and title mode, session state, OHLC, bar change, volume, change since previous close, indicator values, and the plate behind the row. |
+| `axes` | Axes | Scale mode, auto-fit, invert, chart timezone, mouse panning, and default visible bars. |
+| `appearance` | Appearance | Grid, crosshair, scale text and lines, plot margins. |
+| `trading` | Trading | Position, order, bracket and execution colours. |
+
+The grouping is our own, and the test it is held to is whether a trader finds a setting
+without hunting: what the instrument is painted with, what the header reads out, what the
+two axes do, what the surface around the data looks like, and what the trade layer draws.
+
+Two groups you might expect are deliberately absent. **Alerts** is on the roadmap and
+arrives with the feature. **Events** has no data source in the engine, so a tab for it would
+be an empty panel with a heading. An empty tab is worse than an absent one, the same rule
+that keeps a checkbox with nothing behind it out of the schema.
+
+<Callout type="info">
+Tab ids are stable and so are control keys, because a host stores them. When the grouping
+above a key changes, the key stays put: `canvas.grid.vertColor` names the option it writes,
+not the tab it is shown on. The one key that did move is `scales.lastValueVisible`, now
+`symbol.lastValueVisible`, so it names the `SeriesStyle` field it patches and sits beside
+the price line it contradicts when the two disagree.
+</Callout>
+
+### A control is a row, not a value
+
+Most controls are the same `IndicatorInput` shape the
+[indicator settings form](/docs/indicators) is built from, so a host that already renders
+that form renders nearly all of this one with no new widget code:
+
+```ts
+{ key: 'canvas.grid.lineWidth', type: 'number', label: 'Width', default: 1,
+  min: 1, max: 4, step: 1, group: 'Grid' }
+```
+
+`type` is `'number' | 'boolean' | 'color' | 'text' | 'select' | 'source' | 'interval' | 'time'`,
+plus one widget this schema adds: **`colorPair`**.
+
+A property with a bullish and a bearish colour is *one row*:
+
+```
+[x] Body      [green] [red]
+[x] Borders   [green] [red]
+[x] Wick      [green] [red]
+```
+
+Not a BODY heading followed by separate Up and Down rows. The stacked form triples the
+height of every panel and is what forces a scrollbar onto a dialog that would otherwise
+fit. So a paired colour is a row in the schema:
+
+```ts
+{
+  key: 'symbol.borders',          // names the ROW. It is not a value key.
+  type: 'colorPair',
+  label: 'Borders',
+  group: 'Candles',
+  enabled: { key: 'symbol.borderVisible', default: true },
+  up:      { key: 'symbol.borderUpColor',   label: 'Up',   default: '#26a69a' },
+  down:    { key: 'symbol.borderDownColor', label: 'Down', default: '#ef5350' },
+}
+```
+
+Colour defaults come from the **live theme**, which is one of the three reasons
+`chartSettingsSchema` takes the chart: the others are that the Price tab depends on the
+primary series type, and that the timezone list has to include whatever zone the chart is
+already in.
+
+The load-bearing detail: `up.key`, `down.key` and `enabled.key` are **ordinary flat keys**
+of `ChartSettingsValues`. A `colorPair` contributes two or three perfectly normal fields to
+the patch, so `readChartSettings` and `applyChartSettings` never learned the widget exists,
+and nothing about the wire format, JSON-safety or state restore had to change to carry it.
+
+`enabled` is optional and its absence is information: a row gets a switch when a
+`SeriesStyle` flag backs it, and goes without one when nothing does, rather than offering a
+checkbox that writes nowhere.
+
+All three candle rows carry one, over `bodyVisible`, `borderVisible` and `wickVisible`.
+Body was the exception until 1.5.0 and is worth knowing about as a worked example of the
+rule: the row shipped with two swatches and an empty switch column, not because a body
+switch was undesirable but because the renderer had nothing to skip. The fix was to add
+`bodyVisible` to `SeriesStyle` and teach the renderer to honour it, not to add the checkbox
+and hope. If you are extending this schema, that is the order to work in.
+
+<Callout type="warning">
+Do not read `input.key` as a value key on a `colorPair` row. `values['symbol.borders']` is
+`undefined` and always will be. Branch on `input.type` first.
+</Callout>
+
+### Rendering the whole dialog
+
+One renderer that handles every control kind the schema can produce, including the paired
+row. This is the reference host's code with its CSS class names left in:
+
+```js
+import { chartSettingsSchema, readChartSettings, applyChartSettings } from 'openalgo-charts';
+
+/**
+ * One widget, tagged with the flat key it writes so the form can be read back
+ * without knowing which row a field came from. A paired-colour row therefore
+ * contributes three ordinary fields and nothing downstream knows the pair exists.
+ */
+function inputField(host, key, kind, spec, value, onChange) {
+  let field;
+  if (kind === 'select') {
+    field = document.createElement('select');
+    for (const o of spec.options) {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      field.appendChild(opt);
+    }
+    field.value = String(value);
+  } else if (kind === 'boolean') {
+    field = document.createElement('input');
+    field.type = 'checkbox';
+    field.checked = Boolean(value);
+  } else if (kind === 'color') {
+    field = document.createElement('input');
+    field.type = 'color';
+    field.className = 'swatch';          // a 26px square, never a 140px block
+    field.value = String(value ?? '#000000');
+  } else {
+    field = document.createElement('input');
+    field.type = kind === 'number' ? 'number' : 'text';
+    if (kind === 'number') {
+      if (spec.min !== undefined) field.min = spec.min;
+      if (spec.max !== undefined) field.max = spec.max;
+      if (spec.step !== undefined) field.step = spec.step;
+    }
+    field.value = String(value ?? '');
+  }
+  field.id = host.id + '_' + key;        // namespaced: two dialogs can coexist
+  field.dataset.key = key;
+  field.dataset.kind = kind;
+  for (const ev of ['input', 'change']) {
+    field.addEventListener(ev, () => onChange(key, fieldValue(field)));
+  }
+  return field;
+}
+
+const fieldValue = (f) =>
+  f.dataset.kind === 'number' ? Number(f.value)
+  : f.dataset.kind === 'boolean' ? f.checked
+  : f.value;
+
+/** Three columns: switch slot, label, control. Booleans sit in the switch slot. */
+function simpleRow(host, input, values, onChange) {
+  const row = document.createElement('div');
+  row.className = 'set-row';
+  const label = document.createElement('label');
+  label.textContent = input.label;
+  label.htmlFor = host.id + '_' + input.key;
+  const field = inputField(host, input.key, input.type, input, values[input.key], onChange);
+  if (input.type === 'boolean') {
+    field.classList.add('set-sw');
+    row.append(field, label);
+  } else {
+    const ctl = document.createElement('div');
+    ctl.className = 'set-ctl';
+    ctl.appendChild(field);
+    row.append(label, ctl);
+  }
+  return row;
+}
+
+/** The switch, the label and both swatches on one line. */
+function colorPairRow(host, input, values, onChange) {
+  const row = document.createElement('div');
+  row.className = 'set-row';
+  if (input.enabled) {
+    const sw = inputField(host, input.enabled.key, 'boolean', input.enabled,
+      values[input.enabled.key], onChange);
+    sw.classList.add('set-sw');
+    row.appendChild(sw);
+  }
+  const label = document.createElement('label');
+  label.textContent = input.label;
+  label.htmlFor = host.id + '_' + (input.enabled ? input.enabled.key : input.up.key);
+  const ctl = document.createElement('div');
+  ctl.className = 'set-ctl';
+  for (const half of [input.up, input.down]) {
+    const sw = inputField(host, half.key, 'color', half, values[half.key], onChange);
+    // Which swatch is which is not obvious at 26px and the row has no space for
+    // two more labels, so the name goes on the control itself.
+    sw.title = half.label;
+    ctl.appendChild(sw);
+  }
+  row.append(label, ctl);
+  return row;
+}
+
+/** The whole form. `input.group` becomes a small uppercase sub-heading. */
+export function renderInputRows(host, inputs, values, onChange) {
+  host.innerHTML = '';
+  let group = null;
+  for (const input of inputs) {
+    if (input.group && input.group !== group) {
+      group = input.group;
+      const h = document.createElement('div');
+      h.className = 'set-group';
+      h.textContent = group;
+      host.appendChild(h);
+    }
+    host.appendChild(input.type === 'colorPair'
+      ? colorPairRow(host, input, values, onChange)
+      : simpleRow(host, input, values, onChange));
+  }
+}
+```
+
+Wiring it to a tab rail is then a handful of lines, and the dialog previews live:
+
+```js
+function renderChartSettings(activeTabId) {
+  const tabs = chartSettingsSchema(chart);
+  // Re-read on every paint. Edits apply live, so switching tabs and coming back
+  // has to show what the chart is actually drawing now, not a stale snapshot.
+  const values = readChartSettings(chart);
+  const tab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+
+  renderTabRail(tabs, activeTabId);
+  renderInputRows(document.getElementById('cset-body'), tab.inputs, values, (key, value) => {
+    dirty.add(key);                                  // for Cancel, see below
+    applyChartSettings(chart, { [key]: value });
+  });
+}
+```
+
+### Restore this tab
+
+The schema declares every control's default, including both halves and the switch of a
+paired colour, so "restore this tab" needs no table of its own and cannot drift from what
+is on screen:
+
+```js
+function restoreTab(tabId) {
+  const tab = chartSettingsSchema(chart).find((t) => t.id === tabId);
+  const patch = {};
+  for (const input of tab.inputs) {
+    if (input.type === 'colorPair') {
+      patch[input.up.key] = input.up.default;
+      patch[input.down.key] = input.down.default;
+      if (input.enabled) patch[input.enabled.key] = input.enabled.default;
+    } else {
+      patch[input.key] = input.default;
+    }
+  }
+  // Marked dirty so Cancel still undoes it: a restore is an edit like any other,
+  // not a new baseline.
+  for (const key of Object.keys(patch)) dirty.add(key);
+  applyChartSettings(chart, patch);
+}
+```
+
+### Cancel
+
+Put back only the keys this session touched, not the whole snapshot. A wholesale write
+would also undo an axis the user dragged or a scale they switched while the dialog was
+open, which is not what Cancel means:
+
+```js
+const before = readChartSettings(chart);   // when the dialog opened
+const dirty = new Set();                   // keys the session wrote
+
+function cancel() {
+  const back = {};
+  for (const key of dirty) back[key] = before[key];
+  applyChartSettings(chart, back);
+  dirty.clear();
+}
+```
+
+### Four properties worth relying on
+
+- **The schema and the accessors are one structure.** Each control carries its own read and
+  write beside its input descriptor, so a control cannot drift from the option it drives
+  and there is no second table to keep in step.
+- **Nothing inert ships.** Every control maps to an option that actually changes what is
+  drawn or stored. The Price tab is generated from the primary series *type*, so a candle
+  gets borders and wicks, a line gets a dash and a thickness, a baseline gets its two fills
+  as a pair, and a chart with no primary series gets an empty Price tab rather than three
+  switches that write nowhere.
+- **Unknown keys are ignored.** That is what lets a settings snapshot written by a newer
+  build restore into an older one, and it is why a stale timezone in a saved workspace
+  cannot throw away the rest of the apply.
+- **Values are flat and JSON-safe.** `Record<string, string | number | boolean>`, dotted
+  keys, no nesting. `chart.getState()` carries the canvas, navigation, status-line, trading-colour and
+  event blocks so a saved layout brings the dialog's settings back with it. See
+  [Chart State](/docs/state).
+
+### Navigation controls
+
+The Axes tab's **Navigation** group exposes these fields through the same schema and
+settings persistence as the other controls:
+
+| Key | Control | Default |
+|---|---|---|
+| `navigation.panEnabled` | Boolean: **Enable panning** | `true` |
+| `navigation.zoomEnabled` | Boolean: **Enable zooming** | `true` |
+| `navigation.mousePan` | Select **Mouse drag**: **Horizontal only** (`'horizontal'`) or **Time and price** (`'both'`) | `'both'` |
+| `navigation.defaultVisibleBars` | Number: **Default visible bars (0 = all)**, minimum `0`, maximum `100000`, step `1` | `0` |
+| `navigation.defaultBarSpacing` | Number: **Default bar spacing (0 = use bar count)**, CSS pixels, minimum `0`, maximum `10000`, step `0.5` | `0` |
+
+`panEnabled` and `zoomEnabled` control native user gestures, keys and navigation buttons independently. Disabling zoom also disables user fit/reset actions in both hosts. Active motion is cancelled, while programmatic view changes and drawing or picking interactions remain available. Both booleans persist with the chart.
+
+```ts
+applyChartSettings(chart, {
+  'navigation.mousePan': 'both',
+  'navigation.defaultVisibleBars': 120,
+});
+readChartSettings(chart)['navigation.defaultVisibleBars'];  // 120
+```
+
+The pan choice applies to mouse and pen plot drags. Touch keeps both axes. Changing the
+bar count applies the new default view immediately, and initial data loads and
+`chart.resetScale()` use that count. A positive value targets the newest N loaded bars
+plus four empty slots on the right, within the data and bar-spacing limits; `0` fits all
+loaded bars. `chart.fitContent()` remains an explicit fit of all loaded history.
+
+This setting controls the viewport. Your feed's history lookback still determines what
+data is requested, and every loaded bar remains available for panning. Hosts that need an
+explicit viewport can set it after the data loads. The widget's ordinary load views honour
+the configured count.
+
+For a custom control, use `chart.setNavigationOptions(patch)` and
+`chart.navigationOptions()`. `chart.getState()` and `restoreState()` carry the optional
+`navigation` block alongside the saved viewport, whose explicit range wins on restore.
+
+### The timezone is a control now
+
+It used to be the one row a host had to bolt on itself, with its own Cancel bookkeeping.
+It is now `time.timezone` on the Axes tab: a `select` over a curated IANA list with
+whatever zone the chart was built with folded in, so a chart configured outside the list
+still shows its own setting selected instead of silently reading as the first entry.
+
+Applying it calls `chart.setTimezone`, which moves numbers and not only labels: the axis,
+the crosshair tag, and every calendar boundary an indicator or a profile resets on. A zone
+the runtime does not know is skipped rather than thrown, so one stale entry in a saved
+workspace cannot lose the rest of the apply. See [Timezones](/docs/timezones).
+
+## The right-click menu
+
+`contextmenu` is the other half of a host-built UI. A canvas hands your app a pixel; this
+event hands it an object.
+
+```ts
+chart.on('contextmenu', (e) => {
+  e.preventDefault();                       // suppress the browser's own menu
+  showMenu(e.point, e.target, e.price);
+});
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `paneIndex` | `number` | Pane under the pointer. |
+| `point` | `{ x, y }` | Container media px, for placing the menu. |
+| `price` | `number \| null` | Null off the plot, so the order rows know not to offer a trade at nothing. |
+| `time` | `number \| null` | UTC seconds; null when there is no data. |
+| `index` | `number \| null` | Logical bar index. |
+| `target` | `ContextMenuTarget` | What was hit. See below. |
+| `preventDefault()` | `() => void` | Call it to show your own menu. |
+
+`target.kind` is one of `'drawing'`, `'indicator'`, `'legend'`, `'primitive'`, `'series'`,
+`'price-scale'`, `'time-scale'`, `'empty'`, and the target carries the hit-test `id`, an
+`instanceId` for an indicator, and a `seriesType` for a series.
+
+### The axis strips are discriminated
+
+A `'price-scale'` hit now says **which** strip was hit and **which of the pane's scales**
+that strip acts on:
+
+```ts
+interface ContextMenuTarget {
+  kind: ContextMenuTargetKind;
+  id: string | null;
+  instanceId?: string;          // kind === 'indicator'
+  seriesType?: SeriesType;      // kind === 'series'
+  side?: 'right' | 'left';      // kind === 'price-scale'
+  scaleId?: PriceScaleId;       // kind === 'price-scale'
+}
+```
+
+`scaleId` identifies the column under the pointer. It can be `'right'`, `'left'`,
+`''` or a named overlay explicitly placed on a visible side. Pass that exact ID
+to the `priceAxis*` calls. Several columns may share a side, so `side` alone
+cannot identify the scale. Unused outer cells reserved to align another pane
+return an `'empty'` target; they do not fall back to a hidden scale.
+
+<Callout type="info">
+The **bottom-left corner** belongs to the time axis, not to a left price ladder. The time
+axis spans the full width including the left column, so a click down there is on the dates.
+A populated bottom-**right** column retains its price-axis target. Blank aligned
+cells have no price-axis target.
+</Callout>
+
+### Routing
+
+```js
+chart.on('contextmenu', (e) => {
+  e.preventDefault();
+  const t = e.target;
+
+  // A price ladder gets its own menu. The chart is what knows a click landed on
+  // an axis strip and which scale that strip draws, so this is the one branch
+  // that cannot be worked out from the pointer alone.
+  if (t.kind === 'price-scale') return openAxisMenu(e.point, e.paneIndex, t);
+  if (t.kind === 'indicator')   return openIndicatorSettings(t.instanceId, e.point);
+  if (t.kind === 'drawing')     return openDrawingMenu(t.id, e.point);
+  if (t.kind === 'time-scale')  return openChartSettings('axes');
+
+  openPlotMenu(e.point, { price: e.price, time: e.time });
+});
+```
+
+<Callout type="info">
+With **no** `contextmenu` listener the chart keeps its save-image fallback: it composites
+the clicked pane's layers so the browser's own "Save image as" produces the visible chart
+rather than a blank overlay. Subscribing takes that over, and unsubscribing the last
+listener restores it. The size of the listener set decides this, not whether `on` was ever
+called, so `off` genuinely gives the fallback back.
+</Callout>
+
+## The price-axis menu
+
+A menu over an axis has to say what the axis is currently doing, or its ticks are
+decoration. `priceAxisState(paneIndex, scaleId)` is the read side, and every item it
+reports has a writer beside it.
+
+```ts
+const s = chart.priceAxisState(0, 'right');   // PriceAxisState | null
+```
+
+| Field | Meaning |
+|---|---|
+| `paneIndex` / `scaleId` | Echoed back, so a menu can hold the state object and nothing else. |
+| `side` | `'right'` or `'left'` for a visible scale. Hidden placement reports `'right'` for compatibility; read `priceAxisPlacement` to distinguish it. |
+| `active` | An attached series or explicitly bound primitive uses this scale. |
+| `autoFit` | The range tracks the data rather than staying where it was put. |
+| `inverted` | Prices increase downward. |
+| `mode` | One of `PRICE_SCALE_MODES`: `'linear'`, `'logarithmic'`, `'percentage'`, `'indexed-to-100'`. |
+| `scaled` | False while the scale still sits on its `0..1` placeholder, meaning nothing has been measured on it yet. |
+| `lockRatio` | The price-per-bar ratio is pinned. |
+| `movable` | Whether legacy `movePriceAxis` can reassign this built-in side ID to the other ID. It does not govern column placement. Deprecated with `movePriceAxis`, removed in 3.0.0. |
+
+Null for a pane that does not exist. `active: false` is a real state, not an error: it is
+the ladder on an empty chart, or the side a menu was raised on before anything was plotted
+there. That is a row to render **disabled with its state visible**, not one to leave out.
+
+### The writers
+
+```ts
+// Any Partial<PriceScaleOptions>: mode, inverted, margins, tick size.
+chart.setPriceAxisOptions(pane, scaleId, { mode: 'logarithmic', inverted: false });
+chart.setPriceAxisAutoFit(pane, scaleId, true);
+const locked = chart.setPriceAxisLockRatio(pane, scaleId, true);   // returns success
+const moved = chart.setPriceAxisPlacement(pane, scaleId, 'left'); // retains scaleId
+chart.setPriceAxisPlacement(pane, scaleId, 'left', 0);            // nearest the plot
+const placement = chart.priceAxisPlacement(pane, scaleId);       // { side, order } or null
+const columns = chart.priceAxisLayout(pane);                    // active column geometry
+```
+
+The four modes are one field, so picking one drops the previous by construction. Turning
+auto-fit **on** releases any ratio lock on that axis, because re-fitting the data every
+frame is exactly what a held ratio is not. Chart-wide `setAutoScale(on)` applies
+to all active visible axes; hidden scales and their ratio locks retain their
+state. `setPriceAxisAutoFit` can address a hidden scale explicitly, while
+`resetScale()` still resets every created scale.
+
+Two of the calls return a boolean, and both are worth showing the user:
+
+- **`setPriceAxisLockRatio`** fails on a scale nothing has measured. There is no ratio to
+  hold on an empty pane, or on one whose series plot no values at all. Reporting that beats
+  a row that flips back on the next repaint with no explanation.
+- **`setPriceAxisPlacement`** returns false for invalid or unchanged requests.
+  It can move a column onto a side already used by other scales. Order zero is
+  nearest the plot; omitting order appends on a new side and retains the current
+  rank on the same side.
+
+Placement keeps the same scale ID, object, range, formatter, sources and ratio
+lock. A menu keeps its target ID after a move. Success emits
+`priceAxisPlacementChanged` with `{ paneIndex, scaleId, side, order }`, followed
+by `objects:change`. See [multiple axes](/docs/scales-and-panes#multiple-axes-on-the-same-side)
+for column geometry and persistence.
+
+The legacy `movePriceAxis(pane, 'right', 'left')`, deprecated and removed in 3.0.0, instead swaps the built-in side
+scale objects and reassigns their resources to the destination ID. That ID must
+be unused; other named columns on its side do not prevent the move. Source and
+destination placements reset to their named sides, and the vacated scale resets
+to chart defaults. `PriceAxisState.movable` describes this operation, including
+its study-resource restrictions. Success emits `priceAxisMoved` with
+`{ paneIndex, from, to }`, an event deprecated with the method and removed in 3.0.0;
+placement emits `priceAxisPlacementChanged`.
+
+<Callout type="warning">
+The four scale modes are one field, so a menu must render them as a **single choice** (a
+radio group), never as four switches. Four checkboxes would let a user ask for a state the
+engine cannot be in.
+</Callout>
+
+### Building it
+
+The whole menu, painted from state and nothing else. Note that every action repaints, so a
+menu left open while the user toggles things never shows a stale tick:
+
+```js
+import { PRICE_SCALE_MODES } from 'openalgo-charts';
+
+// PRICE_SCALE_MODES is the engine's order. The labels and the chords are ours.
+const MODE_LABEL = {
+  linear: 'Linear', logarithmic: 'Logarithmic',
+  percentage: 'Percent', 'indexed-to-100': 'Indexed to 100',
+};
+const MODE_CHORD = {
+  linear: 'Alt+R', logarithmic: 'Alt+L', percentage: 'Alt+P', 'indexed-to-100': 'Alt+1',
+};
+const AX_MODES = PRICE_SCALE_MODES.map((value) => ({
+  value, label: MODE_LABEL[value], chord: MODE_CHORD[value],
+}));
+
+const menu = document.getElementById('axmenu');
+menu.addEventListener('pointerdown', event => event.stopPropagation());
+// Which axis the menu acts on. The main pane's price ladder until a right-click
+// names another, so the keyboard chords have a target with no pointer involved.
+let target = { paneIndex: 0, scaleId: 'right' };
+const axisState = () => chart.priceAxisState(target.paneIndex, target.scaleId);
+
+function paintAxisMenu() {
+  const s = axisState();
+  const placement = chart.priceAxisPlacement(target.paneIndex, target.scaleId);
+  menu.innerHTML = '';
+  if (!s || !placement) return;
+  const add = (o) => menu.appendChild(axRow(o));
+
+  add({ label: 'Auto-fit to the data', on: s.autoFit, chord: 'Alt+A',
+        onSelect: () => run(() => chart.setPriceAxisAutoFit(s.paneIndex, s.scaleId, !s.autoFit)) });
+
+  add({ label: 'Invert', on: s.inverted, chord: 'Alt+I',
+        onSelect: () => run(() => chart.setPriceAxisOptions(s.paneIndex, s.scaleId, { inverted: !s.inverted })) });
+
+  // Our own words for holding the price-per-bar ratio while the time axis zooms.
+  // Nothing has been measured on an empty pane, so there is no ratio to hold:
+  // the row stays, greyed, saying why.
+  add({ label: 'Pin price per bar', on: s.lockRatio, disabled: !s.scaled,
+        note: s.scaled ? '' : 'nothing measured',
+        onSelect: () => run(() => chart.setPriceAxisLockRatio(s.paneIndex, s.scaleId, !s.lockRatio)) });
+
+  menu.appendChild(separator());
+  menu.appendChild(heading('Scale'));
+  for (const m of AX_MODES) {
+    add({ mark: 'radio', label: m.label, on: s.mode === m.value, chord: m.chord,
+          onSelect: () => run(() => chart.setPriceAxisOptions(s.paneIndex, s.scaleId, { mode: m.value })) });
+  }
+
+  if (placement.side !== 'hidden') {
+    menu.appendChild(separator());
+    add({
+      label: placement.side === 'right' ? 'Move the scale to the left' : 'Move the scale to the right',
+      disabled: !s.active,
+      note: s.active ? '' : 'nothing on this scale',
+      onSelect: () => run(() => {
+        const now = chart.priceAxisPlacement(s.paneIndex, s.scaleId);
+        if (!now || now.side === 'hidden' || !chart.priceAxisState(s.paneIndex, s.scaleId)?.active) return;
+        chart.setPriceAxisPlacement(s.paneIndex, s.scaleId, now.side === 'right' ? 'left' : 'right');
+        // The menu target keeps the same scale ID.
+      }),
+    });
+    const columns = side => chart.priceAxisLayout(s.paneIndex)
+      .filter(column => column.side === side).sort((a, b) => a.order - b.order);
+    const peers = columns(placement.side);
+    const index = peers.findIndex(column => column.scaleId === s.scaleId);
+    if (index >= 0 && peers.length > 1) for (const delta of [-1, 1]) {
+      add({
+        label: delta < 0 ? 'Move closer to the plot' : 'Move further from the plot',
+        disabled: peers[index + delta] === undefined,
+        onSelect: () => run(() => {
+          const now = chart.priceAxisPlacement(s.paneIndex, s.scaleId);
+          if (!now || now.side === 'hidden') return;
+          const current = columns(now.side);
+          const at = current.findIndex(column => column.scaleId === s.scaleId);
+          const neighbor = at < 0 ? undefined : current[at + delta];
+          if (neighbor) chart.setPriceAxisPlacement(s.paneIndex, s.scaleId, now.side, neighbor.order);
+        }),
+      });
+    }
+  }
+
+  menu.appendChild(separator());
+  add({ label: 'Axis settings...', onSelect: () => openChartSettings('axes') });
+}
+
+/** Run an axis action, then repaint whatever is on screen showing its state. */
+function run(action) {
+  action();
+  if (!menu.hidden) paintAxisMenu();
+}
+```
+
+Opening it from the event is then the target plumbing and nothing else:
+
+```js
+function openAxisMenu(point, paneIndex, hit) {
+  if (hit.kind !== 'price-scale' || hit.scaleId === undefined) return;
+  // Empty-string IDs are valid when their column is explicitly exposed.
+  target = { paneIndex, scaleId: hit.scaleId };
+  paintAxisMenu();
+  menu.hidden = false;
+  place(menu, point);
+}
+```
+
+<Callout type="info">
+Keep the menu open while the user toggles. Close it on a `pointerdown` **outside** it
+rather than on any click at all, or a level flyout closes itself the moment it is used.
+</Callout>
+
+## Price levels in the menu
+
+The [price-level family](/docs/price-levels) is where an axis menu earns its keep: previous
+close, session high and low, extended-hours opens and closes, bid and ask. Each level is a
+line on the plot **and** a tag on the axis, and the two halves toggle independently, so the
+natural shape is two flyouts over the same ten rows read through different halves of one
+style object.
+
+```js
+import { PriceLevels, PRICE_LEVEL_KINDS,
+         lastPriceLevelFromSeriesStyle, seriesStyleForLastPriceLevel } from 'openalgo-charts';
+
+const levels = new PriceLevels({ timezone: 'Asia/Kolkata' });
+chart.addPrimitive(levels);   // no pane: the price pane, wherever it sits
+
+/** Our own words, in the order the engine lists the kinds. */
+const LEVEL_LABEL = {
+  previousClose: 'Previous close', sessionHigh: 'Session high', sessionLow: 'Session low',
+  lastPrice: 'Last price',
+  preMarketOpen: 'Pre-market open', preMarketClose: 'Pre-market close',
+  postMarketOpen: 'Post-market open', postMarketClose: 'Post-market close',
+  bid: 'Bid', ask: 'Ask',
+};
+
+/**
+ * The last price is the one level the core already owns: `priceLineVisible` and
+ * `lastValueVisible` are this level's two halves under older names. Letting the
+ * primitive draw it as well would put two lines on one price, so the row reads
+ * and writes through the series instead, in the same shape as every other row.
+ */
+const isLastPrice = (kind) => kind === 'lastPrice';
+
+const levelStyle = (kind) => isLastPrice(kind)
+  ? lastPriceLevelFromSeriesStyle(chart.primarySeriesInfo()?.style ?? {})
+  : levels.level(kind);
+
+function setLevelHalf(kind, half, on) {
+  if (isLastPrice(kind)) {
+    const next = { ...levelStyle(kind), [half]: on };
+    chart.primarySeries()?.applyOptions(seriesStyleForLastPriceLevel(next));
+  } else {
+    levels.setLevel(kind, { [half]: on });
+  }
+}
+
+/** `half` is 'line' (lines on the plot) or 'label' (tags on the axis). */
+function paintLevelFlyout(el, half) {
+  el.innerHTML = '';
+  el.appendChild(heading(half === 'line' ? 'Lines on the plot' : 'Tags on the axis'));
+  for (const kind of PRICE_LEVEL_KINDS) {
+    const style = levelStyle(kind);
+    const ok = levels.available(kind);
+    el.appendChild(axRow({
+      label: LEVEL_LABEL[kind],
+      on: style[half] === true,
+      // Disabled, not hidden. "No previous session yet" and "no live quote" are
+      // information; an absent checkbox is not. The switch keeps showing state.
+      disabled: !ok,
+      note: ok ? '' : 'no data',
+      onSelect: () => run(() => setLevelHalf(kind, half, style[half] !== true)),
+    }));
+  }
+}
+```
+
+A level with no data is `null` and never `0`, which is what makes `available(kind)` possible:
+nothing draws at zero, and the control can be rendered **disabled with its state still
+visible** rather than hidden. "There is no previous session in this data yet" and "no live
+quote is feeding this chart" are both answers a trader should be able to read off the menu.
+An absent checkbox says neither.
+
+## What stays yours
+
+- **Placement, animation, focus trapping and keyboard chords.** The reference host uses an
+  `Alt+<key>` grammar for the axis (`Alt+R`, `Alt+L`, `Alt+P`, `Alt+1` for the modes,
+  `Alt+I` for invert, `Alt+A` for auto-fit) matched on `code` as well as `key`, because on
+  macOS `Alt+L` arrives as a typographic character and the letter is only recoverable from
+  `code`. That is a host decision, not an engine one.
+- **The words.** Standard domain vocabulary is shared property and should be used plainly:
+  logarithmic, percent, indexed to 100, precision, timezone, invert. A competitor's turn of
+  phrase is not. Write your own labels.
+- **The scrollbars.** Never leave a default scrollbar on a dark surface. Style
+  `::-webkit-scrollbar` and set `scrollbar-color` with `scrollbar-width: thin`, once at the
+  root, so every scrollable surface inherits it.
+
+## See also
+
+- [Price Levels & Axis Chrome](/docs/price-levels) for the level family, the session
+  clock and the bar countdown.
+- [Theming & Chart Options](/docs/themes) for the option blocks the Appearance tab writes.
+- [Events](/docs/events) for the rest of the event surface.
+- [Scales & Panes](/docs/scales-and-panes) for what the axes themselves do.

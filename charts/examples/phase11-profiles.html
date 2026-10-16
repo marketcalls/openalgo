@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: profiles and order flow</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    body { min-height: 100vh; display: flex; flex-direction: column; }
+    .bar { padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    select { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046; border-radius: 6px; padding: 6px 8px; }
+    #hint { color: #9099ad; }
+    main { position: relative; flex: 1; min-height: 600px; }
+    #chart, iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    #chart { cursor: crosshair; }
+    @media (max-width: 650px) { main { min-height: 740px; } }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Profiles and order flow</strong>
+    <label>Overlay
+      <select id="kind"><option>Volume Profile</option><option>Market Profile (TPO)</option><option value="Footprint">Order flow (Footprint)</option></select>
+    </label>
+    <span id="hint"></span>
+  </div>
+  <main id="stage"></main>
+
+  <script type="module">
+    import { createChart, generateBars, darkTheme } from '../dist/openalgo-charts.mjs';
+    import { computeVolumeProfile, HorizontalProfile } from '../dist/openalgo-charts.profile.mjs';
+
+    const bars = generateBars(1_705_286_700, 300, 60);
+    let chart;
+
+    function build(kind) {
+      chart?.destroy();
+      chart = null;
+      window.__chart = null;
+      const stage = document.getElementById('stage');
+      // Unload the previous example so its live simulation and listeners stop.
+      stage.replaceChildren();
+      const hint = document.getElementById('hint');
+      if (kind !== 'Volume Profile') {
+        // Reuse the maintained demos so this entry point shares their controls and renderers.
+        const frame = document.createElement('iframe');
+        frame.id = 'profile-demo';
+        frame.title = kind === 'Footprint' ? 'Order flow chart and controls' : 'Market Profile chart and controls';
+        frame.src = kind === 'Footprint' ? './orderflow/index.html' : './market-profile/index.html';
+        hint.textContent = kind === 'Footprint'
+          ? 'Simulated NIFTY around 23,800. Choose themes, text colors, lots and optional table rows below.'
+          : 'TPO letters, session profiles, themes and split controls. All data is simulated.';
+        stage.append(frame);
+        return;
+      }
+      hint.textContent = 'Simulated volume by price. Orange marks POC; gray lines mark the value area.';
+      const host = document.createElement('div');
+      host.id = 'chart';
+      stage.append(host);
+      chart = createChart(host, { theme: darkTheme, priceAxisWidth: 60 });
+      chart.addSeries('candlestick').setData(bars);
+      const vp = computeVolumeProfile(bars, 0.1, 0.7);
+      // The renderer shares a value field for volume and TPO counts.
+      const overlay = new HorizontalProfile({
+        buckets: vp.buckets.map(({ price, volume }) => ({ price, value: volume })),
+        poc: vp.poc, vah: vp.vah, val: vp.val, width: 140, side: 'right',
+        barColor: 'rgba(90,110,150,0.5)', vaColor: 'rgba(120,150,200,0.6)',
+      });
+      chart.addPrimitive(overlay, 0);
+      window.__chart = chart;
+    }
+    document.getElementById('kind').addEventListener('change', (event) => build(event.target.value));
+    build('Volume Profile');
+  </script>
+</body>
+</html>

@@ -1,0 +1,252 @@
+---
+title: Live Data (OpenAlgo)
+description: REST history plus WebSocket realtime, wired through the OpenAlgo adapters.
+---
+
+import { Callout } from 'nextra/components'
+
+# Live data (OpenAlgo)
+
+The chart's market data depends only on the `DataFeed` interface, so any source fits behind
+a small adapter. Order entry is a separate contract, the trade tier's `OrderFeed` that its
+`OrderEngine` drives ([Trading](/docs/trading)), which a chart without trading never needs.
+OpenAlgo adapters are included.
+
+## Historical bars (REST)
+
+```ts
+import { OpenAlgoDataFeed } from 'openalgo-charts';
+
+const feed = new OpenAlgoDataFeed({ baseUrl: 'http://127.0.0.1:5000', apiKey: 'YOUR_KEY' });
+
+const day = 86400;
+const bars = await feed.getBars({
+  symbol: 'RELIANCE', exchange: 'NSE', interval: '1m',
+  from: Math.floor(Date.now() / 1000) - 7 * day,
+  to: Math.floor(Date.now() / 1000),
+});
+series.setData(bars);
+```
+
+`from` / `to` are **UTC seconds**; the adapter converts them to the IST date range OpenAlgo's
+`/api/v1/history` expects, and normalizes returned timestamps back to UTC seconds.
+Epoch seconds and milliseconds are accepted. Strings ending in `Z` or an explicit
+numeric offset use that offset; strings without an offset are interpreted as IST.
+
+The REST adapter translates these exact interval aliases at the request boundary:
+
+| Chart interval | OpenAlgo history interval |
+|---|---|
+| `1d`, `1D` | `D` |
+| `1w`, `1W` | `W` |
+| `1M`, `MN` | `M` |
+
+Other codes pass through unchanged, including `D`, `W`, `M` and the minute code `1m`.
+Non-OK HTTP responses reject the load. A JSON response with `status: 'error'` also
+rejects, using its `message` when present, even when the HTTP status is 200.
+
+## Explicit bar confirmation
+
+Native series accept optional confirmation metadata. Use it when your provider
+knows whether the latest bar is still forming, especially for tick-count or
+volume-driven bars whose close cannot be inferred from a clock.
+
+```ts
+series.setData(bars, { confirmation: 'forming' });
+series.update(latestBar, { confirmation: 'confirmed' });
+series.update(latestBar, { confirmation: 'auto' });
+series.update(correctedBar, { source: 'history' });
+```
+
+`forming` and `confirmed` override interval inference. A confirmation-only update
+is sufficient to recalculate indicators; OHLC values need not change. Same-time
+updates retain an explicit state unless replaced or cleared with `auto`. A new
+tail, replacement dataset, or changed instrument/timeframe clears old metadata.
+Prepending history retains confirmation for an unchanged tail. An older-bar
+correction cannot change the current tail's confirmation.
+
+`setData` is always a historical replacement, even if all timestamps match the
+previous dataset. `update` is live by default; use `source: 'history'` for a
+historical tail correction or append. Updates to older timestamps are historical
+automatically. Replay supplies its own forming/completed state and restores the
+saved data and confirmation when stopped. Historical loads and replay do not
+trigger native live indicator alerts.
+
+## Realtime (WebSocket)
+
+LTP / Quote / Depth come from the WS adapter. Feed its LTP ticks through a `CandleBuilder`
+and call `series.update()`:
+
+```ts
+import { OpenAlgoWsFeed, CandleBuilder } from 'openalgo-charts';
+
+const ws = new OpenAlgoWsFeed({ url: 'ws://127.0.0.1:8765', apiKey: 'YOUR_KEY' });
+const builder = new CandleBuilder({ intervalSec: 60, volumeMode: 'ltq-sum' });
+// Continue the bucket history already ended in, rather than opening a new one.
+if (bars.length) builder.seed(bars[bars.length - 1]);
+
+ws.connect();
+const stopLtp = ws.onLtp((e) => {
+  if (e.symbol !== 'RELIANCE' || (e.exchange && e.exchange !== 'NSE')) return;
+  const time = e.timeSec > 0 ? e.timeSec : Math.floor(Date.now() / 1000);
+  const u = builder.onTick({ time, price: e.ltp, ltq: e.ltq });
+  if (u) series.update(u.bar);
+});
+ws.subscribe('LTP', 'RELIANCE', 'NSE');
+
+function disposeChart() {
+  stopLtp();
+  ws.close();
+  chart.destroy();
+}
+```
+
+**Seed the builder**, and seed it again after every reconnect. History normally ends
+*inside* the bar currently forming. An unseeded builder has no current bar, so its first
+tick opens a fresh one for that same bucket, which opens at whatever tick price arrived
+first instead of the bucket's true open, and restarts its volume at zero. `seed` hands it
+the last historical bar so ticks fold into it instead.
+
+If you keep your own bar array and push the builder's output into it, an unseeded builder
+also leaves you two entries for that time. `setData` de-duplicates by time as of 1.0.12
+(keeping the later bar), so it no longer draws two candles on top of each other, but the
+open is still wrong until the bucket rolls over. Seeding is the actual fix.
+
+When history stops one bucket short of the one forming, the seed is an older bar and
+the first tick still opens the current bucket at its own price. The builder knows: the
+update carries `provisional: true`, and `builder.reconcile(bar)` adopts the open
+history reports once a refresh brings it (the extremes widen, the volume takes the
+larger value, the close stays with the ticks). `DataLoadingController.pushBar(bar, { provisional: true })` keeps that open across
+later ticks. After a reconnect, reseed with `builder.seed(builder.current())` so the
+bucket opened after the gap is provisional too, then refresh.
+
+The WS adapter speaks the documented OpenAlgo protocol (authenticate, then a numeric-mode subscribe,
+then `market_data`), with connection and control callbacks (`onState` / `onControl`).
+Market-data frames can carry `symbol` and `exchange` on the top-level envelope with
+prices inside `data`. Non-empty identity fields inside `data` take precedence, followed
+by the envelope fields and then the legacy `topic` fallback.
+
+## Real-time order updates
+
+OpenAlgo also streams **order lifecycle events** (fills, partial fills,
+rejections, cancellations) over the same socket (`subscribe_orders`). This is
+an account-level stream (no symbols/modes), pushed by the broker in live mode
+or by the sandbox engine in analyze mode. Use it to update on-chart order lines
+instantly instead of polling the order book:
+
+```ts
+ws.onOrderUpdate((e) => {
+  // e: { orderId, symbol, action, quantity, price, triggerPrice?, pricetype,
+  //      status, filledQuantity, averagePrice, rejectionReason, mode, ... }
+  const working = e.status === 'open' || e.status === 'trigger pending' || e.status === 'pending';
+  if (working) upsertOrderLine(e);
+  else removeOrderLine(e.orderId);        // complete / cancelled / rejected
+});
+ws.subscribeOrders();                     // replayed automatically on reconnect
+// ws.unsubscribeOrders() to stop
+```
+
+`status` is OpenAlgo's lowercase order vocabulary (`open`, `trigger pending`,
+`complete`, `rejected`, `cancelled`, …); the adapter maps it to the chart's
+`Order['status']` internally (the mapping itself is not a package export). Keep a slow
+order-book poll as reconciliation: brokers can deliver the same transition
+twice (dedupe on `orderId` + `status` + `filledQuantity`).
+
+After an unexpected close it **auto-reconnects** with exponential backoff, then
+re-authenticates and replays every active subscription. `close()` is treated as
+intentional and never reconnects. `onState` reports a `'reconnecting'` phase in
+between. Tune or disable it:
+
+```ts
+new OpenAlgoWsFeed({
+  url, apiKey,
+  reconnect: { enabled: true, baseDelayMs: 1000, maxDelayMs: 30000, maxAttempts: Infinity },
+});
+```
+
+## All-in-one live feed
+
+`OpenAlgoLiveDataFeed` composes REST history + WebSocket + the candle builder so you get a
+history that joins live data without a seam, from a single object:
+
+```ts
+import { OpenAlgoLiveDataFeed } from 'openalgo-charts';
+
+const live = new OpenAlgoLiveDataFeed({
+  baseUrl: 'http://127.0.0.1:5000', wsUrl: 'ws://127.0.0.1:8765', apiKey: 'YOUR_KEY',
+});
+const bars = await live.getBars({ symbol: 'RELIANCE', exchange: 'NSE', interval: '1m', from, to });
+series.setData(bars);
+// Pass seedFrom to continue the last history bar's bucket seamlessly.
+// Pass cumDayVolumeSoFar if using volumeMode: 'day-delta' to diff against the right baseline.
+const stopBars = live.subscribeBars(
+  { symbol: 'RELIANCE', exchange: 'NSE', interval: '1m', from, to },
+  (bar) => series.update(bar),
+  { seedFrom: bars[bars.length - 1] },
+);
+
+function disposeChart() {
+  stopBars();
+  live.close();
+  chart.destroy();
+}
+```
+
+The optional third argument implements the shared `BarSubscriptionOptions` contract:
+`seedFrom`, `cumDayVolumeSoFar`, and `onResync`. After a successful reconnect,
+`OpenAlgoLiveDataFeed` forwards the socket's `STREAM_RESYNC` notification to `onResync`.
+Subscription replay restores delivery; refresh history as well to repair any missed
+bars. A bare-chart host should buffer arriving live bars while fetching the current
+window with `noCache: true`, merge those observations before `series.setData`, and seed
+the next subscription from the merged last bar. Keep reconnect monitoring active during
+the fetch so a second interruption can supersede the pending repair.
+See [Custom Data Feeds](/docs/data-feeds#continuing-history-and-recovering-a-stream).
+
+With `createWidget(container, { feed: live, ... })`, the widget seeds every subscription
+and performs this history refresh automatically on `onResync`, preserving the visible
+logical range. It merges live bars received during the fetch into refreshed history.
+It keeps the previous chart visible with a stale-history error if the refresh fails or
+returns no bars, with display updates paused but buffering and reconnect monitoring
+still active. Call `widget.reload()` to retry; the request keeps `noCache: true`
+until a load succeeds. `widget.reload()` refreshes the current source without
+resetting the view; a changed symbol, exchange or interval starts a new load.
+The widget owns its subscription; the host still owns `live.close()` during teardown.
+
+Optional open interest is a separate feed capability. The bundled LTP stream
+does not manufacture OI from price or volume. If your provider supplies it, map
+observations to `Bar.oi` and declare instrument support as described in
+[Open interest](/docs/open-interest).
+
+## Long-running chart lifecycle
+
+Keep every unsubscribe returned by a feed or chart event, and release it before
+the chart view goes away. `chart.destroy()` cleans up chart-owned canvases,
+observers, and listeners, but it cannot close a feed that your application
+created:
+
+```ts
+const stopBars = live.subscribeBars(request, onBar, { seedFrom: bars[bars.length - 1] });
+const stopState = chart.on('pan', persistViewport);
+
+function disposeLiveChart() {
+  stopBars();
+  stopState();
+  live.close();
+  chart.destroy();
+}
+```
+
+For a direct `OpenAlgoWsFeed`, also keep the functions returned by `onLtp`,
+`onDepth`, `onState`, and `onControl`. Call them during teardown, then call
+`ws.close()` to stop reconnect and heartbeat timers. See
+[Performance & Operations](/docs/performance-and-operations) for bounded
+history and browser-memory guidance.
+
+<Callout type="warning">
+Your API key lives only in your app/browser - never commit it. Verify the exact REST paths
+and WS message schema against your running OpenAlgo build before production use, and prefer
+analyzer mode while testing the [trade path](/docs/trading).
+</Callout>
+
+A complete, runnable example (history + WebSocket + chart trading) lives in the repository
+under `examples/live`, which runs on `DataLoadingController` with `refreshOnBarClose`, `refreshOnGap` and `refreshWindowBars`.

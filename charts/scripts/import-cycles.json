@@ -1,0 +1,4 @@
+{
+  "comment": "Sizes, largest first, of the import cycles under src/ that type imports close (strongly connected components; scripts/check-cycles.mjs). Measured at 11838bf3, lowered as merges shrink it. This list only shrinks: a new or larger component fails npm run check:cycles, and so does this list once the tree measures lower, until it is lowered to match. Runtime cycles are not listed because there must be none.",
+  "typeInclusive": [57, 9, 7, 7, 6, 4, 2]
+}

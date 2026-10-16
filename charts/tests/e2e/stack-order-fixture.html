@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><style>
+body { margin: 24px; background: #171923; }
+#host { width: 950px; height: 560px; }
+#gl { width: 700px; height: 320px; margin-top: 16px; }
+</style></head>
+<body><div id="host"></div><div id="gl"></div><script type="module">
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+import { createChart, darkTheme, registerIndicator } from '/dist/openalgo-charts.mjs';
+import '/dist/openalgo-charts.indicators.mjs';
+
+// A flat study well above the candles, drawn thick in pure red, so one pixel
+// says whether the study or a drawing over the same spot painted last.
+registerIndicator({ id: 'stack-flat', name: 'Flat line', placement: 'onchart', inputs: [],
+  plots: [{ key: 'v', title: 'Flat', type: 'line', style: { color: '#ff0000', lineWidth: 6 } }],
+  calc: bars => ({ v: bars.map(() => 120) }) });
+
+const bars = Array.from({ length: 160 }, (_, i) => {
+  const close = 100 + Math.sin(i / 9) * 2;
+  return { time: 1700000000 + i * 60, open: close - 0.5, high: close + 1, low: close - 1, close, volume: 100 };
+});
+const t = i => bars[i].time;
+const api = { widget: null, chart: null, flatId: '', boxId: '', coverId: '', glChart: null, glFlatId: '', glBoxId: '', targets: [] };
+
+const widget = createWidget(document.querySelector('#host'), {
+  symbol: 'STACK SIM', interval: '1m', intervals: ['1m'], theme: 'dark',
+  rail: false, statusline: false, panels: false, navigation: { defaultVisibleBars: 120 },
+});
+api.widget = widget;
+api.chart = widget.chart;
+widget.series.setData(bars);
+// Nothing to fit but the candles and the flat line: a steady axis for pixels.
+widget.chart.setAutoScale(false);
+widget.chart.panes()[0].priceScale.setPriceRange({ min: 90, max: 130 });
+api.flatId = widget.chart.addIndicator('stack-flat').id;
+// An opaque blue box over the flat line, and an opaque cyan one over the candles.
+api.boxId = widget.draw.add({ tool: 'rectangle', paneIndex: 0,
+  points: [{ time: t(60), price: 125 }, { time: t(100), price: 115 }],
+  style: { color: '#0000ff', fill: true, fillOpacity: 1, lineWidth: 1 } }).id;
+api.coverId = widget.draw.add({ tool: 'rectangle', paneIndex: 0,
+  points: [{ time: t(110), price: 104 }, { time: t(140), price: 96 }],
+  style: { color: '#00ffff', fill: true, fillOpacity: 1, lineWidth: 1 } }).id;
+widget.chart.on('contextmenu', e => { api.targets.push(e.target.kind); });
+
+/** Page coordinates of a time and price on the main chart. */
+api.at = (time, price) => {
+  const rect = widget.root.querySelector('.oac-chart').getBoundingClientRect();
+  return { x: rect.left + widget.chart.timeToCoordinate(time), y: rect.top + widget.chart.priceToCoordinate(price) };
+};
+api.t = t;
+/** A price inside a bar's candle body, between its open and its close. */
+api.body = i => (bars[i].open + bars[i].close) / 2;
+
+/** The main chart's pane as one image: its base canvas with the overlay on top. */
+function composite(chart, root) {
+  const canvases = [...root.querySelectorAll('canvas')].slice(0, 2);
+  const [base, top] = canvases;
+  const out = document.createElement('canvas');
+  out.width = base.width; out.height = base.height;
+  const g = out.getContext('2d');
+  g.drawImage(base, 0, 0);
+  g.drawImage(top, 0, 0);
+  return out;
+}
+api.pixel = (which, time, price) => {
+  const chart = which === 'gl' ? api.glChart : widget.chart;
+  const root = which === 'gl' ? document.querySelector('#gl') : widget.root.querySelector('.oac-chart');
+  const image = composite(chart, root);
+  const ratio = image.width / root.querySelector('canvas').getBoundingClientRect().width;
+  const x = Math.round(chart.timeToCoordinate(time) * ratio), y = Math.round(chart.priceToCoordinate(price) * ratio);
+  return [...image.getContext('2d').getImageData(x, y, 1, 1).data];
+};
+
+// A second, raw chart on the GPU backend where the browser has one: the
+// series batch is flushed before a drawing placed between two series, so
+// the same order holds there.
+await import('/dist/openalgo-charts.webgl.mjs');
+const { DrawingController } = await import('/dist/openalgo-charts.draw.mjs');
+const gl = createChart(document.querySelector('#gl'), { renderer: 'auto', theme: darkTheme, navigation: { defaultVisibleBars: 120 } });
+gl.addSeries('candlestick').setData(bars);
+gl.setAutoScale(false);
+gl.panes()[0].priceScale.setPriceRange({ min: 90, max: 130 });
+api.glChart = gl;
+api.glFlatId = gl.addIndicator('stack-flat').id;
+api.glDraw = new DrawingController(gl);
+api.glBoxId = api.glDraw.add({ tool: 'rectangle', paneIndex: 0,
+  points: [{ time: t(60), price: 125 }, { time: t(100), price: 115 }],
+  style: { color: '#0000ff', fill: true, fillOpacity: 1, lineWidth: 1 } }).id;
+window.__stack = api;
+</script></body></html>

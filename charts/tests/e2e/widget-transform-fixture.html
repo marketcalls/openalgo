@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Widget transform fixture</title>
+<style>html,body{margin:0;height:100%;background:#0d0e12}#chart{position:absolute;inset:0}</style></head>
+<body><div id="chart"></div>
+<script type="module">
+import '/dist/openalgo-charts.transform.mjs';
+import '/dist/openalgo-charts.indicators.mjs';
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+
+// Five-minute bars that trade like a stock: a seeded random walk with wicks.
+let seed = 20260930;
+const random = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+const gauss = () => Math.sqrt(-2 * Math.log(random() || 1e-9)) * Math.cos(2 * Math.PI * random());
+const T = Date.UTC(2026, 8, 1, 3, 45) / 1000;
+const bars = [];
+let close = 1486.35;
+for (let i = 0; i < 300; i++) {
+  const open = close;
+  close = Math.round(open * (1 + gauss() * 0.0019) * 20) / 20;
+  const wick = open * 0.0011;
+  bars.push({ time: T + i * 300, open, close, volume: Math.round(52000 * (0.5 + random())),
+    high: Math.round((Math.max(open, close) + random() * wick) * 20) / 20,
+    low: Math.round((Math.min(open, close) - random() * wick) * 20) / 20 });
+}
+const streams = [];
+const feed = {
+  getBars: async () => bars.slice(),
+  subscribeBars: (request, push) => { streams.push(push); return () => {}; },
+};
+const widget = createWidget(document.getElementById('chart'), {
+  feed, symbol: 'SIM', exchange: 'NSE', interval: '5m', now: () => (T + 300 * 300 + 60) * 1000,
+  lookbackBars: 300, rail: false,
+});
+let forming = null;
+window.fixture = {
+  widget, bars,
+  /** A live tick: a new bar five minutes on, or the forming bar revised. */
+  live: (price, next = false) => {
+    const last = forming ?? bars[bars.length - 1];
+    forming = next || forming === null
+      ? { time: last.time + 300, open: last.close, high: Math.max(last.close, price), low: Math.min(last.close, price), close: price, volume: 100 }
+      : { ...forming, close: price, high: Math.max(forming.high, price), low: Math.min(forming.low, price) };
+    streams[streams.length - 1]({ ...forming });
+  },
+};
+window.__frame = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+</script></body></html>

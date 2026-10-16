@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html,body{margin:0;height:100%;background:#0d0e12}#chart{position:absolute;inset:0}</style></head>
+<body><div id="chart"></div>
+<script type="module">
+  import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+  import { ReplayController } from '/dist/openalgo-charts.mjs';
+  import '/dist/openalgo-charts.indicators.mjs';
+  const messages = {
+    'Chart toolbar': 'Herramientas del grafico',
+    'Chart settings': 'Configuracion del grafico',
+    'Close': 'Cerrar', 'Cancel': 'Cancelar', 'OK': 'Aceptar',
+    'Objects': 'Objetos', 'Chart objects': 'Objetos del grafico', 'Search objects': 'Buscar objetos',
+    'Interval {code}': 'Intervalo {code}',
+    'Chart controls': 'Controles del grafico', 'More': 'Mas opciones',
+    'Switch to the light theme': 'Cambiar al tema claro',
+    'Switch to the dark theme': 'Cambiar al tema oscuro',
+    'Dismiss': 'Descartar',
+    'schema.settings.tab.appearance': 'Apariencia',
+    'schema.settings.tab.axes': 'Escalas',
+    'schema.settings.tab.price': 'Precio',
+  };
+  const orders = [];
+  let locked = false;
+  let capabilities = { orderTypes: ['LIMIT'] };
+  const widget = createWidget(document.getElementById('chart'), {
+    symbol: 'OBJECTS', exchange: 'NSE', interval: '5m',
+    mobile: new URLSearchParams(location.search).has('mobile') ? 'always' : 'never',
+    translate: key => messages[key],
+    tradingCapabilities: () => capabilities,
+    tradingLocked: () => locked,
+    onOrder: order => orders.push(order),
+  });
+  widget.series.setData(Array.from({ length: 100 }, (_, index) => ({
+    time: 1700000000 + index * 300, open: 100 + index / 10, high: 102 + index / 10,
+    low: 99 + index / 10, close: 101 + index / 10, volume: 1000 + index,
+  })));
+  widget.chart.fitContent();
+  window.fixture = { widget, orders,
+    setLocked: value => { locked = value; },
+    setCapabilities: value => { capabilities = value; },
+    startReplay: () => new ReplayController(widget.chart, { startIndex: 10 }),
+    openMenu: () => widget.chart.emit('contextmenu', {
+      target: { kind: 'series', id: null, seriesType: 'candlestick' }, paneIndex: 0,
+      price: 105, index: 10, time: 1700003000, point: { x: 100, y: 150 }, preventDefault: () => {},
+    }),
+  };
+</script></body></html>

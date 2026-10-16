@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><style>html,body{margin:0;height:100%;background:#0d0e12}#t{position:absolute;inset:0}</style></head>
+<body>
+  <div id="t"></div>
+  <script type="module">
+    // The drawing UI of the widget tier: the floating toolbar, style
+    // templates, the coordinates tab and the objects panel, on bars that
+    // behave like a market: a seeded random walk over NSE sessions, with
+    // volatility that clusters, overnight gaps and quiet lunch hours.
+    import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+    import { DrawingTemplateRepository, createMemoryDrawingTemplateStorage } from '/dist/openalgo-charts.workspace.mjs';
+    import '/dist/openalgo-charts.indicators.mjs';
+
+    const params = new URLSearchParams(location.search);
+    const seed = Number(params.get('seed') ?? 20260927);
+    function mulberry32(a) {
+      return () => {
+        a |= 0; a = a + 0x6D2B79F5 | 0;
+        let t = Math.imul(a ^ a >>> 15, 1 | a);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+    const rand = mulberry32(seed);
+    const gauss = () => { let u = 0; while (u === 0) u = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand()); };
+
+    // Five-minute bars, 09:15 to 15:30 IST, weekdays only, from Monday 2026-09-07.
+    const bars = [];
+    let price = 2468.35;
+    let vol = 0.0011;
+    const first = Date.UTC(2026, 8, 7, 3, 45) / 1000;
+    for (let day = 0, sessions = 0; sessions < 9; day++) {
+      const open = first + day * 86400;
+      const weekday = new Date(open * 1000).getUTCDay();
+      if (weekday === 0 || weekday === 6) continue;
+      sessions++;
+      // Overnight news: the open lands away from the close, sometimes far.
+      if (bars.length > 0) price *= 1 + gauss() * 0.0045 + (rand() < 0.2 ? gauss() * 0.009 : 0);
+      for (let i = 0; i < 75; i++) {
+        // Volatility clusters: a big move raises the next bar's risk, then it decays.
+        const shock = gauss();
+        const lunch = i > 36 && i < 50 ? 0.6 : 1;
+        vol = 0.00045 + 0.82 * (vol - 0.00045) + 0.0009 * Math.abs(shock) * (i < 6 ? 1.8 : 1);
+        const o = price;
+        const c = o * (1 + shock * vol * lunch + 0.00003);
+        const wick = o * vol * lunch;
+        const h = Math.max(o, c) + Math.abs(gauss()) * wick * 0.8;
+        const l = Math.min(o, c) - Math.abs(gauss()) * wick * 0.8;
+        const round = (x) => Math.round(x * 20) / 20;
+        bars.push({ time: open + i * 300, open: round(o), high: round(h), low: round(l), close: round(c),
+          volume: Math.round(1800 * (1 + 3 * Math.abs(shock)) * (i < 6 || i > 68 ? 2.2 : lunch)) });
+        price = c;
+      }
+    }
+
+    // Swing lows: a bar whose low is the lowest of the five on either side.
+    const swings = bars.map((b, i) => i).filter(i => i >= 5 && i < bars.length - 5
+      && bars.slice(i - 5, i + 6).every(o => o.low >= bars[i].low));
+    const lowest = (from, to) => swings.filter(i => i >= from && i < to).reduce((a, b) => (bars[b].low < bars[a].low ? b : a));
+    const n = bars.length;
+    const a = lowest(Math.floor(n * 0.35), Math.floor(n * 0.6));
+    const b = lowest(Math.floor(n * 0.75), n);
+    // The session high after the first low, a level the trend line runs under.
+    const high = bars.slice(a).reduce((m, bar) => Math.max(m, bar.high), -Infinity);
+
+    const feed = { getBars: async () => bars, subscribeBars: () => () => {} };
+    const templates = new DrawingTemplateRepository(createMemoryDrawingTemplateStorage(), 'fixture');
+    const theme = params.get('theme') === 'light' ? 'light' : 'dark';
+    const errors = [];
+    window.addEventListener('error', e => errors.push(e.message));
+    const widget = createWidget(document.getElementById('t'), {
+      feed, symbol: 'RELIANCE', exchange: 'NSE', interval: '5m', intervals: ['5m', '15m', '1h'], theme,
+      rail: { favorites: ['trend-line', 'rectangle', 'horizontal-line'] }, mobile: 'never',
+      drawingTemplates: templates, navigation: { defaultVisibleBars: 440 },
+    });
+    const api = { widget, templates, bars, errors, ids: {}, swingLows: [a, b], ready: false };
+    window.__drawUi = api;
+    widget.on('data', e => {
+      if (api.ready || e.bars === 0) return;
+      const draw = widget.draw;
+      api.ids.trend = draw.add({ tool: 'trend-line', paneIndex: 0, style: { color: '#f0a020', lineWidth: 2 },
+        points: [{ time: bars[a].time, price: bars[a].low }, { time: bars[b].time, price: bars[b].low }] }).id;
+      api.ids.level = draw.add({ tool: 'horizontal-line', paneIndex: 0, style: { color: '#2a9df4', lineWidth: 1, lineStyle: 'dashed' },
+        points: [{ time: bars[a].time, price: high }] }).id;
+      api.ids.box = draw.add({ tool: 'rectangle', paneIndex: 0, style: { color: '#9c6ade', lineWidth: 1 },
+        points: [{ time: bars[b - 30].time, price: bars[b].low - 4 }, { time: bars[b + 3].time, price: high - 2 }] }).id;
+      api.ready = true;
+    });
+  </script>
+</body>
+</html>

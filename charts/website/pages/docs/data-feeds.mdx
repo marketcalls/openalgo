@@ -1,0 +1,232 @@
+---
+title: Custom Data Feeds
+description: The DataFeed and OrderFeed interfaces, and writing an adapter for any broker.
+---
+
+# Custom data feeds
+
+The engine never imports a broker SDK. It depends on two small interfaces, so wiring a new
+source is a focused adapter - not a fork.
+
+## DataFeed
+
+```ts
+interface DataFeed {
+  getBars(req: BarsRequest): Promise<Bar[]>;
+  getBarsPage?(req: BarsPageRequest): Promise<BarsPage>;
+  getCachedBars?(req: BarsRequest): Promise<Bar[] | undefined>;
+  // optional: live updates to the last bar, or a new last bar
+  subscribeBars?(req: BarsRequest, onBar: (bar: Bar, meta?: LiveBarMeta) => void, opts?: BarSubscriptionOptions): () => void;
+  subscribeDepth?(req: BarsRequest, onDepth: (depth: MarketDepth) => void, opts?: { depthLevel?: number }): () => void;
+  // optional: instruments matching what the user typed, closest first
+  searchSymbols?(request: SymbolSearchRequest): Promise<SymbolMatch[]>;
+}
+
+interface BarsRequest {
+  symbol: string;
+  exchange: string;
+  interval: string;       // '5s' | '1m' | '1h' | 'D' | ...
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  countBack?: number;
+  from?: number;          // UTC seconds
+  to?: number;            // UTC seconds
+  noCache?: boolean;      // bypass cached history for an authoritative refresh
+}
+
+interface BarSubscriptionOptions {
+  seedFrom?: Bar;
+  cumDayVolumeSoFar?: number;
+  onResync?: () => void;
+}
+
+interface LiveBarMeta {
+  provisional?: boolean;
+}
+```
+
+`DataFeed`, `BarsRequest`, `BarSubscriptionOptions`, `LiveBarMeta`, `MarketDepth`,
+`SymbolSearchRequest` and `SymbolMatch` are exported from `openalgo-charts`. The third subscription argument is optional; existing feeds with
+two-argument `subscribeBars` implementations remain compatible. A history-only feed
+omits `subscribeBars` so hosts can detect whether live data is available.
+
+Pass `meta.provisional` when a live builder opened a bucket after missing its
+earlier ticks. `DataLoadingController` uses that flag to retain an authoritative
+history open during repair. Depth is separately optional; the requested level
+is broker-dependent.
+
+`Bar.oi` carries an optional open-interest observation. Preserve zero, omit a
+missing reading, and declare instrument support separately through
+`ChartDataContext.hasOpenInterest`. See [Open interest](/docs/open-interest).
+
+`interval` is a **code your feed and the engine both have to agree on**. The built-in tokens
+(`5s`, `1m`, `1h`, `D`, `W`) resolve on their own; anything else, including a monthly bar or
+a 500-tick bar, is registered by the host. See [Custom Intervals](/docs/custom-intervals),
+and note that an unrecognised code now throws rather than quietly meaning one minute.
+
+A minimal adapter just maps your API's rows to `Bar` (UTC seconds + OHLCV):
+
+```ts
+class MyFeed implements DataFeed {
+  async getBars(req: BarsRequest): Promise<Bar[]> {
+    const rows = await fetchFromMyApi(req);
+    return rows.map((r) => ({
+      time: Math.floor(r.epochMs / 1000),
+      open: r.o, high: r.h, low: r.l, close: r.c, volume: r.v,
+    })).sort((a, b) => a.time - b.time);
+  }
+}
+```
+
+## Symbol search
+
+From 2.6.0 a feed can also answer symbol lookups. The widget uses
+`searchSymbols` for its symbol box, typed entry, watchlist and study symbol
+inputs whenever the host passes no `symbolSearch`, so a feed that searches needs
+no host code for it. A host `symbolSearch` still wins.
+
+```ts
+interface SymbolSearchRequest {
+  query: string;
+  signal?: AbortSignal;   // aborted once a newer query replaces this one
+}
+
+interface SymbolMatch {
+  symbol: string;
+  exchange?: string;
+  name?: string;
+  assetClass?: string;    // shown as category filters
+  iconUrl?: string;
+  contractGroup?: { label?: string; contracts: readonly SymbolMatch[] };
+}
+```
+
+Both OpenAlgo feeds implement it through `POST /api/v1/search`, with the API key
+in the body as history sends it. They keep the platform's ranking, show at most
+50 rows, file each row under `Index`, `Equity`, `Futures` or `Options`, and gather
+the options of one underlying and expiry into one row that opens onto its
+contracts, so a search for an index lists expiries rather than every strike.
+`withBarCache` passes `searchSymbols` through when the wrapped feed has it.
+
+```ts
+import { OpenAlgoDataFeed } from 'openalgo-charts';
+import { createWidget } from 'openalgo-charts/widget';
+
+// Keep the key out of source control; a backend proxy is better still.
+const feed = new OpenAlgoDataFeed({ baseUrl: 'http://127.0.0.1:5000', apiKey: 'YOUR_KEY' });
+createWidget(container, { feed, symbol: 'RELIANCE', exchange: 'NSE' });
+// The symbol box now searches OpenAlgo's instruments.
+```
+
+## Continuing history and recovering a stream
+
+After loading history, pass its last bar to `subscribeBars` through `seedFrom` so a
+time-bucketed live builder continues the current candle's open, high, low and volume.
+Count-driven bars cannot resume historical trade counts. The optional
+`cumDayVolumeSoFar` is the cumulative day volume at that same snapshot, for feeds using
+day-volume deltas; it is not the last bar's volume.
+
+A feed calls `onResync` when a restored connection may have missed bars. A host using a
+bare chart should mark its display stale, keep receiving and buffering live bars, and
+fetch the current history window with `noCache: true`. Merge the buffered observations
+into that history before `setData`, then seed the replacement subscription from the
+merged last bar before releasing the old subscription. Keep resync monitoring active
+so another reconnect can supersede the pending request. Preserve the viewport, and
+ignore results for a symbol or interval the user has since left.
+
+Live candle volumes and history candle volumes are snapshots; adding them together
+double-counts overlapping trades. A repair needs a defined merge policy for overlapping
+timestamps. The widget retains the history open, combines high/low extremes, uses the
+latest buffered close, and takes the maximum volume. This does not reconstruct unseen
+trades. A buffered whole candle can retain a seed extreme that history corrected;
+exact reconciliation needs snapshot/tick ordering the bar contract does not provide.
+Bars without buffered observations keep their authoritative history values. If recovery
+fails, keep the previous display marked stale and offer a retry while continuing to
+collect live observations.
+
+`onBar` is for tail updates. Do not send older gap-fill bars through `series.update()`;
+they need the history replacement path. [The widget](/docs/widget) handles this recovery
+sequence automatically for feeds that signal `onResync`.
+
+## Warm loads for any feed
+
+`withBarCache` is a `DataFeed` in and a `DataFeed` out, so an adapter of your own gets the
+same warm-load caching the bundled one does, with nothing to implement:
+
+```ts
+import { withBarCache } from 'openalgo-charts';
+
+const feed = withBarCache(new MyFeed(), { ttlMs: 60_000 });
+await feed.getBars({ symbol, exchange, interval, from, to, noCache: true });
+```
+
+`noCache: true` skips a cached history result and refreshes it from the wrapped source.
+Custom feeds and cache wrappers should honor or forward this optional `BarsRequest`
+field. `withBarCache` also forwards the subscription options, including `onResync`.
+
+Entries are keyed `symbol | exchange | interval` with the range deliberately left out, and
+**the forming bar is never stored**, because a chart that paints a frozen candle from cache
+is confidently wrong with no spinner to warn anyone. See [Bar Cache](/docs/bar-cache) for
+the freshness rules, the memory bounds, and how to plug in your own persistent store.
+
+The cache is separate from the bars already retained by a chart. For a live
+adapter that stays open for hours, keep a bounded source window and release
+every subscription during teardown. See
+[Performance & Operations](/docs/performance-and-operations).
+
+## OrderFeed and TradeFeed
+
+`OrderFeed` (from `openalgo-charts/trade`) is what the engine's write path needs, and the
+only one you implement to place orders. Note that `place` receives the engine's
+`mode`, so an adapter can route analyzer traffic differently from live:
+
+```ts
+interface OrderFeed {
+  place(req: PlaceRequest & { mode: 'live' | 'analyzer' }): Promise<{ orderId: string }>;
+  modify(orderId: string, patch: { price?: number; triggerPrice?: number; qty?: number }): Promise<void>;
+  cancel(orderId: string): Promise<void>;
+}
+```
+
+`TradeFeed` (from the base package) is deprecated and goes in 3.0.0. Nothing in the library
+takes or implements it, and the trading layer never calls one:
+
+```ts
+interface TradeFeed {
+  placeOrder(o: PlaceOrder): Promise<{ orderId: string }>;
+  modifyOrder(orderId: string, patch: Partial<PlaceOrder>): Promise<void>;
+  cancelOrder(orderId: string): Promise<void>;
+  subscribeOrders(cb: (orders: unknown[]) => void): UnsubscribeFn;
+  subscribePositions(cb: (positions: unknown[]) => void): UnsubscribeFn;
+}
+```
+
+Implement `OrderFeed` against your broker for the engine's writes, and hand the orders and
+positions you read back to the chart with `chart.trading.syncState`: that is what the on-chart
+trading layer draws from. The bundled `OpenAlgoTradeFeed` implements `OrderFeed` and is the
+reference implementation; `FakeBroker` is an in-memory `OrderFeed` for tests and demos.
+
+## Time conversion helpers
+
+The library exports the conversions it uses internally, so your adapter can reuse them:
+
+```ts
+import {
+  epochMsToUtcSeconds, istStringToUtcSeconds, utcSecondsToIstDateString,
+  formatIstTime, formatIstTimeSeconds, IST_OFFSET_SECONDS,
+} from 'openalgo-charts';
+```
+
+## Managed history capabilities (2.1.6)
+
+`BarsPageRequest` extends `BarsRequest` with exclusive `before: UTCSeconds` and
+required `countBack: number`. Return `BarsPage { bars: Bar[]; hasMore?: boolean;
+nextBefore?: UTCSeconds }`. Omit `hasMore` when the provider cannot establish
+exhaustion; one empty date window is not enough evidence. The next cursor must
+move backward. Existing feeds need only `getBars` and continue to work.
+
+Forward `req.signal` to `fetch` and honor `noCache` for authoritative repairs.
+`HistoryRequestPool` shares identical pending requests without cancelling other
+consumers when one chart changes symbol. The pool and `DataLoadingController`
+are in the base tier. See [data loading](/docs/data-loading) for options,
+cache snapshots, deadlines, replay fences and widget integration.

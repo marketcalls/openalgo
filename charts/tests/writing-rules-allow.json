@@ -1,0 +1,75 @@
+[
+  {
+    "file": "src/input/shortcuts.ts",
+    "text": "\u2190",
+    "reason": "formatCombo, a public export, shows the arrow keys as the arrows printed on them; hosts and tests read that output, and the widget's own chord display uses words."
+  },
+  {
+    "file": "src/input/shortcuts.ts",
+    "text": "\u2192",
+    "reason": "formatCombo, a public export, shows the arrow keys as the arrows printed on them; hosts and tests read that output, and the widget's own chord display uses words."
+  },
+  {
+    "file": "src/input/shortcuts.ts",
+    "text": "\u2191",
+    "reason": "formatCombo, a public export, shows the arrow keys as the arrows printed on them; hosts and tests read that output, and the widget's own chord display uses words."
+  },
+  {
+    "file": "src/input/shortcuts.ts",
+    "text": "\u2193",
+    "reason": "formatCombo, a public export, shows the arrow keys as the arrows printed on them; hosts and tests read that output, and the widget's own chord display uses words."
+  },
+  {
+    "file": "src/input/shortcuts.ts",
+    "text": "\u21e7",
+    "reason": "formatCombo shows the macOS modifiers as the key symbols the platform itself prints (the Shift arrow among them); hosts and tests read that output, and the widget's own chord display uses words."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "Armed",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "Keep tool armed",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "On: the tool stays armed after each drawing",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "Tools stay armed after each drawing",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "{group}: chevron for the rest. Double-click keeps it armed",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "{name} stays armed until Escape",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "{count} chart shortcut struck through: the same chord arms a drawing tool here and takes precedence.",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  },
+  {
+    "file": "src/widget/localization.ts",
+    "text": "{count} chart shortcuts struck through: the same chord arms a drawing tool here and takes precedence.",
+    "whole": true,
+    "reason": "A deprecated message key, retained so host catalogs written for the armed wording stay type compatible until 3.0.0 (COMPATIBILITY.md); the widget no longer shows it."
+  }
+]

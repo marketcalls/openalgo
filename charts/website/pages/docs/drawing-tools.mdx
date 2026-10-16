@@ -1,0 +1,1160 @@
+---
+title: Drawing Tools
+description: 87 drawing tools, a headless controller, undo/redo, and persistence.
+---
+
+import { Callout } from 'nextra/components'
+import DrawingToolsDemo from '../../components/DrawingToolsDemo'
+
+# Drawing Tools
+
+`openalgo-charts/draw` is a lazy tier (**58.44 kB** Brotli in 2.6.4) with 87 tools and a headless
+controller. It ships **no UI**: no toolbar, no dialogs. It owns the model and the
+interactions; your app supplies the buttons.
+
+## Try the drawing tools
+
+Pick any tool from the full catalogue or use the quick rail and draw directly on the chart. The three sample
+drawings are editable: select one on the chart or from the drawing list, then move
+it, drag a handle, or delete it. Undo and redo let you try changes; Reset demo restores
+the examples.
+
+<DrawingToolsDemo />
+
+This playground supplies a small toolbar around `DrawingController`. For the complete
+packaged rail, properties dialogs and shortcuts, use [the widget tier](/docs/widget).
+
+Open the [full-size drawing gallery](/demos/drawings/index.html) for a prepared, editable
+sample of every tool, phone controls and simulated NIFTY prices near 23800.
+
+## Start with the controller
+
+```ts
+import { createChart } from 'openalgo-charts';
+import { DrawingController } from 'openalgo-charts/draw';
+
+const chart = createChart(el);
+chart.addSeries('candlestick').setData(bars);
+
+const draw = new DrawingController(chart, { magnet: true });
+draw.setTool('trend-line');   // the next two clicks place it
+```
+
+## The tools
+
+**87 built-in tools**, all registered when the tier is imported.
+
+| Group | `id` | Anchors |
+|---|---|---|
+| Lines | `trend-line`, `ray`, `extended-line`, `arrow`, `info-line`, `trend-angle` | 2 |
+| Horizontal / vertical | `horizontal-line`, `horizontal-ray`, `vertical-line`, `cross-line` | 1 |
+| Shapes | `rectangle`, `ellipse`, `circle` | 2 |
+| Shapes | `triangle`, `rotated-rectangle` | 3 |
+| Paths | `path`, `polyline`; `arc`, `curve`, `double-curve` | n; 3 |
+| Channels | `parallel-channel`, `fib-channel`, `flat-top-bottom`; `disjoint-channel`; `regression-channel` | 3; 4; 2 |
+| Pitchforks | `pitchfork`, `schiff-pitchfork`, `modified-schiff-pitchfork`, `inside-pitchfork` | 3 |
+| Fibonacci levels | `fib-retracement`, `fib-extension-two-point`; `fib-extension` | 2; 3 |
+| Fibonacci time | `fib-time-zone`; `trend-fib-time` | 2; 3 |
+| Fibonacci geometry | `fib-fan`, `fib-speed-resistance-fan`, `fib-circles`, `fib-speed-resistance-arcs`, `fib-spiral`; `fib-wedge` | 2; 3 |
+| Gann | `gann-fan`, `gann-box`, `gann-square` | 2 |
+| Geometric studies | `dedekind-tessellation`, `sonic`, `supersonic`, `golden-sonic`, `golden-supersonic` | 2 |
+| Harmonic patterns | `xabcd-pattern`, `gartley`, `bat`, `butterfly`, `crab`, `shark`, `cypher`; `abcd-pattern` | 5; 4 |
+| Wave patterns | `elliott-impulse`; `elliott-correction`; `head-shoulders` | 5; 3; 7 |
+| Forecasting | `long-position`, `short-position`; `forecast` | 3; 2 |
+| Measurers | `price-range`, `date-range`, `measure` | 2 |
+| Marks | `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `icon-stamp` | 1 |
+| Cycles | `cyclic-lines`, `time-cycles`, `sine-line` | 2 |
+| Text and notes | `text`, `price-label`, `flag-mark`, `note`, `balloon`, `comment`, `signpost`, `price-note`, `table`; `callout` | 1; 2 |
+| Brushes | `brush`, `highlighter` | n |
+| Analysis | `anchored-vwap`; `fixed-range-volume-profile` | 1; 2 |
+
+`long-position` and `short-position` place in two clicks: the entry, then the target.
+The second click is also the direction: release above the entry and the trade is a long,
+below it and it is a short, whichever tool was armed (the armed tool only decides which
+way a bare click faces). The stop lands opposite the entry at one part risk to two parts
+reward, sized on screen (64 px of risk, 150 px wide) rather than as a fraction of price,
+so the box reads the same on a 3 rupee stock and a 24,000 point index. Every level stays a
+handle, and the stop and target are held on opposite sides of the entry: drag one through
+the entry and the other reflects, so the trade turns around with its ratio intact. The
+readouts are a header of direction and R:R, money at risk and position size (from
+`accountSize` and `risk` in the style bag), and each zone's move in percent, with the level
+price on request; `props.showHeader`, `showLossSize`, `showTargetLabel`, `showStopLabel`,
+`showPrices`, `profitColor` and `lossColor` are the toggles. The zones default to the theme's up and down
+candle colours, as the measure, price range, forecast and a line's readout are tinted by
+direction, so a drawing reads the same as the candles beside it on any theme.
+
+Anchor counts of `n` mean the tool collects anchors until you end it. **Freehand** tools
+(`brush`, `highlighter`) sample the cursor while the pointer is held and finish on release:
+one press-drag-release is one stroke, and only the two ends get grab handles. The other
+`n` tools (`path`, `polyline`) take one anchor per click and finish on **double-click**, or
+on `controller.finish()` if you want to bind a key to it.
+
+`measure` draws price and time arrows across its box and a chip carrying the
+change, percentage, bar count, calendar span, and the volume traded over the
+span (that last one via `rc.bars()`, so it appears only when the pane has a
+price series with volume).
+
+The three measurers differ only in what they report. `measure` gives price change, percent
+*and* bar count; `price-range` drops the time axis; `date-range` drops the price axis, which
+is what you want when the other axis is noise. All three take their **bar count from logical
+indices**, so it matches what the gapless axis shows rather than raw elapsed time.
+
+`circle` measures its radius in **pixels**, so it stays round on screen instead of becoming
+the ellipse that differing axis scales would otherwise produce. `arc` passes *through* its
+middle anchor; `curve` treats that anchor as a control handle, so the path only leans toward
+it. `highlighter` is `path` with a fat translucent stroke, and is grabbable anywhere across
+its width.
+
+## Anchored analysis
+
+`anchored-vwap` places with one click and accumulates from the first loaded candle
+at or after that timestamp through the latest candle. `fixed-range-volume-profile`
+uses two clicks to choose an inclusive time range; either anchor order works.
+Both use the primary OHLCV series of their owning pane, retain UTC timestamps
+when history changes, and support the usual selection, dragging, properties,
+undo, deletion and JSON restore. Moving an anchor's price moves its handle;
+the calculation depends on its time and the series data.
+
+```ts
+draw.setTool('anchored-vwap');
+// Or add a known range directly:
+const profile = draw.add({
+  tool: 'fixed-range-volume-profile', paneIndex: 0,
+  points: [{ time: startTime, price: startPrice }, { time: endTime, price: endPrice }],
+  style: { color: '#4f8cff', fillOpacity: 0.4 },
+  props: { rows: 48, valueArea: 70, width: 35, side: 'left' },
+});
+draw.update(profile.id, { props: { rows: 64, showPoc: true } });
+```
+
+The profile is an **estimate from candles**: each candle's volume is distributed
+uniformly over its low-to-high range. It does not represent exchange
+trade-by-trade volume. Its point of control is the midpoint of the largest
+volume row. The value area grows contiguously around that row until it reaches
+the selected percentage, choosing the larger adjacent row first and the lower
+row on ties.
+
+| Drawing | `props` setting | Default | Bounds or choices |
+|---|---|---|---|
+| Anchored VWAP | `source` | `hlc3` | `hlc3`, `close`, `hl2`, `ohlc4` |
+| Anchored VWAP | `showBands` | `true` | Boolean |
+| Anchored VWAP | `bandMultiplier` | `1` | 0 to 5; volume-weighted population standard deviation |
+| Volume profile | `rows` | `48` | Requested count rounded to 4 to 200; fewer rows when distinct price edges cannot be represented, one for flat prices |
+| Volume profile | `valueArea` | `70` | 1 to 100 percent |
+| Volume profile | `width` | `35` | 5 to 100 percent of the anchored screen span |
+| Volume profile | `side` | `left` | `left` or `right` |
+| Volume profile | `showPoc` | `true` | Boolean |
+| Volume profile | `showValueArea` | `true` | Boolean |
+
+Both expose line color, width, dash and label font settings. Profile histogram
+opacity is `style.fillOpacity` (default `0.4`). `drawingSettingsSchema()` supplies
+the controls; `readDrawingSettings()` returns their effective declared defaults
+when the drawing has no override. Calculation settings are bounded even when
+loaded directly from JSON. Histogram row lookups use at most 200 boundaries;
+interior rows are accumulated without visiting every row for each candle. Narrow
+price ranges merge indistinguishable boundaries and distribute volume using the
+remaining row widths. The forming candle is recalculated on every call and paint.
+
+Missing, negative or nonfinite volume is unavailable. Zero volume is a known
+observation with no weight. A result with some unavailable observations is
+labelled partial; a wholly unavailable or zero-volume range shows that state
+instead of a valid measurement. These notices remain visible when optional
+labels are hidden, and the anchor marks keep an unavailable drawing selectable.
+
+If the requested anchor or range start precedes the earliest supplied candle,
+`historyPartial` is true and an otherwise usable result has `status: 'partial'`.
+The drawing explicitly reports partial history, separately from missing volume.
+Load history through the anchor to obtain the full measurement; prepending those
+bars recalculates the result without changing the stored timestamps.
+
+The draw tier also exports the DOM-free calculators and descriptors:
+
+```ts
+import {
+  anchoredVwapAnalysis, fixedRangeVolumeProfileAnalysis,
+  ANCHORED_VWAP, FIXED_RANGE_VOLUME_PROFILE,
+} from 'openalgo-charts/draw';
+
+const vwap = anchoredVwapAnalysis(bars, anchorTime, { source: 'hlc3' });
+const histogram = fixedRangeVolumeProfileAnalysis(bars, startTime, endTime, {
+  rows: 48, valueArea: 70,
+});
+```
+
+Pass bars sorted by ascending timestamp. Results report `status`, `historyPartial`,
+`missingVolumeBars` and `invalidPriceBars`. VWAP `points` carry `time`, `value`,
+`deviation` and `breakBefore` for omitted observations. Profile `rows` carry
+`low`, `high`, `volume` and `valueArea`, alongside `totalVolume`, `poc`,
+`valueAreaLow` and `valueAreaHigh`. A status can be `ready`, `partial`,
+`missing-volume`, `zero-volume`, `empty` or `invalid-data`; unavailable profile
+levels are `null`. These helpers need neither the indicators tier nor the profile tier.
+
+## Advanced drawings in 2.2.0
+
+The additional 34 tools use the same selection, settings, undo/redo and saved
+`Drawing` document as the existing catalogue. Multi-point placement shows the
+anchors already chosen and a dashed guide until the final point is placed.
+
+`regression-channel` fits the loaded primary series closes within the selected
+time range. The deviation multiplier controls the outer bands and the readout
+shows R-squared and the number of valid bars. Moving or updating a forming bar
+recalculates the fit. A range without loaded bars shows a clear empty-range label.
+
+The four pitchforks offer standard, Schiff, modified Schiff and inside geometry.
+Levels, fills and labels remain editable. `disjoint-channel` has four independent
+endpoints; `flat-top-bottom` takes a trend edge and a horizontal opposite edge.
+
+`fib-extension` retains its existing three-anchor projection. The new
+`fib-extension-two-point` extends one measured swing. `fib-fan` retains its saved
+price-ray geometry and is named Fib Fan; `fib-speed-resistance-fan` adds both time
+and price ray families. `trend-fib-time` measures logical bar spacing from its
+first two anchors and projects it from the third, including across session gaps.
+
+Circles, radial arcs and wavefronts use screen radii; they remain circular when
+the time and price axes have different scales. `fib-wedge` uses three anchors
+for its centre and angle. Gann Square combines price/time divisions, fans and
+arcs. Dedekind Tessellation limits curvature and skips off-screen work to keep
+recursive geometry bounded.
+
+The wavefront tools expose editable level ladders. For `sonic` and `supersonic`,
+Wave limit caps the enabled ladder at six by default and can increase to twelve.
+Golden variants use their Fibonacci-spaced levels directly. Mach number controls
+the supersonic cone angle; Max curvature controls tessellation detail.
+
+Harmonic and wave tools are manually placed annotations. Their labels describe
+the chosen anchors and measured ratios; they do not detect patterns or generate
+orders. Named harmonic patterns compare measured ratios against their own expected
+ranges. When labels are enabled, they show measured values with `OK` or `OUT`
+and an overall status once all anchors are placed. Zero-length legs omit unavailable
+ratios instead of printing non-finite values. All anchors remain independently editable.
+
+## Existing layouts
+
+Saved documents remained version 2 in 2.2.0 (version 3 adds only an
+[interval range](#visibility-per-interval), and a document without one is still written as
+version 2). Existing tool IDs and anchor formats are
+preserved, including forward projections beyond the latest candle. Drawing
+bodies, guides and handles stay clipped to the plot, including with a left price
+axis. The new descriptor arrays `ADVANCED_LINE_TOOLS`, `ADVANCED_GEOMETRY_TOOLS`
+and `PATTERN_DRAWING_TOOLS` are exported for hosts that inspect tool families;
+normal imports still register the full catalogue automatically.
+
+## Anchors live in data space
+
+A drawing's points are `{ time, price }`, never pixels. The time axis is gapless (weekends,
+holidays, and session breaks collapse), so a pixel anchor would slide the moment the viewport
+changed. Anchors map through `DataLayer.timeToIndexFloat`, which also resolves positions
+*between* bars (inside a collapsed gap) and *past the last bar*, where trend projections and
+forecasts live.
+
+The bar times past the last bar follow the chart's session calendar when the host set one,
+with `chart.setSessionCalendar`, `SessionCalendar.applyTo`, `Instrument.applyTo` or `chart.dataLayer.setSessionCalendar`: on an intraday chart an
+endpoint drawn two bars past Friday's last candle lands on Monday's second bar, not on Friday
+night. Without a calendar they continue at the median recent bar interval, never at the gap
+between the last two bars, which is so often a night or a weekend. See
+[times past the last bar](/docs/instruments#times-past-the-last-bar).
+
+A note, a box or a table can instead be pinned to the screen. Its anchors are then fractions
+of its pane's plot, kept in a field of their own; see [Pinned to the screen](#pinned-to-the-screen).
+
+## Using it from TypeScript
+
+`DrawingController` takes a `DrawingChartHost`, a structural interface covering
+the members it uses, which the chart from `createChart()` satisfies directly:
+
+```ts
+import { createChart } from 'openalgo-charts';
+import { DrawingController } from 'openalgo-charts/draw';
+
+const chart = createChart(el);
+const draw = new DrawingController(chart);   // no cast needed
+```
+
+<Callout type="info">
+Before 1.0.14 this failed with *"Types have separate declarations of a private
+property"*: each tier inlined its own copy of `Chart`, and private members make a
+class nominal, so the two copies were different types. If you are pinned below
+1.0.14 and see that error, upgrade. There is no workaround from outside the
+package.
+</Callout>
+
+The host contract, if you are wrapping the chart rather than passing it directly:
+
+```ts
+interface DrawingChartHost {
+  on(event: string, handler: (payload: unknown) => void): () => void;
+  emit(event: string, payload: unknown): void;
+  addPrimitive(primitive: IPrimitive, paneIndex?: number): void;
+  removePrimitive(primitive: IPrimitive): void;
+  readonly dataLayer: DataLayer;
+  getVisibleLogicalRange(): { from: number; to: number } | null;
+  drawingState(): unknown;
+  setDrawingState(state: unknown): void;
+  setPlacementMode?(active: boolean): void;
+  // Optional. The first two make a paste or nudge offset a screen translation that
+  // survives a log scale, and place a drawing for its alert values. The third keeps a
+  // drawing copied out of an indicator pane from conjuring an empty pane in a chart
+  // that has fewer, and lets an alert read a drawing on a pane collapsed to its header
+  // strip, where the first two return null, through that pane's own scale.
+  priceToCoordinate?(price: number, paneIndex?: number): number | null;
+  coordinateToPrice?(y: number, paneIndex?: number): number | null;
+  panes?(): readonly unknown[];
+  // Optional, for drawings pinned to the screen: the time axis, whose width is the
+  // plot width a pinned x is a fraction of, and the price columns, whose innermost
+  // left edge is where the plot begins on a chart with no bars to measure against.
+  readonly timeScale?: { readonly width: number; indexToX(index: number): number; xToIndex(x: number): number };
+  priceAxisLayout?(paneIndex?: number): readonly { side: 'left' | 'right'; x: number; width: number }[];
+}
+```
+
+### Surviving a chart rebuild
+
+A host that recreates the chart (on a timeframe switch, a chart-type change, a
+theme change) must carry the drawings across, because the controller and its
+layers belong to the chart that is going away:
+
+```ts
+// before chart.destroy()
+const saved = draw.toJSON();
+draw.destroy();
+
+// after the new chart exists
+const next = new DrawingController(newChart);
+next.fromJSON(saved);
+```
+
+Anchors are `{ time, price }`, so they land on the same bars even if the new
+chart has a different interval loaded.
+
+## Controller API
+
+| Member | Description |
+|---|---|
+| `setTool(id \| null, options?)` | Arm a tool for placement, or return to the cursor. `{ space: 'viewport' }` pins what it places to the screen, and `draw:tool` then carries `space: 'viewport'`. |
+| `activeTool()` / `activeToolSpace()` | The armed tool id, or null; the space it places in. |
+| `screenPoints(id)` | A drawing's anchors in container px, whichever space it is anchored in, for placing an overlay beside it. |
+| `drawings()` / `get(id)` | The model, in paint order. |
+| `add(drawing)` | Add one directly (import, or host-authored). `zIndex`, `createdAt` and `id` are filled in. A `policy` restricts what the user can do with it; see [Drawing policies](#drawing-policies). |
+| `update(id, patch, options?)` / `updateMany(patches, options?)` | Patch `points`, `style`, `text`, `props`, `locked`, `visible`, `zIndex`, `policy`, `space` or `viewportPoints`. `space` alone converts the anchors where the drawing is on screen, and `update` returns false when that cannot be done. `updateMany` is one undo step. A read-only drawing is left alone unless `options` is `{ force: true }`, and a forced patch is not an undo step. |
+| `remove(id, options?)` / `removeMany(ids, options?)` / `clear(options?)` | Delete one, several (one undo step), or all. Read-only drawings stay unless `{ force: true }`. |
+| `finish()` | End a variable-anchor shape (`path`, `polyline`) at the anchors placed so far. Returns whether it committed. Double-click already calls it. |
+| `select(id \| ids \| null, additive?)` / `selected()` / `selection()` | Selection. `additive` toggles each id; `selected()` is the primary id, `selection()` the list in pick order. |
+| `duplicate(ids)` / `nudge(ids, dx, dy)` | Clone with the paste offset and select the clones; move by a screen distance. One undo step each. |
+| `setZIndex(id, z)` / `bringToFront(id)` / `sendToBack(id)` | Paint order within the slot the drawing paints in: its side of the series, or the entry it is placed above. |
+| `reorder(id, direction)` | One step through the same slot, as one undo step. |
+| `sendBehindSeries(id)` / `bringAboveSeries(id)` | Cross the series: below zero paints under the candles. Either one takes a drawing out of the series band. |
+| `placeInStack(id, target, where)` | Put a drawing directly `'above'` or `'below'` another drawing (`{ drawing: id }`) or a series-band entry (`{ entry: 'indicator:<id>' }`) of its pane, as one undo step. See [Draw order](#draw-order). |
+| `copy(target?)` / `cut(target?)` / `paste()` | Clipboard, all async. See [Drawing Clipboard](/docs/drawing-clipboard). |
+| `clipboard()` | The `DrawingClipboard` behind those three, for reporting why a copy did not reach the OS clipboard. |
+| `undo()` / `redo()` / `canUndo()` / `canRedo()` | History. A paste of several drawings is one step. `canUndo()` and `canRedo()` report only a step that still changes something. |
+| `historySteps()` | `{ undo, redo }`: the steps each branch holds, oldest first, by the number `drawing:change` reported them under. For a host that keeps one timeline across drawings and its own edits, such as [`ChartHistory`](/docs/undo-history): a step in neither branch was taken away by a reset, a trim or a host's forced edit. |
+| `untracked(fn)` | Run `fn` as the host's own act: an edit it makes records no undo step and leaves both branches as they are, and every recorded step takes it in, as a forced edit does, so no undo or redo reverses it. It reaches no read-only drawing, and `undo` or `redo` inside it still moves along the branches. [`ChartHistory`](/docs/undo-history) runs its `ignore` and every press through it. |
+| `delegateInputAnchorSteps(record)` | Hand the step each study input anchor move makes (a drag, `moveInputAnchor`) to a timeline of the host's: `record` receives the move's `InputAnchorStep`, its own `undo()` and `redo()`, as the move ends, and this history records nothing for it. The returned function gives the steps back. [`ChartHistory`](/docs/undo-history) takes them, since it records the settings patch the move writes, and one move must be one step. A point written through the study's settings (a settings dialog's Pick point), which this history otherwise holds as a step of its own, is not handed over: the host's timeline sees that write itself. A move inside `untracked` is a step nowhere. |
+| `toJSON()` / `fromJSON(data)` | Explicit serialisation: a `{ version, drawings }` document out, version 3 when a drawing carries an [interval range](#visibility-per-interval) and 2 otherwise; a document or a 1.9.x bare array in, upgraded by `migrateDrawings`. |
+| `interval()` / `shownOnInterval(id)` / `hiddenOnInterval()` | The chart interval drawings are shown for, whether a drawing's range admits it, and every drawing it hides. See [Visibility per interval](#visibility-per-interval). |
+| `setOptions(patch)` | `magnet`, `stayInDrawingMode`, `historyLimit`, `defaultStyle`, `pasteOffsetBars`, `pasteOffsetPixels`, `clipboard`, `clipboardFallbackToMemory`, `gestures` (see [Modifier gestures](#modifier-gestures)). `inputAnchors` is read once, when the controller is built. |
+| `cancel()` / `popAnchor()` | Drop the anchors placed so far (the tool disarms unless `stayInDrawingMode` keeps it), or take away a temporary measure; remove the last anchor of a variable-anchor shape still being placed. Escape and Backspace, once the host wires them. |
+| `measuring()` | Whether a [temporary measure](#temporary-measure) is on the chart. |
+| `setEraser(active)` / `erasing()` | [Eraser mode](#eraser-mode) on or off, and whether it is on. |
+| `hovered()` / `magnetMode()` | The unselected drawing under the pointer, or `null` (`drawing:hover { id }` fires when it changes); the resolved `'off' \| 'weak' \| 'strong'`. |
+| `destroy()` | Detach layers and listeners. |
+
+### Events
+
+`draw:tool`, `draw:add`, `draw:update`, `draw:remove`, `draw:select`, `draw:copy`,
+`draw:cut` and `draw:paste` all fire on `chart.on(...)`. The 2.0 pair `drawing:select`
+(`{ ids }`, the whole selection) and `drawing:change` (`{ ids, kind }`, one per mutation)
+fire alongside them for a host that tracks a multi-selection, and `drawing:hover`
+(`{ id }`) when the unselected drawing under the pointer changes. A drag of a
+[study input anchor](/docs/indicators#a-time-and-a-price-that-belong-together) is a step
+of the same undo history and emits `drawing:change` with empty `ids`, so a host's Undo
+button refreshes on the event it already listens to.
+
+The two families are two granularities of one model, and both stay: `draw:add`,
+`draw:update` and `draw:remove` fire once per drawing and carry it, while `drawing:change`
+fires once per mutation with the ids; `draw:select` names the primary selection and
+`drawing:select` the whole of it. Importing the tier adds all of these names to
+`ChartEventMap`, so a listener's payload is typed (`DrawingEvent`, `DrawingIdsEvent` and
+the rest, exported from `openalgo-charts/draw`). See [Events](/docs/events#typed-payloads).
+(`{ id }`) when the unselected drawing under the pointer changes. A `drawing:change` that
+closes a recorded undo step carries that step's number as `step`; a host's forced edit, a
+linked chart's commit, a restore and a move along the branches carry none
+(`DrawingChangeEvent` names the payload). `draw:measure` (`{ active }`) fires as a
+[temporary measure](#temporary-measure) starts and goes, and `draw:eraser` (`{ active }`) as
+[eraser mode](#eraser-mode) turns on and off.
+
+<Callout type="info">
+The controller listens on the **event bus** (`click`, `crosshair:move`, `drag`, `drag:end`),
+not `subscribeClick` / `subscribeDrag`, so a drawing never arms an order line's drag. Your app
+can use either for its own order lines.
+</Callout>
+
+## Interaction
+
+- **Place**: click once per anchor, or **press-drag-release** to lay down a two-point shape
+  in one gesture. A live preview follows the cursor between clicks.
+- **Draw beyond the candles**: move into the blank space after the latest candle or
+  before the first loaded bar. Previews and freehand strokes remain active there.
+  Leave room by panning the chart or adjusting the visible logical range.
+  Drawing times there come from the chart's future bar times (the session calendar's, or
+  the median recent bar interval) and, before the first bar, the first bar spacing; they
+  do not add market data.
+- **Select**: click a drawing; click empty space to deselect.
+- **Move**: drag the body to translate every anchor, or drag a handle to move one.
+- **Magnet**: `{ magnet: 'strong' }` (or `true`) snaps anchors to the nearest O/H/L/C
+  of the bar under them, and on a study pane to the nearest value a study plots there;
+  `'weak'` snaps only when a value is within 8 pixels, so a click on open space lands where
+  it was made. It pulls while placing, while dragging a handle and while dragging a whole
+  shape, and **Ctrl** (Cmd on macOS) held is the strong magnet whatever the mode. A ring
+  shows where the next click will land. See [Modifier gestures](#modifier-gestures).
+- **Shift**: locks the free end of a line to 45 degree steps on screen, while placing and
+  while dragging a handle.
+- **Hover**: the drawing under the pointer shows its handles faintly before it is picked.
+- **Freehand**: the brush and highlighter ink every coalesced pointer sample, thin the trail
+  on release and paint it as a spline; a pen's pressure can drive the width
+  (`style.pressure`).
+- **Undo**: a whole drag is **one** undo step, not one per frame.
+- **Lock**: a locked drawing renders but cannot be selected or dragged.
+- **Read-only**: a drawing whose policy sets `editable: false` selects on a click, while a
+  press-drag on it pans the chart. It shows its anchors faintly and no control moves or
+  deletes it. See [Drawing policies](#drawing-policies).
+
+<Callout>
+While a tool is armed the controller puts the chart in **placement mode**
+(`chart.setPlacementMode(true)`), so a press starts a shape instead of panning. The chart
+reports the gesture as two `click` events: the press point, then the release point tagged
+`viaDrag`. `DrawingController` manages this for you; you only need it if you are placing
+things (alerts, annotations) without the draw tier.
+</Callout>
+
+## Modifier gestures
+
+<Callout type="info">Since 2.5.9.</Callout>
+
+Holding a modifier key turns a pointer gesture into something else. **Ctrl** means Cmd on
+macOS. None of them is a key chord, so none collides with a tool's `Alt+` shortcut or with
+the editing keys `keyToDrawingAction` maps (Ctrl+Z, Ctrl+C and the rest): those read key
+presses, these read the keys held during a click or a drag.
+
+| Hold | Then | Turns off with |
+|---|---|---|
+| Ctrl | Place an anchor, or drag a handle or a shape: the strong magnet while held, whatever `magnet` is set to | `gestures: { snapModifier: false }` |
+| Shift | Click empty chart space with no tool armed: a [temporary measure](#temporary-measure) | `gestures: { measure: false }` |
+| Ctrl | Drag on empty chart space with no tool armed: [box select](#box-select); add Shift to add to the selection | `gestures: { boxSelect: false }` |
+| Alt | Drag a drawing's body: [drag a copy](#drag-to-copy) and leave the drawing where it is | `gestures: { dragCopy: false }` |
+
+Every gesture is on by default. A host whose own chart gestures already use one of these keys
+turns it off through `gestures` (a `DrawingGestureOptions`), at construction or later with
+`setOptions`, which merges it flag by flag.
+
+### The magnet everywhere
+
+The magnet pulls wherever an anchor is put, not only while placing:
+
+- **A handle** in hand lands on the nearest value of the bar under it, at that bar's time.
+  Shift's angle lock still wins on a line.
+- **A whole shape** in hand moves rigidly: its anchor nearest the grab lands on a bar's time
+  and value, and the rest keep their offsets from it.
+- **On a study pane** the magnet snaps to the values the studies there plot, the reading the
+  legend shows under the bar. A hidden study or a transparent helper plot is skipped, so an
+  anchor never lands on a line that is not drawn. The price pane keeps snapping to the
+  candles.
+
+A drawing pinned to the screen never snaps. The chart from `createChart()` provides what the
+magnet reads (`primaryBars`, `indicators`, `panes`, `seriesStyle`); on a custom
+`DrawingChartHost` without them, placements on the price pane still snap as before.
+
+### Temporary measure
+
+Shift+click on empty chart space, with no tool armed, lays down a ruler from the click to the
+pointer: the price change, the percentage, the bars and the time between them, read off the
+measure tool. The next click anywhere takes it away and does nothing else, and so does Escape
+through `cancel()`. It is never a drawing: nothing is saved, nothing goes on the undo history,
+and a linked chart never sees it. `measuring()` says whether one is up, and `draw:measure`
+(`{ active }`) fires as it starts and goes, which is when a host says what Escape will do:
+
+```ts
+chart.on('draw:measure', ({ active }) => { status.textContent = active ? 'Esc clears the ruler' : ''; });
+
+// Route Escape to cancel() while a ruler is up, as while a tool is being placed.
+const action = keyToDrawingAction(e, {
+  hasSelection: draw.selected() !== null, hasTarget: draw.hovered() !== null, editingText: false,
+  placing: draw.activeTool() !== null || draw.measuring(),
+});
+```
+
+### Box select
+
+Hold Ctrl and drag on empty chart space: every drawing on that pane the box touches is
+selected, and the selection follows the box as it grows. Hold Shift as well to add to what
+was already selected. The box touches a drawing where it meets the drawing's lines, levels,
+fills or labels, the places a click would select it, so a trend line crossing the box is
+selected though neither of its ends is inside. Hidden, locked and unselectable drawings stay
+out, as they do for a click.
+
+A drag on empty space normally pans the chart. While Ctrl is held over empty space, the
+controller puts the chart in placement mode so the press draws the box instead, and hands
+the pan back as soon as Ctrl is let go or the pointer moves onto a drawing. A Ctrl+click that
+never becomes a drag is unchanged, and a Ctrl+drag that starts on a drawing moves it.
+
+### Drag to copy
+
+Hold Alt (Option on macOS) and drag a drawing's body: the drawing stays and a copy of it
+moves with the pointer. With several drawings selected, all of them are copied, the ones a
+plain drag would move. The copy is one undo step, carries no policy, and reaches a linked
+chart once, where it was dropped. A copy is only made once the pointer has moved a few
+pixels, so an unsteady click does not leave one hidden under the drawing, and Escape during
+the drag takes it back.
+
+### Eraser mode
+
+`draw.setEraser(true)` turns the pointer into an eraser: click a drawing to delete it, or drag
+across several to delete them all as one undo step. Drawings the drag touches disappear as it
+passes and are deleted when the pointer lets go. A read-only, locked, unselectable or hidden
+drawing survives it, and a click on empty space does nothing. While it is on, a drag erases
+instead of panning, and a ring at the pointer shows how far it reaches.
+
+Turning it on disarms any tool. Arming a tool, `cancel()` (Escape) and `setEraser(false)` turn
+it off, and `draw:eraser` (`{ active }`) fires on each change, so a toolbar button can follow
+it:
+
+```ts
+eraserButton.addEventListener('click', () => draw.setEraser(!draw.erasing()));
+chart.on('draw:eraser', ({ active }) => eraserButton.setAttribute('aria-pressed', String(active)));
+```
+
+## Drawing policies
+
+`locked` is the user's own switch. A host that places drawings of its own (a signal
+level, a session marker, an annotation from a strategy) needs restrictions the user
+cannot lift, and needs them one at a time. `drawing.policy` carries four independent
+flags. Each defaults to `true`, so a drawing without a policy behaves as it always has.
+
+```ts
+const mark = draw.add({
+  tool: 'horizontal-line', paneIndex: 0, style: { lineStyle: 'dashed' },
+  points: [{ time, price }],
+  policy: { editable: false, persistent: false, listed: false },
+});
+
+// The host that placed it still moves and retires it.
+draw.update(mark.id, { points: [{ time, price: next }] }, { force: true });
+draw.remove(mark.id, { force: true });
+```
+
+| Flag | `false` means | Binds |
+|---|---|---|
+| `selectable` | Never joins the selection. A click passes through to what lies under it, and nothing hovers or drags it. | Every caller: `select()` ignores it. |
+| `editable` | Read-only. It still selects, copies and duplicates, but nothing moves, reshapes, restyles, hides, locks, cuts, deletes or regroups it, and undo and redo never change it or its group. `createGroup` leaves it in its group, and a group holding it cannot be renamed or removed, by a call or by an undo. | User operations. Every mutating controller method treats a call as the user's unless it passes `{ force: true }`. A restore and a linked chart's commit always apply. |
+| `persistent` | Transient. Left out of `toJSON()`, the chart state and every saved layout, while it renders and undoes as usual in the session. | Every caller: the serializer. A restore replaces it with what was saved. |
+| `listed` | Left out of the object inventory (`ChartObjects`), every objects panel and every group-wide action there, and out of the widget's alert source picker. | Every caller of the inventory. |
+
+Placing a drawing with a restriction, a patch that carries `policy`, and every forced call
+are the host's own acts, so none of them is an undo step, and every step already recorded takes
+them as well: undoing and redoing the user's own steps never reverses a forced move, delete,
+regroup or rename. A policy is never history either:
+every recorded step takes the drawing's policy as it is now, so no undo or redo brings an
+older one back, and a step a new restriction or a forced call has left with nothing to do is
+dropped, so `canUndo()` and `canRedo()` stay true to what a press would do. A new group
+never takes the id of a group that an undo or redo step still holds, so bringing that group
+back never dissolves the new one.
+
+Taking the host's act into the recorded steps is one pass over the undo and redo history:
+both snapshots of every step are parsed and rewritten, so the work grows with the number of
+recorded steps (see `historyLimit`) times the number of drawings. A forced delete, a forced
+grouping call, a forced patch to a drawing the user may edit or one that carries `zIndex`,
+any patch that carries `policy` and a linked chart's change of policy make that pass. A
+forced patch to a read-only drawing that carries neither `policy` nor `zIndex` makes none,
+so a host can trail a level on every tick: history cannot reach that drawing while it stays
+read-only, and the patch goes in with the next pass, which a change of its policy always
+makes.
+
+A copy is the user's own drawing: paste and duplicate never carry a policy. A policy is
+data, so it survives a save and a restore for a persistent drawing, and the migration keeps
+only the four boolean flags; strip `policy` before `fromJSON` when importing a document you
+do not trust, the way the yfinance host does for every layout file it imports. Stacking order (front, back, either side of the series, a place in the series band) is outside the policy.
+
+The widget draws every edit control for a read-only selection disabled with the note
+"read-only" (context menu, properties dialog, rail, mobile bar) and keeps copy and duplicate.
+The [Objects](/docs/objects) panel leaves unlisted drawings out and offers a read-only one
+no hide, lock or remove. The yfinance reference host's **Mark ... for This Session** menu
+row places a read-only, transient, unlisted line, puts it back after every rebuild or
+restore, and clears the marks with `force`.
+
+## Draw order
+
+A pane paints in bands, back to front:
+
+1. **Behind the series**: study fills and shading, profiles, and drawings sent behind the series (`zIndex` below zero).
+2. **The series band**: the price source and each study, in the order `chart.seriesStack(paneIndex)` lists them, and drawings placed directly above one of them.
+3. **The overlay band**: price lines, markers and study levels.
+4. **In front**: drawings (the default place), legends, tables and trading controls.
+
+A drawing's `stackAbove` names the series-band entry it sits on: `'source:primary'` or
+`'indicator:<instance id>'`, the same ids the [Objects](/docs/objects) inventory uses. It
+paints right after that entry's series and before the next entry's, so a box can sit over
+the candles and under a moving average, or between two studies. `zIndex` orders the
+drawings placed on the same entry.
+
+```ts
+const ema = chart.addIndicator('ema', { length: 21 });
+const box = draw.add({ tool: 'rectangle', paneIndex: 0, style: { fill: true }, points });
+
+// Over the candles, under the average.
+draw.placeInStack(box.id, { entry: 'source:primary' }, 'above');
+// Directly above the average.
+draw.placeInStack(box.id, { entry: 'indicator:' + ema.id }, 'above');
+// Next to another drawing: it joins the slot that drawing paints in.
+draw.placeInStack(box.id, { drawing: other.id }, 'below');
+```
+
+`placeInStack` renumbers the drawings of the slot it lands in (below the series up to -1,
+elsewhere from 0) and records one undo step; like every stacking call it is outside a
+drawing's [policy](#drawing-policies). Below an entry means on top of the slot under it,
+and below the first entry means on top of the drawings behind the series. It returns
+false, and records nothing, for a target on another pane or a move that changes nothing.
+
+While the entry a drawing is placed on plots no series on its pane (the study was removed
+or moved to another pane) the drawing paints in front, by its `zIndex`, and it returns to
+its place when the entry does: `stackAbove` is kept, saved in the drawing document and
+carried by copy, duplicate and paste. On another chart the entry does not exist, so a paste
+there lands in front. Older documents have no `stackAbove` and paint exactly as before.
+
+The pointer takes what is painted on top. The front layer answers for every layer of its
+pane, front to back: a click lands on the uppermost drawing under it wherever each one
+paints, and the selected drawing's handles always paint in front. Whatever paints over
+the series (price lines, order lines, markers, drawings in front) takes the press, the
+hover and the menu from a drawing placed in the series band or sent behind the series
+wherever it answers, whatever the distance, so a box placed under an order line gives
+the line the press. Where a drawing and a source or study both lie under a right-click,
+the one painted on top is the menu's target, so a drawing behind the series or under a
+study gives way to that series there.
+
+A study or the price source moves in the series band with `chart.moveInSeriesStack(id,
+target, where)`. The drawings placed on it move with it, since nothing can paint between an
+entry and a drawing placed on it. The [Objects](/docs/objects#draw-order) inventory
+combines both into one list per pane and refuses a move the bands cannot paint.
+
+## Pinned to the screen
+
+Most drawings mark something on the bars and move with them. A session plan, a checklist or
+a box framing part of the screen belongs to the screen instead. A drawing whose `space` is
+`'viewport'` stays where it is when the chart pans or zooms, keeps its proportions when the
+chart is resized, and is edited like any other drawing: drag it, drag a handle, nudge it,
+copy it, undo it.
+
+```ts
+// Placed by the host, at fractions of the pane's plot.
+draw.add({
+  tool: 'text', paneIndex: 0, style: {}, points: [], space: 'viewport',
+  viewportPoints: [{ x: 0.02, y: 0.04 }], text: { value: 'Session plan' },
+});
+
+// Placed by the user: the next rectangle is pinned where it is drawn.
+draw.setTool('rectangle', { space: 'viewport' });
+
+// Pin or unpin an existing drawing, keeping it where it is on screen.
+draw.update(id, { space: 'viewport' });
+draw.update(id, { space: 'data' });
+```
+
+**The coordinates are pane-relative.** `x` runs from 0 at the plot's left edge to 1 at its
+right edge, with the price axes outside that span. `y` runs from 0 at the top of the pane to
+1 at the bottom of its plot, which on the lowest pane is the top of the time axis. A pinned
+drawing belongs to its pane, so it moves with the pane, keeps its fraction of the pane when
+the separator is dragged, and comes back where it was when a collapsed pane is opened again.
+There is no whole-chart coordinate. Pixel sizes stay pixel sizes: a note's font does not
+scale with the chart, while both corners of a box do. The plot is the rectangle
+[`chart.plotRect(paneIndex)`](/docs/scales-and-panes#where-a-panes-plot-is) reports, so
+an HTML overlay a host lays against it lines up with a pinned drawing, and
+`draw.screenPoints(id)` returns anchors in the same container px. A note pinned over the
+chart's corner logo takes presses there; the logo yields to it.
+
+**Which tools.** Text, rectangle, ellipse and table. Their shape and text come from their
+own anchors, and nothing they print is a price or a time. Tools that print prices (the
+fib family, measures, the position tools), that point at a bar (notes, balloons, signposts,
+callouts) or that compute from bars (anchored VWAP, volume profile) stay on time and price,
+because a fixed place on screen would contradict what they show. A custom tool can opt in
+with `viewport: true` when its `draw` and `distance` read only the screen anchors.
+
+Converting keeps the drawing where it is on screen and is one undo step. A drawing that is
+off the plot, or larger than it, when it is pinned is brought onto the plot, since no pan
+could reach it afterwards. A conversion that cannot be made (a tool without support, a pane
+folded to its strip) leaves the drawing as it was, and `update` returns false. A pinned
+drawing has no price, so it offers no alert levels, and the magnet does not pull while one
+is placed: it lands where it is clicked.
+
+**The whole drawing stays on screen.** A note or a table is laid out from one corner, and a
+box or an ellipse can carry its label above it, so it is the drawing's box, label included,
+not its anchors, that is kept inside the plot: at every edge, through a
+drag, a handle, a nudge or a paste, at any device pixel ratio, and after the chart is resized
+smaller than the place it was pinned at. A custom pinnable tool that paints beyond its
+anchors declares `bounds(pts, drawing)` to say how far.
+
+| Where | How it behaves |
+|---|---|
+| Save and restore | `toJSON()` writes `space: 'viewport'` and `viewportPoints`. A layout with no pinned drawing is saved exactly as before, still version 2, and older layouts load unchanged. |
+| Copy and paste | A paste lands at the same fraction of the target pane on a chart of any size, offset by `pasteOffsetPixels` on both axes. |
+| Linked charts | A pinned drawing is never shared: the same fraction of another chart's pane sits over different bars. Pinning a shared drawing takes it out of the link on that chart only; the other charts keep their copy. |
+| Device pixel ratio | Painted at the same fraction of the plot at any ratio. |
+| Widget | The drawing properties dialog shows an **Anchor** row (Time and price, Screen) for the four tools. |
+| Reference host | The properties bar in `examples/yfinance` shows a pin toggle for the same tools, and says why when a folded pane left the drawing where it was. |
+
+## Keyboard shortcuts
+
+Each tool can declare a `shortcut`. The built-in line tools ship the standard chords:
+
+| Shortcut | Tool |
+|---|---|
+| `Alt+T` | Trend line |
+| `Alt+H` | Horizontal line |
+| `Alt+J` | Horizontal ray |
+| `Alt+V` | Vertical line |
+| `Alt+C` | Cross line |
+
+`drawingShortcuts()` returns the `id -> shortcut` map, which is what a palette renders beside
+each tool's name. `matchDrawingShortcut(event)` resolves a key event to a tool id:
+
+```ts
+import { matchDrawingShortcut } from 'openalgo-charts/draw';
+
+window.addEventListener('keydown', (e) => {
+  // Your call, not the library's: skip while typing or with a dialog open.
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  const id = matchDrawingShortcut(e);
+  if (id) {
+    e.preventDefault();
+    controller.setTool(id);
+  }
+});
+```
+
+<Callout type="info">
+The library installs **no** key listener. Only the host knows whether the chart has focus, a
+dialog is open, or the user is typing, so binding is left to you.
+
+Modifiers must match **exactly**: `Alt+T` does not fire for `Ctrl+Alt+T`, so a tool cannot
+shadow a browser or host chord, and `metaKey` (Cmd) counts as Ctrl. A bare letter never
+matches, so ordinary typing is never swallowed.
+</Callout>
+
+Give a custom tool a chord the same way:
+
+```ts
+registerDrawingTool({ id: 'my-band', name: 'My band', points: 2, shortcut: 'Alt+B', draw, distance });
+```
+
+## Copy, cut and paste
+
+The controller has a clipboard, and like the shortcuts above it is an API your binding
+calls. All three are async, because `navigator.clipboard` is:
+
+```ts
+window.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const key = e.key.toLowerCase();
+  if (key === 'c') { e.preventDefault(); void draw.copy(); }
+  if (key === 'x') { e.preventDefault(); void draw.cut(); }
+  if (key === 'v') { e.preventDefault(); void draw.paste(); }
+});
+```
+
+A paste inserts fresh objects with fresh ids in a single undo step, offset from the
+original, and a cut deletes only once the clipboard write has succeeded. Foreign text pastes
+nothing rather than throwing. See [Drawing Clipboard](/docs/drawing-clipboard) for the
+payload format, the validation rules and the failure modes.
+
+## Text and labels
+
+The `text` tool draws a standalone text box, but **shapes carry labels too**: give a
+rectangle, ellipse, or parallel channel a `text` block and it renders inside the outline.
+That is one shape with two colours: `style.color` strokes the outline, `text.color` paints
+the label. Text is its own block on the drawing, `drawing.text` (a `DrawingText`), not a
+set of keys on `style`, so a host can tell a label colour from a stroke colour without
+knowing the tool.
+
+| `text` key | Applies to | Notes |
+| --- | --- | --- |
+| `value` | text tool, shapes | `\n` starts a new line |
+| `color` | both | falls back to `style.color` |
+| `fontSize` | both | media px, default 12 (the `text` tool's `defaultText` sets 14) |
+| `fontFamily` | both | defaults to the UI sans stack |
+| `bold`, `italic` | both | booleans |
+| `align` | both | `'left'` \| `'center'` \| `'right'` |
+| `valign` | both | `'top'` \| `'middle'` \| `'bottom'` |
+| `position` | shapes only | `'inside'` the outline or `'outside'` just above it |
+| `background`, `backgroundColor`, `backgroundOpacity` | text tool | filled plate behind the text |
+| `border`, `borderColor` | text tool | stroked plate border |
+| `wrap`, `wrapWidth` | both | soft-wrap instead of running off the pane |
+
+```ts
+// `add` takes a single drawing object (id is generated when omitted).
+draw.add({
+  tool: 'rectangle',
+  points: [a, b],
+  paneIndex: 0,
+  style: { color: '#8b5cf6' },
+  text: {
+    value: 'Supply zone',
+    color: '#ffffff',
+    fontSize: 13,
+    bold: true,
+    position: 'inside',
+    valign: 'top',
+    align: 'center',
+  },
+});
+
+// Later edits patch the block: `text` merges, so send only the key that changed.
+draw.update(id, { text: { value: 'Supply zone (tested)' } });
+```
+
+<Callout>
+With `position: 'inside'`, `valign` x `align` give the nine placements a shape-text
+properties panel exposes. `'outside'` parks the block above the shape and ignores
+`valign`. A tool merges its `defaultText` under the caller's block the way `defaultStyle`
+merges under `style` (`text` and `callout` ship one), and
+`drawingSettingsSchema(toolId).textIsContent` is true for the tools that *are* their text,
+so a host can ask for the content on placement. The yfinance example wires all of it to a
+properties bar.
+</Callout>
+
+<Callout type="info">
+Coming from 1.9.x, where these lived on `style` as `text`, `fontColor`, `fontWeight`,
+`fontStyle`, `textAlign`, `textVAlign` and `textPosition`: a saved layout is upgraded on
+load by `migrateDrawings`, and the key-by-key mapping is in
+[Migrating to 2.0](https://github.com/marketcalls/openalgo-charts/blob/master/docs/migrating-to-2.md).
+</Callout>
+
+## Persistence
+
+Drawings round-trip through the chart state with no extra plumbing:
+
+```ts
+localStorage.setItem('layout', JSON.stringify(chart.getState()));   // includes drawings
+
+// later
+chart.restoreState(JSON.parse(localStorage.getItem('layout')));
+const draw = new DrawingController(chart);   // picks them up from the state
+```
+
+A transient drawing (`policy.persistent: false`) is never in that state, so a rebuild or a
+restore drops it; re-add it afterwards.
+
+See [Chart State](/docs/state) for the rest of the payload.
+
+## Drawings per instrument
+
+<Callout type="info">Since 2.5.9.</Callout>
+
+The chart state holds one drawing document: the drawings on screen. The engine has no
+instrument concept, so a host that loads another symbol into the same chart would keep
+the previous symbol's lines on screen, and a delete there would delete them for every
+symbol. Traders expect the opposite: a level belongs to the symbol it was drawn on.
+`InstrumentDrawings` keeps one document per instrument and swaps them as the chart's
+data context moves. The [widget](/docs/widget) does this by default.
+
+```ts
+import {
+  DrawingController, InstrumentDrawings, instrumentDrawingsKey,
+  webStorageDrawingStore, migrateUnscopedDrawings,
+} from 'openalgo-charts/draw';
+
+const draw = new DrawingController(chart);
+// Where the documents live is your choice; the default is memory for the page's life.
+const store = webStorageDrawingStore(localStorage, 'my-app:chart-1:drawings:');
+// Once: drawings saved before they were per instrument belong to the saved symbol.
+migrateUnscopedDrawings(store, instrumentDrawingsKey({ symbol: 'INFY', exchange: 'NSE' }), oldDocument);
+const scoped = new InstrumentDrawings(chart, draw, { store });
+
+chart.setDataContext({ symbol: 'INFY', exchange: 'NSE', interval: '5m' });  // INFY's drawings
+chart.setDataContext({ symbol: 'TCS', exchange: 'NSE', interval: '5m' });   // INFY's saved, TCS's shown
+```
+
+| Export | What it does |
+|---|---|
+| `InstrumentDrawings(chart, draw, options?)`, `createInstrumentDrawings(...)` | Follows the chart's `data:context`. Options: `store`, `key`, `prefer` (`'stored'` or `'live'`), `onError`. Methods: `key()`, `setInstrument()`, `document()`, `setDocument()`, `save()`, `destroy()`. |
+| `instrumentDrawingsKey(instrument)` | The default key, `NSE:INFY`, or `AAPL` with no exchange; null without a symbol. |
+| `memoryDrawingStore()` | The default store: memory, for the life of the page. |
+| `webStorageDrawingStore(storage, prefix)` | One JSON entry per instrument in any storage with `getItem`, `setItem` and `removeItem`. |
+| `migrateUnscopedDrawings(store, key, document)` | Attaches an old chart-wide document to an instrument that has none yet. |
+
+How it behaves:
+
+- **An instrument is a symbol and an exchange.** A new interval or data variant keeps the
+  drawings; a context that names no instrument changes nothing. A `key` function changes
+  the rule, for one set per session variant, say.
+- **Every committed change is written**, and only when the saved document changed. An
+  instrument left with no drawings has its entry removed.
+- **A swap is not an undo step.** It clears the drawing undo history, so no undo on one
+  symbol restores or removes a line of another. A drag in progress is put back first, and
+  anchors placed for an unfinished shape are dropped, with the tool left armed.
+- **Drawings pinned to the screen swap too**, with the rest of the document: groups and
+  stacking can span both kinds, and a pinned note is nearly always about the symbol on screen.
+- **Alerts stay with their drawing's symbol.** An alert on a line of INFY keeps waiting while
+  TCS is on screen, without evaluating, even over a TCS drawing that shares its id.
+- **Copy and paste cross symbols** as the user asks: the clipboard is not the document.
+- **A store that fails loses nothing for the session.** `onError` hears it, the document is
+  held in memory, and the next change tries again. The store is synchronous: a swap happens
+  inside the context change, so an answer arriving later would land on the wrong symbol.
+
+## Visibility per interval
+
+<Callout type="info">Since 2.5.9.</Callout>
+
+A level drawn on hourly bars is often noise on the one minute chart and too fine to matter
+on the weekly one. A drawing can carry the range of chart intervals it is shown on,
+`intervals: { from, to }`, both ends included, and it is on the chart only while the chart's
+interval lies inside it.
+
+```ts
+import { DrawingController, drawingShownOnInterval } from 'openalgo-charts/draw';
+
+chart.setDataContext({ symbol: 'INFY', exchange: 'NSE', interval: '15m' });
+const draw = new DrawingController(chart);
+const level = draw.add({
+  tool: 'horizontal-line', paneIndex: 0, style: {}, points: [{ time, price }],
+  intervals: { from: '1m', to: '1h' },
+});
+
+draw.update(level.id, { intervals: { to: '4h' } });   // replace the range: one undo step
+draw.update(level.id, { intervals: null });            // every interval again
+
+chart.setDataContext({ symbol: 'INFY', exchange: 'NSE', interval: 'D' });
+draw.shownOnInterval(level.id);      // false while the chart is on daily bars
+drawingShownOnInterval(level, '5m'); // the same test for any interval
+```
+
+| API | What it does |
+|---|---|
+| `Drawing.intervals` | A `DrawingIntervalRange`, `{ from?, to? }`, of interval codes. Absent: every interval. An absent end is no limit on that side. |
+| `DrawingPatch.intervals` | Replaces the range; `null` or `{}` clears it. One undo step, like any edit. |
+| `interval()` | The interval the controller shows drawings for: the data context's `interval`, or `null`. |
+| `shownOnInterval(id)` | Whether a drawing's range admits the chart's interval. |
+| `hiddenOnInterval()` | The ids of every drawing the chart's interval hides, in model order, in one pass. |
+| `drawingShownOnInterval(drawing, interval)` | The same test with no controller, for any interval. |
+| `INTERVAL_FIELDS` | The settings pair `intervals.from` and `intervals.to`, kind `'interval'`, group `'visibility'`. |
+
+How intervals compare:
+
+- **By bar length, from the [interval registry](/docs/custom-intervals).** `60m` and `1h` are one
+  interval, and codes a host registers take part like the built-in ones. A calendar month
+  sorts above a week and below a quarter.
+- **Either way round.** The range is the span between its ends.
+- **A comparison that cannot be made hides nothing.** An end nothing resolves (an unknown
+  code, a tick or volume interval) is no limit, and so is a chart interval of that kind, or
+  none at all.
+
+The chart's interval is its data context's: the controller reads `getDataContext()` when it
+is built and follows every `data:context`, so a new interval applies the moment the chart
+announces it. A change of data variant alone, made with `publishDataContext`, leaves the
+drawings as they were. A drawing outside its range is kept, saved and undone like any
+other, but it is not on the chart:
+
+- nothing paints it, and the vector export and screenshots leave it out;
+- a click passes through it, and a box select or an eraser drag does not reach it;
+- an interval change drops it from the selection. Picked on purpose, from an objects panel
+  say, it is selectable all the same, so its settings can widen the range;
+- the [object inventory](/docs/objects) keeps its row, marked `hiddenOnInterval: true`, with
+  no `focus`. Its `visible` stays the user's own show and hide switch, and an alert on it
+  keeps firing.
+
+A duplicate, a drag to copy and the clipboard carry the range. A paste never lands hidden:
+a copy whose range leaves out the receiving chart's interval is pasted without it. Linked
+charts share the range, and each shows the drawing by its own interval.
+
+**Settings.** No tool declares the interval fields, because only the host knows which
+intervals it offers. Add them to a tool's schema and render your own interval list, with an
+empty choice for no limit:
+
+```ts
+import { composeSettings, drawingSettingsSchema, readDrawingSettings, applyDrawingSettings, INTERVAL_FIELDS } from 'openalgo-charts/draw';
+
+const schema = composeSettings([drawingSettingsSchema(d.tool).fields, INTERVAL_FIELDS]);
+readDrawingSettings(d, schema);   // { ..., 'intervals.from': '1m', 'intervals.to': '1h' }
+draw.update(d.id, applyDrawingSettings(d, { 'intervals.to': 'D' }, schema));
+```
+
+The reference host puts the pair under **Visibility** in the properties bar's More
+settings, and the bar says **Hidden on 1D** when the selected drawing is off the interval
+on screen. Its **Select all** takes only the drawings on the chart, from
+`hiddenOnInterval()`, so a delete that follows never takes one nobody can see; **Remove all
+drawings** still counts and removes every drawing.
+
+**Document version 3.** The range is the one field drawing document version 3 added.
+
+- A version 2 document is a valid version 3 one and loads unchanged, version and all.
+- A document, and a clipboard copy, is written as version 3 only while a drawing in it
+  carries a range, and as version 2 otherwise, so a save without one is exactly what 2.5.8
+  wrote. [Drawings per instrument](#drawings-per-instrument) stores whichever version the
+  controller writes, and a stored version 2 document is not rewritten until something in
+  it changes.
+- **An older build and a version 3 document.** A build before this one reads version 2.
+  Its clipboard refuses a newer payload, so it pastes nothing from a copy that carries a
+  range. Its layout loading never refused a document: it keeps what it knows, so it opens a
+  version 3 layout with every drawing, shows the ranged ones on every interval, and saves
+  them without their ranges. Keep a layout with ranges away from an older build, or set the
+  ranges again after one has saved it.
+
+## Building your own tool
+
+A tool is a descriptor, like a chart type or an indicator. `draw` receives anchors already
+in **device** px; `distance` receives them in **media** px, the same space as the cursor.
+
+```ts
+import { registerDrawingTool, distToSegment } from 'openalgo-charts/draw';
+
+registerDrawingTool({
+  id: 'zigzag',
+  name: 'Zig Zag',
+  points: 3,
+  defaultStyle: { color: '#f5a623', lineWidth: 2 },
+  draw: ({ ctx, pts, style, rc }) => {
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = style.lineWidth * rc.dpr;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  },
+  // Return a distance in media px, or null for a miss. 0 means "inside".
+  distance: (x, y, { pts }) => Math.min(
+    distToSegment(x, y, pts[0], pts[1]),
+    distToSegment(x, y, pts[1], pts[2]),
+  ),
+});
+
+draw.setTool('zigzag');
+```
+
+Geometry helpers are exported: `distToSegment`, `distToLine`, `distToPolyline`,
+`distToRect`, `distToEllipse`, `rectOf`, `extendSegment`.
+
+Two optional fields change how a tool is *placed*:
+
+| Field | Effect |
+|---|---|
+| `freehand: true` | Sample the cursor while the pointer is held and commit on release: one press-drag-release is one stroke. Only the first and last anchors get grab handles. Requires `points: 0`. |
+| `expand(clicked, ctx)` | Turn the anchors actually clicked into the tool's full anchor set, so it can place a complete, editable default from fewer clicks. `ctx` carries `barSeconds` and `visibleBars`, and `toPixel` / `fromPixel` when the host can map coordinates, so a default can be sized in pixels and fall back to chart units when it cannot. |
+| `constrain(points, handle)` | Keep the anchors consistent after one moves: a handle drag (`handle` is its index) or a `points` patch (`handle` is `null`). Returns the anchors to store. Pure. The position tools use it to hold the stop and the target on opposite sides of the entry. |
+
+`expand` is how a tool drops a ready default from fewer clicks than its anchor count; the position tools derive the stop from the entry and target clicks this way. A one-click box:
+
+```ts
+registerDrawingTool({
+  id: 'my-box',
+  name: 'My Box',
+  points: 1,                     // one click places it...
+  expand: (clicked, { barSeconds, visibleBars }) => {
+    const p = clicked[0];
+    const span = barSeconds * Math.max(5, Math.round(visibleBars * 0.08));
+    // ...but the drawing has three anchors, each a draggable handle.
+    return [p, { time: p.time + span, price: p.price * 1.01 },
+               { time: p.time + span, price: p.price * 0.99 }];
+  },
+  draw: (c) => { /* c.drawing.points has all three */ },
+  distance: () => null,
+});
+```
+
+Size the default against `visibleBars`, not a fixed bar count: a fixed count is a hairline
+when zoomed out and fills the pane when zoomed in.
+
+## Building a toolbar
+
+The controller is deliberately headless, so a host toolbar is a handful of buttons. The
+[yfinance example](https://github.com/marketcalls/openalgo-charts/tree/master/examples/yfinance)
+ships a full one: a vertical tool rail, a floating properties bar that appears on selection
+(colour grid, opacity, thickness, line style, lock, duplicate, delete) and can be dragged
+anywhere, plus Delete / Esc / Ctrl-Z key handling.
+
+```ts
+// tool rail
+for (const tool of registeredDrawingTools()) {
+  button(tool.name).onclick = () => draw.setTool(tool.id);
+}
+
+// properties bar on selection
+chart.on('draw:select', ({ id }) => showPropertiesBar(id));
+
+// keyboard
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Delete') { const id = draw.selected(); if (id) draw.remove(id); }
+  if (e.key === 'Escape') draw.setTool(null);
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') e.shiftKey ? draw.redo() : draw.undo();
+});
+```
+
+### Icons for the toolbar
+
+The tier ships a glyph for every tool on a 24 grid, and a chrome set (undo, lock, eye,
+trash, settings and the rest) on a 16 grid, as path data with string builders over it.
+Tools are drawn for 20px (`ICON_SIZE`) and chrome for 16px (`CHROME_ICON_SIZE`), and each
+tier's stroke (`ICON_STROKE` 1.6, `CHROME_ICON_STROKE` 1.3) puts about a 1.3px line on screen
+at that size, so a rail of tools and the chrome under it read as one fine set.
+
+```ts
+import { iconSvg, chromeIconSvg, iconSprite, iconUse, toolCursor } from 'openalgo-charts/draw';
+
+button.innerHTML = iconSvg('trend-line');       // 20px, currentColor
+lockButton.innerHTML = chromeIconSvg('lock');   // 16px
+canvas.style.cursor = toolCursor('trend-line'); // the glyph over a contrasting halo
+```
+
+Each path is the whole glyph. The marks that tell siblings apart (the anchor dots of a
+trend line, the origin dot of a ray, an arrowhead, a magnet's pole caps) are drawn in the
+path as outlines, so a host that wraps the raw path data gets every one of them. Some
+glyphs also carry an **accent**: the same marks again, for a fill on top. The builders
+always draw it, as a second `<path>` with `fill="currentColor" stroke="none"`; a host with
+its own wrapper can do the same:
+
+```ts
+import { drawingToolIcon, drawingToolAccent, ICON_ATTRS } from 'openalgo-charts/draw';
+
+const accent = drawingToolAccent('ray');         // undefined when the glyph has none
+svg.innerHTML = `<path d="${drawingToolIcon('ray')}"/>`
+  + (accent ? `<path d="${accent}" fill="currentColor" stroke="none"/>` : '');
+```
+
+`CHROME_ICON_ACCENTS` and `chromeIconAccent(id)` are the same for the chrome set.
+
+The chrome set covers the controls around a chart: the grid of charts, replay, alerts, the market session, scale modes, layouts and files, trading actions and the settings tabs (`chromeIconIds()` lists every id). It also holds a glyph for each chart type and transform under `chart-<id>`, which `chartTypeIcon(type)` reads. A layout picker builds its tiles with `layoutIconPath(rows, columns, slots?)`: one to four rows and columns, where a slot that spans cells is drawn as one pane. A chart grid takes up to eight a side, so a button that shows the current layout draws `layout` past four.
+
+```ts
+import { chartTypeIcon, chromeIconSvg, layoutIconPath, CHROME_ICON_ATTRS } from 'openalgo-charts/draw';
+
+// A chart-type menu row: the glyph when the type has one, an empty slot otherwise.
+const glyph = chartTypeIcon(type) !== undefined ? chromeIconSvg(`chart-${type}`) : '';
+
+// A layout picker tile: one tall chart beside two, in the chrome frame.
+const d = layoutIconPath(2, 2, [{ row: 0, column: 0, rowSpan: 2 }, { row: 0, column: 1 }, { row: 1, column: 1 }]);
+const a = CHROME_ICON_ATTRS;
+tile.innerHTML = `<svg viewBox="${a.viewBox}" width="16" height="16" fill="none" stroke="currentColor"`
+  + ` stroke-width="${a.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+```
+
+The widget draws every picture it shows from this set: the chart-type menu, the type button and the phone layout's sheet show `chart-<type>`, the theme button `sun` or `moon`, and the settings tabs, stacking rows, line styles, menu tick and remove crosses their chrome ids. No widget file draws a glyph of its own, so the checks on the registry cover the widget as well.
+
+Through 2.6.2 both tiers drew a 2-unit line at their grid size (24px and 16px): crisp on every
+straight edge, but nearly twice the ink, and a rail of them read as heavy beside the chart. To keep
+that weight, pass it explicitly: `iconSvg(id, { size: 24, stroke: 2 })`,
+`chromeIconSvg(id, { stroke: 2 })`, or `stroke-width` in your own frame or stylesheet. The tool
+cursor (`toolCursor`) keeps a 2-unit line either way, since it sits over candles.
+
+The grid, margins, stroke and marks are checked by unit tests. A browser check rasterises
+every glyph in Chromium, Firefox and WebKit, both as the builders draw it and as the bare
+path data, and fails when two glyphs in a set overlap enough to be mistaken for each
+other.
+
+## Plot clipping and moved axes (2.1.6)
+
+Drawing bodies, previews, selection handles and snap rings are clipped to their
+pane's plot. Anchors remain valid beyond the newest candle; clipping does not
+truncate saved drawing coordinates. Moving the primary price scale to the left
+keeps drawing placement, rendering and hit testing on the same price scale.
+`PrimitiveRenderContext.readoutPriceScale` exposes that primary scale for custom
+primitives; `priceScale` retains the existing right-scale contract.
+
+Dense geometry labels use separate rows to stay readable. At extreme density,
+labels without available space are omitted; zoom in or disable unneeded levels
+to expose their values. The saved geometry and its hit regions remain exact.

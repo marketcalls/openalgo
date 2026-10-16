@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Drawings per instrument fixture</title>
+<style>html,body{margin:0;height:100%;background:#0d0e12}#root{position:absolute;inset:0}</style></head>
+<body><div id="root"></div>
+<script type="module">
+// The widget and the chart grid, switching instruments with drawings on them.
+// Every symbol trades in the same range on the same times, so a drawing that
+// leaked from one instrument onto another would be on screen there.
+import { VERSION } from '/dist/openalgo-charts.mjs';
+import { createWidget, createChartGrid } from '/dist/openalgo-charts.widget.mjs';
+
+const params = new URLSearchParams(location.search);
+const T = 1_700_000_000;
+const COUNT = 200;
+const bars = () => Array.from({ length: COUNT }, (_, i) => {
+  const close = 100 + Math.sin(i / 9) * 5 + i * 0.02;
+  return { time: T + i * 300, open: close - 0.5, high: close + 1.5, low: close - 1.5, close, volume: 100 + i };
+});
+// `hold` keeps every request open until the test answers it, for switches
+// made while a load is still in flight.
+const held = [];
+const feed = {
+  getBars: request => params.has('hold')
+    ? new Promise(resolve => held.push({ request, resolve }))
+    : Promise.resolve(bars()),
+};
+const common = {
+  feed, exchange: 'NSE', interval: '5m', theme: 'dark', rail: false, statusline: false,
+  now: () => (T + (COUNT + 10) * 300) * 1000, lookbackBars: COUNT,
+  ...(params.get('scope') ? { drawingScope: params.get('scope') } : {}),
+  ...(params.has('persist') ? { persist: params.get('persist') || 'drawscope' } : {}),
+};
+const symbol = params.has('nosymbol') ? undefined : (params.get('symbol') || 'AAA');
+const root = document.getElementById('root');
+const errors = [];
+window.addEventListener('error', event => errors.push(String(event.message)));
+
+let widget = null;
+let grid = null;
+if (params.get('mode') === 'grid') {
+  grid = createChartGrid(root, { ...common, symbol: symbol ?? 'AAA', preset: params.get('preset') || '1x2',
+    links: { crosshair: false, viewport: false, symbol: false, interval: false } });
+} else {
+  widget = createWidget(root, { ...common, ...(symbol ? { symbol } : {}) });
+}
+const at = index => grid ? grid.cells()[index].widget : widget;
+
+window.fixture = {
+  version: VERSION, errors, held, bars, T,
+  get widget() { return widget; },
+  get grid() { return grid; },
+  at,
+  answer: () => { for (const entry of held.splice(0)) entry.resolve(bars()); },
+  loaded: (index = 0) => at(index).series.getData().length,
+  symbol: (index = 0) => at(index).symbol(),
+  drawings: (index = 0) => at(index).draw.drawings().map(d => ({ id: d.id, tool: d.tool, points: d.points.map(p => ({ ...p })) })),
+  /** A magenta trend line between two bars, added the way a host's own code would. */
+  addLine: (index = 0, from = 60, to = 150) => {
+    const b = bars();
+    return at(index).draw.add({ tool: 'trend-line', paneIndex: 0, style: { color: '#ff00ff', lineWidth: 4 },
+      points: [{ time: b[from].time, price: b[from].low - 3 }, { time: b[to].time, price: b[to].high + 3 }] }).id;
+  },
+};
+</script></body></html>

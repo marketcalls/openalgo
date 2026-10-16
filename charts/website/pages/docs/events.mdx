@@ -1,0 +1,694 @@
+---
+title: Events
+description: Timeline event markers, grouped details and the chart interaction, viewport, data and lifecycle bus.
+---
+
+import { Callout } from 'nextra/components'
+import RunnableExample from '../../components/RunnableExample'
+
+# Events
+
+OpenAlgo Charts gives you one small, predictable event surface. A single
+`chart.on(name, cb)` bus covers interaction, viewport, data, and lifecycle
+events, and it returns an unsubscribe function so cleanup is one call. The
+trading layer routes its `trading:*` events through the same bus, so you never
+juggle two APIs. Every name is declared in `ChartEventMap` with its payload, so
+in TypeScript the listener's argument is typed by the name you subscribe to.
+
+## Subscribing
+
+```ts
+// Subscribe. The return value unsubscribes.
+const off = chart.on('crosshair:move', (e) => {
+  // handle event
+});
+
+// Later: stop listening.
+off();
+
+// Or drop one listener / every listener for a name.
+chart.off('crosshair:move', handler);
+chart.off('crosshair:move');
+
+// Fire once, then auto-unsubscribe.
+chart.once('ready', () => console.log('chart is live'));
+```
+
+<Callout type="info">
+Every `on(...)` returns its own unsubscribe. Keep the returned function and call
+it on teardown (component unmount, route change) so listeners never leak.
+</Callout>
+
+## Typed payloads
+
+`ChartEventMap` (since 2.6.0) names every event on the bus with the payload a
+listener receives. `chart.on`, `once` and `off` read it, so the payload needs no cast:
+
+```ts
+chart.on('click', (e) => {          // e: ChartClickEvent
+  if (e.id !== null) select(e.id);
+});
+chart.on('pan', ({ from, to }) => syncRange(from, to));   // ChartViewportEvent
+```
+
+The draw tier adds its `draw:*` and `drawing:*` names to the map by declaration merging,
+so they are typed once `openalgo-charts/draw` (or the widget) is imported. The payload
+types are exported (`ChartViewportEvent`, `PaneEvent`, `DrawingEvent` and the rest), and
+any one of them is also `ChartEventMap['name']`.
+
+An event of your own, emitted by a study descriptor's `ctx.emit` for instance, is declared
+the same way, once, and is then typed everywhere:
+
+```ts
+declare module 'openalgo-charts' {
+  interface ChartEventMap {
+    'myapp:signal': { price: number };
+  }
+}
+
+chart.on('myapp:signal', ({ price }) => mark(price));
+```
+
+<Callout type="warning">
+**Upgrading from 2.5.** A name that is not in the map still compiles, through a string
+overload that is deprecated and goes in 3.0.0; declare it as above. A list of names typed
+`string[]` takes that overload too, so write it `as const`. And a cast that no longer
+overlaps the typed payload stops compiling: `(p) => p as Record<string, unknown>` on
+`click` is error TS2352, because `ChartClickEvent` is an interface. Read the field
+directly, or cast through `unknown` (`p as unknown as Record<string, unknown>`). Nothing
+changes at runtime.
+</Callout>
+
+**Names.** A name is `namespace:action`, lower case, hyphen-joined, in the present tense
+(`objects:change`, `draw:preview-clear`). The names that predate that rule keep their
+spelling: the camelCase pane and indicator events, the single words, `trading:*` in snake
+case, and `branding:changed`, `timezone:changed`, `alerts:changed` and `alerts:restored`.
+Each name has one payload shape; one with nothing to report carries an empty object
+(`EmptyEvent`), except `events:change`, which carries `undefined`.
+
+**A listener that throws** does not stop the others, and nothing reaches the engine that
+emitted. Since 2.6.0 the error goes to the platform's `reportError`, which in a browser
+logs it and fires the window's `error` event, as a throwing DOM listener does; before, the
+chart bus dropped it silently. `chart.trading.on` and `chart.shortcuts?.on` follow the same
+rule, so a throwing trading listener no longer stops the others or the copy on the chart
+bus.
+
+## What the engine emits
+
+| Event | Payload | Fires when |
+|-------|---------|-----------|
+| `ready` | `{}` | Once, on the microtask after `createChart` returns. |
+| `destroy` | `{}` | Once, at the end of `chart.destroy()`, with the chart already torn down. Anything holding a chart it did not create lets go of it here. |
+| `crosshair:readout` | `CrosshairMoveEvent` | Every position a readout should show: the pointer's, and a linked chart's (`source: 'linked'`, `point: null`). |
+| `crosshair:move` | `{ time, index, price, bar, point, paneIndex, pressed, modifiers, pointerType, pressure, samples? }` | The pointer moves over the plot (all-null when it leaves). `pressed` is true while a pointer is held: the only way to observe a drag in progress, since placement mode suppresses panning. `samples` is present only then and lists every coalesced position since the last move. |
+| `click` | `{ id, price, time, paneIndex, point, modifiers, pointerType, pressure }` | The plot was clicked. `id` is the hit primitive's `externalId`, or **`null`** for a click on empty chart space. `point` uses container x and pane-local y in media pixels. `pressure` is the press pressure, since a release always reads 0. |
+| `event:click` | `ChartEventClick`: `{ id, cluster, events, point, paneIndex }` | A chart-owned timeline badge was clicked. `events` contains independent copies of every cluster member. |
+| `events:change` | `undefined` | Chart-owned event data, type visibility or group visibility changes. Hosts can dismiss stale detail views. |
+| `hover` | `{ id }` | The pointer enters (`id` = `externalId`) or leaves (`id` = `null`) a hit-testable primitive. |
+| `dblclick` | `DoubleClickEvent`: `{ paneIndex, x, y, handled }` | The plot is double-clicked. The chart then resets the scale (or maximizes the pane, per `doubleClick`), *unless* a drawing tool is active, where a double-click finishes the shape instead, or a listener set `handled = true`. |
+| `contextmenu` | `{ paneIndex, point, price, time, index, target, preventDefault }` | The plot is right-clicked. `target` classifies what is under the pointer, so an app can raise its own menu. See below. |
+| `drag:start` | `ChartDragEndEvent` | A draggable primitive accepts the press, before movement. Capture the original value here. |
+| `drag` | `{ id, price, time, paneIndex, fromPrice, fromTime, point, samples, modifiers, pointerType, pressure }` | A draggable primitive is being moved. `from*` is the grab origin. `point` is container x with y local to the pane where the drag started, including when the pointer crosses another pane. `samples` uses the same space. |
+| `drag:end` | `ChartDragEndEvent` | The gesture ends. A legacy end event can follow cancellation; check `drag:cancel` before committing. |
+| `drag:cancel` | `{ id, paneIndex, reason }` | An accepted gesture is cancelled. `reason` is `pointercancel`, `pinch` or `escape`. See [Primitive drag lifecycle](#primitive-drag-lifecycle). |
+| `pan` | `{ from, to, logicalFrom, logicalTo }` | The user pans (drag, two-finger, kinetic glide). |
+| `zoom` | `{ from, to, logicalFrom, logicalTo }` | The user zooms (wheel or pinch). |
+| `resize` | `{ width, height }` | The container size changes (CSS px). |
+| `lazy-load` | `{ from, to, direction }` | The viewport nears the oldest bar and history paging should run. |
+| `priceAxisMoved` | `{ paneIndex, from, to }` | Deprecated, removed in 3.0.0 with `chart.movePriceAxis`, the only call that emits it: listen for `priceAxisPlacementChanged`, which `chart.setPriceAxisPlacement` emits. A pane's price axis moved to the other strip. The scale object travels with it, so a menu holding a `scaleId` should follow. |
+| `priceAxisPlacementChanged` | `{ paneIndex, scaleId, side, order }` | `chart.setPriceAxisPlacement` moved or reordered a price scale's column. The scale keeps its id; `side` and `order` are where it now draws. |
+| `layout:change` | `{ setter }` (`LayoutChangeEvent`) | A setter that changes the saved layout and has no event of its own ran: `setPaneWeight`, `setPriceAxisOptions`, `setPriceAxisAutoFit`, `setPriceAxisLockRatio`, `setPriceScaleOptions`, `setAutoScale`, `setGridOptions`, `setCanvasOptions`, `setStatusLineOptions`, `setWatermarkOptions`, `setTradingSettings`, `setAxisChromeOptions`, `setEventOptions`, `setNavigationOptions` (since 2.6.0; the pan and zoom switches also fire `objects:change`) or `applyOptions`, which the crosshair magnet shortcut goes through since 2.6.0. Once per outermost call, after the change; never during a restore, which has its own start and end events. Save the layout here, or record an undo step. |
+| `paneAdded` / `paneRemoved` / `paneMaximized` / `paneResized` | `{ paneIndex }` | The pane layout changed through a legend button or a divider drag. `paneMoved` reports `{ from, to }` instead: two neighbours swapped, the price pane included on a chart built with `movablePrimaryPane`. `setPrimaryPaneIndex` emits one per step; read `chart.primaryPaneIndex()` after one. |
+| `paneCollapsed` | `{ paneIndex, collapsed }` | A study pane folded to its header strip or opened again, from `setPaneCollapsed`, its legend button or a host menu. |
+| `indicatorRemoved` / `indicatorSettings` | `{ instanceId, indicatorId, paneIndex }` | An indicator legend's close or gear button was pressed. |
+| `indicatorSource` | `{ instanceId, indicatorId, paneIndex }` | The source button of a descriptor with `hasSource: true` was pressed. The [host supplies the code and viewer](/docs/indicators#source-access-and-legend-controls). |
+| `indicator:alert` | `IndicatorAlertPayload` | A condition an indicator descriptor declared came true on a new bar. See [Indicator alerts](#indicator-alerts). |
+| `objects:change` | `{}` | The source, study or chart object inventory changed, including the pan and zoom switches of `setNavigationOptions` (which sent `undefined` before 2.6.0). Re-read what you show; the payload says nothing. |
+| `style:change` | `LinkAppearanceValues` | `applyChartSettings` applied appearance a [link group](/docs/chart-linking) mirrors. |
+| `timezone:changed` | `{ timezone }` | `chart.setTimezone` changed the chart's clock. |
+| `branding:changed` | `BrandingChangedEvent` | The brand mark changed: its options, or `false` when removed. |
+| `data:context` | `ChartDataContext` or `undefined` | `chart.setDataContext` changed the instrument, interval or variant. |
+| `data:update` | `ChartDataUpdate`: `{ kind, time? }` | The primary series was written: a live bar (`update`), a replacement (`reset`) or older history (`prepend`). |
+| `data:range` / `data:requests` | `{}` | Studies were invalidated (the bars or the clock they read changed), or their bars provider changed; studies that fetch ask again. |
+| `state:restore:start` / `state:restore:end` | `{}` | `chart.restoreState` began and finished. `drawings:restore` and `alerts:restore` hand the draw tier and an `AlertController` their part of the state in between. |
+| `indicator:data-status` | `{ id, indicatorId, status: IndicatorDataStatus }` | An indicator's managed data state changed: a Tier-2 fetch is loading, ready, empty, unsupported or failed, and since 2.4.0 a `calc` that threw (`{ state: 'error', error }`) or recovered (`ready`). |
+| `pick:start` / `pick:end` | `{ kind }` / `{ kind, value }` | `chart.beginPick` armed, and then resolved or was cancelled (`value` is `null` when cancelled). `kind` is `'price'`, `'time'` or `'point'`, whose `value` is `{ time, price }`. See [Picking a price or a bar](/docs/interactions#picking-a-price-or-a-bar). |
+| `replay:*` | `ReplayState` | The [market replay](/docs/market-replay) playhead starts, moves, plays, pauses, ends or stops. |
+| `trading:*` | see [Trading events](#trading-events) | The user interacts with a position, order, or bracket. |
+| `alert:*` / `alerts:*` | see [Trader alerts](/docs/alerts) | An `AlertController` reports a trigger or a committed change. Drag previews do not emit saved changes. |
+| `draw:*` / `drawing:*` | see [Drawing tools](/docs/drawing-tools#events) | The draw tier reports tools, drawings and the selection: `draw:*` once per drawing, `drawing:*` once per change. |
+| `symbol` / `interval` / `chartType` | `{ symbol, exchange? }`, `{ interval }`, `{ chartType }` or a bare string | A host (the widget, for `symbol`) announced a choice; a [link group](/docs/chart-linking) follows it. The engine never emits these. |
+
+`from` / `to` on the viewport and data events are **UTC seconds** (or `null`
+when the edge falls outside loaded data). `logicalFrom` / `logicalTo` are the raw
+logical bar indices, handy when you drive your own paging math.
+
+<Callout type="info">
+`crosshair:move` and `pan` / `zoom` fire at pointer/gesture rate. Do only light
+work in the handler (update a legend, a readout). Defer heavy work to
+`requestAnimationFrame` or a debounce.
+</Callout>
+
+## Timeline event markers
+
+Supply a timeline with `chart.setEvents(events)`. Each `ChartEvent` requires
+`time` in UTC seconds, `type` and the short badge `label`. The optional `id`
+remains the hit handle for a single event when that ID is unique. Anonymous events,
+duplicate IDs and clusters receive generated handles; details preserve the original
+event IDs. You can also supply `color`, `title`,
+`group` and `details`. Details accept a string or a `ChartEventDetails` object
+containing `summary`, a list of `{ label, value }` text fields and, from 2.6.0,
+rich `blocks` (see [Rich details and actions](#rich-details-and-actions)).
+
+```ts
+chart.setEventGroups([
+  { id: 'calendar', label: 'Calendar' },
+  { id: 'company', label: 'Company', parentId: 'calendar' },
+]);
+chart.setEvents([
+  {
+    id: 'sample-results', time: 1705315500, type: 'earnings', label: 'E',
+    title: 'Sample results announcement', group: 'company',
+    details: {
+      summary: 'Demonstration data supplied by this application.',
+      fields: [{ label: 'Period', value: 'Quarter 3' }],
+    },
+  },
+]);
+chart.setEventMarkerOptions({ clustering: true, clusterRadius: 18 });
+chart.setEventGroupVisible('calendar', false);
+chart.setEventGroupVisible('calendar', true);
+chart.setEventOptions({ news: false });
+```
+
+Clustering defaults to **false**, preserving individual badges. When enabled,
+events within `clusterRadius` CSS pixels share a count badge, and zooming in
+separates them. The radius defaults to 18 and accepts values from 1 to 200.
+Group visibility includes descendants: showing a child cannot override a hidden
+parent. Duplicate group IDs, missing parents and cycles are rejected before the
+existing hierarchy changes. Ungrouped events and groups not yet configured remain
+visible. The existing type switches continue to apply alongside group visibility.
+
+Events do not need an exact candle timestamp. The primitive interpolates chart
+time across candle and session gaps, retaining the original timestamp in every
+returned member. Nonfinite timestamps are rejected. Input events, group definitions
+and returned details are copied, so callers can edit their own objects safely.
+Changing the chart's symbol or exchange clears chart-owned events; the host supplies
+the next instrument's calendar. Group and visibility preferences remain available.
+
+### Click details and custom hosts
+
+```ts
+import type { ChartEventClick } from 'openalgo-charts';
+
+const off = chart.on('event:click', ({ id, cluster, events }) => {   // ChartEventClick
+  showEventDetails({ id, cluster, events });
+});
+```
+
+`ChartEventClick` contains the badge `id`, a `cluster` boolean, all member `events`,
+the click `point` and `paneIndex`. Cluster handles remain stable while membership
+stays the same. Read `chart.eventMarkers()?.detailsForHit(id)` for the latest drawn
+hit; outdated handles return `null` after layout or model changes. The primitive
+also exposes `events()`, `groups()`, `options()` and `isGroupVisible(id)`.
+
+For a host-owned primitive, call
+`chart.addEventMarkers(paneIndex, { clustering: true })` and keep its return value.
+Use `setEvents`, `setGroups`, `setGroupVisible` and `setOptions` on that primitive,
+then resolve ordinary chart `click` or `hover` IDs through its `detailsForHit`.
+`event:click` is emitted for the strip managed by `chart.setEvents`.
+
+### Widget popup and host loaders
+
+The widget opens an accessible details popup when a chart-owned badge is clicked.
+Cluster members are selectable buttons. All titles, summaries, field values and
+rich blocks are rendered as text. Escape and Close dismiss it, Tab stays within its controls,
+and closing returns focus to the opener when appropriate.
+
+```ts
+import { createWidget } from 'openalgo-charts/widget';
+
+const widget = createWidget(container, {
+  eventDetails: {
+    loadDetails: async (event, { signal }) => {
+      return calendarDetails.load(event.id, { signal });
+    },
+  },
+});
+widget.chart.setEvents(sampleEvents);
+```
+
+`EventDetailsLoader` returns a promise of a detail string, a `ChartEventDetails`
+object, or `null` to retain supplied details. The popup aborts the previous signal
+on selection changes, closure and disposal, and ignores late results even when
+the host loader cannot cancel its work. A failed lookup keeps supplied details
+visible. The host owns its feed, request authentication and cancellation support;
+the engine and widget make no calendar requests themselves.
+
+The popup the widget mounts speaks the widget's language: its title, its Close
+button and its loading and error lines go through `translate` like the rest of the
+chrome (since 2.6.0), and any `eventDetails.labels` you pass still win.
+
+Set `eventDetails: false` to provide your own detail view. A custom host can also
+create `new EventDetailsPopup(container, options)` from the widget tier, call
+`open(details, { x, y })` with container-relative CSS coordinates, and call
+`destroy()` at teardown. `EventDetailsPopupOptions` accepts `labels`, `formatTime`,
+`styleNonce`, a shared `overlays` stack and `injectStyles: false` for hosts that
+already include `EVENT_DETAILS_CSS`. Standalone time formatting defaults to
+`Asia/Kolkata`; supply `formatTime` for another timezone or locale.
+
+### Rich details and actions
+
+From 2.6.0, `details.blocks` adds headings, paragraphs and bulleted lists after
+the fields, and `eventDetails.actions` adds buttons under them.
+
+```ts
+widget.chart.setEvents([{
+  id: 'sample-results', time: 1705315500, type: 'earnings', label: 'E',
+  title: 'Sample results announcement',
+  details: {
+    summary: 'Demonstration data supplied by this application.',
+    blocks: [
+      { type: 'heading', text: 'Highlights' },
+      { type: 'paragraph', text: [
+        { text: 'Margins ' }, { text: 'widened', strong: true }, { text: ' on lower costs. ', em: true },
+        { text: 'Read the filing', href: 'https://example.com/filing' },
+      ] },
+      { type: 'list', items: ['Volume up 9%', 'Guidance kept'] },
+    ],
+  },
+}]);
+
+const widget = createWidget(container, {
+  eventDetails: {
+    actions: event => event.type === 'earnings'
+      ? [{ label: 'Mark on chart', run: shown => markTime(shown.time) }]
+      : [],
+  },
+});
+```
+
+Event content usually comes from a feed, so it is treated as untrusted:
+
+- Blocks are structure, not markup. A block's `text` is a string or a list of
+  spans `{ text, strong?, em?, href? }`, and every string is shown as text: a
+  feed that sends `<img onerror=...>` shows those characters, and nothing runs.
+- A span's `href` becomes a link only when it is an absolute `http` or `https`
+  URL without credentials. It opens in a new tab with no opener and no referrer.
+  `javascript:`, `data:`, `vbscript:`, relative and protocol-relative values
+  show the span's text alone.
+- A block of an unknown type or a malformed shape is skipped, and `setEvents`
+  copies blocks all the way down, so later edits to your objects change nothing.
+
+`actions(event)` is asked each time an event is shown and returns
+`{ label, run }` pairs; labels are text. A press closes the popup first, then
+calls `run` with a copy of the event, so a dialog the action opens is not closed
+under it. Without `actions` the popup has no buttons. Custom hosts pass the same
+option to `new EventDetailsPopup(container, { actions })`.
+
+The [linked analysis example](/examples) uses explicitly labelled sample events.
+No live calendar source is bundled.
+
+## Live demo
+
+Move the crosshair, then drag and wheel-zoom. The readout is driven entirely by
+`chart.on('crosshair:move')` and `chart.on('zoom' | 'pan')`.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+el.style.position = 'relative';
+const out = document.createElement('div');
+out.style.cssText = 'position:absolute;left:8px;top:8px;font:12px ui-monospace,monospace;background:light-dark(rgba(255,255,255,.9),rgba(0,0,0,.55));color:light-dark(#151515,#e6edf3);box-shadow:0 0 0 1px light-dark(#e4e4e4,transparent);padding:6px 9px;border-radius:6px;pointer-events:none;line-height:1.5';
+el.appendChild(out);
+
+let hover = 'move the crosshair';
+let view = '';
+const render = () => { out.innerHTML = hover + (view ? '<br>' + view : ''); };
+
+chart.on('crosshair:move', (e) => {
+  hover = e.bar
+    ? 'O ' + e.bar.open.toFixed(2) + '  H ' + e.bar.high.toFixed(2) + '  L ' + e.bar.low.toFixed(2) + '  C ' + e.bar.close.toFixed(2)
+    : 'off chart';
+  render();
+});
+const fmt = (t) => t == null ? '-' : new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+chart.on('zoom', (r) => { view = 'zoom  ' + fmt(r.from) + ' -> ' + fmt(r.to); render(); });
+chart.on('pan',  (r) => { view = 'pan   ' + fmt(r.from) + ' -> ' + fmt(r.to); render(); });
+render();
+return chart;`} />
+
+## Interaction events
+
+### crosshair:move
+
+Fires on every pointer move across the plot, and once with all-null fields when
+the pointer leaves. `bar` is the hovered bar of the primary price series (or
+`null` off the data); `point` is the crosshair position in container CSS px.
+
+```ts
+chart.on('crosshair:move', ({ time, price, bar, point }) => {
+  if (!bar) { legend.hidden = true; return; }
+  legend.hidden = false;
+  legend.textContent = `O ${bar.open} H ${bar.high} L ${bar.low} C ${bar.close}`;
+});
+```
+
+The typed helper `chart.subscribeCrosshairMove(cb)` also delivers linked readouts
+with `source: 'linked'`, the follower's own bar and null pointer coordinates.
+Those readouts do not emit `crosshair:move` on the bus. Native hover takes
+precedence; clearing a link restores the latest-bar fallback. See
+[Chart linking](/docs/chart-linking#the-linked-crosshair).
+
+Every move also reports the pointer itself: `modifiers` (`{ shift, alt, ctrl, meta }`),
+`pointerType` (`'mouse' | 'touch' | 'pen'`) and `pressure` (0..1 as the pointer events
+spec defines it: what the hardware measured, else 0.5 while a button is held, else 0).
+While `pressed`, `samples` carries every position the pointer passed through since the
+last move, with its pressure, so a freehand stroke inks a fast gesture whole rather than
+one point per frame. `click`, `drag` and `drag:end` carry the same three pointer facts;
+`drag` adds coalesced `samples`.
+
+### Primitive drag lifecycle
+
+`drag:start` and `drag:end` use `ChartDragEndEvent`: the primitive id, price,
+time, pane index, point and pointer facts. A press without movement can still
+produce both events, so a release alone does not prove a value changed.
+
+Use `drag:start` to capture a draft, `drag` to preview it, and `drag:cancel` to
+discard it. A browser `pointercancel` announces cancellation before the legacy
+`drag:end` event. A pinch cancels the primitive gesture as it becomes navigation.
+Escape cancels only primitives whose hit sets `cancelOnEscape: true`; other
+primitives retain their existing Escape behavior. Cancellation is not a commit.
+
+For a primitive on an independent scale, convert `point.y` through its own
+`series.priceScale().yToPrice(...)`; the payload's `price` follows the pane's
+readout scale. [Trader alerts](/docs/alerts) already own this draft lifecycle:
+listen for `alert:updated` to persist a released threshold instead of writing
+alert state from the generic drag events.
+
+### click
+
+Fires on every plot click, not only on a hit. **Null-check `id`**: it is `null`
+when the click landed on empty space rather than a primitive. The payload `id` is the
+`externalId` you set on the marker, event marker, or price line, so you can route
+the click without a lookup.
+
+```ts
+chart.on('click', ({ id }) => {
+  if (id === 'entry-line') openOrderPanel();
+});
+```
+
+`chart.subscribeClick(cb)` is the hit-only form (`cb(externalId)`). Like `on`, it takes any
+number of subscribers and returns the function that unsubscribes one; before 2.6.0 each call
+replaced the previous callback.
+
+### hover
+
+Fires when the pointer enters or leaves a hit-testable primitive (`id` is the
+primitive's `externalId`, or `null` on leave), at state-change rate, not
+pointer rate. The chart already renders hover states (thicker line, brighter
+pill, cursor hint) by itself; use this event for app-side affordances such as
+an order tooltip or a details panel.
+
+```ts
+chart.on('hover', ({ id }) => {
+  tooltip.hidden = id === null || !id.startsWith('ord:');
+});
+```
+
+### contextmenu
+
+Fires on a right-click over the plot, with everything a menu needs: where the pointer is,
+what is under it, and the `preventDefault` that suppresses the browser's own menu.
+
+```ts
+chart.on('contextmenu', (e) => {
+  e.preventDefault();
+  if (e.target.kind === 'drawing') return drawingMenu(e.point, e.target.id);
+  if (e.target.kind === 'indicator') return indicatorMenu(e.point, e.target.instanceId);
+  chartMenu(e.point, { price: e.price, time: e.time });
+});
+```
+
+`target.kind` is `'drawing' | 'indicator' | 'legend' | 'primitive' | 'series' |
+'price-scale' | 'time-scale' | 'empty'`, and carries the hit-test `id`, an `instanceId` for
+an indicator, and a `seriesType` for a series. A canvas hands an app a pixel rather than an
+object, so this classification is the part it cannot work out for itself, and the part that
+decides which menu items make sense.
+
+A `'price-scale'` hit also carries `side` (`'right'` or `'left'`, the strip that was hit)
+and `scaleId` (which of the pane's scales that strip acts on, `''` when the pane's values
+all sit on the hidden overlay scale). `scaleId` is the argument the `priceAxis*` calls take,
+so a menu should pass it through rather than deriving one from `side`:
+
+```ts
+if (e.target.kind === 'price-scale') {
+  const state = chart.priceAxisState(e.paneIndex, e.target.scaleId);
+  return openAxisMenu(e.point, state);
+}
+```
+
+The **bottom-left** corner belongs to the time axis, not to a left price ladder, because the
+time axis spans the full width including the left column. The bottom-right corner stays the
+price axis'. Building the axis menu itself is covered on
+[Settings & Menus](/docs/settings-and-menus#the-price-axis-menu).
+
+<Callout type="info">
+With no `contextmenu` listener the chart keeps its save-image fallback: it composites the
+clicked pane's layers so the browser's own "Save image as" produces the visible chart
+rather than a blank overlay. The first listener takes that over; dropping the last one
+restores it. See [Theming and chart options](/docs/themes#building-the-context-menu).
+</Callout>
+
+## Viewport events
+
+`pan` and `zoom` report the new visible window after the gesture. `resize` fires
+whenever the container changes size (the built-in `ResizeObserver` drives it, and
+an explicit `chart.applySize(w, h)` also emits it).
+
+They are not gesture-only. `setVisibleLogicalRange`, `fitContent`, `resetScale` and the
+keyboard pan and zoom commands all announce themselves the same way, and only when the
+window **actually moved**: a clamped zoom, or a `fitContent` on an already-fitted chart,
+emits nothing. Which of the two you get is decided by whether the span changed, since a
+restored range can pan or zoom and the payload alone would not say.
+
+```ts
+chart.on('pan',  ({ from, to }) => syncOtherChart(from, to));
+chart.on('zoom', ({ from, to }) => syncOtherChart(from, to));
+chart.on('resize', ({ width, height }) => layoutOverlays(width, height));
+```
+
+<Callout type="info">
+Use `pan` / `zoom` to decide when to save the user's camera. `chart.getState()`
+includes the viewport; writing that snapshot to storage remains the host's job.
+
+For keeping a second chart in lockstep, prefer [chart linking](/docs/chart-linking) over
+copying logical ranges across by hand. Event `from` and `to` are UTC seconds;
+`logicalFrom` and `logicalTo` belong to this chart's bar set. Linking converts
+between each member's own time and index spaces.
+</Callout>
+
+## Data events
+
+### lazy-load
+
+Fires when the viewport nears the oldest loaded bar. Pair it with a history
+loader and `series.prependData(...)`, then call `chart.historyLoadComplete()` to
+re-arm the trigger. See [Data Loading](/docs/data-loading) for the full pattern.
+
+```ts
+chart.setHistoryLoader(async () => {
+  try {
+    const oldest = series.getData()[0]?.time;
+    if (oldest === undefined) return;
+    const older = await fetchOlderBars(oldest);
+    series.prependData(older);
+  } catch (error) {
+    showHistoryError(error);
+  } finally {
+    chart.historyLoadComplete();
+  }
+});
+```
+
+<Callout type="info">
+`setHistoryLoader` is the direct hook: it fires the loader with no payload.
+`lazy-load` is the observable form of the same trigger, carrying the time window
+for observation. Register the loader once; a `lazy-load` listener alone does not
+arm history loading. The event's visible endpoints may be null, so fetch older
+history from the source series' earliest timestamp.
+</Callout>
+
+## Replay events
+
+`ReplayController` reports through the same bus, and every payload is the same
+`ReplayState`, so one handler can drive a whole transport bar.
+
+| Event | Fires |
+|---|---|
+| `replay:start` | The controller puts its first bar on the chart. |
+| `replay:frame` | Every playhead move: seek, step, stepBack, and each played bar. |
+| `replay:play` / `replay:pause` | Playback armed or halted. |
+| `replay:end` | The playhead reached the last bar. |
+| `replay:stop` | Replay left; data and viewport restored. |
+
+```ts
+chart.on('replay:frame', ({ index, total, bar }) => {   // ReplayState
+  scrub.max = String(total - 1);
+  scrub.value = String(index);
+  clock.textContent = bar ? new Date(bar.time * 1000).toLocaleString() : 'No available bar';
+});
+```
+
+See [Market Replay](/docs/market-replay) for the controller itself.
+
+## Lifecycle events
+
+### ready
+
+Fires once, on the microtask after `createChart` returns. Because it is deferred,
+a subscription registered on the very next line still receives it.
+
+```ts
+const chart = createChart(el);
+chart.on('ready', () => console.log('ready'));  // still fires
+```
+
+### destroy
+
+Fires once, at the very end of `chart.destroy()`, and `chart.isDestroyed` is already `true`
+when it does. A listener is there to **let go** of the chart (unsubscribe, drop it from a
+[link group](/docs/chart-linking), release a controller), not to read it: it sees the same
+dead object every other holder sees. `destroy()` is idempotent, so a second call re-emits
+nothing, and every listener is dropped afterwards, since subscriptions on a destroyed chart
+would otherwise retain their closures forever.
+
+```ts
+chart.on('destroy', () => group.remove(chart));
+chart.isDestroyed;   // true once it has run
+```
+
+<Callout type="info">
+**Host events on the same bus.** `chart.emit(name, payload)` is deprecated and goes in
+3.0.0: the bus carries the chart's own events. It still works in 2.x, and a
+[link group](/docs/chart-linking) still listens for host `symbol`, `interval` and
+`chartType` events, but the direct calls are the way forward:
+
+```ts
+group.setSymbol(chart, 'RELIANCE');      // was chart.emit('symbol', 'RELIANCE')
+group.setInterval(chart, '5m');          // was chart.emit('interval', '5m')
+chart.setDataContext({ symbol: 'RELIANCE', exchange: 'NSE', interval: '5m' });
+```
+
+`chart.setDataContext(...)` declares the identity used by studies, alerts and a drawing
+link; a link event alone does not load bars or update that context. Keep events of your
+own app on your own emitter.
+</Callout>
+
+## Indicator alerts
+
+An indicator descriptor can declare conditions the runtime watches on its behalf, because
+the indicator is the only thing that knows what a crossover of its own columns means. A
+trigger arrives on the ordinary bus:
+
+```ts
+import 'openalgo-charts/indicators';
+
+chart.on('indicator:alert', ({ indicatorId, instanceId, alertId, title, message, time, index }) => {
+  toast(`${title} on bar ${index}`);
+});
+```
+
+**`IndicatorAlertPayload`**
+
+| Field | Type | Description |
+|---|---|---|
+| `indicatorId` | `string` | The descriptor id, e.g. `'macd'`. |
+| `instanceId` | `string` | The instance id, so three EMAs are tellable apart. |
+| `alertId` | `string` | The `id` of the `IndicatorAlertSpec` that fired. |
+| `title` | `string` | Short label from the spec. |
+| `message` | `string` | Longer text, defaulting to `title`. |
+| `time` | `number` | The bar that triggered it, UTC seconds. |
+| `index` | `number` | That bar's index in the indicator's `bars`. |
+
+<Callout type="warning">
+**Alerts fire only on a live tail change.** Adding an indicator to a loaded chart, changing
+a setting, paging history in, or switching symbol reseeds the watermark silently and emits
+nothing, so two years of bars cannot announce every crossover in them at once. The watermark
+is a bar time rather than a count, so older bars arriving at the left edge cannot re-fire the
+chart either. See [Alerts](/docs/indicators#alerts) for the descriptor side.
+</Callout>
+
+## Trading events
+
+Every trading event is mirrored onto the main bus, so
+`chart.on('trading:order_modify', cb)` and
+`chart.trading.on('trading:order_modify', cb)` are equivalent (both use the full
+`trading:` prefixed name). Use whichever reads better in your code.
+
+| Event | Payload |
+|-------|---------|
+| `trading:order_modify` | `{ orderId, newPrice, previousPrice }` |
+| `trading:order_cancel` | `{ orderId }` |
+| `trading:order_click` | `{ order }` |
+| `trading:position_close` | `{ positionId }` |
+| `trading:position_click` | `{ position }` |
+| `trading:bracket_modify` | `{ parentId, bracketRole, newPrice }` |
+
+`newPrice` is the pointer's price unless the chart has a tick schedule, from
+[`chart.setTickSchedule`](/docs/trading-api#price-ticks-while-dragging) or from
+an instrument with `tickBands` applied with `applyTo`, in which case it is the nearest
+price on the instrument's ticks.
+
+```ts
+chart.on('trading:order_modify', async ({ orderId, newPrice }) => {
+  await broker.modifyOrder(orderId, { price: newPrice });
+});
+
+chart.on('trading:position_close', async ({ positionId }) => {
+  await broker.closePosition(positionId);
+});
+```
+
+See the [Trading API](/docs/trading-api) page for the full data model.
+
+## Keyboard shortcut events
+
+Shortcut triggers come off their own manager rather than the value bus, because
+the payload is a rich `ShortcutTriggerEvent`:
+
+```ts
+chart.shortcuts?.on(({ command, combo }) => {
+  analytics.track('shortcut', { command, combo });
+});
+```
+
+See [Keyboard Shortcuts](/docs/keyboard-shortcuts).
+
+## Design notes and scope
+
+OpenAlgo Charts is a lean rendering engine, not a full white-label shell, so the
+event surface stays deliberately small and stable. Concerns that belong to your
+application layer are composed from the primitives above rather than shipped as
+built-in events:
+
+- **With a bare chart, menus, toolbars, dialogs and transport bars are yours.** The engine emits what it
+  knows and draws none of the chrome: `contextmenu` classifies the right-click target,
+  `indicatorSettings` fires when a legend's gear is pressed, and the `replay:*` events
+  drive a transport bar. The optional [widget](/docs/widget) supplies a packaged UI.
+- **Annotations.** Build them as [primitives / plugins](/docs/primitives-and-plugins) and
+  hit-test with `click`.
+- **Data-feed reconnection, gap-fill, timezone, theme families, undo/redo,
+  state persistence.** These live in your app or your feed. The engine exposes
+  the hooks (`setData`, `update`, `prependData`, `setHistoryLoader`,
+  `setTheme`-style options) so you own the policy. See
+  [Data Loading](/docs/data-loading) and [Live Data](/docs/live-data). For undo and
+  redo the widget tier's [`ChartHistory`](/docs/undo-history) builds one timeline from
+  these events, and a bare chart can use it too.
+
+This keeps the base bundle small and the API easy to reason about: a handful of
+events you will actually use, each with a plain payload and a one-call
+unsubscribe.

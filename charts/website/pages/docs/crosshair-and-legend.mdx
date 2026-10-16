@@ -1,0 +1,73 @@
+---
+title: Crosshair & Legend
+description: Subscribe to crosshair moves to drive an OHLC legend or floating tooltip.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+
+# Crosshair & legend
+
+`subscribeCrosshairMove` fires the hovered bar of the primary price series on every cursor
+move (and all-null fields on pointer-leave), so your app renders the legend or tooltip in its
+own DOM - the engine never imposes a legend style.
+
+```ts
+const unsub = chart.subscribeCrosshairMove((e) => {
+  const bar = e.bar ?? bars.at(-1);     // e.bar is null when the cursor leaves
+  legendEl.textContent = bar
+    ? `O ${bar.open} H ${bar.high} L ${bar.low} C ${bar.close}`
+    : '';
+  // e.point gives container-relative px to position a floating tooltip
+});
+```
+
+## Live OHLC legend
+
+Hover the chart - the legend in the top-left tracks the bar under the crosshair:
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 160, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+el.style.position = 'relative';
+const legend = document.createElement('div');
+legend.style.cssText = 'position:absolute;left:12px;top:10px;z-index:4;font:600 12px ui-monospace,monospace;color:light-dark(#151515,#cbd5e1);pointer-events:none';
+el.appendChild(legend);
+
+function render(b) {
+  legend.textContent = b
+    ? ('O ' + b.open.toFixed(2) + '   H ' + b.high.toFixed(2) + '   L ' + b.low.toFixed(2) + '   C ' + b.close.toFixed(2))
+    : '';
+}
+render(bars[bars.length - 1]);
+chart.subscribeCrosshairMove(function (e) { render(e.bar || bars[bars.length - 1]); });
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Move your cursor across the chart to update the legend." />
+
+The crosshair itself is global (a thin vertical line across all panes) with price and time
+axis tags. Its time tag shows seconds on [sub-minute timeframes](/docs/timeframes-and-tick-charts).
+
+## Collapse indicator legends
+
+```ts
+chart.setIndicatorLegendCollapsed(true);
+chart.indicatorLegendCollapsed(); // true
+```
+
+The constructor option `indicatorLegendCollapsed` defaults to `false`. Collapse
+suppresses study legend rows and their hit areas across panes. The persistent
+**Indicators N** control on the price pane expands them with a click or
+touch. The count includes every applied study, including individually hidden
+ones, and disappears when no studies remain. Expanded legends retain a control
+for collapsing them again.
+
+Plots, study visibility, calculations, live subscriptions and alerts stay active.
+Host OHLC and custom legend rows retain their display. The count respects the
+reserved `legendOffset`, follows the price pane when it is moved below its studies, and
+follows the top visible pane when a study pane is maximized over it.
+
+Both hosts expose **Collapse indicator legends** in Readout settings for keyboard
+access. The stable schema key is `statusLine.indicatorsCollapsed`. Native chart
+state and portable workspaces retain this chart-local preference; study templates
+do not replace it and appearance linking does not synchronize it.

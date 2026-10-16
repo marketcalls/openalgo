@@ -1,0 +1,225 @@
+---
+title: Use from a CDN
+description: Run OpenAlgo Charts from unpkg or jsDelivr with no build step, from a single HTML file.
+---
+
+# Use from a CDN
+
+There is nothing to install and nothing to deploy. Every release published to npm
+is on unpkg and jsDelivr within seconds of `npm publish`, because both are CDNs
+that sit in front of the npm registry rather than places you upload to.
+
+So a chart is one HTML file and a `<script>` tag away.
+
+## The shortest thing that works
+
+Save this as `chart.html` and open it. No npm, no bundler, no server.
+
+```html
+<!doctype html>
+<html>
+  <body style="margin:0;background:#0d0e12">
+    <div id="chart" style="width:100vw;height:100vh"></div>
+
+    <script type="module">
+      import { createChart } from 'https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.mjs';
+
+      const chart = createChart(document.getElementById('chart'), {
+        timezone: 'Asia/Kolkata',
+      });
+      const candles = chart.addSeries('candlestick');
+
+      candles.setData([
+        { time: 1735689600, open: 100, high: 104, low: 99, close: 103 },
+        { time: 1735693200, open: 103, high: 106, low: 102, close: 105 },
+        { time: 1735696800, open: 105, high: 105, low: 101, close: 102 },
+      ]);
+    </script>
+  </body>
+</html>
+```
+
+`type="module"` is doing the work: modern browsers import ESM straight from a URL,
+so the library needs no build step to be used.
+
+## Pin the version
+
+Use an exact version in anything you leave running:
+
+```html
+https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.mjs
+```
+
+The unversioned URL always resolves to the newest release. That is convenient for
+a scratch file and a liability for a page you are not watching, because a future
+release changes what your page loads without you touching it.
+
+The widget needs the exact version even in a scratch file. It fetches a few of its
+panels later, from files beside the tier file, and a tier file works only with the
+panels built with it. A range such as `@2`, or no version, can resolve the tier file and
+a panel to two different releases, and the panel then cannot load.
+
+jsDelivr serves the identical files if you prefer it:
+
+```html
+https://cdn.jsdelivr.net/npm/openalgo-charts@2.6.0/dist/openalgo-charts.mjs
+```
+
+## Adding indicators and drawing tools
+
+The base bundle is the engine and its registries. Indicators, drawing tools,
+transforms and the trade layer are separate files, and that is the point: what
+you do not import is not downloaded. Import a tier for its side effect and it
+registers itself into the engine you already loaded.
+
+```html
+<script type="module">
+  const CDN = 'https://unpkg.com/openalgo-charts@2.6.0/dist';
+
+  const { createChart, registeredIndicators } = await import(`${CDN}/openalgo-charts.mjs`);
+  const { registerBuiltinIndicators } = await import(`${CDN}/openalgo-charts.indicators.mjs`);
+  const { registerBuiltinDrawingTools } = await import(`${CDN}/openalgo-charts.draw.mjs`);
+
+  registerBuiltinIndicators();
+  registerBuiltinDrawingTools();
+
+  const chart = createChart(document.getElementById('chart'));
+  chart.addSeries('candlestick').setData(bars);
+
+  chart.addIndicator('supertrend');
+  chart.addIndicator('rsi');
+
+  console.log(registeredIndicators().length); // 112
+</script>
+```
+
+Every tier is a file under `/dist`:
+
+| Import | File | Contents |
+|---|---|---|
+| base | `openalgo-charts.mjs` | The engine, 13 chart types, registries, grouped timeline events, appearance links, primitives and feeds |
+| indicators | `openalgo-charts.indicators.mjs` | 112 built-ins plus the Tier-2 contract |
+| drawing | `openalgo-charts.draw.mjs` | 87 tools, including analysis drawings, the headless controller and drawing links |
+| transforms | `openalgo-charts.transform.mjs` | Heikin Ashi, Renko, Range, Line Break, and 2 more chart types |
+| profiles | `openalgo-charts.profile.mjs` | Volume Profile, Market Profile (TPO), Footprint, order flow |
+| trading | `openalgo-charts.trade.mjs` | Order, position and bracket lines, DOM ladder |
+| webgl | `openalgo-charts.webgl.mjs` | Optional WebGL2 series backend |
+| widget | `openalgo-charts.widget.mjs` | Packaged toolbar, drawing rail, dialogs, event details, translated controls and shortcuts |
+| workspace | `openalgo-charts.workspace.mjs` | Validated documents, named catalogs and asynchronous storage adapters |
+
+Loading the transform tier is what takes `registeredChartTypes()` from 13 to 15:
+Point and Figure and Kagi are registered by it.
+
+## Live data in the same file
+
+The OpenAlgo REST and WebSocket adapters are in the base bundle, so a working
+terminal is still one file:
+
+```html
+<script type="module">
+  const CDN = 'https://unpkg.com/openalgo-charts@2.6.0/dist';
+  const { createChart, OpenAlgoDataFeed } = await import(`${CDN}/openalgo-charts.mjs`);
+  const { registerBuiltinIndicators } = await import(`${CDN}/openalgo-charts.indicators.mjs`);
+  registerBuiltinIndicators();
+
+  const feed = new OpenAlgoDataFeed({
+    baseUrl: 'http://127.0.0.1:5000',
+    apiKey: 'your-api-key',
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  const bars = await feed.getBars({
+    symbol: 'RELIANCE',
+    exchange: 'NSE',
+    interval: '5m',
+    from: now - 7 * 86400,
+    to: now,
+  });
+
+  const chart = createChart(document.getElementById('chart'), { timezone: 'Asia/Kolkata' });
+  chart.addSeries('candlestick').setData(bars);
+  chart.addIndicator('supertrend');
+</script>
+```
+
+Keep an API key out of a page you serve to anyone else. A key in client-side
+JavaScript is a key you have given away, whatever the file is called.
+
+## The no-modules build
+
+If you cannot use `<script type="module">` at all, every tier also ships as a
+classic script. The base file defines an `OpenAlgoCharts` global, and each tier's
+file adds itself to it under the tier's name, so what a module imports from
+`openalgo-charts/draw` a classic script reads from `OpenAlgoCharts.draw`:
+
+```html
+<script src="https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.standalone.js"></script>
+<script src="https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.indicators.standalone.js"></script>
+<script src="https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.draw.standalone.js"></script>
+<script src="https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.widget.standalone.js"></script>
+<script>
+  const chart = OpenAlgoCharts.createChart(document.getElementById('chart'));
+  chart.addSeries('candlestick').setData(bars);
+  chart.addIndicator('rsi');
+
+  const draw = new OpenAlgoCharts.draw.DrawingController(chart);
+
+  const widget = OpenAlgoCharts.widget.createWidget(document.getElementById('terminal'), {
+    feed, symbol: 'RELIANCE', exchange: 'NSE', interval: '5m',
+  });
+</script>
+```
+
+| Tier | Classic script | Global |
+|---|---|---|
+| base | `openalgo-charts.standalone.js` | `OpenAlgoCharts` |
+| indicators | `openalgo-charts.indicators.standalone.js` | `OpenAlgoCharts.indicators` |
+| drawing | `openalgo-charts.draw.standalone.js` | `OpenAlgoCharts.draw` |
+| transforms | `openalgo-charts.transform.standalone.js` | `OpenAlgoCharts.transform` |
+| profiles | `openalgo-charts.profile.standalone.js` | `OpenAlgoCharts.profile` |
+| trading | `openalgo-charts.trade.standalone.js` | `OpenAlgoCharts.trade` |
+| webgl | `openalgo-charts.webgl.standalone.js` | `OpenAlgoCharts.webgl` |
+| widget | `openalgo-charts.widget.standalone.js` | `OpenAlgoCharts.widget` |
+| workspace | `openalgo-charts.workspace.standalone.js` | `OpenAlgoCharts.workspace` |
+
+- **Load the base first.** A tier file reads the engine from the global and
+  registers its indicators, tools or chart types into it, so there is one engine
+  on the page. The widget also reads the drawing tier, so load that before it. A
+  file loaded too early stops at once and names the files it needs first. Load
+  each file once.
+- **Do not mix the two forms.** A tier's `.mjs` module next to the classic base
+  imports an engine of its own, which the classic chart never reads.
+- **The widget's script carries its panels.** The module form fetches a few
+  panels the first time a user opens them; a classic script cannot, so the
+  widget's script has them in it and fetches nothing more. It is somewhat larger
+  than the module for that.
+
+The module form above is still the one to reach for when the page allows it: it
+fetches the widget's panels only when they are used, and a bundler leaves out
+what you never import.
+
+## What you do not need
+
+The advice you will find for putting a library on a CDN usually includes two
+steps that do not apply here:
+
+- **There is no separate stylesheet to load.** The engine draws on canvas. The
+  optional widget tier supplies interface controls and injects its scoped styles;
+  custom hosts supply their own interface. There is no `openalgo-charts.css` file.
+- **There is nothing else to list for the widget.** A few of its panels load from
+  files beside `openalgo-charts.widget.mjs` the first time a user opens them. They
+  resolve against the tier's own URL, so the CDN path you import from serves them,
+  provided it pins the exact version. The widget's classic script has them in it.
+- **There is no separate CDN deployment.** unpkg and jsDelivr mirror npm. A
+  release is on both the moment it is published; there is no account to create
+  and no upload step.
+
+## Checking a version is live
+
+```sh
+curl -sI https://unpkg.com/openalgo-charts@2.6.0/dist/openalgo-charts.mjs | head -1
+npm view openalgo-charts version
+```
+
+Browse everything a release contains at
+[`unpkg.com/openalgo-charts@2.6.0/dist/`](https://unpkg.com/browse/openalgo-charts@2.6.0/dist/).

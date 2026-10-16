@@ -1,0 +1,195 @@
+---
+title: Mobile & Touch
+description: Touch gestures, responsive layout, and crisp rendering on mobile.
+---
+
+import { Callout } from 'nextra/components'
+import NavigationMobileDemo from '../../components/NavigationMobileDemo'
+
+# Mobile & Touch
+
+All input handling is built on the [Pointer Events API](https://www.w3.org/TR/pointerevents/), so the same input system serves mouse, touch, and stylus input. Touch retains two-axis panning; mouse and pen also pan both axes by default, with optional time-only movement through `navigation.mousePan: 'horizontal'`.
+
+The engine gestures below work in every host. The optional
+[`openalgo-charts/widget`](/docs/widget#mobile-widget-controls) tier also supplies a
+responsive header, bottom controls and drawing sheets.
+
+## Navigation demo
+
+Switch container widths, place drawings and compare animated and immediate autoscaling.
+
+<NavigationMobileDemo />
+
+## Built-in touch gestures
+
+### One-finger drag
+
+Dragging with a single finger pans both axes at once: horizontal movement scrolls the time axis left or right, and vertical movement shifts the price scale of the touched pane up or down. This is unchanged by `navigation.mousePan: 'horizontal'`. Releasing after a fast swipe launches a kinetic animation that decelerates the scroll naturally.
+
+### Two-finger pinch and pan
+
+Placing two fingers on the chart starts a pinch gesture. On every animation frame the engine compares the current two-pointer state with the previous one:
+
+- **Distance between fingers increases** -- zooms in on the time axis around the midpoint.
+- **Distance between fingers decreases** -- zooms out on the time axis.
+- **Midpoint translates horizontally** -- pans the time axis.
+- **Midpoint translates vertically** -- pans the price scale of the touched pane.
+
+All four effects are computed in a single frame, so spreading fingers while sliding sideways zooms and pans simultaneously.
+
+Some browsers expose a trackpad pinch as Ctrl-wheel or Meta-wheel. The chart treats that
+as proportional time zoom at the pointer. Pixel, line and page wheel deltas are normalized
+before use. Hardware and browser event delivery can differ, so test the devices your host
+supports rather than assuming identical gestures everywhere.
+
+### Double-tap to reset
+
+A double-tap fires the browser's synthetic `dblclick` event. With the default `doubleClick: 'reset'`, it calls `resetScale()`: the configured default view is restored and every price axis returns to auto-scaling. `navigation.defaultVisibleBars: 0` fits all loaded bars; a positive count targets the newest N loaded bars plus four empty bar slots on the right, subject to data and bar-spacing limits. You can trigger the same action programmatically:
+
+```ts
+chart.resetScale();
+```
+
+Use `chart.fitContent()` to explicitly fit all loaded history. The visible-bar setting
+changes the viewport only; it does not limit history requests or remove loaded bars.
+
+## Tapping to interact
+
+A tap (pointer-down followed by pointer-up with less than 3 px of movement) is treated as a click. When the tap lands on a hit-testable primitive -- a series marker, an event marker, or a price line -- the chart calls any `subscribeClick` callback with the primitive's `externalId` and emits a `click` event. See [Events](/docs/events).
+
+```ts
+chart.subscribeClick((externalId) => {
+  console.log('tapped primitive:', externalId);
+});
+```
+
+A tap-and-drag on a draggable price line (used for order, stop-loss, and take-profit levels) moves the line in real time and fires the `subscribeDrag` callbacks. For the higher-level trading layer, which manages order/SL/TP visuals and emits `trading:*` events, see [Trading API](/docs/trading-api).
+
+```ts
+chart.subscribeDrag(
+  (externalId, price) => { /* called on every move */ },
+  (externalId, price) => { /* called on release   */ },
+);
+```
+
+## Responsive layout
+
+The chart installs a `ResizeObserver` on its container element at construction time. Whenever the container changes size -- viewport resize, device orientation change, or a flex/grid parent reflowing -- the chart recalculates pane layout and repaints automatically with no extra code required. It paints inside the observer's callback, before the browser shows the frame, so a resize or a rotation never flashes a cleared chart.
+
+Use a fluid container so the chart fills its available space:
+
+```html
+<div id="chart" style="width: 100%; height: 400px;"></div>
+```
+
+For a fixed aspect ratio at any screen width:
+
+```css
+#chart {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+```
+
+## Packaged mobile widget controls
+
+`WidgetOptions.mobile` accepts `'auto'`, `'always'` or `'never'`. The default is
+`'auto'`, which decides from the size of the widget container rather than the browser
+viewport, so a narrow chart in a wide dashboard receives the compact controls too. The
+pointer is the primary one, as the `(pointer: coarse)` media query reports it:
+
+| Widget container (CSS px) | Fine pointer | Coarse pointer |
+| --- | --- | --- |
+| At most 640 wide | Compact | Compact |
+| 641 to 960 wide, under 600 tall | Desktop | Compact |
+| 641 to 960 wide, 600 tall or more | Desktop | Desktop |
+| Wider than 960 | Desktop | Desktop |
+
+A phone therefore keeps the compact controls in both orientations: turned on its side it
+is wide but short. A tablet in either orientation, and a touch laptop, get the full top
+bar and drawing rail, which keep every tool one tap away. From 2.5.10; earlier releases
+chose the compact controls for any coarse pointer, whatever the container size.
+
+The widget decides again whenever the container is resized (a rotation, a split view, a
+dashboard cell changing size) and whenever the primary pointer changes, as it does when
+a convertible folds into tablet mode. Two cases keep the current layout. A container that
+measures 0 wide (hidden, or not laid out yet) starts with the desktop controls, and one
+that later drops to 0 wide or 0 tall keeps the layout it had, so hiding a tab does not
+close an open sheet. While a form field inside the widget has focus (the symbol box, or
+an input in a dialog), a switch waits until focus leaves it, so an on-screen keyboard
+that shortens the container never hides the field being typed in.
+
+```ts
+import { createWidget } from 'openalgo-charts/widget';
+
+const widget = createWidget('#terminal', {
+  mobile: 'auto',
+  rail: { tools: ['trend-line', 'horizontal-line', 'rectangle'] },
+});
+```
+
+When active, the desktop top bar, status line and drawing rail are replaced by a touch
+header and bottom bar. The header provides symbol entry and interval selection. The
+bottom bar provides Draw, Studies, Objects and More as enabled by `topbar`, `rail` and
+`indicators`. More opens with Undo and Redo, then theme, chart settings and chart type.
+Selecting a drawing shows Properties, Lock or Unlock, and Delete. While a tool is active, the
+Drawing sheet also provides Finish, Cancel, Undo, Redo, Magnet and Stay controls.
+
+The mobile and desktop controls use the same `DrawingController`, object inventory,
+selection, [chart-wide undo history](/docs/undo-history), settings dialogs and overlay stack. Changing layout does not
+copy or reset drawings. `rail.tools` filters both the desktop rail and mobile Drawing
+sheet to the same allowed ids.
+
+The widget checks `prefers-reduced-motion: reduce` when it creates the chart. If the host
+did not set them, the widget disables both `animZoom` and `animAutoscale`. Explicit option
+values remain in force.
+
+For a custom packaged host, the widget entry also exports `mountMobile` and its
+`MobileMode`, `MobileOptions` and `MobileHandle` types. Most applications should use
+`createWidget`, which wires the handle to the shared widget context and destroys it with
+the rest of the chrome. See [The Widget Tier](/docs/widget#mobile-widget-controls) and
+[Scales and Panes](/docs/scales-and-panes#navigation-and-autoscale-animation).
+
+## Crisp rendering
+
+The chart reads `window.devicePixelRatio` automatically at startup and draws every canvas at the physical pixel density of the screen. On 2x Retina displays and 3x mobile screens the output is sharp with no CSS-scaling blur.
+
+It follows a change of ratio too: a window dragged to a screen of another density, or a zoom. The chart watches a resolution media query for the ratio in force, made again after each change, and the window's `resize`, and re-sizes and repaints every canvas at once. Pane boundaries land on whole device pixels at every ratio. At fractional ratios such as 1.25 and 1.5, common on laptop screens, the separator is one device pixel tall, laid over the top of the lower pane, so no pane is stretched by a fraction of a pixel; at whole ratios it is the 1 px border it has always been. Where the browser reports a canvas's device-pixel box (Chromium, Firefox), the canvas takes exactly that many pixels.
+
+To override the ratio -- for testing, fixed-density screenshots, or environments without `window` -- pass a `pixelRatio` function in `ChartOptions`. The value is re-read on every resize and repaint, so a function that reads `window.devicePixelRatio` dynamically is valid:
+
+```ts
+const chart = createChart(el, {
+  pixelRatio: () => 2,  // force 2x regardless of the device
+});
+```
+
+## Page-level setup
+
+### Viewport meta tag
+
+Add the standard viewport meta tag to your HTML so mobile browsers do not apply default page scaling:
+
+```html
+<meta name="viewport" content="width=device-width, initial-scale=1">
+```
+
+### touch-action
+
+The chart sets `touch-action: none` on its container element automatically in the constructor, so browser-native pan and pinch-to-zoom do not intercept chart gestures.
+
+<Callout type="warning">
+If the chart container is nested inside a scrollable parent element (a modal, a page body with `overflow: scroll`, or any custom scroll container), the ancestor can still capture touch events before they reach the chart. In that case, add `touch-action: none` to the scrollable ancestor, or restructure the layout so the chart is not inside a native-scroll region.
+</Callout>
+
+## Accessibility
+
+The chart container carries `role="application"`, `tabindex="0"`, and an `aria-label` that screen readers announce when the element is focused. You can override the default label via `ChartOptions.ariaLabel`:
+
+```ts
+const chart = createChart(el, {
+  ariaLabel: 'NIFTY 5-minute candlestick chart',
+});
+```
+
+A visually-hidden `aria-live="polite"` region is appended to the container. It updates with the bar count and latest close price each time data is loaded, so screen readers announce changes without the user having to navigate to the element.

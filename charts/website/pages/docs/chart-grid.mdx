@@ -1,0 +1,436 @@
+---
+title: Chart Grid
+description: Several widget charts in one layout with layouts from one to sixteen charts, a grid bar, one bar under the charts, maximize and swap, link groups, saved desks, a whole-grid capture and portable workspace documents.
+---
+
+# Chart grid
+
+`createChartGrid` from `openalgo-charts/widget` places one complete widget in each
+cell of a rows by columns grid. It adds the pieces a multi-chart desk needs around
+them: layouts from one chart to sixteen, draggable splitters, one active chart that
+owns the keyboard, maximize and swap, link groups over the engine's `LinkGroup`, one
+picture of every chart, a compact view for narrow screens, and the same portable
+workspace payload that `openalgo-charts/workspace` validates and stores. An optional
+grid bar puts the layouts, maximize, the links, the capture and the saved desks on
+screen, and an optional bar under the charts sets the active chart's range, date, zone
+and scale.
+
+It is part of the widget tier. The base engine and the other tiers still ship no DOM.
+
+## Create a grid
+
+```ts
+import { createChartGrid } from 'openalgo-charts/widget';
+import 'openalgo-charts/indicators';
+
+const grid = createChartGrid('#desk', {
+  feed,                          // one DataFeed; every chart loads through its own controller
+  symbol: 'RELIANCE', exchange: 'NSE', interval: '5m',
+  preset: '2x2',                 // the layout when nothing is restored
+  links: { crosshair: true, viewport: true },
+  persist: 'desk',               // keep the workspace in IndexedDB (since 2.5.10)
+  toolbar: true,                 // the grid bar: layouts, maximize, links, capture
+  bottombar: true,               // one bar under the charts, for the active one
+});
+
+await grid.ready;                // the stored desk has landed
+grid.cells()[1].widget.setSymbol('INFY');
+grid.setActive(grid.cells()[1].id, { focus: true });
+```
+
+Every other `WidgetOptions` field applies to each chart. `symbol`, `exchange`,
+`interval` and `chartType` seed the first chart; a chart added by a larger layout
+copies the active chart's instrument and joins its link group. Cells use desktop
+controls unless you pass `mobile`, because a chart in a split is often narrower than
+the phone threshold.
+
+`feed` can also be a function, called once for each chart as it is built with its
+pane id and the `historyPeriod` its workspace pane saved. Use it when your source
+answers by a named period rather than a time window, and return one feed object for
+every chart that loads the same period, so those charts still share requests.
+
+```ts
+const feeds = new Map();
+const grid = createChartGrid('#desk', {
+  feed: ({ historyPeriod = '1y' }) => {
+    if (!feeds.has(historyPeriod)) feeds.set(historyPeriod, periodFeed(historyPeriod));
+    return feeds.get(historyPeriod);
+  },
+  symbol: 'RELIANCE', exchange: 'NSE', interval: '1d',
+});
+```
+
+## Layouts and splitters
+
+`CHART_GRID_LAYOUTS` (since 2.5.10) holds every layout the grid offers, from one chart
+to sixteen. Each entry is data: its rows and columns, one slot per chart with the
+`row`, `column`, `rowSpan` and `columnSpan` of the workspace schema, and the track
+weights it starts with. `setPreset(id)` and `preset` take any of these ids, and the
+picker draws each tile from the same slots with `layoutIconPath`, so what a tile shows
+is what the grid builds.
+
+| Charts | Layouts |
+| --- | --- |
+| 1 | `1x1` one chart |
+| 2 | `1x2` two columns; `2x1` two rows |
+| 3 | `1x3` three columns; `3x1` three rows; `left-2` large left, two on the right; `right-2` large right, two on the left; `top-2` large top, two below; `bottom-2` large bottom, two above |
+| 4 | `2x2` two by two; `1x4` four columns; `4x1` four rows; `left-3` large left, three on the right; `top-3` large top, three below |
+| 5 | `left-4` large left, four on the right; `top-4` large top, four below |
+| 6 | `2x3` two rows of three; `3x2` three rows of two; `corner-5` large corner, five around |
+| 8 | `2x4` two rows of four; `4x2` four rows of two; `corner-7` large corner, seven around |
+| 9 | `3x3` three by three |
+| 12 | `3x4` three rows of four; `4x3` four rows of three |
+| 16 | `4x4` four by four |
+
+The uniform layouts, `1x1` to `4x4`, are also listed in `CHART_GRID_PRESETS` as
+`[rows, columns]`, which gained ten entries in 2.5.10. A host that keys its own labels
+on that table needs a label for each, or can read `CHART_GRID_LAYOUT_NAMES`, the
+English name of every layout, which is also its message key. Every name goes through
+the host's `translate` like any other widget text.
+
+`setPreset(id)` keeps the charts that still fit, in reading order and with their
+drawings, studies and data, destroys the rest and builds any new ones. In an uneven
+layout the active chart takes the large slot, even when it sat past the charts that
+fit, and the others keep their reading order around it. Weights reset to the layout's own, so a large chart beside a stack of three
+starts at two thirds of the width. An id outside the catalogue throws before anything
+changes.
+
+A splitter sits in the gap between two tracks. Drag it, focus it and use the arrow
+keys (Shift for a bigger step), or double click to even the pair. A track keeps at
+least 15 percent of the pair it shares. Weights are fractions, so a resized window
+keeps the proportions. A splitter stops where a spanning chart crosses its boundary,
+and a saved workspace whose spans the catalogue does not name is drawn as saved.
+
+## The grid bar
+
+With `toolbar: true` (since 2.5.10; off by default, so a host with its own controls
+keeps its page as it was) a bar above the charts carries four controls, each in the
+widget's own buttons, menus, focus ring and themes. The bar and its menus load from
+files beside the widget tier when a grid shows the bar and when a menu first opens; the
+grid lays the bar's strip out at its height from the start, so the charts keep their size:
+
+- **Layout** names the current layout and opens the picker: one row of tiles per chart
+  count, the current layout checked. The arrow keys walk the tiles (Up and Down move
+  between rows), Home and End go to either end, Enter picks, and Escape closes and
+  gives the focus back. A line under the tiles names the one under the pointer or the
+  focus. `presets` limits and orders what the picker offers; an empty list leaves the
+  Layout control out.
+- **Maximize** shows the active chart alone, and restores the grid when pressed again.
+- **Link** opens the link menu for the active chart (see Linking and link groups).
+- **Capture** downloads or copies one picture of every chart.
+- **Layouts**, at the far end, with `workspaces`: the desk's saved layouts (see Saved
+  desks).
+
+A control that cannot act now is shown greyed with its reason, for example maximize on
+a grid of one chart, or capture while one chart is shown.
+
+## The bar under the charts
+
+With `bottombar: true` (since 2.5.10; off by default, as the grid bar is) one bar under
+the grid acts on the active chart: the preset ranges, Go to, the market status from the
+chart's calendar, a clock in its zone that opens the zone menu, and the auto, log and
+percent toggles. It is the widget's own bottom bar (see [the widget](/docs/widget#bottom-bar)),
+read again whenever another chart becomes active, so a press on a chart moves the bar
+to it. A chart never has a bar of its own inside a grid.
+
+With the bar, the charts leave Go to out of their top bars (and out of the More sheet of
+a phone layout, since the bar shows there too) and the market status off their status
+lines, which the bar carries. Go to opens over the whole grid, above the bar, so a small
+chart in a four by four desk still gets the whole panel. Without the bar, each chart
+keeps Go to in its top bar and says its market status on its status line. `ranges`,
+`sessionCalendar` and `sessionShading` apply to every chart as they do to one widget, and
+a range is each chart's own: it holds while that chart's interval does.
+
+## Maximize, move and swap charts
+
+`maximize(id?)` shows one chart alone, the active one by default, and `restore()`
+brings the grid back; `maximized()` says which chart is shown. The other charts stay
+alive behind it, the tabs switch the chart shown, and the maximized chart keeps the
+window it showed as it grows, and again as it shrinks back. Maximizing is a view, not
+a layout: it is not saved, and a layout change or an applied workspace restores the
+grid. At the compact width every chart is already shown alone, so
+maximize waits.
+
+`swap(first, second)` trades the places of two charts, spans included: a small chart
+moved into the large slot of an uneven layout takes its size. No chart is rebuilt, the
+page order follows the new reading order, so Tab and a screen reader follow the places
+too, and the saved slots change with it.
+
+With the pointer, drag a chart by the background of its bar onto another chart. The
+target is outlined while the chart moves, Escape or a cancelled pointer drops it where
+it started, and a press on a control of the bar stays the control's. Double click the
+bar's background to maximize or restore.
+
+Each chart's keymap carries the grid's chords, listed in a Chart grid section of its
+shortcuts panel and checked against every other chord for conflicts. Only the active
+chart answers them.
+
+| Keys | Action |
+| --- | --- |
+| Alt+Enter | maximize or restore the active chart |
+| Escape | restore the grid, when nothing else on the chart wants the key |
+| Alt+Shift+Arrow | make the chart in that direction active |
+| Ctrl+Shift+Arrow (Cmd on macOS) | swap the active chart with the chart in that direction |
+
+While a chart is maximized, the tabs take the arrows, Home and End, with one tab stop
+for the row.
+
+A chord the user moves in one chart's shortcuts editor (since 2.5.10) moves in every
+chart of the grid, and with `persist` it is kept with the desk and applied to each chart,
+including one a later layout adds. Reset all in any chart resets them all.
+`shortcutsEditor: false` lists the chords only and shares none.
+
+## The active chart and the keyboard
+
+Every widget listens for keys on the document, so on a page with several charts one
+chord could reach the chart under the pointer and the chart holding the focus. The
+grid makes the active chart the only one that answers. Pressing or focusing inside a
+chart activates it and draws its outline. A key pressed while the page itself has the
+focus goes to the active chart whenever the pointer is over the grid, and a focused
+splitter, tab or grid bar control keeps its own keys.
+
+The same decision is available to any host through `WidgetOptions.keyboardRoute`:
+return false to silence a widget and its chart's shortcuts, true to send keys to it,
+and undefined to keep the usual rule, which is pointer or focus, or always when the
+`shortcuts` scope is `global`. It routes a `ShortcutManager` instance as well, including
+one instance shared by several widgets, which is what a grid's cells receive when you
+pass one.
+
+## Linking and link groups
+
+The grid starts with one link group holding every chart, which is the whole desk
+linking together. `setLinks(patch)` switches channels of the active chart's group, and
+`linkOptions()` reads them:
+
+| Channel | What follows |
+| --- | --- |
+| `crosshair` | the crosshair, by time; `whenMissing` picks the nearest bar or hides it where a chart has none |
+| `viewport` | the time range: the window of the chart you navigate |
+| `symbol` | the instrument, symbol and exchange together |
+| `interval` | the interval |
+| `chartType` | the chart type (since 2.5.10) |
+| `appearance` | colours and styles of the chart |
+| `drawings` | drawings, between charts on the same instrument (since 2.5.10) |
+
+Each change is applied once per follower and never echoes back. Turning symbol,
+interval or chart type linking on adopts the active chart's choice. A linked symbol is
+the symbol and the exchange together, so moving a chart from one exchange's listing to
+another's, with the same ticker, moves the linked charts too. A view that moves only
+because a chart received new bars stays local, so a follower on a different interval
+is not squeezed into a sliver; linked views converge on the next pan or zoom. The
+linked window is kept as a span of time, read from the chart you last navigated, and
+it moves along with that chart's new bars. Once charts share a window, a resize keeps
+each of them on it: the right edge stays where it was, so a chart following new bars
+keeps following them, and the number of bars across is kept rather than the bar width,
+so charts of different widths still agree. A chart that comes back from behind the
+compact tabs or a maximized chart takes the linked window. The window is forgotten
+when its chart changes instrument or is removed, and when viewport linking is switched
+on, which starts without one until the next pan or zoom. See
+[Chart linking](/docs/chart-linking) for how time, not bar index, crosses charts.
+A linked appearance or chart type change is an undo step of the chart it was made on
+only: the others apply it outside their own timelines, and undoing it there takes it
+back on every linked chart.
+
+**Groups (since 2.5.10).** A desk can link in several named groups, up to sixteen, and
+a chart is in one group or in none. Each group has its own channels, so two charts can
+follow one instrument while two others follow another, and nothing crosses between
+groups.
+
+```ts
+const banks = grid.addLinkGroup(grid.cells()[2].id, { name: 'Banks', links: { symbol: true } })!;
+grid.setLinkGroup(grid.cells()[3].id, banks);     // joins, and adopts the group's symbol
+grid.setLinkGroup(grid.cells()[1].id, null);      // links with nothing
+grid.setGroupLinks(banks, { chartType: true, drawings: true });
+grid.renameLinkGroup(banks, 'PSU banks');
+grid.linkGroups();   // id, name, letter, links and cells of each group, in the order made
+```
+
+A chart that joins a group converges on what the group links. A new group starts from
+the chart that makes it, and a group is dropped when its last chart leaves, so it never
+hands a later chart an instrument nobody shows. Each group keeps its letter, A to P,
+for life. Once the desk has more than the one group every chart starts in, each chart's
+bar starts with a mark carrying the group's letter on its hue, or an unlinked glyph,
+and each chart's accessible name says its group, so a group never rests on colour
+alone. The mark opens the link menu for that chart, and `cells()[i].linkGroup` is the
+id of its group, or null.
+
+**The link menu** lists Not linked and the groups, the active chart's checked, then New
+group and Rename group, then the channels of the active chart's group as toggles that
+keep the menu open, and a share action for drawings.
+
+**Drawings** link through the draw tier's `DrawingLinkGroup`, between charts of one
+group on the same instrument; charts whose host names no exchange still share when they
+show the same symbol. Drawings made before the switch went on stay on their own chart
+until you share them: `shareDrawings(cellId)`, or Share this chart's drawings in the
+link menu, sends them and returns how many went. A chart that leaves a group keeps what
+it already received.
+
+## Workspaces
+
+```ts
+import { parseWorkspacePayload } from 'openalgo-charts/workspace';
+
+const text = JSON.stringify(grid.getWorkspace());      // portable, validated by the tier
+const report = grid.applyWorkspace(parseWorkspacePayload(text));
+if (!report.applied) console.warn(report.reason);        // nothing on screen changed
+```
+
+`getWorkspace()` returns a plain JSON `WorkspacePayload`: rows, columns, slots,
+weights, the layout id as `preset`, the active pane, the links and each chart's
+instrument, chart type, chart state, theme (`settings['widget.theme']`), drawing magnet
+and stay, and `historyPeriod` when the chart has one. The grid keeps a pane's
+`historyPeriod` and copies it to the charts a larger layout adds; a `feed` function is
+what loads it. A widget draws no separate volume series and no comparisons, so `volume`
+is written false and `comparisons` empty.
+
+`applyWorkspace(payload)` is all or nothing. It first checks the whole payload: grid
+size, slots and overlap, weights, intervals and chart types this build knows,
+registered studies, history periods that are text, no comparison symbols, and within
+each link group, linked symbols, intervals and chart types that agree. It then builds
+and restores every new chart off screen. On the first failure it destroys the new
+charts, which cancels their history requests, and returns `{ applied: false, reason }`
+with the old charts exactly as they were. Validate untrusted files with
+`parseWorkspacePayload` first.
+
+**Links in a workspace.** While every chart is in the one group it started in, `sync`
+holds the flat channels exactly as 2.5.9 wrote them. Once there are several groups, a
+named group or an unlinked chart, `sync.groups` lists each group with its id, name and
+channels, and each pane names its group in `linkGroup`. The flat channels are then the
+ones every chart can follow together: those of a group holding every chart, and all
+off otherwise, so a reader from before groups, which applies the flat channels to the
+whole desk, can neither refuse the desk nor pull one chart onto another's instrument.
+A group nobody named is written under the name it shows, `Group A` and on, because the
+schema needs one, and reads back as unnamed, so a desk that returns to one group
+holding every chart writes the flat channels again.
+
+With `persist`, the grid saves this payload after every change and restores it on
+the next construction. Since 2.5.10 the default store is IndexedDB: the grid is built
+from `preset` out of sight and asks the feed for nothing until the stored desk has been
+read, then opens it, and `grid.ready` settles. The first visit copies a desk an earlier
+release left in `localStorage` into IndexedDB, once, and leaves it there. A workspace
+you apply before `ready` settles wins over the stored one. Pass `storage: localStorage`
+to restore synchronously, as before. A layout, link, group, theme, active chart,
+instrument, swap or keyboard splitter change is written before the current task ends, so
+a reload straight after it keeps it. Pans, zooms and drags are written once they
+settle, and any write still pending is flushed when the page hides, on `pagehide` and on
+`destroy()`. Hiding a page with nothing pending writes nothing, so a tab left for another
+on the same desk does not write its older desk over the one saved there.
+
+Each chart keeps drawings per instrument (since 2.5.9), in a store of its own keyed by its
+pane id, so two charts on one symbol never overwrite each other's lines. The payload
+carries only the drawings each chart shows; with `persist`, the drawings of the symbols a
+chart is not showing are saved beside it under `oac-widget:<namespace>:grid-drawings` and
+come back with the desk. A chart a smaller layout drops takes its drawings with it, and a
+workspace you apply starts each chart from its own payload.
+
+A stored payload that no longer applies, for example because it names a study the page
+registers later, is not overwritten. The grid shows `preset`, puts the reason in a
+toast on the active chart, and keeps the stored payload until the user changes the
+grid; loading data and moving the focus do not count. `grid.restored()` reports what
+happened: `null` when nothing was stored, and until `ready` settles, otherwise the
+`{ applied, reason? }` report.
+
+## Saved desks
+
+With the grid bar and `workspaces` (since 2.5.10), usually a `WorkspaceRepository` from
+`openalgo-charts/workspace`, the grid keeps a layouts controller over the whole desk and
+the bar's Layouts control opens the widget's own Layouts menu on it: save, save as,
+rename, delete, recent layouts, autosave and the choice when another window changed the
+layout. The control names the layout held, with a mark while it has unsaved changes,
+which its accessible name says in words.
+
+```ts
+import { WorkspaceRepository, createIndexedDbWorkspaceStorage } from 'openalgo-charts/workspace';
+
+const grid = createChartGrid('#desk', {
+  feed, toolbar: true, persist: 'desk',
+  workspaces: new WorkspaceRepository(createIndexedDbWorkspaceStorage(indexedDB, 'my-desks'), 'desk'),
+});
+```
+
+A saved desk is `getWorkspace()` without the view of each chart, its alerts'
+bookkeeping or which chart had the focus, so panning, a closing bar or a click on
+another chart is no unsaved change; an opened desk makes its first chart active. A
+change still in autosave's quiet period is written when the page hides. The layout that
+was active when the page last closed opens once `ready` settles, over the desk the grid
+restored itself, unless a workspace was applied by then (a hand-off from another page, a
+file): that desk is the newer choice and stays. No chart has a Layouts button of its
+own, and every chart's indicator picker offers the store's templates.
+
+`layouts` passes a controller the host built over the grid instead, which the bar
+drives and the grid never reopens or destroys, and `layouts: false` leaves the control
+out. Without the grid bar the grid keeps no controller: `workspaces` gives the charts
+their templates only, and a `layouts` controller drives each chart's own Layouts
+button.
+
+## Capture every chart
+
+`takeScreenshot()` (since 2.5.10) returns one canvas of the whole grid at the device
+pixel ratio: each chart's own screenshot at its place, over the grid's gutters, with
+each cell's bar drawn as a panel naming the chart's symbol and interval.
+`downloadScreenshot(filename?)` saves it as a PNG named after the layout and the time,
+and returns false when there is no picture or the runtime refuses to save one, for
+example a canvas tainted by a cross-origin image. While one chart is shown, compact or
+maximized, the others have no pixels, so both return null or false rather than a
+picture with blank charts.
+
+The grid bar's capture menu downloads or copies the picture, and each chart's own
+capture menu offers the same under Every chart, beside its own picture. That second
+place uses `WidgetOptions.captureRows` (since 2.5.10), a function the widget reads each
+time its capture menu opens, which any host can use to add rows of its own.
+
+## Many charts
+
+Every chart is a full widget. At sixteen charts on a laptop screen each cell is about
+300 by 180 CSS px, where a full top bar would wrap over a third of the plot. A cell
+narrower than 560 or shorter than 340 CSS px is therefore dense: its drawing rail hides,
+its top bar keeps one row that scrolls sideways, the exchange and the less frequent
+buttons hide, and buttons with an icon drop their words. Drawing shortcuts still work,
+and maximizing a chart brings everything back. The grid rechecks density on every
+resize, splitter drag, layout change and maximize. The rule is the cell's size, not the
+layout's name, so it applies to every layout: a two by two grid on a laptop screen
+under 700 px tall is dense too, where a full rail would show only part of its tools.
+
+A linked pan or crosshair across sixteen charts redraws every follower in the same
+frame. The grid's browser suite measures it, with the frame time, the script heap and
+the canvas memory at one, four and sixteen charts, and fails if a frame of either
+collapses. Canvas memory grows with the square of the device pixel ratio, four times
+over on a 2x display.
+
+## Loading and teardown
+
+Each chart owns its data controller, status overlay and retry. Charts on the same
+request share one feed call; switching a chart's instrument cancels its previous
+request unless another chart still needs it. Removing a chart through a layout, a
+workspace or `destroy()` destroys its widget, and a late answer for a destroyed chart
+never reaches the screen.
+
+## Narrow screens
+
+At or below `compactWidth` (640 CSS px by default, 0 to disable) the grid shows only
+the active chart at full size, with a tab strip naming each chart's symbol and
+interval. Splitters hide, and the tabs take the arrows, Home and End. Widening the
+grid restores every chart with its weights.
+
+## Events
+
+| Event | Payload |
+| --- | --- |
+| `active` | `{ id }`, from `setActive` and whenever a layout or an applied workspace moves the active chart |
+| `layout` | `{ reason }`: `preset`, `weights`, `workspace`, `compact`, `maximize` or `swap` |
+| `links` | the active chart's link channels, after any link, group or active chart change |
+| `theme` | `{ theme }` after any chart changes theme; every chart follows |
+
+## Reference host
+
+The yfinance example has a grid view, `examples/yfinance/grid.html`, that uses the grid
+bar for every layout, maximize, link groups, capture and saved desks, the bar under the
+charts with each chart's venue calendar, and keeps its own bar for import and export of
+layout files; the grid persists itself. Its status line names the
+layout with the library's own name and tile. Each chart loads the history period its
+layout saved, through a `feed` function. The main page hands a layout it cannot draw
+(more than two charts, or rows) to the grid view from its Layouts dialog, after
+checking that the grid view can open it: a layout with comparison symbols, an interval
+the grid view does not load or a history period its server does not know is refused on
+the main page, before it navigates. A one or two chart layout exported from the grid
+view opens on the main page in turn.

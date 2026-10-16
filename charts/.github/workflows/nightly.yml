@@ -1,0 +1,132 @@
+name: Nightly
+
+# The long checks a pull request cannot wait for: a trading session's worth of
+# ticks through the engine (scripts/soak.mjs), thirty minutes of live charts in
+# a real browser (scripts/browser-endurance.mjs), and the render bench on the
+# day's master, whose artifacts are the runner-side record its budgets are
+# tightened from. Each fails the run on its own gates.
+on:
+  schedule:
+    # 20:30 UTC is 02:00 in India, between one session and the next.
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A manual run started while another is going queues behind it instead of
+# cancelling it: a nightly cut short would leave half its reports.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: nightly-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  soak:
+    name: soak (engine, 90k ticks)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: nightly-dist
+          path: dist/
+      - name: Teardown and a 6.25-hour session at four ticks a second
+        # The script's defaults keep it quick enough for a laptop; this is the
+        # full session it was written to model, and more create/destroy cycles
+        # than a day of symbol switching.
+        env:
+          SOAK_TICKS: '90000'
+          SOAK_CYCLES: '1000'
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/soak
+          npm run soak 2>&1 | tee artifacts/soak/soak.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: soak-report
+          path: artifacts/soak/
+          if-no-files-found: error
+          retention-days: 30
+
+  browser-endurance:
+    name: browser endurance (chromium, 30 min)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: nightly-dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - name: Thirty minutes of the default live workload
+        # docs/browser-endurance.md: two charts, 2,000 bars each, ten forming-
+        # bar updates a second, five studies, every gate in
+        # scripts/browser-endurance-metrics.mjs. The report is kept pass or fail.
+        run: node scripts/browser-endurance.mjs --duration-seconds 1800 --sample-seconds 30 --output "$RUNNER_TEMP/p3-nightly-endurance"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: browser-endurance
+          path: ${{ runner.temp }}/p3-nightly-endurance/
+          if-no-files-found: error
+          retention-days: 30
+
+  render-bench:
+    name: render bench (chromium)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: nightly-dist
+          path: dist/
+      - run: npx playwright install --with-deps chromium
+      - name: Frame budgets at 10k, 50k and 200k bars, canvas2d and WebGL
+        run: npm run bench:render -- --reporter=line
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: render-bench-nightly
+          path: artifacts/render-bench/
+          if-no-files-found: error
+          retention-days: 90

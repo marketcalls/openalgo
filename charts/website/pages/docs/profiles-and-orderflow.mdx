@@ -1,0 +1,742 @@
+---
+title: Profiles & Order Flow
+description: Volume Profile, Market Profile (TPO), Footprint and cumulative delta.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+import { OrderflowDemo } from '../../components/ProfileShowcase'
+
+# Profiles & order flow
+
+The **profile tier** (`openalgo-charts/profile`) adds market-structure studies: Volume
+Profile, Market Profile (TPO), Footprint, and cumulative delta.
+
+## Volume Profile
+
+`computeVolumeProfile(bars, tickSize, valueAreaPct)` returns buckets plus the point of
+control (POC) and value-area high/low. Render it with the `HorizontalProfile` primitive:
+
+<RunnableExample height={340} tiers={['profile']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+const vp = lib.computeVolumeProfile(bars, 0.5, 0.7);
+chart.addPrimitive(new lib.HorizontalProfile({
+  // HorizontalProfile draws { price, value } buckets; map volume -> value.
+  buckets: vp.buckets.map(function (b) { return { price: b.price, value: b.volume }; }),
+  poc: vp.poc, vah: vp.vah, val: vp.val,
+  width: 150, side: 'right', barColor: '#3b5168', vaColor: '#4a6fa5',
+}));
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Volume Profile with POC (gold) and value area on the right." />
+
+## Market Profile (TPO)
+
+The **2.1.0** adds compact pixel letters, per-session split/unsplit and
+open/latest-price markers. [Try the full demo and browse five theme screenshots](/docs/market-profile-examples).
+
+A real market profile draws **letter blocks**: one letter per time period, stacked at every
+price that period traded. `computeMarketProfile` builds them and the `MarketProfile` primitive
+renders them:
+
+<RunnableExample height={440} tiers={['profile']} code={`const chart = lib.createChart(el, { priceScale: { marginTop: 0.06, marginBottom: 0.06 } });
+const bars = lib.generateBars(1700000000, 160, 1800); // ~30-min bars over three days
+
+// The letters are the picture; the candles only give the profiles their
+// sessions and the time axis.
+const price = chart.addSeries('candlestick');
+price.setData(bars);
+price.applyOptions({ visible: false });
+
+const mp = lib.computeMarketProfile(bars, {
+  tickSize: 0.1,
+  rowTicks: lib.rowTicksFor(0.5, 0.1),  // 0.5-point rows
+  session: 'day',                         // one profile per session
+  blockMinutes: 30,                       // a letter per half hour
+  valueAreaPercent: 0.7,
+  initialBalancePeriods: 2,
+});
+
+// The page hands the chart its light or dark theme; the profile follows it.
+const dark = chart.theme().background === lib.darkTheme.background;
+chart.addPrimitive(new lib.MarketProfile(mp, {
+  blockDisplay: 'compact', letterWidth: 7, profileSpacing: 12,
+  colorMode: 'valueArea',                 // value area strong, the tails quiet
+  fillValueArea: true, valueAreaFillOpacity: 0.07,
+  showValueArea: false,                   // the shading marks it; no lines through the letters
+  showVolumeProfile: true, volumeProfileWidth: 40,
+  showInitialBalance: true, showSessionOpen: true, showLastPrice: true,
+  showPocLabel: false, showValueAreaLabels: false, showSessionLabel: false,
+  ...(dark
+    ? { volumeColor: '#2f7f8f' }
+    : { color: '#405b72', vaColor: '#193e56', volumeColor: '#84a7bb', pocColor: '#a24929', labelColor: '#45566b' }),
+}), 0);
+
+chart.timeScale.setVisibleLogicalRange({ from: -4, to: bars.length + 4 });
+return chart;`} caption="Compact TPO profiles, one per session: the value area strong and the tails quiet, the POC, the initial-balance bracket, the session open and the latest price, with volume at price beside each." />
+
+<Callout>
+There is also a simpler `computeTpo(bars, periodBars, tickSize, valueAreaPct)` that returns
+`{ poc, vah, val }` counts in volume-profile shape, for when you want a plain histogram from
+the `HorizontalProfile` primitive rather than letters. See
+[Market Profile (TPO)](/docs/market-profile) for the full renderer.
+</Callout>
+
+## Footprint & cumulative delta
+
+A footprint shows executed **bid volume on the left** and **ask volume on the right** at
+each price. Delta is ask volume minus bid volume. The slim candle beside a column shows
+its actual open, high, low and close; a pale outline identifies the highest-volume row
+(the point of control, or POC). Optional lines bound that bar's 70% value area.
+
+Profile and cluster ladder styles, per-candle stats, and the text-color methods below are
+available in **2.1.1**. See the [release notes](/docs/release-notes#211). Trade classification,
+the trade size filter, the imbalance, delta percent and volume x delta views, order flow
+signals, zones, unfinished auctions, delta labels, the visible-range profile, session letters
+and the cumulative volume rows are available in **2.6.1**.
+
+### Try the order-flow demo
+
+Seven readable, one-minute bars replay a **deterministic NIFTY simulation around 23,800**.
+Executions use a one-point simulation grid and are grouped into **2-point price rows** by
+default. Each simulated execution represents 1 to 16 lots of 65 quantity units. These are demo settings,
+rather than a statement of current exchange contract specifications. This is an illustration,
+not a live market feed. The demo opens paused so you can inspect the numbers before resuming.
+
+<OrderflowDemo />
+
+| Control | What changes |
+| --- | --- |
+| Style | Variable-width **Profile**, rectangular **Cluster ladder**, or intensity-based **Heatmap** |
+| Values | Bid × Ask, Bid × Ask imbalance, signed Delta, Delta %, total Volume, or Volume × Delta at each price |
+| Side | **Feed** keeps each simulated execution's recorded side; **Tick rule** re-reads every print from its price alone |
+| Min trade | Counts only executions of at least this many lots; smaller ones still mark their row, which shows zero |
+| Order flow | Zones, unfinished auctions, multiple nodes, big limit orders, absorption, aggressive delta flips, delta labels with divergence, the visible-range profile and the last price row, each independently; with zones on, a host-side zone alert appears below the chart |
+| Quantity / Lot size | Displays raw quantity or divides the displayed quantities by an editable lot size, initially 65 |
+| Text | Auto contrast, bid/ask side, row delta, dominant side, diagonal imbalance, or volume strength |
+| Row | Reaggregates the retained tape into 2, 4 or 8-point price rows |
+| POC / Value area / Cards | Toggles the row outline, value-area lines, and per-candle metric cards |
+| Table | Shows the optional bottom table, with metric names fixed at the left and values aligned to each candle; off by default |
+| Table rows | Adds or removes Delta, Min delta, Max delta, Cumulative delta, Ask volume, Bid volume, Volume, Cumulative volume, Cum. delta / volume, and the Session letter independently |
+| Theme | Midnight, Graphite, Classic neon, Ocean, Ember, Forest, or Ivory; also updates controls and tooltip |
+| Pause / Resume | Stops or resumes the synthetic replay |
+| Reset | Restarts the same deterministic session with the selected style, theme and grouping |
+
+These are footprint price rows; time-at-price TPO profiles are covered in
+[Market Profile](/docs/market-profile).
+
+The table starts hidden. Its seven metrics are initially selected; changes to that selection
+are remembered while it is hidden. Selecting no metrics leaves the table empty. Cards and
+the table can be shown independently. On narrow screens, the demo shows fewer recent candles so every card remains readable;
+drag to inspect earlier columns. Enabling the table also leaves room for its fixed metric names.
+
+Style and theme are independent and preserve the current data and viewport. Try the
+[Classic neon ladder](/demos/orderflow/index.html?theme=classic&style=ladder&paused=1)
+for bright red and green blocks on black, or the
+[Ivory profile](/demos/orderflow/index.html?theme=ivory&paused=1)
+for a light presentation. Hover a price row or a stats card to inspect exact values.
+
+### Build a footprint
+
+`computeFootprint(time, classifiedTrades, tickSize, rowTicks?)` builds one bar.
+`FootprintAggregator` incrementally builds bars from a stream. Both populate `open`, `high`,
+`low`, `close`, `tradeCount`, and `rowSize` alongside the price cells and delta.
+OHLC metadata uses actual execution prices, even when several ticks share a grouped row.
+
+```ts
+import { createChart, darkTheme } from 'openalgo-charts';
+import { computeFootprint, Footprint } from 'openalgo-charts/profile';
+
+const chart = createChart(container, {
+  theme: darkTheme,
+  timeScale: { maxBarSpacing: 260 }, // allow readable, wide footprint columns
+  priceScale: { marginTop: 0.1, marginBottom: 0.25 },
+});
+const footprint = new Footprint({
+  cellStyle: 'profile',
+  displayMode: 'bidask',
+  statsPosition: 'bar',
+  statsRows: ['volume', 'delta', 'deltaPct'],
+  showCandle: true,
+  pocStyle: 'outline',
+  showValueArea: true,
+  valueAreaPercent: 0.7,
+  buyColor: '#159d87',
+  sellColor: '#cc374b',
+  pocColor: '#ccd5e1',
+});
+chart.addPrimitive(footprint);
+
+const bar = computeFootprint(1788960600, [
+  { price: 6000.00, qty: 12, side: 'bid' },
+  { price: 6000.25, qty: 19, side: 'ask' },
+  { price: 6000.00, qty: 7, side: 'ask' },
+], 0.25);
+footprint.setBars([bar]);
+
+// A transparent supporting series supplies the time axis and OHLC autoscale.
+const clear = 'rgba(0,0,0,0)';
+const price = chart.addSeries('candlestick', { style: {
+  upColor: clear, downColor: clear, wickUpColor: clear, wickDownColor: clear,
+  borderUpColor: clear, borderDownColor: clear,
+} });
+price.setData([{
+  time: bar.time, open: bar.open!, high: bar.high!, low: bar.low!, close: bar.close!,
+}]);
+chart.timeScale.fitContent(1);
+```
+
+<Callout type="warning">
+Order flow requires classified executions: `side: 'bid'` means an aggressive seller hit
+the bid; `side: 'ask'` means an aggressive buyer lifted the ask. OHLCV bars or an LTP stream
+cannot recover this information. Use a feed's aggressor classification, or a documented
+trade classifier; do not label every trade that is not known to be a sell as a buy.
+</Callout>
+
+### Styles and display modes
+
+`cellStyle` controls the shape without changing analytics. **Profile** draws variable-width
+horizontal bars around the central bid/ask divider. **Ladder** draws a pair of solid
+rectangular cells with a narrow central gap. **Heatmap**, the backwards-compatible default,
+uses volume intensity. The bid and ask values stay aligned in their respective columns.
+When rows or columns become too small, text is suppressed to avoid overlap.
+
+| Option | Values / default |
+| --- | --- |
+| `cellStyle` | `'heatmap'` (default), `'profile'`, `'ladder'` |
+| `displayMode` | `'bidask'` (default), `'imbalance'`, `'delta'`, `'deltaPct'`, `'volume'`, `'volumeDelta'`, `'deltaShadedVolume'` |
+| `intensityScope` | `'bar'` (default) shades against each bar's busiest row; `'visible'` against the busiest row on screen, so volume clusters stand out |
+| `compactNumbers` | `true` (default) abbreviates to three significant figures; `false` prints whole numbers with separators |
+| `tableRows` | Metric rows in an independent bottom table; `[]` (default) disables it |
+| `tableLabelWidth` | Width of the fixed metric-name column; `150` pixels by default |
+| `statsRows` | Card or legacy-footer metrics; `[]` by default |
+| `statsPosition` | `'bottom'` (default) for the legacy footer; `'bar'` for cards below each candle |
+| `pocStyle` | `'marker'` (default) or `'outline'` |
+| `showValueArea` | `false` by default |
+| `valueAreaPercent` | `0.7` by default |
+| `buyColor`, `sellColor`, `textColor` | Optional palette overrides |
+| `imbalanceBuyColor`, `imbalanceSellColor` | Imbalanced cells, stacked brackets and stacked zones (since 2.6.4); default to the buy and sell colors |
+| `volumeColor` | Cells in the volume view (since 2.6.4); otherwise each row takes the color of the side that traded more |
+| `candleUpColor`, `candleDownColor` | The candle beside each column (since 2.6.4) |
+| `profileAskColor`, `profileBidColor` | The visible-range profile's bars (since 2.6.4) |
+| `sessionColor`, `tableBackground` | Session letters and the statistics table's background (since 2.6.4) |
+| `pocColor`, `valueAreaColor` | Reference-line colors |
+| `cvdOffset` | Starting cumulative delta in raw quantity, default `0` |
+| `volumeDivisor` | Divides displayed quantity values only; `1` (raw quantity) by default |
+
+Column width follows the chart's bar spacing, capped by the available slot so adjacent bars
+remain separate. `cellWidth` requests a fixed width within that slot. `widthFactor` controls
+its relative width. `tickSize`, when supplied, overrides the effective price step used for row height. Otherwise
+computed bars supply `rowSize`, which is especially useful for grouping and sparse rows.
+`imbalanceRatio`, `imbalanceThreshold`, and `stackedImbalances` control diagonal imbalance
+highlights and brackets; pass `stackedImbalances: 0` to hide the brackets.
+
+The **imbalance** view leaves cells plain and fills only diagonal imbalances, stronger as the
+ratio passes two and three times the threshold and full against an empty opposite side. Rows
+inside the candle body are lightly shaded in the candle's colour and outlined. **Delta %**
+prints each row's delta as a share of its volume; **volume x delta** prints both.
+**Delta-shaded volume** (`'deltaShadedVolume'`, since 2.6.4) prints each row's volume on a cell
+coloured by the side that won the row and shaded by the size of its delta, so a busy row with
+little conviction reads pale and a quieter one-sided row reads strong.
+
+`FOOTPRINT_THEMES` (since 2.6.4) holds six named color sets: `ocean`, `ember`, `forest`, `neon`
+and `monochrome` for dark charts, `daylight` for light ones. Each is a plain options patch, so
+spread it under your own choices:
+
+```ts
+import { Footprint, FOOTPRINT_THEMES } from 'openalgo-charts/profile';
+
+const footprint = new Footprint({ ...FOOTPRINT_THEMES.ocean, displayMode: 'bidask' });
+footprint.setOptions({ ...FOOTPRINT_THEMES.daylight }); // switch with the chart theme
+```
+
+### Raw quantity and lots
+
+Set **Quantity** to **Lots** to divide the displayed numbers by **Lot size**, initially `65` in
+this NIFTY simulation. Edit that positive whole-number setting to compare other divisors,
+or select **Raw** to see the underlying quantities. Try the
+[NIFTY table in lots](/demos/orderflow/index.html?paused=1&table=1&units=lots&lot=65).
+The default is raw quantity; the lot size is a configurable demo setting.
+
+```ts
+footprint.setOptions({ volumeDivisor: 65 }); // display raw quantities as lots
+footprint.setOptions({ volumeDivisor: 1 });  // return to raw quantity
+```
+
+The divisor applies consistently to bid/ask cells, volume, delta, min/max delta, cumulative
+delta, cards, and the bottom table. Delta percentages, execution counts, prices, bar widths,
+and color comparisons remain unchanged. Fractional lots retain significant digits.
+`stats()`, hover data, and supplied bars remain in **raw quantity** so changing the display
+cannot change analytics. Host-owned readouts and tooltips should divide the raw values by
+the same divisor; the demo does this and labels the selected units.
+
+### Text coloring
+
+Text coloring is independent of the cell background. `textColorMode` supports these methods:
+
+| Method | Meaning |
+| --- | --- |
+| `'contrast'` (default) | Readable text against the painted background |
+| `'side'` | Bid text uses the sell shade; ask text uses the buy shade |
+| `'delta'` | Both values follow that price row's ask-minus-bid delta |
+| `'dominant'` | Highlights the larger side at the same price |
+| `'imbalance'` | Highlights diagonal bid/ask imbalances using the configured ratio and threshold |
+| `'volume'` | In bid/ask view, side volume relative to the peak side; in single-value views, total row volume relative to peak total volume |
+
+`buyTextColor` and `sellTextColor` let a palette use different foreground shades from its
+`buyColor` and `sellColor` backgrounds. `textColor` supplies the neutral text shade. Contrast
+adjustment keeps small numbers readable. The demo exposes each method while preserving
+its tape, statistics, style and theme. These are the supported methods in this renderer;
+this does not imply complete parity with other platforms' Numbers Bars studies.
+
+### Per-bar statistics
+
+`tableRows` chooses the metrics and their order in the bottom table. It is **disabled by
+default** (`[]`). The metric names remain fixed at the left while the value columns follow
+the chart's bar centers during pan and zoom. `statsRows` independently configures the existing
+per-candle cards when `statsPosition: 'bar'`; it also defaults to `[]`. The demo explicitly
+enables three cards while leaving the table off.
+
+```ts
+footprint.setOptions({
+  tableRows: ['delta', 'minDelta', 'maxDelta', 'cvd', 'askVolume', 'bidVolume', 'volume'],
+  tableLabelWidth: 150,
+  statsPosition: 'bar',
+  statsRows: ['volume', 'delta', 'deltaPct'],
+});
+// Choose fewer table metrics, or pass [] to hide the table.
+footprint.setOptions({ tableRows: ['delta', 'cvd', 'volume'] });
+```
+
+Reserve a bottom price-scale margin for the table's pixel height
+(`tableRows.length * statsRowHeight`) plus any cards. When fitting a viewport, leave room at
+the left for `tableLabelWidth` so its fixed labels do not cover the first data column.
+The demo adjusts this space when the table is enabled or its rows are changed.
+
+Existing `statsPosition: 'bottom'` with `statsRows` continues to work as the legacy footer.
+Use the independent `tableRows` option when you want cards and a table together.
+
+| Row | Value |
+| --- | --- |
+| `volume` | Sum of bid and ask volume |
+| `delta` | Ask volume minus bid volume |
+| `minDelta` | Lowest running intrabar delta, starting from zero at the bar open |
+| `maxDelta` | Highest running intrabar delta, starting from zero at the bar open |
+| `askVolume` | Executed volume at the ask |
+| `bidVolume` | Executed volume at the bid |
+| `deltaPct` | Delta as a percentage of bar volume |
+| `cvd` | `cvdOffset` plus cumulative delta across the loaded bars |
+| `trades` | Actual execution count from `tradeCount`; unavailable legacy counts display `-` |
+| `cumVolume` | Volume summed across the loaded bars |
+| `cvdRatio` | Cumulative delta divided by cumulative volume, to three decimals |
+| `session` | The session letter: `A` for the bar opening in the first `tpoMinutes` of the session, `B` for the next, as in the market profile |
+
+`cvdReset: 'session'` restarts cumulative delta and cumulative volume at each session open.
+Sessions open at `sessionWindow` (a `SessionWindow`, such as `TRADING_HOURS.india`) on
+`timezone`, or at local midnight when no window is given. Letters are counted the same way the
+market profile counts its periods, so a footprint and a profile of the same day agree.
+
+```ts
+import { Footprint, TRADING_HOURS } from 'openalgo-charts/profile';
+
+const footprint = new Footprint({
+  sessionWindow: TRADING_HOURS.india, tpoMinutes: 30, cvdReset: 'session',
+  tableRows: ['session', 'delta', 'cvd', 'cvdRatio', 'volume', 'cumVolume'],
+});
+```
+
+`footprint.stats()` exposes the same calculations. Its `trades` value is `null` when an older
+manually assembled bar has no count metadata; occupied price levels are not a trade count.
+`minDelta` and `maxDelta` also return `null` and display `-` when legacy bars lack intrabar
+extrema. They describe the running execution-by-execution delta path, not the largest or
+smallest price-row delta; aggregated cells alone cannot recover them. Replaying the same
+retained executions with a different price grouping preserves both extrema.
+Legacy bars without OHLC remain renderable, but an actual candle requires OHLC metadata.
+
+### Streaming and grouping
+
+Retain classified ticks if you want to change price grouping later: changing a renderer's
+options cannot recreate the original executions from aggregated cells. Rebuild the
+aggregator with the new `rowTicks` and replay those retained ticks. The demo follows this path.
+
+```ts
+import { FootprintAggregator } from 'openalgo-charts/profile';
+
+const aggregator = new FootprintAggregator(
+  { mode: 'interval', seconds: 60 },
+  0.25, // instrument tick size
+  2,    // two ticks per row: 0.50 price units
+);
+const bars = [];
+let cvdOffset = 0;
+
+function onClassifiedTrade(tick) {
+  const update = aggregator.onTick(tick);
+  if (update.isNew) {
+    bars.push(update.bar);
+    if (bars.length > 100) cvdOffset += bars.shift().delta;
+  } else {
+    bars[bars.length - 1] = update.bar;
+  }
+  footprint.setOptions({ cvdOffset });
+  footprint.setBars(bars.slice());
+  // Also update the supporting price series from each bar's OHLC metadata.
+}
+```
+
+Preserve dropped bars' delta in `cvdOffset` to keep session CVD continuous when trimming a
+rolling window. Reset both the window and offset to start a new session. Feed executions
+in nondecreasing timestamp order: late ticks are rejected before mutating the current bar.
+Timestamp ties remain together when a tick-count or volume threshold would otherwise create
+a second bar with the same timestamp.
+
+### Row alignment, classification and the trade size filter
+
+Rows are centred on multiples of `tickSize * rowTicks`. A trade is first put on its tick, then
+on its row; a tick exactly between two row centres goes to the even row (round half to even),
+so alternate boundaries go up and down instead of always up. With 2-point rows on a 0.05 tick,
+22469.00 belongs to the 22468 row and 22471.00 to the 22472 row. An interval bar covers
+`[start, start + seconds)`: a trade stamped exactly on a boundary opens the next bar.
+
+A feed that does not mark each print's aggressor can classify it with
+`createTradeClassifier`. The tick rule calls a print above the previous one a buy, below it a
+sell, and an unchanged price keeps the previous side; the quote rule tests the recorded bid and
+ask first and falls back to the tick rule inside the spread. Keep one classifier per instrument
+and feed it prints in time order.
+
+```ts
+import { createTradeClassifier, FootprintAggregator } from 'openalgo-charts/profile';
+
+const side = createTradeClassifier('quote'); // or 'tickRule'
+const aggregator = new FootprintAggregator(
+  { mode: 'interval', seconds: 300 },
+  0.05, // tick size
+  40,   // 2-point rows
+  { minTradeSize: 50 * 65 }, // count only single prints of 50 lots or more
+);
+function onPrint(print) { // { time, price, qty, bid?, ask? }
+  aggregator.onTick({ ...print, side: side(print) });
+}
+```
+
+`minTradeSize` keeps the ladder's full range: a smaller print still opens its row, which shows
+zero, and still sets the bar's open, high, low and close. Volume, delta, the delta extremes and
+`tradeCount` count only the prints that pass. `computeFootprint` takes the same options as a
+fifth argument.
+
+### Order flow layers
+
+Every layer is off by default, so an existing chart draws exactly as before.
+
+| Option | Draws |
+| --- | --- |
+| `multipleNodeBars` | Highlights the point of control when this many consecutive bars share it (`nodeColor`) |
+| `bigOrderMultiple` | Outlines the bar's largest bid near its low on a selling bar, or largest ask near its high on a buying bar, when it reaches this many average cells (`bigOrderColor`) |
+| `absorptionMultiple` | Bands rows near the high or low where bid and ask both reach this many of their average cells (`absorptionColor`) |
+| `flipBars` | A triangle where delta turns after this many bars of the other sign, at least `flipMinDeltaPct` of the bar and large against recent bars, at a swing |
+| `showZones` | Extends stacked imbalances, multiple nodes and absorption to the right until `zoneEnd` says price dealt with them; `zoneKinds` (since 2.6.4) picks which of the three |
+| `showUnfinishedAuctions` | A dash-dot line at a high or low that traded on both bid and ask, until a later bar trades beyond it |
+| `showDeltaLabels`, `markDivergence` | Bar delta under each column, boxed when an up bar has negative delta or a down bar positive |
+| `showVisibleProfile` | Volume at price of the visible bars against the left edge, ask and bid split |
+| `lastPriceColor` | Fills the newest bar's last-price row |
+
+`signalLookback` (default 10 bars) sets the average cell, and `nearExtremeRows` (default 3) how
+close to the high or low a big order or absorption must be. `zoneEnd` is `'closeInside'`
+(default: a closed bar closes inside the zone, or any bar trades through it), `'traverse'` or
+`'touch'`. Ended zones stay drawn up to the bar that ended them. `formingLastBar` (default
+`true`) keeps the newest bar from ending a zone by its close, or from setting an unfinished
+auction, while it is still forming. `zoneKinds` (default all three of `'stacked'`, `'node'` and
+`'absorption'`) chooses which zones `showZones` extends, and `zoneLookback` (default `0`, every
+bar) starts zones only in the newest that many bars, so a long history does not fill the chart
+with old levels.
+
+`footprint.onZoneAlert(handler)` (since 2.6.4) calls the handler once for each zone that
+`showZones` extends (so turn `showZones` on, and pick the kinds with `zoneKinds`) when a bar's high
+to low range comes back to it after it became active (a bar that jumps across the zone counts, as
+it would trigger a stop there), the moment to raise an alert or play a sound. The first
+bars a footprint is given are history and report nothing. Each later `setBars` is the live tail:
+a touch in the bar that was newest at the previous call, or in any bar after it, is reported, so
+a host may send several prints, even across a new bar, in one call. `setBars([])`, or bars that
+start again from an older bar (another instrument), begin a new history. It returns the
+unsubscribe:
+
+```ts
+const stop = footprint.onZoneAlert(({ zone, time }) => {
+  notify(`Price came back to a ${zone.kind} zone ${zone.low} to ${zone.high}`);
+});
+```
+
+`showEmptyRows` (default `true`) draws a row inside a bar that no trade reached as 0 x 0, so
+every column spans its whole range. It changes only the drawing. Imbalances treat such a row as
+zero volume whether it is drawn or not (since 2.6.4), and the point of control, the value area
+and the other signals read the traded rows.
+
+```ts
+footprint.setOptions({
+  displayMode: 'imbalance', multipleNodeBars: 2, bigOrderMultiple: 3, absorptionMultiple: 2, flipBars: 2,
+  showZones: true, showUnfinishedAuctions: true, showDeltaLabels: true, markDivergence: true,
+});
+```
+
+### Runtime restyling and hit-testing
+
+`setOptions(partial)` merges and repaints without replacing the bars:
+
+```ts
+footprint.setOptions({ cellStyle: 'ladder', displayMode: 'delta' });
+footprint.setOptions({ buyColor: '#32e600', sellColor: '#ff2424', textColor: '#ffffff' });
+```
+
+`hitTest(x, y)` and `hoverAt(x, y)` use pane-local chart coordinates. `hoverAt` returns
+`{ time, price, cell, stats }`; `price` and `cell` are `null` over a stats card or table.
+Use it to build a host-owned tooltip:
+
+```ts
+chart.on('crosshair:move', (event) => {
+  const hit = event.point ? footprint.hoverAt(event.point.x, event.point.y) : null;
+  tooltip.hidden = hit === null;
+  if (hit === null) return;
+  const cell = hit.cell ? `bid ${hit.cell.bidVol} × ask ${hit.cell.askVol}` : '';
+  tooltip.textContent = `${cell}  volume ${hit.stats.volume}  delta ${hit.stats.delta}`;
+});
+```
+
+## Footprint analytics
+
+Pure functions operate on footprint data without any rendering side-effects. They are
+useful for custom overlays, alerts, or server-side analysis.
+
+```ts
+import {
+  computeFootprint,
+  diagonalImbalances,
+  cumulativeDelta,
+  stackedImbalances,
+} from 'openalgo-charts/profile';
+```
+
+### diagonalImbalances
+
+`diagonalImbalances(cells, ratio = 3, rowSize?, threshold = 0)` scans the `FootprintCell[]` of one bar (sorted high
+to low, as returned by `computeFootprint`) and returns `Imbalance[]`. A buy imbalance fires
+when ask volume at price P is at least `ratio` times the bid volume at the cell one row
+below; a sell imbalance fires when bid volume at P is at least `ratio` times the ask volume
+at the cell one row above. `rowSize` is the effective grouped price step. A row between the
+bar's high and low that never traded counts as zero volume, so the cell beside it is compared
+with zero (since 2.6.4; through 2.6.3 it was not compared). The rows beyond the high and low
+are not compared. Without an explicit step, the minimum observed spacing is inferred;
+this cannot distinguish uniformly missing rows from a coarser grid. `threshold` is the
+minimum qualifying side volume. Positive volume against zero can qualify, while zero
+against zero does not. Both sides can be imbalanced at the same price.
+
+```ts
+const bar = computeFootprint(time, trades, tickSize);
+const imb = diagonalImbalances(bar.cells, 3, bar.rowSize);
+const imb4 = diagonalImbalances(bar.cells, 4, bar.rowSize, 10); // ratio 4, minimum volume 10
+// imb: Array<{ price: number; side: 'buy' | 'sell' }>
+```
+
+### cumulativeDelta
+
+`cumulativeDelta(bars)` takes a `FootprintBar[]` and returns a `number[]` of the same
+length. Each element is the running total of `bar.delta` through that index. Bar delta is
+computed by `computeFootprint` as `sum(askVol - bidVol)` across all cells in the bar.
+
+```ts
+const cd = cumulativeDelta(footprintBars);
+// cd[i] is the cumulative net delta through bar i
+```
+
+### stackedImbalances
+
+`stackedImbalances(cells, ratio = 3, minStack = 3, rowSize?, threshold = 0)` builds on `diagonalImbalances` and
+finds runs of `minStack` or more consecutive same-side imbalances within one bar's cell
+stack. Buy and sell runs are tracked independently, and neither crosses a missing row.
+Returns `StackedImbalance[]`, each with `{ startPrice, endPrice, side, count }`.
+
+```ts
+const stacked = stackedImbalances(bar.cells, 3, 3, bar.rowSize);
+// Array<{ startPrice: number; endPrice: number; side: 'buy' | 'sell'; count: number }>
+```
+
+**Combined example**
+
+```ts
+// sessionTrades: Array<{ time: number; trades: ClassifiedTrade[] }>
+const bars = sessionTrades.map((g) => computeFootprint(g.time, g.trades, 0.5));
+
+const cd = cumulativeDelta(bars);
+
+bars.forEach((bar, i) => {
+  const stacked = stackedImbalances(bar.cells, 3, 3);
+  if (stacked.length > 0) {
+    console.log(`Bar ${i} cd=${cd[i].toFixed(0)}: ${stacked.length} stacked zone(s)`);
+  }
+});
+```
+
+### footprintSignals
+
+`footprintSignals(bars, options?)` is the pure calculation behind the layers, for alerts,
+scanners or a server. It returns `{ bars, zones, auctions }`: per bar `node`, `bigBid`,
+`bigAsk`, `absorption`, `flip` and `divergence`; each zone's `kind`, price span, `endTime`,
+`activeTime` and `touchTime` (since 2.6.4: the first bar after it became active whose high to
+low range reached it); and each unfinished auction's price and `endTime`. A zone becomes active
+once `zoneActiveAfter` whole bars have traded completely beyond it. `footprint.signals()`
+returns the same result for the bars and options a primitive holds.
+
+```ts
+import { footprintSignals } from 'openalgo-charts/profile';
+
+// On a server or in a scanner, without a Footprint: raise an alert the first time price
+// trades into an active zone that has not ended. A chart uses footprint.onZoneAlert instead.
+const alerted = new Set();
+function checkZones(bars, lastPrice) {
+  for (const zone of footprintSignals(bars, { zoneActiveAfter: 1 }).zones) {
+    const id = zone.kind + ':' + zone.time + ':' + zone.low;
+    if (zone.activeTime === null || zone.endTime !== null || alerted.has(id)) continue;
+    if (lastPrice < zone.low || lastPrice > zone.high) continue;
+    alerted.add(id);
+    notify(`Price entered a ${zone.kind} zone ${zone.low} to ${zone.high}`);
+  }
+}
+```
+
+## Price bucketing utilities
+
+`bucketPrice` and `priceBuckets` underpin every profile compute function. They are useful
+when building a custom renderer or aligning prices from two data sources to the same tick
+grid.
+
+### bucketPrice
+
+`bucketPrice(price, step)` snaps any raw price to the nearest multiple of `step` and rounds
+to 8 decimal places to avoid floating-point drift across repeated additions.
+
+```ts
+import { bucketPrice } from 'openalgo-charts/profile';
+
+bucketPrice(100.003, 0.05); // -> 100.0
+bucketPrice(99.978,  0.05); // -> 100.0
+bucketPrice(22349.7, 0.5);  // -> 22349.5
+```
+
+### priceBuckets
+
+`priceBuckets(low, high, step)` returns the inclusive list of all bucketed prices spanning
+`[low, high]`. The first and last elements are `bucketPrice(low, step)` and
+`bucketPrice(high, step)`.
+
+```ts
+import { priceBuckets } from 'openalgo-charts/profile';
+
+priceBuckets(99.9, 100.2, 0.1);
+// -> [99.9, 100.0, 100.1, 100.2]
+```
+
+This is handy when pre-allocating one row per price level in a custom canvas renderer, or
+when merging footprint data from two sources onto a shared price axis.
+
+## TPO: simple vs rich API
+
+The profile tier exports two functions for TPO computation. The runnable example above uses
+`computeTpo`, the simpler one. `computeMarketProfile` is the richer alternative for
+multi-session data.
+
+### computeTpo (simple, single session)
+
+`computeTpo(bars, periodBars, tickSize, valueAreaPercent = 0.7, ibPeriods = 2)` treats the
+entire input array as one profile. It groups consecutive bars into fixed-size buckets of
+`periodBars` bars each, counts how many buckets touched each price, then computes POC, value
+area, and initial balance. Return shape:
+
+```ts
+interface TpoResult {
+  buckets: { price: number; count: number }[]; // sorted high -> low
+  poc:     number;
+  vah:     number;
+  val:     number;
+  ib:      { high: number; low: number };      // initial balance price range
+}
+```
+
+Use `computeTpo` when you have already sliced your bars to a single session or composite
+window, or when you only need POC, value area, and initial balance with no per-period
+letters.
+
+### computeMarketProfile (rich, multi-session)
+
+`computeMarketProfile(bars, options?)` accepts a `Partial<MarketProfileOptions>` and splits
+the bar array into calendar sessions before building one profile per session. Options and
+their defaults:
+
+```ts
+import { computeMarketProfile } from 'openalgo-charts/profile';
+
+const result = computeMarketProfile(intradayBars, {
+  tickSize:              0.5,
+  session:               'day',  // 'day' | 'week' | 'month' | 'composite'
+  blockMinutes:          30,     // one TPO letter per block
+  valueAreaPercent:      0.7,
+  initialBalancePeriods: 2,
+});
+
+result.sessions.forEach((s) => {
+  console.log(`poc=${s.poc}  vah=${s.vah}  val=${s.val}`);
+  console.log(`IB ${s.initialBalance.low} - ${s.initialBalance.high}`);
+  console.log(`single prints: ${s.singlePrints.join(', ')}`);
+  console.log(`poor high: ${s.poorHigh}  poor low: ${s.poorLow}`);
+  s.levels.slice(0, 3).forEach((l) =>
+    console.log(`  ${l.price}  [${l.letters}]  vol=${l.volume.toFixed(0)}`),
+  );
+});
+```
+
+Each `MarketProfileLevel` in `levels` (sorted high to low) carries:
+
+| Field     | Type     | Description                                           |
+|-----------|----------|-------------------------------------------------------|
+| `price`   | `number` | Bucketed price.                                       |
+| `count`   | `number` | Distinct TPO periods at this price.                   |
+| `letters` | `string` | Period letters that touched this price, e.g. `"ABF"`. |
+| `volume`  | `number` | Bar volume distributed evenly across the price range. |
+
+Each `MarketProfileSessionResult` also exposes `poorHigh` / `poorLow` booleans (the session
+extreme printed in more than one period, indicating a weak rejection) and `singlePrints`
+(prices that printed in exactly one period away from the session extremes). Session
+boundaries are computed on the `timezone` option's calendar, which defaults to
+`Asia/Kolkata` and so matches NSE/BSE intraday calendars out of the box. Set it to
+`America/New_York` for a US instrument, or pass a `window` that names its own zone. See
+[Timezones](/docs/timezones).
+
+The `MarketProfile` canvas primitive exported from the profile tier consumes
+`MarketProfileResult` directly and handles the letter-based display.
+
+### tpoLetter
+
+`tpoLetter(period)` maps a zero-based period index to the letter used in the classic TPO
+display. Periods 0-25 map to `A`-`Z` and 26-51 map to `a`-`z`, then the cycle repeats.
+
+```ts
+import { tpoLetter } from 'openalgo-charts/profile';
+
+tpoLetter(0);  // -> 'A'
+tpoLetter(25); // -> 'Z'
+tpoLetter(26); // -> 'a'
+tpoLetter(51); // -> 'z'
+tpoLetter(52); // -> 'A'  (wraps back)
+```
+
+`computeMarketProfile` calls this internally. Use it directly only when building a custom
+renderer that needs to label individual cells by period.
+
+### When to use each
+
+| Scenario                                                     | Function               |
+|--------------------------------------------------------------|------------------------|
+| Single pre-sliced session or fixed composite window          | `computeTpo`           |
+| Multi-day intraday data, automatic session splitting         | `computeMarketProfile` |
+| Need TPO letters, single prints, or poor high/low flags      | `computeMarketProfile` |
+| Feeding the `MarketProfile` canvas primitive                 | `computeMarketProfile` |

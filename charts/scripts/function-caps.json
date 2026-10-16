@@ -1,0 +1,111 @@
+{
+  "maxLines": 150,
+  "caps": {
+    "src/core/chart-state.ts": {
+      "ChartPersistence._restoreState": 160,
+      "ChartPersistence.restoreState": 153
+    },
+    "src/core/chart-studies.ts": {
+      "ChartStudies._indicatorHost": 210
+    },
+    "src/indicators/external.ts": {
+      "createTier2Indicator": 298
+    },
+    "src/indicators/requested-indicator.ts": {
+      "createRequestedIndicator": 199
+    },
+    "src/model/conflation.ts": {
+      "createLodColumns": 196
+    },
+    "src/primitives/indicator-draws.ts": {
+      "IndicatorDrawings.draw": 164
+    },
+    "src/profile/market-profile-primitive.ts": {
+      "MarketProfile._drawSession": 229
+    },
+    "src/render/axis.ts": {
+      "drawTimeAxis": 155
+    },
+    "src/widget/bottombar-shell.ts": {
+      "wire": 156
+    },
+    "src/widget/bottombar.ts": {
+      "mountBottombar": 373
+    },
+    "src/widget/color-picker.ts": {
+      "createColorPicker": 186
+    },
+    "src/widget/date-navigation-dialog.ts": {
+      "openDateNavigation": 152
+    },
+    "src/widget/dialogs/context-menu.ts": {
+      "contextMenuEntries": 171
+    },
+    "src/widget/dialogs/drawing-coordinates.ts": {
+      "mountDrawingCoordinates": 189
+    },
+    "src/widget/dialogs/drawing-properties.ts": {
+      "mountDrawingProperties": 211
+    },
+    "src/widget/dialogs/indicator-picker.ts": {
+      "mountIndicatorPicker": 168
+    },
+    "src/widget/dialogs/indicator-settings.ts": {
+      "mountIndicatorSettings": 230
+    },
+    "src/widget/dialogs/level-editor.ts": {
+      "mountLevelEditor": 192
+    },
+    "src/widget/drawing-toolbar.ts": {
+      "mountDrawingToolbar": 322
+    },
+    "src/widget/form.ts": {
+      "renderForm": 538
+    },
+    "src/widget/indicator-input-controls.ts": {
+      "mountIndicatorInputControls": 180
+    },
+    "src/widget/keymap-editor.ts": {
+      "mountShortcutsPanel": 288
+    },
+    "src/widget/layouts-menu.ts": {
+      "mountLayoutsMenu": 379
+    },
+    "src/widget/layouts-templates-menu.ts": {
+      "openTemplatesMenu": 162
+    },
+    "src/widget/layouts.ts": {
+      "createLayoutsController": 387
+    },
+    "src/widget/mobile.ts": {
+      "mountMobile": 472
+    },
+    "src/widget/news-panel.ts": {
+      "mountNewsPanel": 194
+    },
+    "src/widget/objects-panel.ts": {
+      "createObjectsPanelContent": 445
+    },
+    "src/widget/overlays.ts": {
+      "createOverlayStack": 168
+    },
+    "src/widget/rail.ts": {
+      "mountRail": 602
+    },
+    "src/widget/statusline.ts": {
+      "mountStatusline": 209
+    },
+    "src/widget/symbol-picker.ts": {
+      "mountSymbolPicker": 205
+    },
+    "src/widget/topbar.ts": {
+      "mountTopbar": 335
+    },
+    "src/widget/watchlist-panel.ts": {
+      "mountWatchlistPanel": 576
+    },
+    "src/widget/widget.ts": {
+      "WidgetImpl.constructor": 252
+    }
+  }
+}

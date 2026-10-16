@@ -1,0 +1,551 @@
+---
+title: Data Loading
+description: Load, stream, page, and downsample data efficiently.
+---
+
+import { Callout } from 'nextra/components'
+import RunnableExample from '../../components/RunnableExample'
+import DataLoadingDemo from '../../components/DataLoadingDemo'
+
+# Data loading
+
+This page covers every way to get price data into a chart: bulk load, live
+updates, tick aggregation, infinite history paging, large-dataset downsampling,
+and gap recovery after a feed drop.
+
+## Data variants
+
+A request's `variant` names which of the provider's series to load: regular or
+extended hours, adjusted or raw prices, a currency or a unit. The controller asks
+the feed's `dataVariants` declaration first and publishes status `'unsupported'`
+without fetching anything when the variant is not declared. See
+[Data Variants](/docs/data-variants).
+
+## Shared loading controller (2.1.6)
+
+`DataLoadingController` owns one instrument's history, live bar store, retries
+and older pages. It has no DOM dependency. The widget uses it automatically when
+supplied a feed; custom terminals can subscribe to the same state contract.
+
+<DataLoadingDemo />
+
+```ts
+import { DataLoadingController, withBarCache } from 'openalgo-charts';
+
+const data = new DataLoadingController(withBarCache(sourceFeed), {
+  timeoutMs: 15_000,
+  pageSize: 500,
+  maxBars: 100_000,
+  pollIntervalMs: 0,
+  // Repair driven by the stream (2.3.2), all off by default: see below.
+  refreshOnBarClose: true,
+  refreshOnGap: true,
+  refreshWindowBars: 5,
+});
+const off = data.subscribe(state => {
+  renderLoadingState(state.status, state.error);
+  // A custom host maps load/prepend/live/refresh to its displayed series.
+  // Skip chart writes while replay owns the display.
+  if (!state.paused) renderSnapshot(state);
+});
+await data.load({ symbol: 'NIFTY', exchange: 'NFO', interval: '1m', from, to });
+await data.loadMore();
+await data.refresh();
+// On unmount:
+off();
+data.destroy();
+```
+
+Use the widget for a ready-made canvas binding, accessible status and Retry
+controls. A custom host should use `series.update` for `reason: 'live'`, prepend
+only new older bars for `reason: 'prepend'`, and retain the visible **time anchor**
+when a refresh replaces its source. Do not fit the chart on every response.
+Pair `chart.setHistoryLoader(() => data.loadMore().finally(() =>
+chart.historyLoadComplete()))` with that subscriber. The widget supplies these
+bindings and preserves a saved view when the original instrument matches.
+
+| Operation | Behavior |
+| --- | --- |
+| `load(req)` | Cancel the old context, clear its bars, optionally paint closed cache bars, fetch current history and seed the stream. |
+| `refresh()` | Fetch authoritative history, buffer incoming bars, then publish the merged result. A failure retains a stale display and Retry remains available. |
+| `loadMore(until?)` | Share a pending page, deduplicate older bars and reject obsolete responses after a context change. `until` (UTC seconds) widens a date feed's window to reach that time in one request, up to `maxBars` bars of a fixed interval; a paged feed keeps its ordinary window and returns one `countBack` page per call. |
+| `pushBar(bar, meta?)` | Accept live bars from an existing host-owned subscription. Omit `feed.subscribeBars` to avoid a second subscription. `meta.provisional` marks a bar whose open is only the first tick a builder saw; it keeps the open history holds for that bucket. |
+| `getState()` / `subscribe(fn)` | Read/observe display bars and typed loading status. Subscribe does not immediately invoke the listener. |
+| `bars()` | Read the current live store, including updates held away from the display. Treat arrays and bars as read-only. |
+| `setPaused(true)` | Hold the display snapshot while the live store continues. A paused historical replay still needs this fence. |
+| `setPaused(false)` | Publish current live bars with `reason: 'resume'`; stop the replay owner before resuming. |
+| `setVisible(false)` | Suspend periodic repair; returning to visible refreshes history. Live subscription ownership remains unchanged. |
+| `destroy()` | Abort owned work, detach subscriptions and stop polling. Shared feeds remain their owner's responsibility. |
+
+Primary status is `idle`, `loading`, `ready`, `empty`, `refreshing`, `stale` or
+`error`. Older history has independent `historyStatus`: `idle`, `loading`,
+`error`, `exhausted` or `limited`. Errors are published in state; managed methods
+complete with retained bars, so a resolved promise alone does not prove success.
+
+`hasMore` is `true`, `false`, or `null` when the provider has not established it.
+Optional `getBarsPage(request)` returns `{ bars, hasMore?, nextBefore? }` with an
+exclusive `before` cursor and `countBack` target. Without it the controller scans
+at most `maxEmptyPages` date windows per gesture (default 4). An empty weekend
+window does not prove exhaustion. `pageWindowSec` defaults to the initial request
+width. Reaching `maxBars` stops paging with `limited`, separately from provider
+exhaustion; live appends retain the newest bars.
+
+To show a date that is older than the loaded history, page back to it and then
+place it. The widget tier's `DateNavigator` does both through a loader you
+supply, and `widget.goTo` wires it to the widget's own controller; see
+[Go to a date or range](/docs/widget#go-to-a-date-or-range).
+
+```ts
+import { zonedStringToUtcSeconds } from 'openalgo-charts';
+import { DateNavigator } from 'openalgo-charts/widget';
+
+const navigator = new DateNavigator({
+  chart,
+  loadHistory: async time => {
+    const first = data.bars()[0]?.time;
+    await data.loadMore(time);
+    const state = data.getState();
+    if (state.historyStatus === 'error') throw state.historyError;
+    if (state.historyStatus === 'limited') return 'limited';
+    if ((data.bars()[0]?.time ?? Infinity) < (first ?? Infinity)) return 'loaded';
+    return state.hasMore === false ? 'exhausted' : 'empty';
+  },
+});
+const result = await navigator.goTo({ from: zonedStringToUtcSeconds('2024-01-15', chart.timezone()) });
+```
+
+### Repair that follows the stream (2.3.2)
+
+`pollIntervalMs` re-fetches the whole load window on a clock whether or not
+anything happened. The stream already says when something happened, so three
+options, each off by default, let repair react to it instead:
+
+| Option | Meaning |
+| --- | --- |
+| `refreshOnBarClose` | `true`, or `{ delayMs, retries, retryDelayMs }` (defaults 2500 ms, 2, 5000 ms). A pushed bar that opens a new bucket means the bar before it just closed: one refresh runs `delayMs` later, long enough for a broker's history to have published the close, and retries while the reply still stops short of that bar. Nothing fires while the market is quiet. |
+| `refreshOnGap` | Refresh at once when a pushed bar skips whole buckets, which is what a dropped socket, a hidden tab or a sleeping machine leaves behind. The window reaches back to the last bar the stream delivered. |
+| `refreshWindowBars` | Re-fetch only this many bars back from the tail on every refresh, instead of the whole window. |
+
+Together they cost about one small request per bar instead of two full-window
+requests a minute, and a skipped bucket is repaired the moment the stream
+resumes. Keep a slow `pollIntervalMs` as the backstop for silent drift. A
+controller built without these options makes exactly the requests it always
+did.
+
+### Requests and cache freshness
+
+`HistoryRequestPool` deduplicates identical pending requests for the **same feed
+instance**, limits concurrency (default 4), and schedules higher priorities first.
+`sharedHistoryRequests(feed)` returns that feed's pool. Each consumer has its own
+`signal` and `timeoutMs` (default 15 seconds), including time spent queued. One
+consumer cancelling does not cancel another; the final consumer releases the
+underlying request. Custom feeds should pass `req.signal` into their transport.
+The OpenAlgo REST adapter bounds both fetch and JSON decoding.
+
+`withBarCache` supplies optional `getCachedBars(req)`: a validated closed-bar
+snapshot for immediate display, followed by authoritative refresh. Durable-store
+read, write, delete or invalid-entry failures fall back to bounded memory. A warm
+snapshot is not a claim that the latest candle is current. Cache reads are bounded
+to 500 ms in the controller, and forming candles are never stored.
+
+Refresh preserves observed live extrema and close; overlapping whole-bar volumes
+use their maximum because a REST snapshot cannot identify overlap with sampled
+updates. Exact tick replay and reconstruction of missed trades require upstream
+sequence/trade data. See [cache behavior](/docs/bar-cache) and
+[OpenAlgo compatibility](/docs/openalgo-compatibility).
+
+### External study context
+
+Set the chart identity before loading the next source:
+
+```ts
+series.setData([]);
+chart.setDataContext({ symbol, exchange, interval });
+series.setData(nextBars);
+```
+
+The widget does this automatically. `createTier2Indicator` receives
+`ctx.dataContext` and `ctx.signal`, refreshes on context changes and extends its
+requested range when history is prepended. `supports(ctx)` can explicitly decline
+unavailable data. Read `indicator.dataStatus()`, observe
+`indicator.subscribeDataStatus(fn)`, and invoke `indicator.retryData()` for
+`loading`, `ready`, `empty`, `unsupported` and `error` states. Unsubscribe the status
+listener on teardown. Live studies append through their subscription; history-only
+studies refresh the tail as the source grows. No future external value is aligned
+into an earlier replay candle.
+
+The following sections cover direct series APIs for hosts that manage their own
+loading lifecycle.
+
+## Initial load
+
+Create a series, then call `setData` with a sorted array of bars:
+
+```ts
+import { createChart } from 'openalgo-charts';
+
+const chart = createChart(el);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+chart.timeScale.fitContent(bars.length);
+```
+
+`setData` replaces the entire series. The first non-empty load applies the
+chart's `navigation.defaultVisibleBars` policy; `0` fits all loaded history.
+Call `chart.fitContent()` when the user intends to see all loaded bars. Preserve
+the viewport during refresh, restore and paging instead of fitting every response.
+
+<Callout type="warning">
+`time` is **UTC seconds** (a plain integer), not a `Date` and not milliseconds.
+Pass bars sorted ascending by `time`; the DataLayer re-sorts on its own, but
+supplying pre-sorted input is faster.
+</Callout>
+
+Bars use the same shape across all series types:
+
+```ts
+interface Bar {
+  time: number;   // UTC seconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+  oi?: number;   // optional open-interest level; zero is a valid observation
+}
+```
+
+Line and area series read `close`; they also accept `{ time, value }` points
+and `{ time }` whitespace gaps through `SeriesDataItem`. Open interest stays
+optional and must not be synthesized from volume. See [Open interest](/docs/open-interest)
+for aggregation, missing readings and instrument support.
+
+Each bar gets a **gapless logical index** on the shared time axis,
+so weekends, holidays, and overnight breaks collapse automatically. See
+[Core Concepts](/docs/core-concepts) for how the index space works.
+
+## Incremental live updates
+
+`series.update(bar)` is the hot path for live data. Pass the current
+in-progress bar on each tick; the chart decides what to do based on `time`:
+
+| Incoming `time` vs last bar | Result |
+|---|---|
+| Newer | Appends a new bar; auto-scrolls if the viewport is already at the right edge |
+| Same | Replaces the last bar in place (intra-bar tick update) |
+| Older | Inserts into history or replaces an existing bar at that time |
+
+```ts
+// Intra-bar update (same time -> replaces)
+series.update({ time: currentBarTime, open, high, low, close, volume });
+
+// New bar (newer time -> appends)
+series.update({ time: nextBarTime, open: close, high: close, low: close, close, volume: 0 });
+```
+
+<Callout type="info">
+Auto-scroll on append only fires when the user's viewport is **already at the
+right edge** (`rightOffset >= 0`). If the user has scrolled left into history,
+new bars accumulate off-screen without disturbing the view.
+</Callout>
+
+Contrast this with `setData`, which replaces the full in-memory series and can
+rebuild derived indicator data. Use `update` for ticks; use `setData` when you
+need to swap in a completely different dataset (timeframe change, symbol
+change).
+
+To inspect the current bar occasionally (for example, from a click handler),
+read it with `getData`:
+
+```ts
+// getData() returns bars sorted oldest -> newest
+const bars = series.getData();
+const last = bars[bars.length - 1];
+series.update({ ...last, close: newPrice, high: Math.max(last.high, newPrice) });
+```
+
+`getData()` creates a new array. Keep the forming bar in your feed or component
+state instead of calling it for every incoming tick. For bounded live history,
+see [Performance & Operations](/docs/performance-and-operations).
+
+### Live streaming demo
+
+This chart streams: a timer ticks the forming candle a few times, then rolls a
+new one, all through `series.update`. Clean the timer up on teardown so it stops
+when the chart is destroyed.
+
+<RunnableExample height={320} code={`const chart = lib.createChart(el);
+const series = chart.addSeries('candlestick');
+series.setData(lib.generateBars(1700000000, 90, 3600));
+chart.timeScale.fitContent(90);
+
+let last = series.getData().slice(-1)[0];
+let t = last.time, ticks = 0, seed = 7;
+const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+const id = setInterval(() => {
+  const move = (rnd() - 0.5) * 1.8;
+  if (ticks >= 6) {                          // roll a fresh candle
+    t += 3600;
+    last = { time: t, open: last.close, high: last.close, low: last.close, close: last.close + move };
+    ticks = 0;
+  } else {                                   // update the forming candle in place
+    const c = last.close + move;
+    last = { time: last.time, open: last.open, high: Math.max(last.high, c), low: Math.min(last.low, c), close: c };
+    ticks++;
+  }
+  series.update(last);
+}, 700);
+
+// Stop the stream when the chart is torn down.
+chart.on('destroy', () => clearInterval(id));
+return chart;`} />
+
+### Bounded history for long-running charts
+
+`series.update` does not discard old bars. For a chart that remains open for a
+session, retain a fixed source window and do the full replacement only when a
+new bar crosses that boundary:
+
+```ts
+const MAX_BARS = 5_000;
+let retained = initialBars.slice(-MAX_BARS);
+series.setData(retained);
+
+function applyLiveBar(bar) {
+  const previous = retained[retained.length - 1];
+  if (previous?.time === bar.time) {
+    retained[retained.length - 1] = bar;
+    series.update(bar);
+    return;
+  }
+
+  retained.push(bar);
+  if (retained.length > MAX_BARS) {
+    retained = retained.slice(-MAX_BARS);
+    series.setData(retained);
+  } else {
+    series.update(bar);
+  }
+}
+```
+
+Do not run `setData` for forming-bar ticks. It replaces the complete series;
+the example above pays that cost only when the oldest retained bar is dropped.
+See [Performance & Operations](/docs/performance-and-operations) for indicator,
+canvas, cache, and lifecycle budgets.
+
+## Building bars from a tick stream
+
+When your WebSocket feed delivers raw trade ticks (price + quantity) rather
+than completed candles, use `CandleBuilder` to bucket them into OHLC bars.
+
+```ts
+import { CandleBuilder } from 'openalgo-charts';
+
+const builder = new CandleBuilder({
+  intervalSec: 60,          // 1-minute bars
+  volumeMode: 'ltq-sum',    // accumulate last-traded qty per tick
+  lateTickPolicy: 'foldIntoBar',
+  sessionAnchorSec: 0,      // align buckets to epoch; set to a session open (UTC seconds)
+                            // to align to the exchange instead. Independent of the
+                            // chart's display timezone.
+});
+
+// Seed from the last historical bar so the first live tick continues it
+const bars = await feed.getHistory(...);
+series.setData(bars);
+if (bars.length) builder.seed(bars[bars.length - 1]);
+
+// Feed each tick as it arrives
+ws.onTick((tick) => {
+  // tick: { time: UTCSeconds, price: number, ltq?: number, cumDayVolume?: number }
+  const update = builder.onTick(tick);
+  if (update !== null) {
+    series.update(update.bar); // update.isNew === true on a bar boundary
+  }
+});
+```
+
+A bar the builder opened without having streamed the bar before it, a cold
+start or a seed from an older bucket, carries only the ticks it saw: the trades
+between the bucket's true open and the first tick were missed. `update.provisional`
+says so, and `builder.reconcile(historyBar)` adopts history's open, the union of
+the extremes and the larger volume for that bucket while keeping the close with
+the ticks. Through the controller, `data.pushBar(update.bar, { provisional: true })`
+keeps the open history holds rather than replacing it, so a repair that found
+the true open is not undone by the next tick.
+
+`onTick` returns `null` only when the `lateTickPolicy` is
+`'dropOlderThanPrevBar'` and the tick predates the current bar's open. The
+`CandleUpdate.isNew` flag is `true` on the first tick of a new bucket (useful
+for logging or triggering signal evaluation).
+
+The `volumeMode` option controls volume accounting:
+- `'ltq-sum'` -- add each tick's `ltq` field (last-traded quantity).
+- `'day-delta'` -- diff a cumulative daily volume counter (`cumDayVolume`);
+  handles intraday resets automatically.
+
+## Lazy / infinite history
+
+When a user pans left past the oldest loaded bar, the chart fires a history
+loader so you can fetch and prepend older data without rebuilding the chart.
+
+Register the loader once after creating the chart:
+
+```ts
+chart.setHistoryLoader(async () => {
+  try {
+    const older = await myApi.getBarsBefore(oldestLoadedTime, 500);
+    if (older.length > 0) {
+      series.prependData(older);
+      oldestLoadedTime = older[0].time;
+    }
+  } catch (error) {
+    showHistoryError(error);
+  } finally {
+    chart.historyLoadComplete();
+  }
+});
+```
+
+`prependData` merges the incoming bars into the existing series by time: new
+timestamps are inserted and existing ones are replaced. The viewport is
+preserved -- the same bars stay on screen because the time-scale `baseIndex`
+shifts to compensate for the prepended count.
+
+<Callout type="warning">
+You **must** call `chart.historyLoadComplete()` after every loader invocation,
+whether or not new bars were returned. Omitting it latches the "loading" flag
+permanently and paging stalls.
+</Callout>
+
+<Callout type="warning">
+Paging is intentionally unbounded unless the host imposes a policy. A
+long-running live chart should fetch pages outside its retained window from the
+feed or an application cache, rather than continually prepending them into the
+same chart.
+</Callout>
+
+You can also listen to the `'lazy-load'` event on the unified bus (for example,
+to log or debounce independently of the loader function):
+
+```ts
+chart.on('lazy-load', (e) => {
+  console.log('paging backward from', e.from, 'to', e.to);
+});
+```
+
+See [Events](/docs/events) for the full event reference.
+
+### Live demo: infinite history
+
+Seed the chart with 120 bars, then pan left -- the loader prepends 60 more
+bars each time you reach the oldest edge.
+
+<RunnableExample height={360} code={`const chart = lib.createChart(el);
+const intervalSec = 3600;
+const seedStart = 1700000000;
+const bars = lib.generateBars(seedStart, 120, intervalSec);
+const series = chart.addSeries('candlestick');
+series.setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+let pageStart = seedStart;
+
+chart.setHistoryLoader(function () {
+  const olderStart = pageStart - 60 * intervalSec;
+  const olderBars = lib.generateBars(olderStart, 60, intervalSec);
+  series.prependData(olderBars);
+  pageStart = olderStart;
+  chart.historyLoadComplete();
+});
+
+return chart;`} caption="Pan left to trigger history paging. Each page prepends 60 more hourly bars while keeping the viewport stable." />
+
+## Large datasets: level of detail
+
+When zoomed far out, many bars share one pixel column, and drawing each of them
+paints the same pixels over and over. The chart's level of detail, on by
+default, draws one OHLC-preserving stick per device-pixel column instead, so a
+frame costs the width of the plot rather than the number of bars in view: 200,000
+candles and their volume fitted into a 944 px plot paint about 2,900 marks,
+against 400,000 bar by bar.
+
+```ts
+const chart = createChart(el, {
+  timeScale: { minBarSpacing: 0.01 }, // allow zooming out past one bar per pixel
+  conflationFactor: 1,                // default; 2 to 4 merge into wider columns
+});
+
+// Opt out: every bar drawn at every zoom.
+const every = createChart(el, { conflate: false });
+```
+
+It engages only below about one CSS px per bar (exactly one at a whole device
+pixel ratio). The default time scale never zooms out past one bar per CSS px
+(`minBarSpacing: 1`), so a chart that keeps that floor draws exactly as before;
+lower the floor to show long histories whole.
+
+Each stick is **OHLC-preserving**: open comes from the first bar in the column,
+close from the last, high and low from the extremes, volume is summed, and the
+stick takes the colours of the bar that closed it. Line series keep each
+column's first, lowest, highest and last values, an HLC area adds each run's
+highest high and lowest low so its band and gaps match the full frame, and
+histograms keep their lowest and highest bar, which cover the pixels every bar
+would have. A custom chart type is
+always drawn in full, even one registered under a built-in name. The step is transparent to your data layer: indicators,
+autoscale and the crosshair see every bar.
+
+Fixed-size merge helpers are also available for manual use:
+
+```ts
+import { conflateBars, mergeBars } from 'openalgo-charts';
+
+const merged = conflateBars(bars, 5);   // merge every 5 bars into one
+const single = mergeBars(bars.slice(0, 5)); // merge a specific group
+```
+
+See [Core Concepts](/docs/core-concepts) for the gapless index model that makes
+the columns align correctly.
+
+The level of detail reduces rendering work for zoomed-out data. It does not
+reduce the memory retained by the source series or indicator outputs. Pair it
+with a history window for sustained sessions.
+
+## Reconnect and gap recovery
+
+When a WebSocket feed drops and reconnects, re-fetch the missed window and merge
+it with `prependData`. This path merges by time and
+deduplicates: bars whose timestamps already exist in the series are replaced
+(not duplicated), and genuinely new bars are inserted in sorted order. You do
+not need to compute the exact gap. Buffer live observations during the request
+so an older response cannot overwrite a newer forming candle. Prefer the
+[shared loading controller](#shared-loading-controller-216) when it owns the feed.
+
+```ts
+// With the shared controller above, refresh owns buffering and reconciliation.
+ws.on('reconnect', () => {
+  void data.refresh();
+});
+```
+
+If the gap is large enough that you want to reload the full visible range
+instead, use `setData` -- it is a full replace and runs the same O(n log n)
+sort that the initial load does.
+
+## Empty state
+
+`setData([])` is valid and renders an empty chart. You can add data later with
+another `setData` call or a sequence of `update` calls.
+
+```ts
+const series = chart.addSeries('candlestick');
+series.setData([]); // chart is blank; axes are visible
+
+// Later, once data arrives:
+series.setData(historicalBars);
+chart.timeScale.fitContent(historicalBars.length);
+```
+
+This is useful for showing a chart shell while an async fetch is in flight.

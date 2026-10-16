@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "paths": { "fixture": ["./src/index.ts"] }
+  }
+}

@@ -1,0 +1,813 @@
+---
+title: Chart Linking
+description: Drive a grid of charts as one workspace. Linking is by instant, never by bar index.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Chart linking
+
+`createLinkGroup()` joins charts into one workspace: hover one and the others mark the same
+moment, pan one and the others hold the same window, switch the instrument, the interval or
+the chart type on one and the others follow, draw a level on one and the others on that
+instrument show it too. It is headless, like [comparison](/docs/symbol-comparison) and
+[replay](/docs/market-replay): the group owns the synchronisation and ships no DOM, so the
+link badge, the colour chips and the menu are yours to draw. A
+[workspace](#saving-links-in-a-workspace) saves the switches, in several named groups when a
+desk needs them.
+
+```ts
+import { createChart, createLinkGroup } from 'openalgo-charts';
+
+const group = createLinkGroup({ crosshair: true, viewport: true });
+group.add(chartA);
+group.add(chartB);
+
+group.setOptions({ viewport: false });  // cursor still mirrored, zoom independent again
+group.remove(chartB);                   // one chart leaves
+group.destroy();                        // no listeners, no linked crosshairs, no references
+```
+
+## Read this first: a bar index is not a shared coordinate
+
+The x-axis is a **gapless logical index** over the bars one chart holds (see
+[Core Concepts](/docs/core-concepts)). Index 412 means "the 413th bar *this* chart has", and
+charts in a group almost never hold the same bars: different symbols, different intervals,
+different history depth, different holidays.
+
+**Index 412 is therefore a different instant on every chart in the group.** So nothing
+crosses a chart boundary as an index. Every value is converted to a time on the sender,
+against its own data, and back to an index on the receiver, against its own:
+
+| Step | Runs on | Reads | Result |
+|---|---|---|---|
+| 1. The user hovers | leader (INFY, 1h) | its own crosshair | logical index `412` |
+| 2. Index to time | leader | `dataLayer.indexToTimeFloat(412)` | `2024-03-05 14:00 IST` |
+| 3. Time to index | follower (RELIANCE, 1D) | `dataLayer.timeToIndex(...)` | logical index `61` |
+| 4. Draw | follower | a linked crosshair at `61` | the same day, not the same bar number |
+
+The same round trip carries a pan or a zoom, with both ends of the range going through the
+fractional conversions (`indexToTimeFloat` / `timeToIndexFloat`), so what crosses is a
+**wall-clock window**. A daily chart under an hourly leader ends up showing a fraction of a
+bar at each edge, which is exactly right, and a window whose right edge sits in the empty
+margin past the last bar still converts.
+
+<Callout type="warning">
+Copying a logical index or a logical range straight across looks perfect on two charts of
+the same symbol and interval, and is wrong on every other pair. That is how a linking
+feature ships broken: it demonstrates beautifully on the case you built it against.
+</Callout>
+
+## When the follower has no bar at that instant
+
+A leader's instant is not guaranteed to exist on a follower, and the two ways it can be
+missing get opposite answers. `whenMissing` chooses between them for the crosshair channel:
+
+| Where the leader's instant falls | `nearest` (default) | `hide` |
+|---|---|---|
+| Exactly on one of the follower's bars | that bar | that bar |
+| Inside the follower's history, between two of its bars | the last bar whose opening is at or before that instant | nothing |
+| Before the follower's first bar, or after its last | nothing | nothing |
+
+The two rows below the first are different situations, not degrees of the same one:
+
+- **Inside the range with no bar** is a missing bar: the sessions either side of it are real
+  and the hole is a holiday, a halt, or a coarser interval. Despite the option's
+  name, `nearest` selects the previous opening, never a future candle that is
+  arithmetically closer. A Saturday instant between Friday and Monday maps to
+  Friday. Choose `hide` when only an exact timestamp match is acceptable.
+- **Outside the coverage** is an absence: the follower does not cover that period at all.
+  Both policies refuse it, because pinning the crosshair to the first or last bar would
+  assert an alignment that does not exist.
+
+The viewport channel has no equivalent choice, and deliberately does not clamp. A follower
+whose history does not overlap the leader's window scrolls into its own empty margin and
+shows nothing, which is the truth. Pulling it back onto its last few bars would show the
+user a different period from the one the leader is on.
+
+<Callout type="info">
+`crosshairIndex(chart)` reads back what a member is marking: its own logical index, or
+`null` when it is showing no linked crosshair (it is the chart being hovered, the instant is
+outside its coverage, or crosshair sync is off). Turn it into a bar with that chart's own
+`dataLayer.indexToTime(...)`, the same way a native crosshair readout does.
+</Callout>
+
+## Live demo
+
+Two charts, one group. The left one is hourly over thirty days; the right one is daily over
+the same period **with two sessions punched out**, so the two never share a bar count or a
+bar index. Hover either chart and the other marks the same instant. Pan or zoom either and
+both hold the same wall-clock window.
+
+<RunnableExample height={340} code={`const HOUR = 3600, DAY = 86400;
+const T0 = 1700438400;                       // a Monday, 00:00 UTC
+
+// Two panels side by side inside the example's box.
+el.style.display = 'flex';
+el.style.gap = '10px';
+const box = function () {
+  const d = document.createElement('div');
+  d.style.cssText = 'flex:1 1 0;min-width:0;height:100%;position:relative';
+  el.appendChild(d);
+  return d;
+};
+const leftEl = box(), rightEl = box();
+
+// Leader: 30 days of hourly bars. Follower: the same 30 days daily, minus two
+// sessions, so its index for a given instant is nowhere near the leader's and
+// is not even a fixed offset from it.
+const hourly = lib.generateBars(T0, 24 * 30, HOUR);
+const daily = lib.generateBars(T0, 30, DAY).filter(function (b, i) { return i !== 11 && i !== 12; });
+
+const left = lib.createChart(leftEl);
+left.addSeries('candlestick').setData(hourly);
+left.fitContent();
+
+const right = lib.createChart(rightEl);
+right.addSeries('candlestick').setData(daily);
+right.fitContent();
+
+// Join them. Both channels on; a member added later would join the same way.
+const group = lib.createLinkGroup({ crosshair: true, viewport: true });
+group.add(left);
+group.add(right);
+
+// Read back what the follower is marking. Subscribed after group.add, so the
+// group has already placed the linked crosshair by the time this runs.
+const out = document.createElement('div');
+out.style.cssText = 'position:absolute;left:10px;top:8px;z-index:5;pointer-events:none;'
+  + 'font:12px ui-monospace,monospace;color:light-dark(#a16207,#f0b90b)';
+rightEl.appendChild(out);
+const fmt = function (t) {
+  return t === undefined ? '' : new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
+};
+left.on('crosshair:move', function () {
+  const i = group.crosshairIndex(right);
+  out.textContent = i === null
+    ? 'daily: no bar at that instant'
+    : 'daily bar ' + i + '   ' + fmt(right.dataLayer.indexToTime(i)) + ' UTC';
+});
+
+// Tear both charts and the group down with the example.
+const destroy = left.destroy.bind(left);
+left.destroy = function () { group.destroy(); right.destroy(); destroy(); };
+return left;`} caption="The readout over the daily chart is group.crosshairIndex(right): its own bar number, resolved from the hourly chart's instant." />
+
+## The independent channels
+
+Each channel is switchable on its own, because a user routinely wants one without the
+others: mirror the cursor across four timeframes but keep each zoom, or slave every chart's
+symbol while each keeps its own window.
+
+| Channel | Default | What crosses | Driven by |
+|---|---|---|---|
+| `crosshair` | on | one instant | the member's `crosshair:move` event |
+| `viewport` | on | a wall-clock window | the member's `pan` and `zoom` events |
+| `symbol` | off | an instrument name | the member's `symbol` event, or `setSymbol` |
+| `interval` | off | an interval token | the member's `interval` event, or `setInterval` |
+| `chartType` | off | a chart type id (candles, bars, a line) | the member's `chartType` event, or `setChartType` |
+| `appearance` | off | visual chart settings | `style:change`, or `syncAppearance` |
+| `drawings` | off | drawing time and price anchors, properties and edits, between charts on one instrument | each member's `LinkDrawingsAdapter`, over a draw-tier `DrawingLinkGroup` |
+
+### The linked crosshair
+
+A follower's crosshair is a `LinkCrosshair` primitive on the `top` z-order, not the chart's
+own crosshair. The engine's crosshair belongs to the pointer inside that chart and there is
+exactly one of them; a linked one is a second, weaker mark that must not fight it. The group
+keeps one per pane, so the line spans price, volume and indicator panes the way the native
+global crosshair does, and drops them all when crosshair sync is switched off.
+
+Two deliberate differences from the native crosshair:
+
+- **It is a vertical line only.** The horizontal line marks a price, and the price under a
+  cursor on another instrument is not a price on this one. On a grid of four symbols a
+  mirrored price line would be a straight lie four times over. The vertical line marks an
+  instant, and an instant is shared.
+- **It draws at reduced opacity** (`LINK_CROSSHAIR_ALPHA`, 0.55) in the follower's own
+  crosshair colour, so it reads as a reflection of a cursor somewhere else rather than as a
+  second cursor in this chart.
+
+On `Chart`, the linked selection also reaches `subscribeCrosshairMove` with
+`source: 'linked'`, the follower's own bar, and null pointer coordinates. It does
+not emit a synthetic `crosshair:move` bus event. Native pointer hover takes
+precedence, and clearing or disabling the link restores the latest-bar readout.
+Use the subscriber for host OHLC legends; retain the selected timestamp through
+live updates and history prepends rather than replacing it with the latest raw bar.
+
+### Viewport
+
+The core emits `pan` or `zoom` for **every** viewport change, not only for a gesture:
+`setVisibleLogicalRange`, `fitContent`, `resetScale` and the keyboard pan and zoom commands
+all announce themselves, and only when the window actually moved (a clamped zoom or an
+already-fitted `fitContent` emits nothing). A linked grid therefore follows an arrow key and
+a restored zoom, not just a drag.
+
+That cuts both ways, and it is the one thing worth designing around:
+
+<Callout type="warning">
+**A freshly loaded follower must not broadcast its own fit.** `chart.fitContent()` after
+`setData` is a viewport change like any other, so in a linked group it drags every other
+chart onto the new chart's window. Suspend the channel across the load:
+
+```ts
+group.setOptions({ viewport: false });
+chart.addSeries('candlestick').setData(bars);
+chart.fitContent();
+group.setOptions({ viewport: true });
+```
+
+The two windows then converge on the first pan, which is what the group documents. Adopting
+the leader's window instead is usually worse: a month of hourly bars inside a five-year
+daily window is a sliver in an empty plot.
+</Callout>
+
+A follower with fewer than two bars never follows the viewport: every time maps to index 0,
+so the mapped span collapses and the group leaves that chart alone rather than guessing.
+
+### Symbol
+
+The host owns symbol selection and loading. `chart.setDataContext(...)` declares
+the identity used by studies and alerts, while the link group relays a host's
+selection. A symbol event does not fetch data or change that context by itself:
+
+```ts
+const group = createLinkGroup({ symbol: true });
+
+group.add(chartA, {
+  symbol: 'RELIANCE',
+  onSymbol: async (symbol, chart) => {           // the group calls, the host loads
+    const bars = await feed.getBars({ symbol, exchange: 'NSE', interval: '5m' });
+    seriesFor(chart).setData(bars);
+  },
+});
+
+group.add(chartB, { symbol: 'RELIANCE', onSymbol: loadInto(chartB) });
+
+// Tell the group the user changed the instrument on chartA.
+group.setSymbol(chartA, 'INFY');
+// The host event still works in 2.x; chart.emit is deprecated and goes in 3.0.0.
+// chartA.emit('symbol', 'INFY');                // or { symbol: 'INFY' }
+```
+
+- A member **without `onSymbol`** broadcasts its own changes but never receives anyone
+  else's, which is how you pin one chart of a grid to an index while the rest follow.
+- The current instrument is recorded even while the switch is **off**, so turning it on later
+  converges the group on something current instead of on a stale name. `group.symbol()`
+  reads it back.
+- A member **joining** a group that already has a symbol adopts it, because joining a linked
+  workspace is exactly the moment a user expects the new chart to fall in line. The first
+  member to declare one establishes the group's.
+- A follower whose `onSymbol` announces the name it loaded under another spelling (a
+  suffix, a case change) does not replace the leader's choice. The announcement arrives
+  while the group is applying the change, so it is dropped as an echo, the same way the
+  interval and chart type channels drop one; the group keeps the leader's instrument.
+
+<Callout type="info">
+Switching `symbol` on converges the group immediately; switching `crosshair` off clears
+every linked line at once. `viewport` has no equivalent: nothing in the group says whose
+window the others should have adopted, so it takes effect on the next pan or zoom.
+</Callout>
+
+### Interval
+
+Timeframe linking is opt-in and uses the same host boundary as symbols:
+
+```ts
+const group = createLinkGroup({ interval: true });
+group.add(chartA, {
+  interval: '5m',
+  onInterval: (interval, member) => {
+    if (!supportedIntervals.has(interval)) return false;
+    loadInterval(member, interval);
+    return true;
+  },
+});
+group.add(chartB, { interval: '5m', onInterval: applyIntervalToSecondChart });
+
+group.setInterval(chartA, '1h');
+// Equivalent host event, deprecated with chart.emit (removed in 3.0.0): chartA.emit('interval', '1h').
+group.interval(); // the group's current token, or null
+```
+
+`onInterval` accepts or refuses the token synchronously; return `false` for an
+unsupported interval. Start asynchronous loading inside the host callback and
+discard obsolete responses when selection changes again. A member without the
+callback can broadcast its own interval but does not follow others. Enabling
+the channel converges members on the current token. The group does not persist
+its settings; [workspaces](#saving-links-in-a-workspace) can carry that host state.
+
+### Chart type
+
+<Callout type="info">Since 2.5.10.</Callout>
+
+The chart type channel works exactly like the interval channel. The host reports a change
+and applies one; the core never emits `chartType` on its own, just as it never emits
+`interval`:
+
+```ts
+import { createLinkGroup, registeredChartTypes, type SeriesType } from 'openalgo-charts';
+
+const group = createLinkGroup({ chartType: true });
+for (const { chart, series } of cells) {
+  group.add(chart, {
+    chartType: chart.seriesType(series) ?? undefined,
+    // A type it cannot draw is refused, and asked again on the next change.
+    onChartType: id => registeredChartTypes().includes(id)
+      && chart.setSeriesType(series, id as SeriesType),
+  });
+}
+
+chartA.setSeriesType(seriesA, 'bar');
+group.setChartType(chartA, 'bar');   // or chartA.emit('chartType', 'bar'), deprecated with chart.emit
+group.chartType();                   // 'bar', kept even while the channel is off
+```
+
+Only the chart type crosses. Colours, scales and the status line belong to the appearance
+channel, so two linked candle charts keep their own colours unless appearance linking is on
+as well. Switching the channel on converges every member on the latest chart type, and a
+member joining an enabled group adopts it.
+
+### Appearance
+
+Supply a settings adapter for each member, then enable the independent appearance
+switch. Settings patches emit `style:change`; a host that changes appearance through
+other setters can call `syncAppearance(chart)` explicitly.
+
+```ts
+import { createLinkGroup, readChartSettings, applyChartSettings } from 'openalgo-charts';
+
+const group = createLinkGroup({ appearance: true });
+for (const chart of [chartA, chartB]) {
+  group.add(chart, {
+    appearance: {
+      read: () => readChartSettings(chart),
+      apply: values => applyChartSettings(chart, values),
+    },
+  });
+}
+applyChartSettings(chartA, { 'canvas.grid.vertColor': '#303744' });
+// Both charts now use that grid color.
+```
+
+`LinkAppearanceAdapter` has synchronous `read()` and `apply(values)` methods.
+`LinkAppearanceValues` is a flat record of string, number and boolean settings.
+`filterLinkAppearance(values)` returns a fresh record containing supported visual
+keys: series styling, readout visibility, scale presentation (mode, auto-fit, the
+primary-prices-only fit since 2.6.0, and inversion), grid, crosshair, watermark styling
+and axis chrome. It excludes watermark text, instrument identity, interval, timezone,
+navigation, the study legend fold, studies, event feeds, alerts and trading settings.
+It does not transfer chart data or the primary series type (the chart type channel does).
+Enabling the channel waits for the next edit or an explicit `syncAppearance`; it does not
+choose a leader.
+
+With an undo timeline on each chart ([`ChartHistory`](/docs/undo-history)), a linked
+change is the step of the chart that made it. Apply it on the others through their
+`ignore`, so it is never a step of theirs: `apply: values => history.ignore(() =>
+applyChartSettings(chart, values))`. Undoing or redoing the step announces the result
+on `style:change` again, so every linked chart takes it back too. The chart grid and
+the reference host's split view do both.
+
+### Drawings
+
+<Callout type="info">The `drawings` channel of the link group is since 2.5.10; the draw tier's sharer is older.</Callout>
+
+The `drawings` switch is a channel of the link group like the others, but the work is split
+across two tiers. The group decides **who** shares: its members, while the switch is on. The
+draw tier's `DrawingLinkGroup` decides **which** drawings cross and moves them, which keeps
+drawing code out of the base bundle. Each member brings a `LinkDrawingsAdapter` over the
+sharer kept for its group:
+
+```ts
+import { createLinkGroup } from 'openalgo-charts';
+import { createDrawingLinkGroup, DrawingController } from 'openalgo-charts/draw';
+
+const group = createLinkGroup({ symbol: true, drawings: true });
+const sharing = createDrawingLinkGroup({ enabled: true });   // the group's switch rules
+for (const chart of [chartA, chartB]) {
+  const controller = new DrawingController(chart);
+  group.add(chart, {
+    symbol: 'INFY', onSymbol: loadInto(chart),
+    drawings: {
+      join: () => sharing.add(chart, controller),
+      leave: () => sharing.remove(chart),
+    },
+  });
+}
+group.setOptions({ drawings: false });   // every member leaves; its copies stay
+```
+
+The group calls `join` when a member is in it and the switch is on, and `leave` when either
+stops being true: the switch goes off, the member is removed, its adapter is replaced (the
+old one leaves before the new one joins), its chart is destroyed, or the group is. A member
+is never joined twice in a row. Moving a chart between two groups is therefore a `remove`
+from one and an `add` to the other.
+
+Which drawings cross, and what an instrument change does to them:
+
+- **Same instrument only.** A drawing crosses only between charts showing the same symbol
+  and exchange. A level drawn on one stock means nothing on another, so a chart on another
+  instrument neither sends nor receives, whatever its group. Intervals may differ: anchors
+  are UTC times and prices.
+- **Price pane, data space.** A drawing pinned to the viewport is a place on that chart's
+  screen and stays on it.
+- **Drawn while the switch is on, to the charts present.** A drawing crosses to the charts on
+  its instrument when it is drawn, and from then on its edits and its deletion reach each of
+  them. A drawing that has never been shared stays private to its chart until the host shares
+  it (`sharing.share(chart, ids?)`), so switching on never sprays one chart's levels across a
+  desk. A chart that arrives on the instrument later, or joins the group later, gets
+  a drawing shared without it only when the host shares that drawing again.
+- **An instrument change keeps drawings with their instrument.** Drawings are kept per
+  instrument (`InstrumentDrawings`, the widget's default since 2.5.9). A chart leaving an
+  instrument keeps its copies in that instrument's saved document and shows the incoming
+  instrument's own. When it comes back they reconnect, and take the state the charts still on
+  it hold now, a deletion included. With symbol linking on as well, the whole group moves
+  together and keeps sharing on each instrument it visits. Build each chart's
+  `InstrumentDrawings` before it joins, so the document swaps before the sharer sees the new
+  instrument.
+- **Leaving keeps what arrived, and re-linking reconnects it.** Switching the channel off, or
+  leaving the group, stops the traffic; every copy already made stays on the chart that holds
+  it. A copy still carries its link, so when its chart shares again (the switch goes back on,
+  or it rejoins the group) it reconnects and takes the state the charts already sharing hold,
+  as on returning to an instrument: their edits, and a deletion made while they were sharing.
+  An edit made to a copy while it was unlinked gives way on re-linking. Members join in the
+  order they were added, so when the switch goes on for the whole group the first of them that
+  holds the drawing sets its state.
+
+The rest of this section is the draw tier's sharer itself, which a host can also drive
+directly. Both the switch and each chart's instrument identity must be explicit. Symbol and
+exchange must match exactly; unknown or blank identity is ineligible.
+
+```ts
+import { DrawingController, createDrawingLinkGroup } from 'openalgo-charts/draw';
+
+const drawings = createDrawingLinkGroup({ enabled: true });
+const drawA = new DrawingController(chartA);
+const drawB = new DrawingController(chartB);
+const context = { symbol: 'INFY', exchange: 'NSE' };
+drawings.add(chartA, drawA, context);
+drawings.add(chartB, drawB, context);
+
+// New price-pane drawings and subsequent edits now reach both charts.
+drawA.add({
+  tool: 'trend-line', paneIndex: 0, style: { color: '#52a8ff' },
+  points: [{ time: 1700438400, price: 1450 }, { time: 1700524800, price: 1490 }],
+});
+
+// Existing local drawings require this separate action.
+drawings.share(chartA); // or drawings.share(chartA, drawA.selection())
+drawings.setOptions({ enabled: false });
+drawings.destroy();
+```
+
+Only pane `0` participates. Indicator panes have no shared identity, and alerts,
+orders and other primitives never join this channel. Updates, drag previews,
+deletion and local undo/redo propagate in either direction. Each chart retains its
+selection and its own undo history. Received previews paint temporarily without
+entering the saved drawing document; cancellation, context changes, unlinking and
+destruction clear them.
+
+Existing local drawings stay local until explicitly shared, and a joining chart
+does not automatically receive older drawings it has never shared. A reserved JSON-safe drawing property,
+`props['openalgo-charts/drawing-link']`, preserves lineage and instrument identity.
+With drawing sync enabled, adding a rebuilt chart or restoring a document reconnects
+matching persisted lineage under the same instrument identity. The current peer's
+committed values and ordering take precedence over an older saved copy. Repeated
+`share` calls reuse those copies; an unrelated drawing with the same local ID remains
+untouched. Duplicating or pasting
+a drawing starts a new lineage. Preserve the reserved property when saving documents.
+Removing a member leaves committed copies in place. Changing its instrument removes
+drawings it received from peers from the chart; with `InstrumentDrawings` in front, as above,
+they are saved with the instrument they belong to first and come back with it.
+
+`add` uses `chart.getDataContext()` when its context argument is omitted.
+`data:context` changes update eligibility automatically. A symbol-only host event
+invalidates a static drawing identity until a complete context is supplied. Hosts
+with another identity source can pass a resolver as the third `add` argument, or
+call `setContext(chart, { symbol, exchange })` when the instrument changes:
+
+```ts
+drawings.add(chartA, drawA, () => ({
+  symbol: chartA.getDataContext()?.symbol,
+  exchange: 'YFINANCE',
+}));
+```
+
+The resolver is called on registration and subsequent context or symbol events.
+A null result, missing identity or thrown error makes that member ineligible.
+It leaves the chart's own context, including existing alert scopes, untouched.
+A feed-qualified symbol can use a stable feed namespace as the
+exchange field, as the reference host does with `YFINANCE`; that identifies the
+host's symbol namespace and is not exchange metadata.
+
+## API
+
+### `createLinkGroup(options?)` and `LinkGroup`
+
+| Member | Description |
+|---|---|
+| `add(chart, member?)` | Put a chart in the group. Adding one twice updates its member options instead of double-subscribing. |
+| `remove(chart)` | Take it out. Safe to call twice, and after `destroy()`. |
+| `members()` | Every live member, in the order they were added. |
+| `has(chart)` | Membership test. |
+| `options()` | Every option resolved, as the group is applying them. |
+| `setOptions(patch)` | Flip channels at runtime. See the callout above for what takes effect immediately. |
+| `symbol()` | The instrument the group has agreed on, or `null` if nobody declared one. |
+| `setSymbol(chart, symbol)` | The imperative twin of emitting `symbol` on that chart's bus. |
+| `interval()` | The current interval token, or `null` when none has been declared. |
+| `setInterval(chart, interval)` | Report an interval selection to following members. |
+| `chartType()` | The current chart type, or `null` when none has been declared. |
+| `setChartType(chart, chartType)` | Report a chart type selection to following members. |
+| `syncAppearance(chart)` | Copy the member adapter's supported visual settings when appearance linking is enabled. |
+| `crosshairIndex(chart)` | The member's own logical index its linked crosshair is marking, or `null`. |
+| `destroy()` | Unlink everything: listeners off, linked crosshairs detached, references dropped. |
+
+### `LinkOptions`
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `crosshair` | `boolean` | `true` | Mirror the hovered instant onto every other member. |
+| `viewport` | `boolean` | `true` | Mirror pan and zoom as a wall-clock window. |
+| `symbol` | `boolean` | `false` | Mirror the instrument, through each member's `onSymbol`. |
+| `interval` | `boolean` | `false` | Mirror the interval, through each member's `onInterval`. |
+| `chartType` | `boolean` | `false` | Mirror the chart type, through each member's `onChartType`. |
+| `appearance` | `boolean` | `false` | Copy supported visual settings through each member's adapter. |
+| `drawings` | `boolean` | `false` | Share drawings through each member's `drawings` adapter, between charts on one instrument. |
+| `whenMissing` | `'nearest' \| 'hide'` | `'nearest'` | What a follower does with an instant it has no bar for. |
+
+### `LinkMemberOptions`
+
+| Option | Type | Description |
+|---|---|---|
+| `symbol` | `string` | The instrument this chart is showing right now, if the host tracks one. |
+| `onSymbol` | `(symbol, chart) => void` | Load `symbol` into this chart. Omit to make the member symbol-read-only. |
+| `interval` | `string` | The current host interval token. |
+| `onInterval` | `(interval, chart) => boolean \| void` | Accept the token synchronously, or return `false` to refuse it. The host loads its data. |
+| `chartType` | `string` | The chart type this chart shows now (a registered chart type id). |
+| `onChartType` | `(chartType, chart) => boolean \| void` | Show it synchronously, or return `false` to refuse a type the chart cannot draw. |
+| `appearance` | `LinkAppearanceAdapter` | Synchronous `read()` and `apply(values)` for visual settings. |
+| `drawings` | `LinkDrawingsAdapter` | `join()` and `leave()` over the group's drawing sharer. Without one, the chart never shares drawings. |
+
+### `createDrawingLinkGroup(options?)` and `DrawingLinkGroup`
+
+| Member | Description |
+|---|---|
+| `add(chart, controller, context?)` | Join using a structural `DrawingLinkChart` and its controller, reconnecting known persisted lineage only. `DrawingLinkContextSource` accepts a static context or resolver. Repeated calls update the identity without duplicate listeners. |
+| `setContext(chart, context)` | Set `DrawingLinkContext` (`symbol`, `exchange`), or `undefined` to make the member ineligible. |
+| `share(chart, ids?)` | Explicitly send selected or all existing price-pane drawings. Returns the number shared. |
+| `setOptions({ enabled })` | Change the opt-in `DrawingLinkOptions` switch. Disabling clears previews. |
+| `options()` | Return a copy of the resolved enabled flag. |
+| `has(chart)` | Test membership. |
+| `remove(chart)` | Unsubscribe and clear previews, leaving committed drawings in place. |
+| `destroy()` | Remove every member and its listeners. |
+
+## Lifecycle and loops
+
+**Echoes are dropped by one group-wide guard.** A syncs B, B echoes back to A, and the pair
+either oscillates forever or blows the stack. Any member event that arrives *while the group
+is broadcasting* is an echo of that broadcast by definition, since a human cannot pan two
+charts in one call stack, so it is dropped. The guard covers all base channels together
+rather than one each: a symbol change that reloads data can move a viewport, and that
+second-order echo is the same bug wearing a different hat.
+
+**A destroyed chart leaves the group by itself.** `chart.destroy()` sets `isDestroyed` and
+emits a `destroy` event, and the group prunes on it, so a dead chart (and every listener
+closure it captured) is released immediately rather than at the next channel event, which for
+an idle grid is never. A `LinkChart` that is not a `Chart` may report neither, so members are
+also probed by pane count before every use: adding a primitive to a destroyed chart would
+otherwise resurrect a pane.
+
+`group.destroy()` is the explicit form, and `add()` on an already-destroyed chart is a no-op.
+A member let go either way, by its chart's destruction or the group's, has its drawing adapter
+`leave`, so the drawing sharer never holds a chart the group has let go.
+
+## Live demo: chart type and drawings
+
+One instrument at two intervals: four-hour bars on the left and the daily bars built from
+them on the right, linked on chart type and drawings. The trend line joins the lowest low and
+the highest high of the four-hour bars, in the order they happened, and it appears on the
+daily chart because both charts show the same instrument. Change the chart type and the
+right chart follows the left; choose **Trend line** and draw on either chart, and the other
+shows it.
+
+<RunnableExample height={400} code={`const HOUR = 3600, DAY = 86400;
+const T0 = 1700438400;                       // a Monday, 00:00 UTC
+
+// A row of controls above two charts side by side.
+el.style.display = 'flex';
+el.style.flexDirection = 'column';
+el.style.gap = '8px';
+const controls = document.createElement('div');
+// Clear of the frame edge, and of the badge in its top right corner.
+controls.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 64px 0 8px;font:12px system-ui,sans-serif';
+const row = document.createElement('div');
+row.style.cssText = 'display:flex;gap:10px;flex:1 1 0;min-height:0';
+el.appendChild(controls);
+el.appendChild(row);
+const box = function () {
+  const d = document.createElement('div');
+  d.style.cssText = 'flex:1 1 0;min-width:0;height:100%;position:relative';
+  row.appendChild(d);
+  return d;
+};
+const leftEl = box(), rightEl = box();
+
+// One instrument: forty days of four-hour bars, and the daily bars built from them.
+const fourHour = lib.generateBars(T0, 6 * 40, 4 * HOUR);
+const daily = [];
+fourHour.forEach(function (b) {
+  const day = Math.floor(b.time / DAY) * DAY, last = daily[daily.length - 1];
+  if (!last || last.time !== day) {
+    daily.push({ time: day, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume });
+  } else {
+    last.high = Math.max(last.high, b.high);
+    last.low = Math.min(last.low, b.low);
+    last.close = b.close;
+    last.volume += b.volume;
+  }
+});
+
+// Each chart names its instrument, which is what lets drawings cross between them.
+const make = function (host, bars) {
+  const chart = lib.createChart(host);
+  const series = chart.addSeries('candlestick');
+  series.setData(bars);
+  chart.fitContent();
+  chart.setDataContext({ symbol: 'DEMO', exchange: 'NSE' });
+  return { chart: chart, series: series, draw: new lib.DrawingController(chart) };
+};
+const left = make(leftEl, fourHour), right = make(rightEl, daily);
+
+// The link group owns the switches; the draw tier's sharer moves the drawings.
+const group = lib.createLinkGroup({ crosshair: true, viewport: false, chartType: true, drawings: true });
+const sharing = lib.createDrawingLinkGroup({ enabled: true });
+[left, right].forEach(function (m) {
+  group.add(m.chart, {
+    chartType: 'candlestick',
+    onChartType: function (id) {
+      m.chart.setSeriesType(m.series, id);
+      return m.chart.seriesType(m.series) === id;
+    },
+    drawings: {
+      join: function () { sharing.add(m.chart, m.draw); },
+      leave: function () { sharing.remove(m.chart); },
+    },
+  });
+});
+
+// A trend line joining the lowest low and the highest high, read off the bars.
+let low = fourHour[0], high = fourHour[0];
+fourHour.forEach(function (b) {
+  if (b.low < low.low) low = b;
+  if (b.high > high.high) high = b;
+});
+const ends = [{ time: low.time, price: low.low }, { time: high.time, price: high.high }]
+  .sort(function (a, b) { return a.time - b.time; });
+left.draw.add({ tool: 'trend-line', paneIndex: 0, style: {}, points: ends });
+
+const button = function (label, act) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = label;
+  b.style.cssText = 'padding:3px 10px;border-radius:4px;cursor:pointer;font:inherit;'
+    + 'border:1px solid light-dark(#c9d1d9,#3a4150);'
+    + 'background:light-dark(#ffffff,#1c212b);color:light-dark(#1f2937,#d1d4dc)';
+  b.addEventListener('click', act);
+  controls.appendChild(b);
+};
+[['candlestick', 'Candles'], ['bar', 'Bars'], ['line', 'Line'], ['area', 'Area']].forEach(function (t) {
+  button(t[1], function () {
+    left.chart.setSeriesType(left.series, t[0]);
+    group.setChartType(left.chart, t[0]);
+  });
+});
+button('Trend line', function () {
+  left.draw.setTool('trend-line');
+  right.draw.setTool('trend-line');
+});
+
+// Tear everything down with the example: the group first, so each chart leaves the sharer.
+const destroy = left.chart.destroy.bind(left.chart);
+left.chart.destroy = function () {
+  group.destroy();
+  sharing.destroy();
+  right.chart.destroy();
+  destroy();
+};
+return left.chart;`} caption="The trend line is computed from the four-hour bars and shared once; the daily chart holds its own copy, anchored at the same times and prices." />
+
+## Saving links in a workspace
+
+<Callout type="info">The chart type, drawings and missing-bar flags, named groups and `linkGroup` are since 2.5.10.</Callout>
+
+[Workspaces](/docs/workspaces) save the switches as the payload's `sync`, a `WorkspaceSync`.
+Every field added since the first release is optional, so every workspace saved before reads,
+and writes back, unchanged, and a host that builds `sync` itself keeps compiling.
+
+| Type or field | What it holds |
+|---|---|
+| `WorkspaceLinkChannels` | `crosshair`, `viewport`, `symbol` and `interval` (booleans, written since the first release), and optional `appearance`, `chartType` and `drawings` booleans and `whenMissing`. Named as `LinkOptions` names them, so a group's flags open with `createLinkGroup(channels)`. |
+| `WorkspaceSync` | The desk's channels, plus optional `groups`: up to 16 `WorkspaceLinkGroup`s. |
+| `WorkspaceLinkGroup` | A group's channels, its `id` (1 to 100 characters, unique) and the `name` a person gave it (1 to 120). |
+| `WorkspacePane.linkGroup` | Optional: the `id` of the group this chart is in. |
+
+```json
+"sync": {
+  "crosshair": false, "viewport": false, "symbol": false, "interval": false,
+  "groups": [
+    { "id": "a", "name": "Intraday", "crosshair": true, "viewport": true, "symbol": true,
+      "interval": false, "chartType": true, "drawings": true },
+    { "id": "b", "name": "Swing", "crosshair": true, "viewport": false, "symbol": false,
+      "interval": true }
+  ]
+}
+```
+
+- **Without `groups`**, the whole desk is one group on the flags beside it. That is how every
+  workspace saved before groups reads.
+- **With `groups`**, even an empty list, each chart is in the group its `linkGroup` names, or
+  in none when it has no `linkGroup`, and each group links on its own flags. A group with no
+  chart yet is kept.
+- A `linkGroup` that names an undeclared group, or any `linkGroup` while the desk declares no
+  groups, refuses the document with a `WorkspaceDocumentError`: either would link that chart
+  wrongly. So do duplicate group ids, a blank id or name, and a flag that is not a boolean.
+- An optional flag that is absent reads as the engine default (off, and `'nearest'`) and is not
+  written back.
+
+When opening a saved desk, pass only the flags to `createLinkGroup`: the group list, and each
+group's id and name, are not link options, and `options()` would report them back.
+
+```ts
+import { createLinkGroup, type LinkGroup } from 'openalgo-charts';
+import { parseWorkspaceDocument, type WorkspacePane } from 'openalgo-charts/workspace';
+
+const desk = parseWorkspaceDocument(saved);
+const { groups, ...deskFlags } = desk.sync;
+const named = new Map<string, LinkGroup>();
+for (const { id, name, ...flags } of groups ?? []) named.set(id, createLinkGroup(flags));
+const whole = groups === undefined ? createLinkGroup(deskFlags) : null;
+
+// The group a chart joins: the whole desk's, the one it names, or none.
+const groupOf = (pane: WorkspacePane): LinkGroup | null =>
+  whole ?? (pane.linkGroup === undefined ? null : named.get(pane.linkGroup) ?? null);
+```
+
+<Callout type="info">
+A reader older than groups drops `groups` and `linkGroup` and applies the flags beside them
+to every chart. When a desk has groups, turn a flag on there only when every chart can follow
+it together, such as symbol only when every chart shows one instrument; all off is always
+safe. A host applying a desk also refuses, per group, one whose symbol-linked group holds
+different instruments or whose interval-linked group holds different intervals, because
+joining a linked group converges it and would overwrite a chart saved on another.
+</Callout>
+
+## Linking something that is not a `Chart`
+
+The group takes a structural `LinkChart`, so a host can join a wrapper of its own (a chart
+inside a widget, a remote pane) as long as it can answer these:
+
+```ts
+interface LinkChart {
+  on(event: string, cb: (payload: unknown) => void): () => void;
+  getVisibleLogicalRange(): { from: number; to: number };
+  setVisibleLogicalRange(range: { from: number; to: number }): void;
+  readonly dataLayer: LinkDataLayer;   // indexToTime, timeToIndex, and the two Float forms
+  readonly isDestroyed?: boolean;      // set by Chart; the pane probe is the fallback
+  panes(): readonly unknown[];
+  addPrimitive(primitive: IPrimitive, paneIndex?: number): void;
+  removePrimitive(primitive: IPrimitive): void;
+}
+```
+
+`Chart` satisfies it with nothing to cast.
+
+## Doing the alignment yourself
+
+Both conversions are exported, pure, and take the structural `LinkDataLayer` rather than a
+live chart, so a host that wants its own linking policy (a shared indicator readout, a
+tooltip over four charts, a custom snap) does not have to re-derive them:
+
+```ts
+import { followerIndex, followerRange } from 'openalgo-charts';
+
+// Leader instant -> the follower's own bar, or null for "draw nothing".
+const i = followerIndex(follower.dataLayer, timeSec, 'hide');
+
+// Leader visible range -> the follower range showing the same wall-clock window.
+const r = followerRange(leader.dataLayer, follower.dataLayer, leader.getVisibleLogicalRange());
+if (r !== null) follower.setVisibleLogicalRange(r);
+```
+
+`followerIndex` returns `null` outside the follower's coverage or for an empty
+history. `followerRange` rejects empty histories, a follower with fewer than two
+bars, and invalid endpoints. It can extrapolate a valid time window beyond the
+follower's loaded data; that chart then shows empty space for the uncovered period.
+
+## Related
+
+- [Events](/docs/events) for `pan`, `zoom`, `crosshair:move` and the `destroy` lifecycle
+  event the group prunes on.
+- [Symbol Comparison](/docs/symbol-comparison) for the other answer to "two instruments at
+  once": one pane, one axis, rebased so equal moves land on equal pixels.
+- [Bar Cache](/docs/bar-cache), which is what keeps a four-chart grid from refetching the
+  same series four times.

@@ -1,0 +1,1016 @@
+/* ── tokens ─────────────────────────────────────────────────────
+   Two palettes, one set of names. Dark is the default; `data-theme="light"`
+   on <html> swaps every token and nothing below names a colour twice.
+   `color-scheme` is what the browser's own pieces read (the list a select
+   drops down, a scrollbar the stylesheet cannot reach), so it flips too. */
+:root {
+  color-scheme: dark;
+  /* Neutral greys, not a tinted navy: the page is the chart's own surface,
+     panels lift it a few percent toward white, and every hover and pressed
+     state is a white wash over that, so the chrome reads as one family with
+     the plot it frames. Colour is kept for meaning: the accent, the candle
+     pair, and amber for what is pinned. */
+  --bg: #151619; --bg-glow: transparent;
+  --panel: #1c1d20; --panel-2: #18191c; --elev: #2a2b2e; --elev-2: #333437; --elev-3: #404144;
+  --bd: #2a2b30; --bd-soft: #232428; --bd-hover: #3d3e45;
+  --tx: #d1d4dc; --tx-strong: #f0f3fa; --mut: #868a96; --faint: #63666e;
+  --acc: #2962ff; --acc-2: #f0f3fa; --acc-tx: #ffffff;
+  --on-bg: rgba(255,255,255,.10); --on-bd: transparent;
+  --ring: #2962ff; --ring-soft: rgba(41,98,255,.28);
+  --buy: #089981; --sell: #f23645; --amber: #e0b400;
+  /* Fills that carry white text: the candle pair is 3.6 and 3.9 to 1 under it, these 5.1 and 5.0. */
+  --buy-fill: #077d69; --sell-fill: #d32f3c;
+  --buy-tx: #22ab94; --sell-tx: #f7525f; --danger-tx: #f7525f;
+  --glass: rgba(28,29,32,.78); --glass-solid: rgba(28,29,32,.96); --scrim: rgba(0,0,0,.45);
+  --shadow: 0 8px 30px rgba(0,0,0,.5); --shadow-lg: 0 20px 60px rgba(0,0,0,.5);
+  --sb-thumb: rgba(178,181,190,.3); --sb-thumb-hover: rgba(178,181,190,.5);
+  --pill-bg: rgba(28,29,32,.94); --pill-bd: #2a2b30; --pill-tx: #b2b5be; --pill-mut: #868a96;
+  --swatch-bd: rgba(0,0,0,.45);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%23868a96' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --r: 8px; --h: 30px;
+}
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff; --bg-glow: transparent;
+  --panel: #ffffff; --panel-2: #f8f9fa; --elev: #f1f3f5; --elev-2: #e7e9ed; --elev-3: #d6d9df;
+  --bd: #d4dae3; --bd-soft: #e3e6eb; --bd-hover: #b7bec9;
+  --tx: #1e293b; --tx-strong: #0b1220; --mut: #5f6673; --faint: #8b919c;
+  --acc: #2962ff; --acc-2: #0b1220; --acc-tx: #ffffff;
+  --on-bg: rgba(30,41,59,.10); --on-bd: transparent;
+  --ring: #2962ff; --ring-soft: rgba(41,98,255,.2);
+  --buy: #089981; --sell: #f23645; --amber: #b88a00;
+  --buy-fill: #077d69; --sell-fill: #d32f3c;
+  --buy-tx: #067a63; --sell-tx: #c2253a; --danger-tx: #c62828;
+  --glass: rgba(255,255,255,.82); --glass-solid: rgba(255,255,255,.96); --scrim: rgba(15,23,42,.32);
+  --shadow: 0 8px 30px rgba(15,23,42,.14); --shadow-lg: 0 20px 60px rgba(15,23,42,.18);
+  --sb-thumb: rgba(30,41,59,.22); --sb-thumb-hover: rgba(30,41,59,.38);
+  --pill-bg: rgba(255,255,255,.96); --pill-bd: #d4dae3; --pill-tx: #334155; --pill-mut: #64748b;
+  --swatch-bd: rgba(0,0,0,.18);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%235f6673' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+* { box-sizing: border-box; }
+
+/* ── scrollbars ─────────────────────────────────────────────────
+   Every scrollable surface here sits on a panel, and the OS default is the
+   loudest sign a themed UI was left unfinished. Declared once at the root so
+   a new panel inherits it instead of being remembered about. Thumb one step
+   lighter than the panel, track invisible. */
+* { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--sb-thumb); border: 2px solid transparent;
+  background-clip: padding-box; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ── focus ──────────────────────────────────────────────────────
+   One ring for everything that can take the keyboard, drawn only for
+   keyboard focus: a pointer never leaves a ring behind. Text controls carry
+   their own glow on the border instead, so the ring stays off them. */
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+:focus:not(:focus-visible) { outline: none; }
+input:not([type=checkbox]):not([type=color]):not([type=range]):focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px var(--ring-soft); }
+/* The plot itself can hold focus (the rail hands it back on Escape); a ring
+   drawn inside its edge says so without fencing the whole page. */
+#chart:focus-visible, #chart2:focus-visible { outline-offset: -2px; }
+#chart[data-chart-focused="true"]::after, #chart2[data-chart-focused="true"]::after {
+  content: ''; position: absolute; inset: 0; z-index: 5;
+  border: 1px solid color-mix(in srgb, var(--ring) 45%, transparent); pointer-events: none;
+}
+/* Read by assistive technology, never drawn. */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+
+/* ── form controls ──────────────────────────────────────────────
+   A native blue tick and an OS select chevron are the two controls that
+   give a themed panel away, so neither is left to the browser. */
+input[type=checkbox] {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 0;
+  width: 15px; height: 15px; border: 1px solid var(--bd); border-radius: 4px;
+  background: var(--elev); cursor: pointer; display: inline-grid; place-content: center;
+  transition: background .12s, border-color .12s;
+}
+input[type=checkbox]:hover { border-color: var(--bd-hover); }
+input[type=checkbox]:checked { background: var(--acc); border-color: var(--acc); }
+/* The tick is two borders of an empty box, rotated: no glyph, no font, and
+   it stays crisp at any device pixel ratio. */
+input[type=checkbox]:checked::after {
+  content: ''; width: 4px; height: 8px; margin-top: -2px;
+  border: solid var(--acc-tx); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+input[type=checkbox]:disabled { opacity: .4; cursor: not-allowed; }
+#toolbar-fit:disabled, #fit:disabled { opacity: .45; color: var(--faint); cursor: not-allowed; }
+input[type=checkbox]:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+/* Radios in the same vocabulary: the checkbox's box made round, and a dot
+   in the accent rather than a filled plate, so a choice of two reads apart
+   from a switch. */
+input[type=radio] {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 0;
+  width: 15px; height: 15px; border: 1px solid var(--bd); border-radius: 50%;
+  background: var(--elev); cursor: pointer; display: inline-grid; place-content: center;
+  transition: border-color .12s;
+}
+input[type=radio]:hover { border-color: var(--bd-hover); }
+input[type=radio]:checked { border-color: var(--acc); }
+input[type=radio]:checked::after { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--acc); }
+input[type=radio]:disabled { opacity: .4; cursor: not-allowed; }
+input[type=radio]:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+select {
+  appearance: none; -webkit-appearance: none; background-repeat: no-repeat;
+  background-position: right 7px center; background-size: 11px;
+  background-image: var(--chevron);
+}
+select::-ms-expand { display: none; }
+/* The dropped-down list is the browser's; `color-scheme` picks its plate and
+   these pick the rows, so a light list never opens under a dark panel. */
+select option, select optgroup { background: var(--panel); color: var(--tx); }
+/* A colour input is a small rounded square, never a bar: same 5px vocabulary
+   as the .swatch below, one size up so it is comfortable to hit. The inner
+   swatch is styled too, or the OS draws its own plate inside ours. */
+input[type=color] {
+  padding: 0; cursor: pointer; appearance: none; -webkit-appearance: none;
+  background-color: var(--elev); border: 1px solid var(--bd); border-radius: 6px;
+}
+input[type=color]:hover { border-color: var(--bd-hover); }
+input[type=color]::-webkit-color-swatch-wrapper { padding: 3px; }
+input[type=color]::-webkit-color-swatch { border: 1px solid var(--swatch-bd); border-radius: 4px; }
+input[type=color]::-moz-color-swatch { border: 1px solid var(--swatch-bd); border-radius: 4px; }
+input.swatch { width: 26px; height: 26px; flex: none; color: transparent; caret-color: transparent; }
+/* A number field's spinner is another OS plate; the keyboard still steps it. */
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none; margin: 0; }
+/* Sliders: a thin track in the panel's own greys and a thumb in the accent. */
+input[type=range] { appearance: none; -webkit-appearance: none; height: 22px; margin: 0;
+  background: transparent; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--elev-3); }
+input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--elev-3); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px;
+  border-radius: 50%; background: var(--acc-2); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--bd); }
+input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%;
+  background: var(--acc-2); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--bd); }
+input[type=range]:focus-visible { outline: none; }
+input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--ring-soft); }
+input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--ring-soft); }
+
+html, body { margin: 0; height: 100%; }
+body {
+  background: radial-gradient(1100px 500px at 78% -12%, var(--bg-glow), transparent), var(--bg);
+  background-color: var(--bg);
+  color: var(--tx); font: 13px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+
+/* ── toolbars ───────────────────────────────────────────────── */
+.topbar, .subbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 14px; }
+.topbar { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border-bottom: 1px solid var(--bd-soft); }
+.subbar { padding: 7px 14px; background: var(--panel-2); border-bottom: 1px solid var(--bd-soft); color: var(--mut); }
+/* Mark only at rest; the wordmark unrolls to its right on hover. Animating
+   max-width (not display) keeps the reveal continuous, and the toolbar to
+   the right slides rather than jumping. */
+.brand { display: inline-flex; align-items: center; font-weight: 700; letter-spacing: .2px;
+  gap: 0; cursor: default; border-radius: 7px; color: var(--tx); text-decoration: none; }
+.brand[href] { cursor: pointer; }
+.brand-mark { width: 22px; height: 22px; flex: none; display: grid; place-items: center; }
+.brand-mark svg { width: 20px; height: 20px; fill: currentColor; color: var(--acc); }
+.brand-name { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  max-width: 0; opacity: 0; overflow: hidden;
+  transition: max-width .28s cubic-bezier(.22,.61,.36,1), opacity .2s ease, padding-left .28s cubic-bezier(.22,.61,.36,1); }
+.brand:hover .brand-name, .brand:focus-visible .brand-name { max-width: 220px; opacity: 1; padding-left: 8px; }
+@media (prefers-reduced-motion: reduce) { .brand-name { transition: none; } }
+.brand em { color: var(--acc-2); font-style: normal; font-weight: 700; font-size: 11px; letter-spacing: .8px;
+  border: 1px solid var(--on-bd); background: var(--on-bg); padding: 1px 6px; border-radius: 5px; }
+.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 8px var(--acc); }
+.group { display: inline-flex; align-items: center; gap: 6px; }
+.divider { width: 1px; height: 22px; background: var(--bd-soft); margin: 0 2px; }
+
+.field {
+  height: var(--h); background-color: var(--elev); color: var(--tx); border: 1px solid var(--bd);
+  border-radius: 7px; padding: 0 9px; font: inherit; outline: none; transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.field::placeholder { color: var(--faint); }
+.field:hover { border-color: var(--bd-hover); }
+.field:focus { border-color: var(--acc); box-shadow: 0 0 0 3px var(--ring-soft); background-color: var(--elev-2); }
+select.field { cursor: pointer; padding-right: 24px; }
+.field--sym { width: 118px; font-weight: 600; letter-spacing: .3px; }
+.field--qty { width: 64px; text-align: center; }
+
+.btn {
+  height: var(--h); display: inline-flex; align-items: center; gap: 6px; padding: 0 13px;
+  background: var(--elev); color: var(--tx); border: 1px solid var(--bd); border-radius: 7px;
+  cursor: pointer; font: inherit; font-weight: 600; transition: all .15s;
+}
+.btn:hover { border-color: var(--bd-hover); background: var(--elev-2); }
+.btn:active { transform: translateY(1px); }
+.btn--primary, .btn--primary:hover { background: var(--acc); color: var(--acc-tx); border-color: transparent; }
+.btn--primary:hover { filter: brightness(1.08); }
+.btn--ghost { color: var(--mut); }
+.btn--buy { background: var(--buy-fill); color: #ffffff; border-color: transparent; }
+.btn--sell { background: var(--sell-fill); color: #ffffff; border-color: transparent; }
+.btn--buy:hover, .btn--sell:hover { filter: brightness(1.08); }
+
+/* The readout now carries the cache verdict and the clipboard's replies, so
+   it has to stay legible. `flex-basis: 220px` is the floor it will accept on
+   the toolbar's own row: a wrapping flex container places items by their
+   content width and wraps before it shrinks anything, so with `auto` a
+   readout asking for its full 250px pushed the whole row over, and with a
+   tiny basis it joined the row and was squeezed to an ellipsis. Below about
+   1700px it takes a row of its own and stays readable; above that it shares
+   the toolbar's, right-aligned where it always was. */
+.status { margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end;
+  gap: 8px; color: var(--mut); flex: 1 1 220px; min-width: 0; max-width: 40vw; overflow: hidden; }
+.status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The feed's staleness badge, beside the readout. Amber: a warning, not a fault. */
+.badge--stale { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; margin-right: 8px;
+  border-radius: 5px; background: color-mix(in srgb, var(--amber) 14%, transparent); color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; flex: none; cursor: default; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--mut) 12%, transparent); }
+#status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+  padding: 4px 10px; border-radius: 7px; border: 1px solid var(--bd-soft); background: var(--elev); color: var(--mut); font-size: 12px; }
+.chk:hover { border-color: var(--bd-hover); color: var(--tx); }
+.chk input { width: 15px; height: 15px; }
+.lbl { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+
+/* ── dialogs ────────────────────────────────────────────────────
+   One card, one head, one foot, shared by the indicator, compare, text and
+   chart-settings dialogs: title left, close top right, actions bottom right
+   with the confirming one last, and any secondary control bottom left. */
+#setmodal, #workspacemodal, #templatemodal, #indsource, #chartdatamodal, #boxmodal { position: fixed; inset: 0; z-index: 60; background: var(--scrim);
+  display: flex; align-items: center; justify-content: center; }
+#setmodal[hidden], #workspacemodal[hidden], #templatemodal[hidden], #indsource[hidden], #chartdatamodal[hidden], #boxmodal[hidden] { display: none; }
+.set-card.source-card { width: min(720px, calc(100vw - 24px)); }
+#indsource-code { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 monospace; color: var(--tx); }
+.set-card.ws-card { width: min(480px, calc(100vw - 24px)); }
+.ws-card .set-head button, .source-card .set-head button { width: auto; padding: 0 8px; font: inherit; font-size: 12px; }
+.ws-body { gap: 10px; }
+.ws-body p { margin: 0; overflow-wrap: anywhere; }
+.ws-body .set-row { grid-template-columns: 0 100px minmax(0, 1fr); }
+.ws-body .set-ctl input, .ws-body .set-ctl select { width: 100%; }
+.csv-card .set-row { grid-template-columns: 0 126px minmax(0, 1fr); }
+#csv-studies { display: grid; gap: 6px; max-height: 150px; overflow: auto; font-size: 12px; color: var(--mut); }
+.csv-study { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.csv-study span { min-width: 0; overflow-wrap: anywhere; }
+.csv-study input { flex: none; margin-top: 2px; }
+.ws-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ws-actions button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ws-actions button[hidden] { display: none; }
+.ws-card .btn:disabled { opacity: .45; cursor: not-allowed; }
+.ws-autosave { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.ws-hint, #ws-notice { color: var(--mut); font-size: 12px; line-height: 1.5; }
+#ws-current { color: var(--tx); font-size: 12px; }
+#ws-error, .ws-error { color: var(--danger-tx); font-size: 12px; line-height: 1.5; }
+#ws-confirm, .ws-confirm { padding: 8px; border: 1px solid var(--bd); border-radius: 6px; }
+#ws-confirm p, .ws-confirm p { margin-bottom: 8px; font-size: 12px; }
+.set-card { width: 366px; max-height: 78vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--bd); border-radius: 12px;
+  box-shadow: var(--shadow-lg); overflow: hidden; }
+.set-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--bd-soft); font-weight: 650; color: var(--tx); }
+.set-head button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 6px;
+  background: transparent; color: var(--faint); font-size: 20px; line-height: 1; cursor: pointer; padding: 0; }
+.set-head button:hover { color: var(--tx); background: var(--elev-2); }
+.set-tabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--bd-soft); }
+.set-tab { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0;
+  border-bottom: 2px solid transparent; color: var(--mut); font: inherit; font-size: 12px; padding: 6px 10px; cursor: pointer; }
+.set-tab:hover { color: var(--tx); }
+.set-tab.is-on { color: var(--tx); border-bottom-color: var(--acc); }
+.set-tab svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+.set-tab:focus-visible { outline-offset: -2px; border-radius: 6px; }
+
+/* ── generated settings rows (indicator dialog and chart dialog) ──
+   Three columns: a switch slot, the label, the control. The switch slot is
+   empty on most rows and exists so the checkboxes of the paired-colour rows
+   line up in a column of their own:
+
+       [x] Body      [up] [down]
+       [x] Borders   [up] [down]
+
+   which is one row per property instead of a section header plus a stacked
+   Up and Down. That shape is the whole reason the densest tab fits without
+   a scrollbar. */
+.set-group { color: var(--faint); font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .8px; line-height: 15px; margin: 8px 0 1px; }
+.set-group:first-child { margin-top: 0; }
+.set-rows { display: contents; }
+/* A 3px gap with 24px rows: the row itself carries the breathing room, and
+   the densest tab (Appearance, 17 controls over 4 groups) has to fit in one
+   panel without a scrollbar. Groups get their air from the header margin. */
+.set-body { padding: 11px 14px; overflow: auto; display: grid; gap: 3px; align-content: start; }
+.set-row { display: grid; grid-template-columns: 15px 1fr 164px; align-items: center;
+  column-gap: 9px; min-height: 24px; }
+.set-row > label { grid-column: 2; color: var(--mut); font-size: 12px; cursor: pointer; }
+.set-row > .set-sw { grid-column: 1; }
+/* Help mark: a 13px ring after a label, muted until pointed at. Sized so it
+   never grows the 30px row, and inline so it stays with a wrapped label. */
+.set-help { display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; margin-left: 5px; vertical-align: -2px;
+  border: 1px solid var(--bd); border-radius: 50%; color: var(--faint);
+  font-size: 9px; font-weight: 600; line-height: 1; cursor: help; user-select: none; }
+.set-help:hover { color: var(--tx); border-color: var(--bd-hover); }
+.set-ctl { grid-column: 3; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.set-ctl:has([data-input-action]) { flex-wrap: wrap; }
+.oac-widget.host-input-actions { position: fixed; inset: 0; z-index: 80; display: block;
+  background: transparent; pointer-events: none; overflow: visible; }
+.set-ctl [data-input-action] { font-size: 11px; padding: 4px 8px; }
+.set-ctl textarea { width: 100%; min-width: 0; min-height: 76px; resize: vertical; box-sizing: border-box;
+  padding: 6px 8px; background: var(--elev); color: var(--tx); border: 1px solid var(--bd); border-radius: 6px;
+  font: inherit; font-size: 12px; }
+.set-input-error { grid-column: 2 / -1; color: var(--danger-tx); font-size: 11px; overflow-wrap: anywhere; }
+.set-input-error[hidden] { display: none; }
+.set-ctl [aria-invalid=true] { border-color: var(--danger-tx); }
+.set-ctl select, .set-ctl input[type=number], .set-ctl input[type=text], .set-ctl input[type=datetime-local] {
+  flex: 1 1 auto; min-width: 0; height: 24px; background-color: var(--elev); color: var(--tx);
+  border: 1px solid var(--bd); border-radius: 6px; padding: 0 8px; font: inherit; font-size: 12px;
+  outline: none; transition: border-color .12s, box-shadow .12s; }
+.set-ctl input::placeholder { color: var(--faint); }
+.set-ctl select { padding-right: 24px; cursor: pointer; }
+/* A generated form is a widget host, and the widget's own select rule sets
+   the whole background, chevron included; the page's chevron goes back on. */
+.set-body .set-ctl select { background-image: var(--chevron); background-repeat: no-repeat;
+  background-position: right 7px center; background-size: 11px; }
+.set-ctl select:focus, .set-ctl input:focus {
+  border-color: var(--acc); box-shadow: 0 0 0 3px var(--ring-soft); }
+/* A control with nothing behind it in the current context is shown, not
+   hidden, and not left live to change nothing: it is dimmed, its value is
+   still readable, and its tooltip says what is missing. `pointer-events`
+   goes on the input because a disabled input swallows the hover that would
+   otherwise show that tooltip; the row keeps it. */
+.set-row--off > label { color: var(--faint); cursor: not-allowed; }
+.set-row--off .set-ctl { cursor: not-allowed; }
+.set-row input:disabled, .set-row select:disabled { opacity: .45; pointer-events: none; }
+.set-ctl option:disabled { color: var(--faint); }
+.set-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 9px 14px; border-top: 1px solid var(--bd-soft); }
+/* Dialog buttons are one notch shorter than the toolbar's, so the furniture
+   takes as little of the panel's height as the form rows do. */
+.set-foot .btn { height: 28px; padding: 0 12px; }
+/* Dialog furniture: the secondary action sits bottom left, away from the
+   pair the user is aiming at. */
+.set-foot .set-lead { margin-right: auto; }
+.indlist { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+/* Active-indicator chips: one per chart.addIndicator() instance. */
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 9px;
+  border-radius: 7px; border: 1px solid var(--bd-soft); background: var(--elev);
+  color: var(--mut); font-size: 12px; }
+.chip b { color: var(--tx); font-weight: 600; }
+.chip .sw { width: 8px; height: 8px; border-radius: 50%; }
+.chip button { border: 0; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 2px 3px; border-radius: 4px; }
+.chip button:hover { background: var(--elev-3); color: var(--danger-tx); }
+/* A study the host protects: no remove button, a dashed edge in its place. */
+.chip.is-protected { border-style: dashed; padding-right: 9px; }
+.spacer { flex: 1 1 auto; }
+.hint { color: var(--faint); font-size: 12px; font-style: italic; }
+
+
+/* ── shared hover label for icon-only controls ─────────────── */
+/* One element fixed to the viewport, not one per button. A tip parented
+   inside a rail button was clipped at the rail's right edge, because the
+   rail scrolls and `overflow-y: auto` makes overflow-x auto with it. It
+   never takes pointer events: on a 32px button the tip lands under the
+   cursor and would swallow the click it is describing. */
+#tip { position: fixed; z-index: 200; left: 0; top: 0; max-width: 260px;
+  pointer-events: none; padding: 5px 9px; border-radius: 6px;
+  background: var(--elev-2); color: var(--tx); border: 1px solid var(--bd);
+  box-shadow: var(--shadow); font: 12px/1.4 system-ui, sans-serif;
+  opacity: 0; transition: opacity .09s ease; }
+#tip.is-on { opacity: 1; }
+.tip-spot { position: fixed; width: 1px; height: 1px; pointer-events: none; }
+#tip .tip-chord { color: var(--mut); margin-left: 10px; font-variant-numeric: tabular-nums; }
+/* Second line: a gesture the control also answers to, dimmer than its name. */
+#tip .tip-sub { display: block; margin-top: 2px; color: var(--faint); font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { #tip { transition: none; } }
+
+/* ── drawing: the left tool rail ────────────────────────────── */
+.rail { position: absolute; top: 0; left: 0; bottom: 0; width: 42px; z-index: 20;
+  background: var(--panel-2); border-right: 1px solid var(--bd-soft);
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; overflow-y: auto; }
+/* The buttons, the carets, the flyouts and the menus are the rail's own
+   rules, injected by src/rail.js beside the icon sprite so the glyphs and
+   the boxes they sit in cannot drift apart. Only the box and the offsets
+   live here. */
+.stage.has-rail #chart { left: 42px; }
+
+/* Compact host controls. The desktop rail remains the detailed tool browser;
+   this bar keeps the primary drawing and navigation actions within finger reach. */
+.mobilebar { display: none; }
+
+/* The properties bar, its popovers, the inline text editor and the level
+   editor carry their own rules (src/properties.js injects them on mount).
+   The swatch vocabulary stays here: it is the one every colour control on
+   the page shares. */
+.swatch { width: 20px; height: 20px; border-radius: 5px; border: 1px solid var(--swatch-bd); }
+
+
+/* ── Terminal shell bar ─────────────────────────────── */
+.shellbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; flex-wrap: wrap;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2)); border-bottom: 1px solid var(--bd-soft); }
+.legacy { display: none !important; }
+.tbtn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 9px;
+  background: transparent; border: 1px solid transparent; border-radius: 7px;
+  color: var(--tx); font: inherit; font-size: 13px; cursor: pointer; }
+.tbtn:hover { background: var(--elev); border-color: var(--bd-soft); }
+.tbtn--buy { color: var(--buy); border-color: color-mix(in srgb, var(--buy) 34%, transparent); }
+.tbtn--sell { color: var(--sell); border-color: color-mix(in srgb, var(--sell) 34%, transparent); }
+.tbtn--buy:hover { background: color-mix(in srgb, var(--buy) 14%, transparent); border-color: var(--buy); }
+.tbtn--sell:hover { background: color-mix(in srgb, var(--sell) 14%, transparent); border-color: var(--sell); }
+.tbtn.is-on { background: var(--on-bg); border-color: var(--on-bd); color: var(--acc-2); }
+.tbtn b { font-weight: 700; letter-spacing: .3px; }
+.tbtn--icon { padding: 0; width: 30px; justify-content: center; }
+.shellbar svg, .menu svg { width: 17px; height: 17px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.pills { display: inline-flex; background: var(--elev); border: 1px solid var(--bd-soft); border-radius: 8px; padding: 2px; }
+.pills button { height: 24px; padding: 0 9px; background: transparent; border: 0; border-radius: 6px;
+  color: var(--mut); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.pills button:hover { color: var(--tx); }
+.pills button.is-on { background: var(--elev-2); color: var(--acc-2); }
+.pills button:focus-visible { outline-offset: -1px; }
+/* the live symbol input, shown only while editing */
+#symbol.is-live { position: fixed; top: 44px; left: 96px; z-index: 70; display: block;
+  width: 320px; height: 34px; padding-right: 150px; }
+#symbol { display: none; }
+/* The operator keypad rides inside the live field's right edge, and is not
+   in the document at all until the field is. Fixed, because the field is.
+   The field reserves padding for it so a long expression never runs under. */
+#symkeys { display: none; }
+#symbol.is-live + #symkeys { display: inline-flex; position: fixed; top: 48px;
+  left: 268px; z-index: 71; }
+
+.menu { position: fixed; z-index: 80; min-width: 190px; max-height: 70vh; overflow: auto;
+  padding: 5px; background: var(--panel); border: 1px solid var(--bd); border-radius: 10px;
+  box-shadow: var(--shadow); }
+.menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px;
+  background: transparent; border: 0; border-radius: 6px; color: var(--tx);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.menu button:hover { background: var(--elev-2); }
+.menu button:disabled { opacity: .45; cursor: not-allowed; }
+.menu button:focus-visible { outline-offset: -2px; }
+.menu button em { margin-left: auto; color: var(--acc-2); font-style: normal; display: grid; }
+.menu button em svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.menu-find { position: sticky; top: 0; z-index: 1; background: var(--panel); padding: 6px; }
+.menu-find input { width: 100%; box-sizing: border-box; padding: 5px 7px; font: inherit;
+  font-size: 12px; color: var(--tx); background: var(--elev); border: 1px solid var(--bd);
+  border-radius: 6px; outline: none; }
+.menu-find input::placeholder { color: var(--faint); }
+.menu-find input:focus { border-color: var(--acc); }
+.menu-empty { padding: 10px 8px; color: var(--faint); font-size: 12px; text-align: center; }
+.menu-group { padding: 7px 8px 3px; color: var(--faint); font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .7px; }
+
+/* ── chart stage ────────────────────────────────────────────── */
+/* The split row. One child at rest; two once the second chart is open, and
+   the divider between them is draggable so a user can decide how much of
+   the width the follower gets. `min-width: 0` on both, or a flex child
+   refuses to shrink below its content and the right pane falls off. */
+.split { position: relative; display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.stage { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; }
+/* An armed tool sets --tool-cursor (see armCursor); the engine's own hover
+   hints are inline and still win while one is up. */
+#chart { position: absolute; inset: 0; cursor: var(--tool-cursor, crosshair); }
+
+/* ── loading, empty and error states ───────────────────────────
+   One overlay over the plot with a ghost chart behind and a card in front.
+   The ghost is a row of bars whose heights follow a wave; while bars are on
+   their way, three dots pulse at the centre of the stage and nothing else
+   is drawn: a chart that has no bars yet must not be impersonated by
+   something shaped like bars. Only the card takes the pointer: a failed
+   reload leaves the last chart underneath it, and that chart stays usable. */
+.chartstate { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center;
+  justify-content: center; pointer-events: none; }
+.chartstate[hidden] { display: none; }
+.stage.has-rail .chartstate { left: 42px; }
+.chartstate__dots { position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; gap: 7px; }
+.chartstate__dots[hidden] { display: none; }
+.chartstate__dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--tx); opacity: .12; }
+/* Negative delays, so every dot is already mid-phase on the first frame. */
+.chartstate[data-state="loading"] .chartstate__dots i {
+  animation: cs-dot 800ms ease-in-out infinite alternate;
+  animation-delay: calc(var(--i, 0) * -260ms); }
+@keyframes cs-dot { from { opacity: .12; } to { opacity: .55; } }
+/* A new instrument blanks the stage: the last symbol's candles must not sit
+   under this one's name while its bars are on the way. Reloading the same
+   instrument keeps them, because they are still the right bars. */
+.chartstate[data-state="loading"][data-blank="1"] { background: var(--bg); }
+.chartstate__card { position: relative; display: flex; align-items: flex-start; gap: 12px;
+  pointer-events: auto; min-width: 280px; max-width: min(440px, calc(100% - 32px));
+  padding: 16px 18px; border-radius: 12px; background: var(--panel); border: 1px solid var(--bd);
+  border-left-width: 3px; box-shadow: var(--shadow); }
+.chartstate__body { flex: 1 1 auto; min-width: 0; }
+.chartstate__title { font-weight: 650; font-size: 14px; color: var(--tx); }
+.chartstate__text { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--mut); }
+.chartstate__text:empty { display: none; }
+.chartstate__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.chartstate__actions .btn { height: 28px; padding: 0 12px; }
+/* `.btn` sets a display, which beats the hidden attribute: say it again here,
+   or a card shows the actions its state hid. */
+.chartstate__actions .btn[hidden] { display: none; }
+.chartstate[data-state="unsupported"] .chartstate__card { border-left-color: var(--amber); }
+.chartstate[data-state="empty"] .chartstate__card { border-left-color: var(--amber); }
+.chartstate[data-state="error"] .chartstate__card { border-left-color: var(--sell); }
+/* A load in flight is the dots alone. The card would only repeat the status
+   line, which already names the symbol and interval, so it is taken off
+   screen and the wording goes to the live region instead. */
+.chartstate[data-state="loading"] .chartstate__card { display: none; }
+.chartstate__spin { display: none; }
+
+/* ── toasts ─────────────────────────────────────────────────────
+   Bottom right, newest at the bottom, each with a coloured edge for its
+   kind and a dismiss of its own. The host takes no pointer so a stack of
+   them never blocks the chart underneath. */
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 90; display: flex; flex-direction: column;
+  gap: 8px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.toast { display: flex; align-items: flex-start; gap: 8px; padding: 9px 6px 9px 12px; border-radius: 9px;
+  background: var(--panel); color: var(--tx); border: 1px solid var(--bd); border-left: 3px solid var(--acc);
+  box-shadow: var(--shadow); font-size: 12.5px; line-height: 1.45; pointer-events: auto;
+  animation: toast-in .16s ease-out; }
+.toast--success { border-left-color: var(--buy); }
+.toast--error { border-left-color: var(--sell); }
+.toast__msg { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; padding-top: 2px; }
+.toast__x { flex: none; width: 26px; height: 26px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--faint); font-size: 17px; line-height: 1; cursor: pointer; padding: 0; }
+.toast__x:hover { background: var(--elev-2); color: var(--tx); }
+.toast.is-out { opacity: 0; transform: translateY(6px); transition: opacity .16s, transform .16s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* ── split view: the linked second chart ────────────────────── */
+.splitbar { flex: none; width: 5px; cursor: col-resize; background: var(--bd-soft);
+  transition: background .12s; }
+.splitbar:hover, .splitbar.is-drag { background: var(--acc); }
+.pane2 { flex: 0 0 44%; min-width: 0; display: flex; flex-direction: column;
+  background: var(--bg); }
+.pane2[hidden] { display: none; }
+/* Its own thin header: this chart has its own instrument and its own
+   timeframe, and saying so beside the plot is the only way the time-not-index
+   alignment is visible (a daily follower tracking an hourly leader). */
+.p2bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+  background: var(--panel-2); border-bottom: 1px solid var(--bd-soft); }
+.p2bar .pills button { height: 22px; padding: 0 7px; font-size: 11px; }
+.p2bar .tbtn { height: 26px; font-size: 12px; }
+.p2note { margin-left: auto; color: var(--faint); font-size: 11px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.p2plot { position: relative; flex: 1 1 auto; min-height: 0; }
+#chart2 { position: absolute; inset: 0; cursor: var(--tool-cursor, crosshair); }
+/* Full-screening the stage takes it out of the page flow, so it needs its
+   own background: the browser backdrop is black and the panes are only
+   painted where the chart draws. */
+.stage:fullscreen { background: var(--bg); }
+body:fullscreen { width: 100%; height: 100%; background: var(--bg); }
+body[data-fullscreen-pane] #splitbar,
+body[data-fullscreen-pane="1"] #pane2,
+body[data-fullscreen-pane="2"] main.stage { display: none; }
+body[data-fullscreen-pane="2"] #pane2 { flex: 1 1 auto; }
+body[data-fullscreen-pane="2"] #chart2 { left: 42px; }
+.shellbar .tbtn--chart { position: sticky; left: 0; z-index: 5; background: var(--panel); }
+.fsexit { position: absolute; top: 8px; right: 10px; z-index: 40; width: 30px; height: 30px;
+  display: grid; place-items: center; border: 1px solid var(--bd-soft); border-radius: 7px;
+  background: var(--elev); color: var(--mut); cursor: pointer; opacity: .35; transition: opacity .15s; }
+.fsexit:hover, .fsexit:focus-visible { opacity: 1; color: var(--tx); }
+.fsexit svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+/* OHLC legend overlay, sits on top of the plot, never intercepts the crosshair */
+#legend {
+  position: absolute; top: 14px; left: 16px; z-index: 10; pointer-events: none; white-space: nowrap;
+  padding: 8px 12px; border-radius: 10px; font: 12px/1.5 system-ui, sans-serif;
+  background: var(--glass); border: 1px solid var(--bd-soft); backdrop-filter: blur(8px); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+#legend:empty { display: none; }
+#legend .name { color: var(--tx-strong); font-weight: 700; font-size: 13px; }
+#legend .meta { opacity: .5; }
+#legend .lbl { opacity: .55; margin-left: 8px; }
+
+/* Bracket panel: pills glued to the entry/TP/SL prices, draggable */
+#bracket { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
+#bracket .bk {
+  position: absolute; left: 16px; transform: translateY(-50%); display: inline-flex; align-items: center;
+  gap: 12px; font: 11px/1 system-ui, sans-serif; padding: 7px 11px; border-radius: 9px; white-space: nowrap;
+  pointer-events: auto; box-shadow: 0 6px 18px rgba(0,0,0,.5); user-select: none; border: 1px solid transparent;
+}
+#bracket .bk b { color: #fff; font-weight: 700; }
+#bracket .bk.tp { background: var(--buy-fill); color: #ffffff; cursor: ns-resize; }
+#bracket .bk.sl { background: var(--sell-fill); color: #ffffff; cursor: ns-resize; }
+#bracket .bk.entry { background: var(--pill-bg); border-color: var(--pill-bd); color: var(--pill-tx); cursor: move; backdrop-filter: blur(6px); }
+#bracket .bk.entry b { color: var(--tx-strong); }
+#bracket .bk .pnl { font-weight: 800; color: #fff; }
+#bracket .bk button { font: 11px/1 system-ui; font-weight: 600; border-radius: 6px; padding: 5px 10px; cursor: pointer; border: 1px solid transparent; color: #fff; transition: filter .12s; }
+#bracket .bk button:hover { filter: brightness(1.12); }
+#bracket .bk .bk-x { background: transparent; color: var(--pill-mut); border-color: var(--pill-bd); padding: 4px 9px; }
+#bracket .bk .bk-x:hover { color: var(--tx-strong); border-color: var(--bd-hover); filter: none; }
+#bracket .bk .bk-buy { background: var(--buy); }
+#bracket .bk .bk-sell { background: var(--sell); }
+#bracket .bk .bk-mod { background: var(--elev-3); color: var(--tx); }
+
+/* right-click order menu */
+#ctxmenu {
+  position: fixed; z-index: 30; min-width: 210px; padding: 6px;
+  background: var(--elev); border: 1px solid var(--bd); border-radius: 11px;
+  box-shadow: var(--shadow); font: 13px system-ui, sans-serif;
+}
+#ctxmenu button {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; background: transparent;
+  border: 0; border-radius: 7px; color: var(--tx); padding: 7px 10px; cursor: pointer; transition: background .12s, color .12s;
+}
+#ctxmenu button:hover { background: var(--elev-2); }
+#ctxmenu [hidden] { display: none; }
+#ctxmenu button:disabled { opacity: .45; cursor: not-allowed; }
+#ctxmenu button:focus-visible { outline-offset: -2px; }
+/* The chord, right-aligned. The engine binds no keys, so a menu row is the
+   only place a user can find out that Ctrl+C means anything here. */
+#ctxmenu button em { margin-left: auto; padding-left: 18px; color: var(--faint);
+  font-style: normal; font-size: 11px; font-variant-numeric: tabular-nums; }
+#ctxmenu button.buy:hover { background: color-mix(in srgb, var(--buy) 18%, transparent); color: var(--buy-tx); }
+#ctxmenu button.sell:hover { background: color-mix(in srgb, var(--sell) 18%, transparent); color: var(--sell-tx); }
+#ctxmenu button::before { content: ''; width: 7px; height: 7px; border-radius: 2px; flex: none; background: var(--elev-3); }
+#ctxmenu button.buy::before { background: var(--buy); }
+#ctxmenu button.sell::before { background: var(--sell); }
+#ctxmenu button[data-act="cancelall"]::before { background: var(--faint); }
+#ctxmenu button.is-on::before { background: var(--acc-2); }
+#ctxmenu hr { border: 0; border-top: 1px solid var(--bd-soft); margin: 5px 8px; }
+
+/* ── replay transport ───────────────────────────────────────── */
+/* Floats over the plot rather than sitting under it: replay is a mode, and
+   a bar that appears inside the chart says so louder than one bolted to the
+   page. `bottom` clears the time axis so the dates stay readable. */
+#replaybar { position: absolute; left: 50%; bottom: 30px; z-index: 25; transform: translateX(-50%);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 6px 10px;
+  box-sizing: border-box; width: max-content; max-width: calc(100% - 20px);
+  background: var(--glass-solid); border: 1px solid var(--bd); border-radius: 10px;
+  box-shadow: var(--shadow); backdrop-filter: blur(8px); }
+#replaybar[hidden] { display: none; }
+#replaybar .rp-actions { display: flex; flex: none; gap: 2px; }
+#rp-scope, #rp-pick-scope { white-space: nowrap; }
+#replaybar button[aria-pressed=true], #replaypick button[aria-pressed=true] { background: var(--on-bg); border-color: var(--on-bd); color: var(--acc-2); }
+#replaybar svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; flex: none; }
+#replaybar button { height: 26px; min-width: 26px; display: inline-flex; align-items: center;
+  justify-content: center; padding: 0 7px; background: transparent; border: 1px solid transparent;
+  border-radius: 6px; color: var(--mut); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+#replaybar button:hover { background: var(--elev-2); color: var(--tx); }
+#replaybar button.is-on { background: var(--on-bg); border-color: var(--on-bd); color: var(--acc-2); }
+#replaybar input[type=range] { flex: 1 1 90px; min-width: 0; width: 190px; max-width: 100%; }
+#replaybar .rcount { color: var(--tx); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#replaybar .rclock { color: var(--faint); font-size: 11px; max-width: 100%; white-space: normal; }
+#replaybar .vsep { width: 1px; height: 18px; background: var(--bd-soft); flex: none; }
+#replaybar .rsub { color: var(--acc); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#replaybar .rsim { color: var(--pill-mut); border: 1px solid var(--pill-bd); border-radius: 4px; padding: 0 5px; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+#replaybar .rsim[hidden] { display: none; }
+
+/* ── select-bar prompt ──────────────────────────────────────────
+ * Sits where the transport will be, so the mode reads as one flow:
+ * choose a bar, then walk from it. */
+#replaypick { position: absolute; left: 50%; bottom: 30px; z-index: 26; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--bd); box-shadow: var(--shadow);
+  color: var(--tx); font-size: 12px; white-space: nowrap; }
+#replaypick[hidden] { display: none; }
+#replaypick { flex-wrap: wrap; width: max-content; max-width: calc(100% - 20px); box-sizing: border-box; white-space: normal; }
+#replaypick .hint { color: var(--faint); }
+#replaypick button { height: 26px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  background: var(--elev-2); border: 1px solid var(--bd); color: var(--tx); font: inherit; font-size: 12px; }
+#replaypick button:hover { background: var(--elev-3); }
+/* The pick cursor says "click to choose", not "drag the chart". */
+#chart.is-picking canvas, #chart2.is-picking canvas { cursor: crosshair; }
+
+/* ── leave-replay confirm ─────────────────────────────────────── */
+#replayleave { position: absolute; inset: 0; z-index: 40; display: flex; align-items: center;
+  justify-content: center; background: var(--scrim); }
+#replayleave[hidden] { display: none; }
+#replayleave .box { width: 340px; padding: 18px; border-radius: 10px; background: var(--panel);
+  border: 1px solid var(--bd); box-shadow: var(--shadow-lg); }
+#replayleave h4 { margin: 0 0 8px; font-size: 14px; color: var(--tx); }
+#replayleave p { margin: 0 0 16px; font-size: 12px; color: var(--faint); line-height: 1.5; }
+#replayleave .row { display: flex; justify-content: flex-end; gap: 8px; }
+#replayleave button { height: 28px; padding: 0 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--bd); background: var(--elev-2); color: var(--tx); font: inherit; font-size: 12px; }
+#replayleave button:hover { background: var(--elev-3); }
+#replayleave button.primary { background: var(--tx); color: var(--bg); border-color: var(--tx); }
+#replayleave button.primary:hover { filter: brightness(1.08); }
+
+/* ── chart snapshot menu ──────────────────────────────────────── */
+#snapmenu { position: absolute; z-index: 60; min-width: 220px; padding: 6px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--bd); box-shadow: var(--shadow); }
+#snapmenu[hidden] { display: none; }
+#snapmenu .head { padding: 6px 8px 4px; font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint); }
+#snapmenu button { width: 100%; display: flex; align-items: center; gap: 10px; height: 30px;
+  padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--tx);
+  font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+#snapmenu button:hover { background: var(--elev-2); }
+#snapmenu button:focus-visible { outline-offset: -2px; }
+#snapmenu button svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+#snapmenu .key { margin-left: auto; color: var(--faint); font-size: 11px; }
+
+/* ── compare dialog ─────────────────────────────────────────── */
+#cmpmodal { position: fixed; inset: 0; z-index: 61; background: var(--scrim);
+  display: flex; align-items: center; justify-content: center; }
+#cmpmodal[hidden] { display: none; }
+.cmp-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; color: var(--mut); }
+.cmp-row .sw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.cmp-row b { color: var(--tx); font-weight: 600; }
+.cmp-row .cmp-cov { margin-left: auto; min-width: 0; overflow-wrap: anywhere; color: var(--faint); font-size: 11px; }
+.cmp-row .btn { flex-shrink: 0; }
+.cmp-row .cmp-del { border: 0; background: transparent; color: var(--faint); font-size: 14px;
+  line-height: 1; cursor: pointer; padding: 2px 5px; border-radius: 4px; }
+.cmp-row .cmp-del:hover { background: var(--elev-3); color: var(--danger-tx); }
+
+/* ── sandbox broker panel ───────────────────────────────────── */
+/* Opened in the chart's overlay layer, so the widget tokens and control
+   styles (inputs, .oac-btn, scrollbars) already apply; these rules only lay
+   the panel out. */
+.acct-panel { width: min(430px, calc(100vw - 24px)); overflow: auto; padding-bottom: 8px; }
+.acct-panel > * { flex: none; }
+.acct-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 12px;
+  border-bottom: 1px solid var(--oac-bd-soft); font-weight: 650; color: var(--oac-tx-strong); }
+.acct-x { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--oac-faint); font-size: 18px; line-height: 1; cursor: pointer; }
+.acct-x:hover { color: var(--oac-tx); background: var(--oac-elev-2); }
+.acct-summary { padding: 9px 12px 0; }
+.acct-summary .oac-account { flex-wrap: wrap; row-gap: 5px; font-size: 11.5px; white-space: normal; }
+.acct-note { margin: 6px 12px 0; color: var(--oac-faint); font-size: 11px; line-height: 1.4; }
+.acct-group { margin: 10px 12px 5px; color: var(--oac-faint); font-size: 10px; font-weight: 700;
+  letter-spacing: .8px; text-transform: uppercase; }
+.acct-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 12px 6px; }
+.acct-field { display: inline-flex; align-items: center; gap: 5px; color: var(--oac-mut); font-size: 12px; }
+.acct-field[hidden] { display: none; }
+.acct-panel .acct-num { width: 76px; height: 26px; }
+.acct-expiry { height: 26px; padding: 0 6px; border: 1px solid var(--oac-bd); border-radius: var(--oac-radius);
+  background: var(--oac-elev); color: var(--oac-tx); color-scheme: inherit; font: inherit; font-size: 12px; }
+.acct-seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--oac-bd-soft); border-radius: 7px; }
+.acct-panel .acct-seg .oac-btn { height: 24px; padding: 0 9px; }
+.acct-panel .acct-row > .oac-btn { height: 28px; }
+.acct-panel .acct-row > .oac-btn:not(.oac-btn--primary) { border-color: var(--oac-bd); background: var(--oac-elev); }
+.acct-panel .acct-row > .oac-btn:not(.oac-btn--primary):hover:not(:disabled) { border-color: var(--oac-bd-hover); }
+.acct-actions { justify-content: flex-end; }
+.acct-panel .oac-btn:disabled { cursor: not-allowed; }
+.acct-preview, .acct-position { margin: 0 12px 6px; min-height: 16px; color: var(--oac-mut); font-size: 12px;
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.acct-position { color: var(--oac-tx); }
+.acct-msg { flex: 1 1 180px; min-width: 0; margin: 0; color: var(--oac-mut); font-size: 12px; overflow-wrap: anywhere; }
+.acct-preview.is-error, .acct-msg.is-error { color: var(--oac-danger); }
+.acct-fills { margin: 0 12px 8px; padding: 0; list-style: none; color: var(--oac-tx); font-size: 12px;
+  font-variant-numeric: tabular-nums; }
+.acct-fills li { padding: 2px 0; }
+.acct-fills .acct-empty { color: var(--oac-faint); }
+
+/* ── point and figure and Renko settings ───────────────────── */
+/* The generated rows' grid, with a control column wide enough for a size
+   box and its method side by side. Everything that is not a row (presets,
+   the hint, the price choice) starts where the labels do: past the switch
+   column and its gap. */
+.box-card { width: min(416px, calc(100vw - 24px)); }
+.box-card .set-row { grid-template-columns: 15px 1fr 200px; }
+#box-size { flex: 0 0 76px; }
+.box-presets { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0 3px 24px; }
+.box-preset { height: 22px; padding: 0 6px; border: 1px solid var(--bd); border-radius: 5px;
+  background: var(--elev); color: var(--mut); font: inherit; font-size: 11px;
+  font-variant-numeric: tabular-nums; cursor: pointer; }
+.box-preset:hover { border-color: var(--bd-hover); color: var(--tx); }
+.box-preset.is-on { background: var(--on-bg); border-color: var(--on-bd); color: var(--acc-2); }
+.box-hint { margin: 0 0 2px 24px; color: var(--faint); font-size: 11px; line-height: 1.4; }
+.box-radios { display: flex; align-items: center; gap: 18px; min-height: 24px; padding-left: 24px; }
+.box-radios label { display: inline-flex; align-items: center; gap: 7px; color: var(--mut); font-size: 12px; cursor: pointer; }
+.box-radios label:has(:checked) { color: var(--tx); }
+.box-error { margin: 0; padding: 0 14px 9px; }
+
+/* ── chart settings dialog ──────────────────────────────────── */
+/* Tabs down the left, controls on the right: the layout chartSettingsSchema()
+   describes. The rows themselves are the .set-row widgets the indicator
+   dialog already uses, so there is one form renderer, not two. */
+#chartset { position: fixed; inset: 0; z-index: 62; background: var(--scrim);
+  display: flex; align-items: center; justify-content: center; }
+#chartset[hidden] { display: none; }
+/* Sized so the label column stays about as wide as the longest label rather
+   than stretching a swatch half a panel away from the property it colours. */
+.cset-card { width: 560px; max-width: calc(100vw - 32px); max-height: 92vh;
+  display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--bd);
+  border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; }
+.cset-main { display: grid; grid-template-columns: 154px 1fr; min-height: 0; flex: 1 1 auto; }
+.cset-tabs { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px;
+  border-right: 1px solid var(--bd-soft); background: var(--panel-2); overflow-y: auto; }
+.cset-tab { display: flex; align-items: center; gap: 9px; text-align: left;
+  background: transparent; border: 0; border-radius: 7px;
+  color: var(--mut); font: inherit; font-size: 13px; padding: 7px 10px; cursor: pointer; }
+.cset-tab:hover { background: var(--elev); color: var(--tx); }
+.cset-tab.is-on { background: var(--on-bg); color: var(--acc-2); }
+.cset-tab svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#cset-body { align-content: start; }
+
+/* ── price-axis menu ────────────────────────────────────────────
+   Raised by a right-click on a price ladder. Toggles carry a tick, the four
+   scale modes carry a radio dot because exactly one of them is ever true,
+   and the level submenus fly out to the side. */
+.axmenu { position: fixed; z-index: 64; min-width: 250px; padding: 5px;
+  background: var(--panel); border: 1px solid var(--bd); border-radius: 10px;
+  box-shadow: var(--shadow); font: 13px system-ui, sans-serif; }
+.axmenu[hidden] { display: none; }
+.axrow { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 9px;
+  background: transparent; border: 0; border-radius: 7px; color: var(--tx);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.axrow:hover:not(:disabled) { background: var(--elev-2); }
+.axrow:focus-visible { outline-offset: -2px; }
+.axrow:disabled { color: var(--faint); cursor: default; }
+.axrow .axname { flex: 1 1 auto; }
+.axrow .chord { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums;
+  letter-spacing: .2px; }
+.axrow .axnote { color: var(--faint); font-size: 11px; font-style: italic; }
+/* The mark column is always drawn, empty or not, so labels stay on one
+   left edge whether or not anything is ticked. */
+.axrow .axmark { width: 14px; height: 14px; flex: none; display: grid; place-items: center; }
+.axrow .axmark svg { width: 13px; height: 13px; fill: none; stroke: var(--acc-2);
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* A greyed row still shows the state it is in: the tick dims with the label
+   rather than disappearing, so "off and unavailable" and "on but
+   unavailable" do not read the same. */
+.axrow:disabled .axmark svg { stroke: var(--faint); }
+.axrow .axdot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--bd);
+  background: var(--elev); }
+.axrow.is-on .axdot { border-color: var(--acc); background:
+  radial-gradient(circle, var(--acc-2) 0 3px, transparent 3.5px); }
+.axrow:disabled .axdot { opacity: .4; }
+.axrow .axarrow { color: var(--faint); display: grid; place-items: center; }
+.axrow .axarrow svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.axmenu hr { border: 0; border-top: 1px solid var(--bd-soft); margin: 5px 7px; }
+.axmenu .axhead { padding: 7px 9px 3px; color: var(--faint); font-size: 10px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .8px; }
+.axrow.is-open { background: var(--elev-2); }
+
+/* ── bottom bar ─────────────────────────────────────────────────
+   The widget tier's strip under the chart, beside the rail. Its root is a
+   layer over the whole stage, so the bar's menus and tips open over the
+   chart; only the strip itself takes the pointer. The chart, its state card
+   and the replay controls stand clear of it. */
+.host-bottombar.oac-widget { z-index: 23; }
+.host-bottombar > .oac-bottombar { position: absolute; left: 0; right: 0; bottom: 0; pointer-events: auto; }
+.stage.has-rail .host-bottombar > .oac-bottombar { left: 42px; }
+.stage.has-bottombar .inspect-layout, .stage.has-bottombar .chartstate { bottom: 28px; }
+.stage.has-bottombar #replaybar, .stage.has-bottombar #replaypick { bottom: 58px; }
+/* One Go to: the bar's wherever the bar shows, the toolbar's in the phone shell. */
+body:has(.stage.has-bottombar) #goto { display: none; }
+
+/* ── small screens and touch ────────────────────────────────────
+   Below 900px the rail becomes a strip along the bottom of the stage, its
+   flyouts and the popup menus become sheets, and every dialog takes the
+   whole screen. The phone shell (a touch bar in place of the rail) follows
+   the widget's container-size rule rather than the pointer alone: a narrow
+   window, or a phone on its side, which is a coarse pointer at most 960px
+   wide and under 600px tall. A tablet or a touch laptop keeps the rail. Any
+   coarse pointer, whatever the width, still grows every control to a 40px
+   target; the colour squares keep their 26px face inside a transparent
+   40px frame, so the standard's small swatch and the finger's target are
+   the same control. */
+@media (max-width: 900px) {
+  .shellbar { padding: 6px 8px; gap: 4px; }
+  .status { flex-basis: 100%; max-width: none; justify-content: flex-start; }
+  .rail { top: auto; right: 0; bottom: 0; width: auto; height: 52px; flex-direction: row;
+    overflow-x: auto; overflow-y: hidden; padding: 0 6px; gap: 4px;
+    border-right: 0; border-top: 1px solid var(--bd-soft); }
+  .stage.has-rail #chart, .stage.has-rail .chartstate { left: 0; bottom: 52px; }
+  #legend { top: 10px; left: 10px; }
+  #replaybar, #replaypick { max-width: calc(100% - 16px); }
+  #replaybar input[type=range] { width: 110px; }
+  .menu { left: 0 !important; right: 0; top: auto !important; bottom: 0;
+    max-height: 60vh; border-radius: 12px 12px 0 0; }
+  #symbol.is-live { left: 8px; width: calc(100vw - 16px); }
+  /* The field spans the viewport on a phone, so the keys anchor to its right. */
+  #symbol.is-live + #symkeys { left: auto; right: 12px; }
+  #setmodal, #cmpmodal, #chartset, #workspacemodal, #templatemodal, #indsource, #chartdatamodal { align-items: stretch; justify-content: stretch; }
+  .set-card, .cset-card { width: 100%; max-width: none; max-height: none; height: 100%;
+    border-radius: 0; border: 0; }
+  .set-card.ws-card { width: 100%; }
+  .set-card.source-card { width: 100%; }
+  .set-body { flex: 1 1 auto; }
+  .set-row { grid-template-columns: 15px 1fr minmax(150px, 46%); }
+  .cset-main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .cset-tabs { flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 8px;
+    border-right: 0; border-bottom: 1px solid var(--bd-soft); }
+  .cset-tab { flex: none; }
+  .toasts { right: 8px; }
+  .chartstate__card { max-width: calc(100% - 24px); }
+}
+@media (max-width: 900px), (pointer: coarse) and (max-width: 960px) and (max-height: 599px) {
+  body[data-fullscreen-pane="2"] #chart2 { left: 0; bottom: 50px; }
+  .shellbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 2px 8px; }
+  .shellbar::-webkit-scrollbar { width: 0; height: 0; }
+  .shellbar > * { flex: none; }
+  .shellbar .status { flex: 0 0 180px; max-width: 180px; }
+  .rail { display: none; }
+  .stage.has-rail #chart, .stage.has-rail .chartstate { left: 0; bottom: 52px; }
+  .stage.has-rail .inspect-layout { left: 0; bottom: 52px; }
+  #replaybar, #replaypick, .stage.has-bottombar #replaybar, .stage.has-bottombar #replaypick { bottom: 62px; }
+  .toasts { bottom: 60px; }
+  /* The touch bar takes the bottom bar's place. Two classes on the root, to
+     outrank the widget sheet's own display rule, which loads after this one. */
+  .host-bottombar.oac-widget > .oac-bottombar { display: none; }
+  body:has(.stage.has-bottombar) #goto { display: inline-flex; }
+  .mobilebar { position: absolute; z-index: 24; left: 0; right: 0; bottom: 0; height: 52px;
+    box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none; touch-action: pan-x;
+    background: var(--panel-2); border-top: 1px solid var(--bd-soft); }
+  .mobilebar::-webkit-scrollbar { width: 0; height: 0; }
+  .mobilebar select, .mobilebar button { flex: none; box-sizing: border-box; min-height: 44px;
+    border: 1px solid var(--bd); border-radius: 7px; background-color: var(--elev); color: var(--tx);
+    font: inherit; font-weight: 600; }
+  .mobilebar select { width: 142px; padding: 0 28px 0 10px; }
+  .mobilebar button { padding: 0 12px; cursor: pointer; }
+  .mobilebar button:disabled { color: var(--faint); cursor: default; }
+  .mobilebar button[aria-pressed="true"] { color: var(--acc-2); border-color: var(--on-bd); background: var(--on-bg); }
+}
+@media (max-width: 900px), (pointer: coarse) {
+  :root { --h: 40px; }
+  .tbtn, .btn, .field, .set-foot .btn, .chartstate__actions .btn, #replayleave button, #replaypick button,
+  .menu button, #ctxmenu button, .axrow, #snapmenu button, .set-tab, .cset-tab,
+  .set-head button, .toast__x, .cmp-row .cmp-del, .fsexit { min-height: 40px; }
+  .tbtn--icon, .set-head button, .toast__x, .cmp-row .cmp-del, .fsexit { min-width: 40px; }
+  .pills button, .p2bar .pills button { height: 40px; min-width: 40px; }
+  .p2bar .tbtn { height: 40px; }
+  #replaybar button { height: 40px; min-width: 40px; }
+  #replaybar input[type=range] { height: 40px; }
+  .set-row { min-height: 40px; }
+  .set-ctl select, .set-ctl input[type=number], .set-ctl input[type=text], .set-ctl input[type=datetime-local] { height: 36px; }
+  input[type=checkbox], .chk input { width: 22px; height: 22px; border-radius: 6px; }
+  input[type=checkbox]:checked::after { width: 6px; height: 11px; }
+  input.swatch { width: 40px; height: 40px;
+    border: 7px solid transparent; background-clip: padding-box; box-shadow: inset 0 0 0 1px var(--bd); }
+  input.swatch:hover { box-shadow: inset 0 0 0 1px var(--bd-hover); }
+  input[type=range]::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8px; }
+  input[type=range]::-moz-range-thumb { width: 16px; height: 16px; }
+}
+
+/* ── motion ─────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .chartstate[data-state="loading"] .chartstate__dots i, .toast { animation: none; }
+  .toast.is-out, .btn, .splitbar { transition: none; }
+}
+
+/* Symbol arithmetic keypad: small square keys beside the symbol field, muted
+   until pointed at, sized so they never grow the field row. */
+.symkeys { display: inline-flex; align-items: center; gap: 2px; }
+.symkey { width: 22px; height: 22px; padding: 0; display: inline-flex; align-items: center;
+  justify-content: center; background: transparent; border: 1px solid transparent; border-radius: 5px;
+  color: var(--mut); font-size: 12px; line-height: 1; cursor: pointer; user-select: none; }
+.symkey:hover { background: var(--elev); border-color: var(--bd); color: var(--tx); }
+.symkey:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+
+/* A chart and its information dock share one measured plot row. The widget
+   scope supplies component tokens without imposing the standalone shell grid. */
+.inspect-layout.oac-widget { position: absolute; inset: 0; display: flex; min-width: 0;
+  width: auto; height: auto; grid-template: none; background: transparent; overflow: hidden; }
+.stage.has-rail .inspect-layout { left: 42px; }
+.stage.has-rail .inspect-layout #chart,
+.p2plot .inspect-layout #chart2 { position: relative; inset: auto; flex: 1 1 auto; min-width: 0; height: 100%; }
+body[data-fullscreen-pane="2"] .p2plot .inspect-layout { left: 42px; }
+.oac-widget .host-symbol-search { min-width: 245px; padding: 7px; }
+.oac-widget .host-symbol-search > input { width: 100%; height: 32px; padding: 0 8px;
+  background: var(--oac-elev); border: 1px solid var(--oac-bd); border-radius: 5px; }
+.set-body.host-form-widget.oac-widget { width: auto; height: auto; background: transparent;
+  display: grid; grid-template-rows: none; grid-auto-rows: max-content; overflow: auto; }
+.set-body.host-form-widget.oac-widget:has(.oac-color__popover:not([hidden])) { overflow: visible; }
+.set-card:has(.oac-color__popover:not([hidden])),
+.cset-card:has(.oac-color__popover:not([hidden])) { overflow: visible; }
+.pb-pop.host-drawing-widget.oac-widget { display: block; width: auto; height: auto;
+  overflow: visible; background: var(--panel); }
+.pb-shared-color { justify-content: space-between; }
+.pb-pop .pb-shared-color .oac-color { flex: 0 0 27px; }
+@media (max-width: 900px) {
+  .stage.has-rail .inspect-layout { left: 0; bottom: 52px; }
+  body[data-fullscreen-pane="2"] .p2plot .inspect-layout { left: 0; bottom: 50px; }
+}
+
+/* ── grid view (grid.html) ─────────────────────────────────────
+   The bar reuses the shell's buttons; the stage is the chart grid itself,
+   which draws its own gaps, splitters and active outline from its tokens. */
+.gridbar { flex: none; }
+.gridbar .brand { gap: 8px; padding: 0 4px; }
+.gridbar__name { white-space: nowrap; }
+.gridbar__status { margin-left: auto; color: var(--mut); font-size: 12px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 42ch; }
+.gridbar svg { width: 16px; height: 16px; }
+.grid-stage { position: relative; flex: 1 1 0; min-height: 0; }
+.grid-stage > .oac-grid { position: absolute; inset: 0; }
+@media (max-width: 900px) {
+  .gridbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .gridbar__status { display: none; }
+}
+
+/* Inline rows in the generated settings form: the lead input's label, then
+   each member's own label and control in the control column. The column takes
+   what the label leaves and wraps its members inside itself on a narrow card,
+   so a row of three never widens the card or scrolls it sideways. */
+.set-row--inline { grid-template-columns: 15px auto minmax(0, 1fr); }
+.set-row--inline .set-ctl { flex-wrap: wrap; row-gap: 4px; }
+.set-inline { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.set-inline > label { color: var(--mut); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.set-inline--off > label { color: var(--faint); cursor: not-allowed; }
+.set-row--inline .set-ctl input[type=number] { flex: 0 0 64px; width: 64px; }
+.set-row--inline .set-ctl select { flex: 0 1 auto; }
+/* A condition hides these through the hidden attribute, which a display rule
+   of their own would otherwise outrank. */
+.set-row[hidden], .set-group[hidden], .set-inline[hidden], .set-row > [hidden] { display: none; }

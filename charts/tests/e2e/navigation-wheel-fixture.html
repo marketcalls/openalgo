@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;background:#151619}#chart{position:absolute;inset:0}</style></head>
+<body><div id="chart"></div><script type="module">
+import {createChart,darkTheme} from '/dist/openalgo-charts.mjs';
+const chart=createChart(document.getElementById('chart'),{theme:darkTheme,priceAxisWidth:64,renderer:'canvas2d'});
+const bars=Array.from({length:1000},(_,i)=>({time:1700000000+i*60,open:23800,high:i===688?24200:23810,low:23790,close:23805}));
+chart.addSeries('candlestick').setData(bars);
+chart.setVisibleLogicalRange({from:699,to:999});
+window.chart=chart;
+window.ready=true;
+</script></body></html>

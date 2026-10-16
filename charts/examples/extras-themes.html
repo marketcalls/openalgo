@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: themes, gradients, axis-drag</title>
+  <style>
+    html, body { margin: 0; height: 100%; font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 10px; align-items: center; background: #1c2030; color: #c7ccd8; }
+    select, button { background: #2a3046; color: #c7ccd8; border: 1px solid #3a4360; border-radius: 6px; padding: 4px 10px; }
+    #chart { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Extras</strong>
+    <label>Theme <select id="theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+    <label>Type <select id="type"><option value="area">Area</option><option value="baseline">Baseline</option><option value="candlestick">Candles</option><option value="line">Line</option></select></label>
+    <span style="opacity:.7">drag the PRICE axis up/down to expand/compress Y; drag the TIME axis left to expand X, right to compress X; drag the plot to pan time; wheel = zoom; dbl-click = reset view</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars, darkTheme, lightTheme } from '../dist/openalgo-charts.mjs';
+
+    const bars = generateBars(1_705_286_700, 300, 60);
+    let chart;
+    function build() {
+      if (chart) chart.destroy();
+      document.getElementById('chart').innerHTML = '';
+      const theme = document.getElementById('theme').value === 'light' ? lightTheme : darkTheme;
+      chart = createChart(document.getElementById('chart'), { theme, priceAxisWidth: 64 });
+      const type = document.getElementById('type').value;
+      const opts = type === 'baseline' ? { style: { baseValue: bars[0].close } } : {};
+      chart.addSeries(type, opts).setData(bars);
+      window.__chart = chart;
+    }
+    document.getElementById('theme').onchange = build;
+    document.getElementById('type').onchange = build;
+    build();
+  </script>
+</body>
+</html>

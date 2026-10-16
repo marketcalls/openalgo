@@ -1,0 +1,251 @@
+---
+title: Trading API
+description: Data-driven trade visualization - push positions, orders, and fills; the chart renders pills and markers and emits interaction events.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Trading API
+
+`chart.trading` is a **data-driven** trade layer. Your app pushes exchange state - positions,
+resting orders, bracket orders (TP/SL), and trade fills - and the chart renders broker-style
+segmented pill groups (`[badge][qty][label][close]`) and fill markers, with hover/dragging
+states and a drag ghost built in. When the user drags an order or clicks the close segment, the
+chart emits a `trading:*` event for your app to relay to the exchange.
+
+```
+Your app --setOrders()--> chart renders line + pill
+                          |
+   user drags the order   v
+Your app <--'trading:order_modify'-- chart  --> Exchange API
+```
+
+It is created on first access (`chart.trading`), works with any data source, and has no
+framework dependencies.
+
+These events are host intents, not broker acknowledgements. Reconcile with the
+broker's authoritative orders after a write, and enforce the host's capability,
+replay and confirmation policy before sending it. For non-order thresholds and
+notifications, use the separate [Alerts guide](/docs/alerts). The transactional
+alert-drag behavior in 2.4.7 belongs to `AlertController`.
+
+## Live example
+
+A long position pill, a resting limit order, TP/SL brackets, and two fill markers - all from
+`chart.trading`. Drag the order lines; the close boxes fire cancel/close events.
+
+<RunnableExample height={380} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 140, 3600);
+chart.addSeries('candlestick').setData(bars);
+const last = bars[bars.length - 1].close;
+
+chart.trading.setPositions([
+  { id: 'p1', side: 'long', entryPrice: last * 0.985, size: 1.5, pnlText: '+$1,240', pnlPercent: '+2.4%' },
+]);
+chart.trading.setOrders([
+  { id: 'o1', type: 'limit', side: 'buy', price: last * 0.95, size: 1 },
+  { id: 'tp', type: 'limit', side: 'sell', price: last * 1.04, size: 1.5, parentId: 'p1', bracketRole: 'tp' },
+  { id: 'sl', type: 'stop',  side: 'sell', price: last * 0.93, size: 1.5, parentId: 'p1', bracketRole: 'sl' },
+]);
+chart.trading.setTrades([
+  { id: 'f1', side: 'buy',  price: bars[40].close, size: 1, timestamp: bars[40].time * 1000, variant: 'chevron' },
+  { id: 'f2', side: 'sell', price: bars[95].close, size: 1, timestamp: bars[95].time * 1000, variant: 'bubble' },
+]);
+
+chart.trading.on('trading:order_modify', function (e) {
+  // send an amend to your exchange with e.newPrice
+});
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="Position, resting order, TP/SL brackets and fill markers. Order lines support drag previews; cancel and position-close controls emit host intents." />
+
+## Quick start
+
+```ts
+import { createChart } from 'openalgo-charts';
+
+const chart = createChart(el);
+chart.addSeries('candlestick').setData(bars);
+
+chart.trading.syncState({
+  positions: [{ id: 'pos_1', side: 'long', entryPrice: 50000, size: 1, pnlText: '+$100.00' }],
+  orders:    [{ id: 'ord_1', type: 'limit', side: 'buy', price: 48000, size: 0.5 }],
+  trades:    [{ id: 'fill_1', side: 'buy', price: 50000, size: 1, timestamp: Date.now() }],
+});
+
+chart.trading.on('trading:order_cancel', ({ orderId }) => exchange.cancel(orderId));
+```
+
+## Data models
+
+### `TradingPosition`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | unique id |
+| `side` | `'long' \| 'short'` | direction (line color) |
+| `entryPrice` | `number` | the pill is drawn at this price |
+| `size` | `number` | position size (shown on the pill) |
+| `pnlText` | `string?` | pre-formatted P&L shown on the pill (e.g. `'+$100.00'`) |
+| `pnlPercent` | `string?` | pre-formatted P&L percent |
+| `color` | `string?` | per-position line color override |
+| `readOnly` | `boolean?` | hide the close button |
+| `variant` | `'standard' \| 'line-only'` | `line-only` renders just the line + axis tag (no pill) |
+
+### `TradingOrder`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | unique id |
+| `type` | `'limit' \| 'stop' \| 'stop_limit'` | order type (shown on the pill) |
+| `side` | `'buy' \| 'sell'` | direction |
+| `price` | `number` | order price |
+| `size` | `number` | order size |
+| `parentId` | `string?` | link to a position/order (bracket child) |
+| `bracketRole` | `'tp' \| 'sl'` | take-profit / stop-loss (colors + `TP`/`SL` label) |
+| `color` / `lineStyle` / `lineWidth` | `string?` / `'solid'\|'dashed'\|'dotted'` / `number?` | line styling |
+| `readOnly` | `boolean?` | hide the cancel button |
+| `draggable` | `boolean?` | allow drag-to-modify (default: `!readOnly`) |
+| `variant` | `'standard' \| 'line-only'` | line-only skips the pill |
+
+### `TradingTrade`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | unique id |
+| `side` | `'buy' \| 'sell'` | marker color |
+| `price` | `number` | marker price |
+| `size` | `number` | fill size (used for `count` VWAP) |
+| `timestamp` | `number` | execution time in **milliseconds** |
+| `variant` | `'chevron' \| 'bubble' \| 'count'` | marker style (default `chevron`) |
+| `color` / `label` | `string?` | per-marker overrides |
+
+## API methods
+
+Access via `chart.trading`.
+
+| Method | Description |
+|---|---|
+| `setPositions(positions)` / `setOrders(orders)` / `setTrades(trades)` | replace all of that kind |
+| `syncState({ positions?, orders?, trades? })` | push several kinds in one call |
+| `upsertOrder(order)` | add or update one order |
+| `removeOrder(id)` | remove an order (and its bracket children) |
+| `addTrade(trade)` | add one fill |
+| `updatePositionPnl(id, pnlText?, pnlPercent?)` | refresh a position's P&L pill without recreating the line. The older form with a number first, `updatePositionPnl(id, pnl, pnlText?, pnlPercent?)`, still works but is deprecated, removed in 3.0.0: the number was never shown |
+| `getPositions()` / `getOrders()` / `getTrades()` | current state |
+| `clear()` | remove everything |
+| `setSettings(colors)` / `getSettings()` | global trading colors |
+| `setTickSchedule(schedule)` | snap dragged order and bracket lines to a `TickSchedule`; `null` (the default) keeps raw pointer prices; anything else throws a `TypeError`. `chart.setTickSchedule` sets it too, and the price alerts with it |
+| `on(event, cb)` / `off(event, cb)` | subscribe / unsubscribe (`on` returns an unsubscribe fn) |
+
+## Events
+
+Subscribe with `chart.trading.on(event, cb)`.
+
+| Event | Payload | Fires when |
+|---|---|---|
+| `trading:order_modify` | `{ orderId, newPrice, previousPrice }` | an order line is dragged and released; `newPrice` is on the tick schedule when one is set |
+| `trading:bracket_modify` | `{ parentId, bracketRole, newPrice }` | a TP/SL bracket line is dragged; `newPrice` is on the tick schedule when one is set |
+| `trading:order_cancel` | `{ orderId }` | the close box on an order pill is clicked |
+| `trading:position_close` | `{ positionId }` | the close box on a position pill is clicked |
+| `trading:order_click` | `{ order }` | an order pill body is clicked |
+| `trading:position_click` | `{ position }` | a position pill body is clicked |
+
+## Price ticks while dragging
+
+Without a schedule, a drag reports the price under the pointer, unrounded. Hand the
+chart the instrument's ticks and the dragged line previews, and both modify events
+carry, the nearest price the instrument can trade at, on the band the price is in:
+
+```ts
+import { TickSchedule } from 'openalgo-charts';
+
+// Host-supplied rules for this instrument (synthetic here): 0.01 below 100, 0.05 from 100.
+chart.setTickSchedule(new TickSchedule([{ tick: 0.01 }, { from: 100, tick: 0.05 }]));
+```
+
+A release at 100.33 then emits `newPrice: 100.35`, and one at 99.874 emits `99.87`.
+`chart.setTickSchedule` is the call for a host that keeps its own instrument metadata:
+the chart passes the schedule on to `chart.trading`, whether the layer exists yet or is
+built later, and dragged [price alerts](/docs/alerts#tick-snapping-and-keyboard-removal)
+and `chart.snapPrice` on the price pane round with it too. `chart.trading.setTickSchedule`
+sets the trading layer's drags alone, so on its own it leaves a dragged alert rounding on
+the scale's single tick.
+
+With validated metadata there is nothing to call: `instrument.applyTo(chart, interval)`
+hands the chart, and through it the controller, the instrument's `tickSchedule`, and a
+constant-tick instrument clears it, so a symbol switch never leaves the previous
+instrument's bands on a drag. Call `chart.setTickSchedule` after `applyTo` to override
+it.
+
+A one-band schedule, `[{ tick: 0.05 }]`, snaps a constant tick. Give `validatePrice` the
+same schedule as `tickSchedule`: its constant `tickSize` path returns
+`100.05000000000001` where the schedule returns `100.05`. Price limits are not checked
+here: run [`validatePrice`](/docs/trading#price-dependent-ticks) before sending the
+amend. See [Instrument metadata](/docs/instruments#price-dependent-ticks) for the band
+rules.
+
+## Settings
+
+Global colors override the defaults and re-render existing lines/markers:
+
+```ts
+chart.trading.setSettings({
+  longColor: '#00C853', shortColor: '#AA00FF',
+  orderColor: '#7C4DFF', tpColor: '#00BCD4', slColor: '#FF1744',
+  buyColor: '#26a69a', sellColor: '#ef5350',
+});
+```
+
+## Patterns
+
+**WebSocket sync** - push a full snapshot in one frame:
+
+```ts
+ws.on('account', (a) => chart.trading.syncState({ positions: a.positions, orders: a.orders }));
+```
+
+**High-frequency P&L** - `updatePositionPnl` only refreshes the pill text:
+
+```ts
+ws.on('mark', ({ price }) => {
+  const pnl = (price - entry) * size;
+  chart.trading.updatePositionPnl('pos_1', (pnl >= 0 ? '+' : '') + '
+});
+```
+
+**Confirm-then-render modify** - keep the exchange as the source of truth:
+
+```ts
+chart.trading.on('trading:order_modify', async ({ orderId, newPrice }) => {
+  const ok = await exchange.amend(orderId, newPrice);
+  if (!ok) chart.trading.setOrders(currentOrders); // revert to server state
+});
+```
+
+<Callout type="info">
+Timestamps on trades are **milliseconds** (markers snap to the nearest bar). Positions and
+orders are drawn at their price with the pill anchored near the right (price) axis. For the
+lower-level order engine, depth ladder, and validation, see
+[On-Chart Trading](/docs/trading).
+</Callout>
+ + pnl.toFixed(2));
+});
+```
+
+**Confirm-then-render modify** - keep the exchange as the source of truth:
+
+```ts
+chart.trading.on('trading:order_modify', async ({ orderId, newPrice }) => {
+  const ok = await exchange.amend(orderId, newPrice);
+  if (!ok) chart.trading.setOrders(currentOrders); // revert to server state
+});
+```
+
+<Callout type="info">
+Timestamps on trades are **milliseconds** (markers snap to the nearest bar). Positions and
+orders are drawn at their price with the pill anchored near the right (price) axis. For the
+lower-level order engine, depth ladder, and validation, see
+[On-Chart Trading](/docs/trading).
+</Callout>

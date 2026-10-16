@@ -1,0 +1,3093 @@
+---
+title: Indicators
+description: 112 built-in indicators via chart.addIndicator, plus the registry for your own.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import IndicatorSignalsDemo from '../../components/IndicatorSignalsDemo'
+import { Callout } from 'nextra/components'
+
+# Indicators
+
+## Typed study inputs
+
+Custom descriptors can declare `symbol`, `session`, `multiline`, `price` and
+`timestamp` inputs. The widget and reference host render these controls and keep
+their values as ordinary strings and numbers in saved layouts.
+
+| Kind | Value and editing |
+| --- | --- |
+| `symbol` | Instrument text, with search when the host supplies it. Optional `exchangeKey` stores the venue separately and defaults to empty text. Selecting a study instrument leaves the primary chart unchanged. |
+| `session` | A session such as `0930-1600:23456`, using the existing overnight and weekday rules. |
+| `multiline` | Literal text with newlines and whitespace preserved. |
+| `price` | A finite number with optional bounds and editor step. `pick: true` enables chart selection; an explicit `{ paneIndex, priceScaleId }` chooses the units for mixed-scale studies. |
+| `timestamp` | Absolute UTC seconds, including fractions. Manual editing preserves the exact number; `pick: true` selects a bar time. |
+
+Invalid values stay visible in the form with an error and do not change the
+study. Cancel restores accepted edits. New typed values are also validated by
+`setSettings` and before a saved layout replaces the chart.
+
+The established `time` input remains a wall-clock string in the chart timezone.
+Use `timestamp` for an instant that must remain unchanged when the timezone
+changes. Existing script descriptors keep their current input kinds.
+
+Try the [typed study inputs example](/examples#typed-study-inputs).
+
+### A time and a price that belong together
+
+A `price` input can name a `timestamp` input with `timeKey`. The two are then one
+point on the chart, a bar time and a price, such as the start of an anchored path.
+Add `anchor: true` for a handle on the chart at that point.
+
+```ts
+registerIndicator({
+  id: 'anchored-growth', name: 'Anchored growth', placement: 'onchart',
+  inputs: [
+    { key: 'from', type: 'timestamp', label: 'Anchor time', default: 0, pick: true },
+    { key: 'price', type: 'price', label: 'Anchor price', default: 0, pick: true, timeKey: 'from', anchor: true },
+    { key: 'rate', type: 'number', label: 'Growth per bar (%)', default: 0.1 },
+  ],
+  plots: [{ key: 'path', title: 'Path', type: 'line' }],
+  calc(bars, s) {
+    const start = bars.findIndex(bar => bar.time >= s.from);
+    return { path: bars.map((_, i) => (start < 0 || i < start ? null : s.price * (1 + s.rate / 100) ** (i - start))) };
+  },
+});
+```
+
+- **One pick sets both.** The settings dialog offers **Pick point on chart** on the
+  price row. One click captures the bar time and the price together
+  ([`chart.beginPick('point')`](/docs/interactions#picking-a-price-or-a-bar)) and
+  commits them in one settings patch; cancelling writes neither. The time row keeps
+  its own time-only pick.
+- **Pane and scale.** The point lives where a pick of the price reads it: the
+  explicit `pick` target, or else the one scale on one pane the study's plots use.
+  `studyInputTarget(chart, study, key)` from `openalgo-charts/draw` answers it. A
+  study whose plots sit on two scales needs an explicit target before it can be
+  picked or anchored.
+- **The anchor drags both.** The drawing tier draws a ring at the point in the
+  study's first plot colour. Dragging it previews the point with guides to both
+  axes, the time snapping to the bar under the pointer and both values held inside
+  the inputs' `min` and `max`, and the release writes both in one patch. Escape
+  cancels the drag. A study whose policy is `configurable: false` keeps its anchor
+  still, and a hidden study shows none. `new DrawingController(chart, { inputAnchors: false })`
+  turns anchors off.
+- **Undo takes a drag back.** Each drag is one step of the drawing undo history, in
+  the order it was made among the drawings, so Ctrl+Z, the rail's Undo and the phone
+  bar reverse it in the widget and the reference host. A step whose study was
+  removed since is passed over. A host control that sets the point another way, a
+  point pick of its own, calls `draw.moveInputAnchor(studyId, key, point)`: the move
+  is snapped, held in bounds and refused exactly as a drag is, and is one step too,
+  so Undo takes it back. A point written through the study's settings instead, as a
+  settings dialog's **Pick point on chart** does, is one step of the drawing history
+  as well: Undo takes the pick back first, then the drag before it, and never a
+  drawing made before them. A write the host makes inside `draw.untracked`, or
+  forces on a study the user may not configure, is its own and no step. With a chart-wide
+  [undo history](/docs/undo-history) on the chart, as the widget and the reference
+  host have, that history holds these steps instead
+  (`draw.delegateInputAnchorSteps`), so each move is taken back once, in order with
+  the drawings and the settings dialog's picks.
+- **Drawing placement comes first.** While a drawing tool is active, a press on the
+  anchor places the drawing, and while a pick is waiting, a click on it answers the
+  pick.
+
+`timeKey` must name a declared `timestamp` input that no other price pairs with, and
+`anchor` needs a `timeKey`; anything else raises `IndicatorInputError` when the
+descriptor is registered. Try the [anchored study input example](/examples#anchored-study-input).
+## Conditional inputs and inline rows
+
+From 2.5.6, an input that only matters for some settings can say so. Every input
+takes three optional presentation fields, which the widget's settings dialog and
+the reference host's form both honour:
+
+| Field | Effect in the form |
+| --- | --- |
+| `visibleWhen` | The input is shown only while the condition holds. A hidden input leaves the tab order, and whatever was typed into it is kept for when it returns. |
+| `activeWhen` | The input can be edited only while the condition holds. Otherwise it is disabled with its value readable and a reason naming the setting it depends on. |
+| `inline` | Consecutive inputs with the same id share one row, the first one's label leading it and each member keeping its own label. |
+
+A condition compares another setting with a value or a list of values, and
+combines with `all` and `any`:
+
+```ts
+inputs: [
+  { key: 'length', type: 'number', label: 'Length', default: 14, inline: 'len' },
+  { key: 'source', type: 'source', label: 'Source', default: 'close', inline: 'len' },
+  { key: 'mode', type: 'select', label: 'Mode', default: 'line',
+    options: [{ label: 'Line', value: 'line' }, { label: 'Bands', value: 'bands' }] },
+  { key: 'width', type: 'number', label: 'Band width', default: 2,
+    visibleWhen: { key: 'mode', is: 'bands' } },
+  { key: 'smoothing', type: 'select', label: 'Smoothing', default: 'none',
+    options: [{ label: 'None', value: 'none' }, { label: 'Moving average', value: 'sma' }] },
+  { key: 'smoothLength', type: 'number', label: 'Smoothing length', default: 5,
+    activeWhen: { key: 'smoothing', isNot: 'none' } },
+  { key: 'fill', type: 'boolean', label: 'Fill', default: false,
+    visibleWhen: { all: [{ key: 'mode', is: 'bands' }, { key: 'width', isNot: 0 }] } },
+]
+```
+
+`is` and `isNot` compare strictly, so the number 5 does not match the text `'5'`.
+Rules cascade: an input shown by a hidden input is hidden too, and one enabled by
+a hidden or disabled input stays disabled.
+
+The rules only change the form. `calc` receives every setting, a hidden value is
+kept rather than reset, and changing a controlling setting writes nothing else.
+The form re-reads the rules after every edit, announces rows that appear, leave,
+or change availability to screen readers, and moves focus off a control that
+just left. A hidden or disabled draft never blocks OK or Apply: a valid one is
+saved, an invalid one is left out and the stored value stands. **Defaults**
+restores hidden inputs as well, and **Cancel** restores the settings and so the
+rows they show.
+
+A host that renders its own form reads the same rules through `inputStates` and
+`inputConditionMet` from `openalgo-charts/widget`; see
+[the widget page](/docs/widget#use-individual-controls-in-your-own-host).
+
+Try the [conditional study inputs example](/examples#conditional-study-inputs).
+
+There are two ways to put an indicator on a chart, and they suit different jobs.
+
+**`chart.addIndicator(id)`** is the managed path: the chart creates the series, picks the
+pane, draws reference levels, recomputes on every data change, and cleans up on removal.
+The 112 built-ins live in the lazy `openalgo-charts/indicators` tier, 40.38 kB Brotli.
+
+```ts
+import { createChart } from 'openalgo-charts';
+import 'openalgo-charts/indicators';   // registers all 112 built-ins
+
+const chart = createChart(el);
+chart.addSeries('candlestick').setData(bars);
+
+chart.addIndicator('bollinger');                       // overlays the price pane
+const macd = chart.addIndicator('macd', { fastPeriod: 8 });  // gets its own pane
+macd.setSettings({ fastPeriod: 12 });
+macd.remove();
+```
+
+**The raw functions** (`ema`, `rsi`, `atr`, `supertrend`) stay in the base bundle for when
+you want to compute a value and plot it yourself. They use Wilder semantics to match
+`openalgo.ta`; the `*Series` helpers return `Bar[]` with `NaN` in warmup slots, which the
+line renderer skips as whitespace.
+
+`atr` seeds from the first `period` consecutive finite true ranges. A true range is missing
+when its own bar has no high or low, and when the bar before it has no close, so a missing
+close costs the ATR the next bar rather than its own. A missing true range is a `NaN` slot,
+the average is kept, and the next finite true range carries on from it. On complete data the
+values are the Wilder recurrence exactly, bit for bit. `supertrend` is `NaN` on a bar with no
+ATR or no close, and such a bar leaves the bands, the direction and the last close it used as
+they stood, so the next complete bar carries on from them and no flip is ever decided on a
+missing value.
+
+```ts
+import {
+  ema, emaSeries,            // EMA: raw values, and a plottable line series
+  rsi, rsiSeries,            // RSI
+  supertrend, supertrendSeries,
+  atr, trueRange,            // ATR (raw values) + true range
+} from 'openalgo-charts';
+```
+
+## The built-in catalog
+
+<RunnableExample height={420} tiers={['indicators']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('bollinger');
+chart.addIndicator('macd');
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+112 descriptors ship in the tier, split across the four categories a picker reads off
+`descriptor.category`: Trend (40), Momentum (31), Volatility (23), and Volume (18).
+
+`onchart` indicators overlay the price pane; `pane` indicators create their own. Override
+with `chart.addIndicator('rsi', {}, { paneIndex: 2 })`.
+
+**Key settings** below are the tunable inputs with their defaults. Every descriptor also
+carries per-plot style inputs (colour, width, line style, opacity) that are not listed
+here; read them off `indicatorStyleInputs(descriptor)` rather than hardcoding them. Ids
+are exact: `addIndicator` throws on one it does not know, so guard a user-supplied id
+with `hasIndicator(id)`. The moving averages, the bands and ten other studies also take a
+`timeframe`, which computes them on a higher timeframe folded from the chart's bars: see
+[a built-in on a higher timeframe](#a-built-in-on-a-higher-timeframe).
+
+### Trend (40)
+
+| Indicator | `id` | Placement | Key settings |
+|---|---|---|---|
+| 52 Week High/Low | `high-low-52-week` | onchart | colours only (the window is 52 weeks by definition) |
+| ADX / DMI | `adx` | pane | `period=14`, `adxPeriod=14` |
+| AlphaTrend | `alphatrend` | onchart | `coeff=1`, `AP=14`, `source=close`, `showsignalsk=true`, `novolumedata=false` |
+| Arnaud Legoux Moving Average | `alma` | onchart | `length=9`, `offset=0.85`, `sigma=6` |
+| Aroon | `aroon` | pane | `length=14` |
+| Aroon Oscillator | `aroon-oscillator` | pane | `length=14` |
+| Chande Kroll Stop | `chande-kroll-stop` | onchart | `p=10`, `x=1`, `q=9` |
+| Chandelier Exit | `chandelier-exit` | onchart | `length=22`, `atrLength=22`, `atrMultiplier=3` |
+| Consolidation and Breakout | `consolidation-breakout` | onchart | `markbreakout=true`, `colorinside=true` |
+| Double EMA | `dema` | onchart | `length=9`, `source=close` |
+| EMA | `ema` | onchart | `length=9`, `source=close` |
+| HalfTrend | `halftrend` | onchart | `amplitude=2`, `channelDeviation=2`, `atrPeriod=100`, `showChannels=true`, `showSignals=true`, `showLabels=true` |
+| Hull Moving Average | `hma` | onchart | `length=9`, `source=close` |
+| Hull Suite | `hull-suite` | onchart | `mode=Hma`, `length=55`, `lengthMult=1`, `source=close`, `switchColor=true`, `candleCol=false`, `visualSwitch=true` |
+| Ichimoku Cloud | `ichimoku` | onchart | `conversionPeriod=9`, `basePeriod=26`, `laggingSpanPeriod=52`, `displacement=26` |
+| Kaufman's Adaptive Moving Average | `kama` | onchart | `erLength=10`, `fastLength=2`, `slowLength=30`, `source=close` |
+| Least Squares Moving Average | `lsma` | onchart | `length=25`, `offset=0`, `source=close` |
+| Linear Regression Slope | `linreg-slope` | pane | `periods=14` |
+| MA Cross | `ma-cross` | onchart | `shortLength=9`, `longLength=26` |
+| CPR with Floor Pivot | `cpr` | onchart | `pivotMode=auto`, `showDaily=true`, `showWeekly=false`, `showMonthly=false`, `displaypivots=true`, `displaysupport=true`, `displayresistance=true`, `displaycpr=true`, `displayS1R1=false` |
+| McGinley Dynamic | `mcginley-dynamic` | onchart | `length=14` |
+| Median | `median` | onchart | `source=hl2`, `length=3`, `atrLength=14`, `atrMult=2` |
+| Moving Average Ribbon | `ma-ribbon` | onchart | four groups `showMaN=true`, `maNType=SMA`, `maNSource=close`, `maNLength` (20 / 50 / 100 / 200) for `N` = 1..4 |
+| Parabolic SAR | `parabolic-sar` | onchart | `start=0.02`, `increment=0.02`, `maximum=0.2` |
+| Seasonality | `seasonality` | pane | `startYear=2015`, `cutoffPercent=10`, `tablePosition=Center`, `tableWidth=100`, `tableHeight=95`, `showAvg=true`, `showStDev=true`, `showPos=true`, `ignoredMonths='YYYY-MM, YYYY-MM'` |
+| SMA | `sma` | onchart | `length=9`, `source=close` |
+| Smoothed Moving Average | `smma` | onchart | `length=7`, `source=close` |
+| Supertrend | `supertrend` | onchart | `period=10`, `multiplier=3` |
+| T3 Average | `t3` | onchart | `length=5`, `factor=0.7`, `source=close`, `highlightMovements=true` |
+| Time Weighted Average Price | `twap` | onchart | `anchor=session`, `source=ohlc4`, `offset=0` |
+| Trend Strength Index | `trend-strength-index` | pane | `length=14` |
+| Triple EMA | `tema` | onchart | `length=9` |
+| Variable Index Dynamic Average | `vidya` | onchart | `length=9`, `cmoLength=9`, `source=close` |
+| Volatility Stop | `volatility-stop` | onchart | `length=20`, `source=close`, `factor=2` |
+| Vortex Indicator | `vortex` | pane | `length=14` |
+| Williams Alligator | `alligator` | onchart | `jawLength=21`, `teethLength=13`, `lipsLength=8`, `jawOffset=8`, `teethOffset=5`, `lipsOffset=3` |
+| Williams Fractals | `williams-fractals` | onchart | `periods=2`, `showUp=true`, `showDown=true` |
+| WMA | `wma` | onchart | `length=9`, `source=close` |
+| Zero Lag EMA | `zlema` | onchart | `length=20`, `source=close` |
+| ZigZag | `zigzag` | onchart | `deviation=5` |
+
+### Momentum (31)
+
+| Indicator | `id` | Placement | Key settings |
+|---|---|---|---|
+| Awesome Oscillator | `awesome-oscillator` | pane | colours only (5 and 34 are the definition, not a preference) |
+| Balance of Power | `balance-of-power` | pane | colours only |
+| CCI | `cci` | pane | `period=20`, `constant=0.015`, `maType=SMA`, `maLength=20`, `bbMult=2` |
+| Chande Momentum Oscillator | `chande-momentum` | pane | `length=9`, `source=close` |
+| Connors RSI | `connors-rsi` | pane | `lenrsi=3`, `lenupdown=2`, `lenroc=100` |
+| Coppock Curve | `coppock-curve` | pane | `wmaLength=10`, `longRoCLength=14`, `shortRoCLength=11` |
+| Detrended Price Oscillator | `dpo` | pane | `period=21`, `isCentered=false` |
+| Elder-Ray Index | `elder-ray` | pane | `length=13` |
+| Fisher Transform | `fisher-transform` | pane | `length=9` |
+| Know Sure Thing | `know-sure-thing` | pane | `roclen1=10`, `roclen2=15`, `roclen3=20`, `roclen4=30`, `smalen1=10`, `smalen2=10`, `smalen3=10`, `smalen4=15`, `siglen=9` |
+| MACD | `macd` | pane | `fastPeriod=12`, `slowPeriod=26`, `signalPeriod=9`, `source=close` |
+| Momentum | `momentum` | pane | `len=10`, `source=close` |
+| Money Flow Index | `mfi` | pane | `period=14` |
+| Percentage Price Oscillator | `ppo` | pane | `source=close`, `fastLength=12`, `slowLength=26`, `signalLength=9`, `oscType=EMA`, `sigType=EMA` |
+| Pring's Special K | `special-k` | pane | `source=close`, `length1=100`, `length2=100` |
+| Rate of Change | `roc` | pane | `length=9`, `source=close` |
+| Relative Vigor Index | `relative-vigor-index` | pane | `length=10`, `offset=0` |
+| RSI | `rsi` | pane | `length=14`, `source=close`, `overbought=70`, `oversold=30` |
+| RSI Divergence Indicator | `rsi-divergence` | pane | `length=14`, `source=close`, `lbR=5`, `lbL=5`, `rangeUpper=60`, `rangeLower=5`, `plotBull=true`, `plotHiddenBull=false`, `plotBear=true`, `plotHiddenBear=false` |
+| Schaff Trend Cycle | `schaff-trend-cycle` | pane | `fastLength=23`, `slowLength=50`, `cycleLength=10`, `factor=0.5`, `source=close` |
+| SMI Ergodic Indicator | `smi-ergodic-indicator` | pane | `longlen=20`, `shortlen=5`, `siglen=5` |
+| SMI Ergodic Oscillator | `smi-ergodic-oscillator` | pane | `longlen=20`, `shortlen=5`, `siglen=5` |
+| Stochastic | `stochastic` | pane | `kPeriod=14`, `kSmoothing=1`, `dPeriod=3` |
+| Stochastic Momentum Index | `smi` | pane | `lengthK=10`, `lengthD=3`, `lengthEMA=3` |
+| Stochastic RSI | `stochastic-rsi` | pane | `smoothK=3`, `smoothD=3`, `lengthRSI=14`, `lengthStoch=14`, `source=close` |
+| TRIX | `trix` | pane | `length=18` |
+| True Strength Index | `tsi` | pane | `long=25`, `short=13`, `signal=13` |
+| Ultimate Oscillator | `ultimate-oscillator` | pane | `length1=7`, `length2=14`, `length3=28` |
+| WaveTrend Pro | `wavetrend` | pane | `source=hlc3`, `n1=10`, `n2=21`, `sigLen=4`, `obLevel1=60`, `obLevel2=53`, `osLevel1=-60`, `osLevel2=-53`, `filterZone=true`, `useInner=true`, `showMom=true`, `showRegDiv=true`, `showHidDiv=false`, `lbL=3`, `lbR=3`, `rangeUpper=60`, `rangeLower=5` |
+| Williams Percent Range | `williams-percent-r` | pane | `length=14`, `source=close` |
+| Woodies CCI | `woodies-cci` | pane | `cciTurboLength=6`, `cci14Length=14` |
+
+### Volatility (23)
+
+| Indicator | `id` | Placement | Key settings |
+|---|---|---|---|
+| ATR | `atr` | pane | `period=14` |
+| Average Daily Range | `average-daily-range` | pane | `length=14` |
+| BBTrend | `bb-trend` | pane | `shortLength=20`, `longLength=50`, `stdDevMult=2` |
+| Bollinger Bands | `bollinger` | onchart | `length=20`, `stdDev=2`, `source=close` |
+| Bollinger Bands %b | `bollinger-percent-b` | pane | `length=20`, `source=close`, `mult=2` |
+| Bollinger BandWidth | `bollinger-bandwidth` | pane | `length=20`, `source=close`, `mult=2`, `expansionLength=125`, `contractionLength=125` |
+| Chaikin Volatility | `chaikin-volatility` | pane | `periods=10`, `rocLookback=10` |
+| Chop Zone | `chop-zone` | pane | colours only (nine zone colours) |
+| Choppiness Index | `choppiness-index` | pane | `length=14`, `offset=0` |
+| Donchian Channels | `donchian` | onchart | `length=20`, `offset=0` |
+| Envelope | `envelope` | onchart | `length=20`, `percent=10`, `source=close`, `exponential=false` |
+| Historical Volatility | `historical-volatility` | pane | `length=10`, `per=1` |
+| Keltner Channels | `keltner-channel` | onchart | `length=20`, `mult=2`, `source=close`, `exp=true`, `bandsStyle=Average True Range`, `atrlength=10` |
+| Mass Index | `mass-index` | pane | `length=10` |
+| Moving Average Channel | `ma-channel` | onchart | `upperLength=20`, `lowerLength=20`, `upperOffset=0`, `lowerOffset=0` |
+| Range Analysis | `range-analysis` | pane | `showAverage=false`, `avgLength=3` |
+| Relative Volatility Index | `relative-volatility-index` | pane | `length=10`, `offset=0`, `maType=SMA`, `maLength=14`, `bbMult=2` |
+| Standard Deviation | `standard-deviation` | pane | `periods=5`, `deviations=1` |
+| Standard Error | `standard-error` | pane | `length=14` |
+| Standard Error Bands | `standard-error-bands` | onchart | `periods=21`, `errors=2`, `method=Simple`, `averagePeriods=3` |
+| Ulcer Index | `ulcer-index` | pane | `source=close`, `length=14` |
+| Volatility Squeeze | `volatility-squeeze` | pane | `length=20`, `bbMult=2`, `kcMult=1.5` |
+| Williams VIX Fix | `williams-vix-fix` | pane | `pd=22`, `bbl=20`, `mult=2`, `lb=50`, `ph=0.85`, `pl=1.01`, `hp=false`, `sd=false` |
+
+### Volume (18)
+
+| Indicator | `id` | Placement | Key settings |
+|---|---|---|---|
+| Accumulation/Distribution | `adl` | pane | colours only |
+| Chaikin Money Flow | `chaikin-money-flow` | pane | `length=20` |
+| Chaikin Oscillator | `chaikin-oscillator` | pane | `short=3`, `long=10` |
+| Ease of Movement | `ease-of-movement` | pane | `length=14`, `divisor=10000` |
+| Elder Force Index | `elder-force-index` | pane | `length=13` |
+| Klinger Oscillator | `klinger-oscillator` | pane | colours only |
+| Negative Volume Index | `nvi` | pane | `maLength=255` |
+| Net Volume | `net-volume` | pane | colours only |
+| Open Interest | `open-interest` | pane | colours only |
+| Open Interest Change | `open-interest-change` | pane | colours only |
+| Open Interest Buildup | `open-interest-buildup` | onchart | `unchanged=neutral` |
+| On-Balance Volume | `obv` | pane | `maType=None`, `maLength=9`, `bbMult=2` |
+| Percentage Volume Oscillator | `pvo` | pane | `fastLength=12`, `slowLength=26`, `signalLength=9`, `oscType=EMA`, `sigType=EMA` |
+| Positive Volume Index | `pvi` | pane | `maLength=255` |
+| Price Volume Trend | `pvt` | pane | colours only |
+| Volume | `volume` | pane | colours only |
+| Volume Weighted Moving Average | `vwma` | onchart | `length=20`, `source=close`, `offset=0` |
+| VWAP | `vwap` | onchart | `anchor=session`, `source=hlc3`, `offset=0`, `calcMode=stdev`, `showBand1=true`, `bandMult1=1`, `showBand2=false`, `bandMult2=2`, `showBand3=false`, `bandMult3=3` |
+
+Adding the **same indicator more than once** gives each instance its own colours:
+three EMAs in one default blue are indistinguishable on the chart and in the
+legend alike. Only colour keys you leave unset are filled, so
+`chart.addIndicator('ema', { color: '#123456' })` always wins, and the first
+instance keeps whatever the descriptor chose.
+
+For `cpr`, every high and low in the prior period must be finite. One nonfinite
+extreme invalidates that period until the next existing session or calendar
+boundary; a complete subsequent period recovers. Only the final close is used.
+This does not change the existing schedule, display controls or pivot formulas.
+
+A missing input costs the running studies only the bars it covers, except where a row says
+otherwise:
+
+| Study | A bar with a missing input |
+|---|---|
+| `atr`, and the studies that read it: `keltner-channel`, `chandelier-exit`, `chande-kroll-stop`, `median`, `halftrend` | A missing high or low leaves that bar's true range out, and a missing close the next bar's, which reads it. The average is kept and resumes on the next finite true range; a leading gap moves the first reading later. A study that also runs a window, such as `chande-kroll-stop` or `median`, loses the bars whose window holds the gap. |
+| `supertrend` | A bar with no ATR or no close is absent and leaves the bands, the direction and the last accepted close as they were. A missing close costs its own bar and the next, and no flip is decided on it. |
+| `volatility-stop` | The ATR under it resumes as above, but the stop does not hold across a gap: a bar with no true range restarts it at the source, as the reference definition does, and a missing source restarts it after the gap. Its level, and sometimes its side, then differ from complete data for some bars. |
+| `vwap` | A missing price, or a NaN or infinite volume, leaves the bar absent and the totals untouched. An undefined volume is a bar that traded nothing. |
+| `twap` | A missing price is skipped and not counted. |
+| `obv` | A NaN or infinite volume counts as nothing traded, so the bar prints the carried total. A missing close adds nothing on its own bar or on the next, which compares with it; both print the carried total. |
+| `adl` | A NaN or infinite volume counts as nothing traded, so the bar prints the carried total. A bar missing its high, low or close, or whose span or term overflows, is absent and the total stays where it was. |
+| `parabolic-sar` | A bar missing its high, low or close is skipped with the stop, trend and acceleration unchanged. The seed is the first two complete bars, and the clamp reads the two complete bars before each step. |
+| `tema` | Absent when any of its three averages is, or when `3 * ema1 - 3 * ema2 + ema3`, added left to right, is not finite. |
+
+`vwap` and `twap` still restart on a missing bar that opens a new anchor period.
+
+## VWAP
+
+`vwap` is a volume-weighted average with a resettable anchor and three optional
+standard-deviation band pairs. Seven plots in all: the average plus an upper and lower
+band for each of three multipliers, of which only the first pair is on by default.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `anchor` | `session` | `session`, `week`, `month`, `quarter`, `year`, or `continuous`. |
+| `source` | `hlc3` | Any `IndicatorSource`. |
+| `offset` | `0` | Shift the whole study left or right, in bars (-500..500). |
+| `calcMode` | `stdev` | `stdev` for standard-deviation bands, `percent` for a fixed percentage of the average. |
+| `showBand1` / `bandMult1` | `true` / `1` | Band pair 1, drawn by default. |
+| `showBand2` / `bandMult2` | `false` / `2` | Band pair 2. |
+| `showBand3` / `bandMult3` | `false` / `3` | Band pair 3. |
+
+A hidden band still declares its plot and returns a `null` column, so turning one on is a
+`setSettings` call. Each pair also declares a fill, giving three nested shaded envelopes
+when all three are on. The average draws in `#2962ff`; each pair has its own colour key
+(`band1Color`, `band2Color`, `band3Color`) shared by its upper line, lower line, and fill.
+
+<RunnableExample height={400} tiers={['indicators']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+chart.addIndicator('vwap', { anchor: 'continuous', showBand2: true });
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="VWAP with two standard-deviation band pairs, each shading the region it encloses." />
+
+<Callout type="info">
+**Every anchor resets on the chart's calendar**, which is `Asia/Kolkata` until you set
+[`timezone`](/docs/timezones) to something else, so a period test never straddles the UTC
+midnight seam and a US symbol can be anchored on New York's days rather than India's.
+`chart.setTimezone(...)` recomputes the study, so the bands move with the axis. `week` is
+Monday-based; `continuous` never resets, giving a running VWAP over all loaded data.
+</Callout>
+
+## HalfTrend
+
+A trend level that deliberately does not move with price. Two state machines run at once:
+`trend` is what is drawn, and a flip is *armed* before it fires. While a down-flip is armed
+the indicator tracks the running maximum of the `amplitude`-bar low, and the flip only
+happens when the mean high drops under that maximum **and** the bar closes below the
+previous bar's low. Needing both a mean crossing and a close beyond the prior extreme is
+what keeps the line flat through noise. On a flip the new level starts from where the other
+side ended, which is why it steps instead of jumping to price.
+
+Every visual layer is independently toggleable: `showChannels` for the half-ATR bands,
+`showSignals` for the flip dots, `showLabels` for the Buy/Sell plates.
+
+<RunnableExample height={380} tiers={['indicators']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+chart.addIndicator('halftrend', { amplitude: 2, channelDeviation: 2 });
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} caption="HalfTrend: stepped level, half-ATR channel, trend-tinted ribbon, and Buy/Sell labels." />
+
+## ZigZag
+
+The swings left once every move smaller than `deviation` percent is filtered out, by the
+percent-reversal definition. While a swing rises, its end is the highest high since it
+began. A bar whose low is at least `deviation` percent below that high confirms the high as
+a swing point and starts a falling swing at that bar's low; a falling swing is the mirror.
+A move of exactly the deviation reverses, and a bar that makes a new extreme extends the
+swing even when its other end would also have reversed it.
+
+The `zigzag` column holds each swing point's price on its own bar, and nothing on the bars
+between. The legs are drawn as shapes, so a leg stays straight on a logarithmic scale, in
+the plot's colour, opacity, thickness and line style; the last leg is dashed.
+
+**Only the last leg repaints.** A tick that makes a new extreme moves the leg's end onto the
+forming bar, and the bar it left reads empty again. A tick that retraces by the deviation
+confirms the end and starts a new last leg on the forming bar. A corrected bar can move the
+end back. Confirmed swing points never move, and the live result always equals a full
+calculation of the same bars.
+
+## 52 Week High/Low
+
+The highest high and the lowest low of the 52 weeks ending with each bar, as two step lines.
+The window is calendar time in the chart's timezone, not a bar count: the 364 days that end
+on the bar's own day, so a high made on a Friday leaves the window on the Friday 52 weeks
+later, whatever holidays fall between. A bar prints only once the loaded history begins
+before its window. A chart with less than a year of history therefore draws nothing rather
+than a shorter range under a 52 week name; on an intraday chart the study needs a year of
+that interval loaded.
+
+<RunnableExample height={400} tiers={['indicators']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 520, 86400);
+chart.addSeries('candlestick').setData(bars);
+
+chart.addIndicator('zigzag', { deviation: 4 });
+chart.addIndicator('high-low-52-week');
+
+chart.setVisibleLogicalRange({ from: 380, to: 522 });
+return chart;`} caption="ZigZag at 4 percent with its last leg dashed, and the 52 week high and low once a year of history is loaded." />
+
+The other five studies added with these pin their first bar and their flat-window rule:
+
+| Study | First value | A window that did not move |
+|---|---|---|
+| `zlema` | bar `lag + length - 1`, with `lag = floor((length - 1) / 2)` | not applicable |
+| `vidya` | bar `cmoLength`, seeded on the source itself | no momentum: the line holds |
+| `elder-ray` | bar `length - 1`, where its EMA starts | not applicable |
+| `schaff-trend-cycle` | bar `slowLength + 2 * cycleLength - 3` (67 at the defaults) | repeats the previous reading; before the first one, nothing |
+| `volatility-squeeze` | state at `length - 1`, momentum at `2 * length - 2` | flat closes shrink the bands onto the basis, so the squeeze is on unless the channel is flat too |
+
+## Signal markers
+
+A descriptor can return bar-anchored markers as well as plots. A plot is a column of
+prices drawn as a line or a histogram; a signal is a discrete event with a name, and no
+plot expresses that. `markers` runs after every `calc`, so it reads the values it just
+produced:
+
+```ts
+registerIndicator({
+  id: 'my-cross',
+  name: 'My Cross',
+  placement: 'onchart',
+  inputs: [{ key: 'showLabels', type: 'boolean', label: 'Show Labels', default: true }],
+  plots: [{ key: 'signal', type: 'line', title: 'Signal', colorKey: 'color' }],
+  calc: (bars, s) => ({ signal: /* ... */ [] }),
+  markers: ({ bars, values, settings }) => {
+    if (settings.showLabels === false) return [];   // returning [] clears the layer
+    return values.signal.flatMap((v, i) =>
+      v === null ? [] : [{
+        time: bars[i].time, position: 'atPrice' as const, price: v,
+        shape: 'labelUp' as const, size: 'small' as const,
+        color: '#2962ff', text: 'Buy',
+      }]);
+  },
+});
+```
+
+The runtime creates the marker layer lazily, so an indicator without the hook costs
+nothing. By default, `markerAnchor: 'plot'` binds it to the first plot. Set
+`markerAnchor: 'price'` on an overlay descriptor to measure `aboveBar` against the
+primary candle's high and `belowBar` against its low. The option applies to indicators
+on the price pane, in whatever slot it sits; a study on its own pane, or a chart without a primary series, uses the first
+plot instead. The marker follows the selected series' scale, including a moved axis,
+and rebinds when that series is replaced. To put some marks on the candles from a study
+in its own pane, or to measure them against a plot other than the first, give those
+marks a [target](#drawing-and-marker-targets).
+
+A missing or `null` first-plot value can use the instrument's bar at the same time
+when the indicator is on the price pane and both series share the same price scale. A finite
+plot value still wins. Instrument prices are never substituted into an oscillator
+pane or a different scale. An unanchored bar-relative marker is skipped; `atPrice`,
+`paneTop` and `paneBottom` can position themselves without a plot value. Every marker
+still needs a time present on the chart's shared time axis. Hiding the indicator
+clears its markers too.
+
+`text` may carry `\n`. A `labelUp` / `labelDown` plate stacks the rows and sizes itself to
+the widest one, staying centred on its anchor so the tail still points at the bar; a free
+`text` marker writes its rows outward from the anchor, so a block above a bar grows upward
+instead of back over the candle.
+
+Marker text can have its own `textColor`, `fontSize`, `fontFamily`, `bold`, `italic`
+and `textAlign`. Size is positive finite CSS pixels; family is a nonempty CSS
+font-family list. These fields do not change the glyph color, preset size or
+anchor. With no overrides, label plates keep contrasting semibold text and other
+shapes keep normal text in the glyph color. `bold: false` removes a label plate's
+semibold weight. Default text size is `max(9, markerSizePx(size))`, and the default
+family is `system-ui, sans-serif`.
+
+`textAlign: 'left' | 'center' | 'right'` aligns multiline rows inside a block that
+stays centered on the marker; omitted means center. Opted-in text styles use their
+measured bounds and clip paint and hits to the plot. Hit targets retain the 8px
+anchor radius. Invalid new fields reject an entire `setMarkers` replacement
+before mutation. Replacing or detaching the marker layer clears old hit positions.
+
+```ts
+{ time: bar.time, position: 'belowBar', shape: 'circle', size: 'small',
+  color: '#ef5350', text: 'Signal\nConfirmed', textColor: '#dce7ff',
+  fontSize: 14, fontFamily: 'ui-monospace, monospace', italic: true }
+```
+
+Six built-ins use the hook:
+
+| Indicator | What it marks |
+|---|---|
+| `halftrend` | A Buy or Sell plate at each trend flip, suppressed by `showLabels: false`. |
+| `williams-fractals` | An up or down triangle at each confirmed fractal, filtered by `showUp` / `showDown`. |
+| `rsi-divergence` | `Bull`, `Bear`, `H Bull`, and `H Bear` labels on the RSI line, one per enabled `plot*` input. |
+| `consolidation-breakout` | A triangle at a range breakout, suppressed by `markbreakout: false`. |
+| `alphatrend` | A Buy or Sell plate where the level crosses its own two-bar lag. |
+| `wavetrend` | A tinted dot at each signal-line cross, plus `R` and `H` plates for regular and hidden divergences, filtered by `showRegDiv` / `showHidDiv`. |
+
+See [markers](/docs/primitives-and-plugins#markers--event-badges) for the shape catalogue.
+
+## Source access and legend controls
+
+Set `IndicatorDescriptor.hasSource: true` when the host can show the indicator's code.
+Its legend then offers a source button beside settings. Clicking it emits
+`indicatorSource` with `{ instanceId, indicatorId, paneIndex }`; the engine stores no
+source code and opens no dialog. The host owns the source and the interface that
+displays it. Descriptors without the flag, including built-ins, have no source button.
+
+```ts
+chart.on('indicatorSource', ({ instanceId, indicatorId, paneIndex }) => {
+  showIndicatorSource({ instanceId, indicatorId, paneIndex });
+});
+
+chart.setLegendIconSize(24);
+// Equivalent at creation: createChart(el, { legendIconSize: 24 }).
+// Equivalent update: chart.applyOptions({ legendIconSize: 24 }).
+```
+
+`showIndicatorSource` above is an application callback. Button sizes default to 16
+media pixels and are clamped to 12..28 when drawn. A chart-wide size also applies to
+later host-added legends, so adjacent rows share one height; it overrides their
+individual `PaneLegendOptions.iconSize`. Nonfinite chart sizes are ignored.
+`chart.legendIconSize()` returns the configured value, or `undefined` when unset.
+This setting is a host preference outside `ChartState`; save it separately and
+reapply it when replacing the chart. The yfinance host includes it in its chart
+settings and [named workspaces](/docs/workspaces).
+
+Fully transparent plot colors, including `transparent`, zero-alpha hex and supported
+`rgba()` colors, contribute no blank reading to the legend. Unrecognized color syntax
+keeps its reading. The plot's data remains available to calculations and markers.
+
+<IndicatorSignalsDemo />
+
+The same [live example](/examples#indicator-source-and-marker-anchors) is on the
+examples page. Each signal label starts a fresh drawing path, so a later label cannot
+refill an earlier label's tail with its own color.
+
+## Tables
+
+An indicator whose output is a matrix rather than a column of prices has nowhere to put
+it: a plot is one price per bar, and a monthly return heatmap is neither. `table` is an
+optional hook beside `markers`, returning rows of cells and the options to draw them
+with. Like `markers`, it runs after every `calc`, so it reads the values it just
+produced:
+
+```ts
+registerIndicator({
+  id: 'my-scoreboard',
+  name: 'My Scoreboard',
+  placement: 'pane',
+  inputs: [],
+  // A pane needs at least one plot to exist. An all-null column draws nothing
+  // and contributes nothing to autoscale, which is what a table-only indicator
+  // wants: the pane gets no price axis at all.
+  plots: [{ key: 'placeholder', type: 'line', title: 'Scoreboard' }],
+  calc: (bars) => ({ placeholder: new Array(bars.length).fill(null) }),
+  table: ({ bars, values, settings }) => ({
+    rows: [
+      [{ text: 'Metric', bold: true }, { text: 'Value', bold: true }],
+      [{ text: 'Bars' }, { text: String(bars.length) }],
+      [{ text: 'Last' }, { text: bars.at(-1).close.toFixed(2), bgColor: '#089981' }],
+    ],
+    options: { position: 'top-right', cellWidth: [80, 60], cellHeight: 18 },
+  }),
+});
+```
+
+Returning `null` draws nothing, which is how an indicator says it has too little data to
+tabulate. A header row on its own reads as a broken table rather than an empty one.
+
+**`TableCell`**
+
+| Field | Type | Description |
+|---|---|---|
+| `text` | `string` | Cell contents. An empty string draws the fill without any label. |
+| `bgColor` | `string?` | Cell fill. Transparent when omitted, so the pane shows through. |
+| `textColor` | `string?` | Derived from `bgColor` for contrast when omitted. |
+| `align` | `'left' \| 'center' \| 'right'` | Default `center`. |
+| `fontSize` | `number?` | Overrides the table's `fontSize` for this cell, for a heading row. |
+| `bold` | `boolean?` | |
+
+**`ChartTableOptions`**
+
+| Option | Default | Description |
+|---|---|---|
+| `position` | `'bottom-right'` | One of nine keywords: `top`/`middle`/`bottom` crossed with `left`/`center`/`right`. |
+| `margin` | `8` | Gap from the pane edge, media px. |
+| `cellWidth` | `64` | Column width in media px, a per-column array, or `'auto'` to fit each column to its widest cell including padding. |
+| `cellHeight` | `18` | Row height in media px. |
+| `widthPercent` | unset | Total width as a percentage of the plot. Column proportions are preserved, so a per-column array still controls the relative widths. `0` or unset sizes from `cellWidth`. |
+| `heightPercent` | unset | Total height as a percentage of the plot. `0` or unset sizes from `cellHeight`. |
+| `rowWeights` | unset | Relative row heights, one per row, defaulting to `1`. A separator row wants something like `0.3`, or a stretched table makes the rule between two sections as tall as the sections. |
+| `fontSize` | `11` | Shrinks automatically when a stretched row is shorter than this. |
+| `borderColor` | unset | Grid line colour. Omit to draw no grid. |
+| `borderWidth` | `1` | |
+| `background` | unset | Backdrop behind the whole grid, drawn before the cells. |
+| `id` | unset | Hit-test id, so a host can route clicks the way it does for other primitives. |
+
+The table is a screen-space primitive: it is pinned to the pane, not to bars, so it stays
+put while the chart pans underneath and survives a zoom untouched. It takes no part in
+autoscale.
+
+
+From 2.5.0, `cellWidth: 'auto'` measures each column at its rendered font size,
+including bold and per-cell overrides. Short rows clamp the measured font just
+as they clamp drawing. Empty columns retain 28 px. With `fontSize: 'auto'`,
+unoverridden cells use an 11 px baseline for width measurement to avoid circular
+sizing; drawing can still shrink to the final cell. `widthPercent` scales those
+measured proportions. Text always clips to its own cell, including fixed widths.
+
+One built-in uses the hook: `seasonality`, whose entire output is the grid. Its
+`tableWidth` and `tableHeight` inputs default to 100% and 95%, so it fills the pane.
+
+`ChartTable` is also usable directly as a primitive without an indicator. See
+[primitives](/docs/primitives-and-plugins).
+
+## Drawings
+
+A marker pins a glyph to a bar and a level runs a horizontal line across the pane.
+Neither draws geometry between two arbitrary points, and a plot cannot either, since a
+plot is one value per bar: a pivot-to-pivot trendline, a supply zone, a measured-move
+projection have nowhere to live. `draws` is the hook for those. Like `markers` and
+`table` it runs after every `calc`, and the list it returns replaces the previous one
+wholesale, so returning `[]` clears the layer.
+
+Anchors are **times and prices, never bar indices**. Paging older history in at the left
+edge shifts every logical index, and a trendline pinned to an index would slide off its
+pivots the moment it did.
+
+```ts
+import { registerIndicator } from 'openalgo-charts';
+import { pivotHigh, nulls } from 'openalgo-charts/indicators';
+
+registerIndicator({
+  id: 'pivot-ray',
+  name: 'Pivot Ray',
+  category: 'Trend',
+  placement: 'onchart',
+  inputs: [
+    { key: 'left',  type: 'number', label: 'Left bars',  default: 5, min: 1, max: 50 },
+    { key: 'right', type: 'number', label: 'Right bars', default: 5, min: 1, max: 50 },
+    { key: 'color', type: 'color',  label: 'Color',      default: '#f5a524' },
+  ],
+  // The output is geometry, not a value per bar, so the only plot is an all-null
+  // placeholder: it draws nothing and contributes nothing to autoscale.
+  plots: [{ key: 'placeholder', type: 'line', title: 'Pivot Ray' }],
+  calc: (bars, s) => ({
+    placeholder: bars.map(() => null),
+    pivots: nulls(pivotHigh(bars.map((b) => b.high), Number(s.left), Number(s.right))),
+  }),
+  draws: ({ bars, values, settings }) => {
+    // The two most recent confirmed pivot highs. A pivot is confirmed `right`
+    // bars after it happens, so the anchor is the bar it describes rather than
+    // the bar that reported it.
+    const back = Number(settings.right);
+    const at: number[] = [];
+    for (let i = values.pivots.length - 1; i >= 0 && at.length < 2; i--) {
+      if (values.pivots[i] !== null) at.push(i - back);
+    }
+    if (at.length < 2) return [];
+    const [recent, older] = at;
+    const color = String(settings.color);
+    return [
+      {
+        kind: 'line',
+        from: { time: bars[older].time,  price: bars[older].high },
+        to:   { time: bars[recent].time, price: bars[recent].high },
+        color, lineWidth: 2, extendRight: true,
+      },
+      {
+        kind: 'label',
+        at: { time: bars[recent].time, price: bars[recent].high },
+        text: `Pivot\n${bars[recent].high.toFixed(2)}`,
+        color, align: 'left',
+      },
+    ];
+  },
+});
+```
+
+Four kinds. Every colour defaults to the theme's axis ink, and every anchor is a
+`DrawAnchor`, which is `{ time, price }`.
+
+**`kind: 'line'`**
+
+| Field | Type | Description |
+|---|---|---|
+| `from` / `to` | `DrawAnchor` | The two ends. |
+| `color` | `string?` | |
+| `lineWidth` | `number?` | Media px, default 1. |
+| `lineStyle` | `'solid' \| 'dashed' \| 'dotted'?` | |
+| `extendLeft` / `extendRight` | `boolean?` | Continue past that anchor to the pane edge, **along the segment's own slope**: a ray keeps its angle rather than flattening. A vertical line spans the pane on either flag. |
+
+**`kind: 'box'`**
+
+| Field | Type | Description |
+|---|---|---|
+| `from` / `to` | `DrawAnchor` | Opposite corners, in either order. |
+| `color` | `string?` | Border, and the caption plate's fill. |
+| `fillColor` | `string?` | Omit to draw an outline only. |
+| `opacity` | `number?` | Fill alpha, 0..1, default 0.12. |
+| `lineWidth` | `number?` | Media px, default 1. |
+| `text` | `string?` | Caption on a plate at the centre of the box; `\n` splits lines. |
+| `textColor` | `string?` | Derived from the plate colour for contrast when omitted. |
+| `align` | `'left' \| 'center' \| 'right'?` | Caption plate placement within the box; default center. |
+| `verticalAlign` | `'top' \| 'middle' \| 'bottom'?` | Caption plate placement within the box; default middle. |
+
+**`kind: 'label'`**
+
+| Field | Type | Description |
+|---|---|---|
+| `at` | `DrawAnchor` | Where the plate sits. |
+| `text` | `string` | `\n` splits lines; the plate sizes to the widest. |
+| `color` | `string?` | Plate fill. |
+| `textColor` | `string?` | Contrast-derived when omitted. |
+| `align` | `'left' \| 'center' \| 'right'?` | Which edge of the plate sits on the anchor. Default `center`. |
+| `verticalAlign` | `'top' \| 'middle' \| 'bottom'?` | Which vertical plate edge sits on the anchor. Default `middle`. |
+
+Both labels and box captions accept these typography fields:
+
+| Field | Default | Description |
+|---|---|---|
+| `fontSize` | `11` | Positive finite CSS pixels. |
+| `fontFamily` | `ui-sans-serif, system-ui, sans-serif` | Nonempty CSS font-family list. |
+| `bold` / `italic` | `false` | Font weight and slant. |
+| `textAlign` | `left` | Left, center or right alignment of rows inside the measured plate. |
+
+`textAlign` changes the rows, while `align` and `verticalAlign` position the whole
+plate. Measurement and drawing use the same font. A caption may still be larger
+than its box. Opted-in typography or placement uses measured culling and clips
+paint and hit targets to the plot in canvas and SVG. Omitted fields retain the
+original rendering. New malformed fields reject `setItems` atomically; accepted
+replacement, hiding or detaching clears old hit rectangles. Hover detail keeps
+its separate default font. These are canvas text strings, without HTML parsing
+or DOM font loading.
+
+**`kind: 'polyline'`**
+
+| Field | Type | Description |
+|---|---|---|
+| `points` | `DrawAnchor[]` | Two or more; a shorter list draws nothing. |
+| `curve` | `'linear' \| 'smooth'?` | Straight by default; smooth interpolates the anchors after time and price mapping. |
+| `color` | `string?` | |
+| `lineWidth` | `number?` | Media px, default 1. |
+| `closed` | `boolean?` | Close the path back to the first point (a triangle, a wedge). |
+| `fillColor` | `string?` | Omit for an unfilled path. |
+| `opacity` | `number?` | Fill alpha, 0..1, default 0.12. |
+
+```ts
+// A supply zone, and a closed wedge over the same span.
+const zone: IndicatorDrawing = {
+  kind: 'box',
+  from: { time: t0, price: hi }, to: { time: t1, price: lo },
+  color: '#ef5350', fillColor: '#ef5350', opacity: 0.1,
+  text: `Supply\n${hi.toFixed(2)}`,
+};
+const wedge: IndicatorDrawing = {
+  kind: 'polyline',
+  points: [{ time: t0, price: hi }, { time: t1, price: mid }, { time: t0, price: lo }],
+  closed: true, color: '#4f8cff', fillColor: '#4f8cff',
+};
+```
+
+`lineStyle` belongs to `line` alone; boxes and polylines stroke solid.
+
+`curve: 'smooth'` uses cubic segments with half-chord tangents. The control
+points sit one sixth of the adjacent-anchor difference from each segment's
+endpoints. Open endpoints repeat their nearest anchor; a closed path wraps its
+neighbors through the seam. This interpolation happens in screen space, so it
+also follows logarithmic and inverted axes. It can overshoot the anchor prices;
+the curve does not add those extrema to autoscale.
+
+Consecutive duplicate anchors are collapsed for smoothing. Two surviving
+anchors remain a straight segment. A repeated final anchor is removed only for
+a closed path. An open filled path uses a straight closing edge for its fill,
+while its stroked curve stays open. Smooth paths are clipped to the plot in both
+canvas and SVG output. A nonfinite source or mapped anchor omits the complete
+polyline, including in linear mode, rather than bridging an unknown coordinate.
+
+What the layer does with what you return:
+
+- It draws **over the series and under the crosshair**: these are annotations on the data.
+- It **takes no part in autoscale**. A projection reaching far above the data would
+  otherwise squash the study it annotates into a band a few pixels tall. The corollary is
+  that a shape drawn outside the visible price range is simply not on screen.
+- Shapes entirely off-pane are culled before any path work, so a descriptor that marks
+  every pivot in 50k bars pays for the visible ones.
+- A time that falls **between** two bars lands between them rather than snapping to the
+  nearer one, and a time past the last bar lands on the chart's future bar times: the
+  session calendar's when the host set one, otherwise the median recent bar interval.
+  That is what lets a projection reach into the empty space on the right, to a time no bar
+  occupies yet.
+- The layer is created lazily, on the first non-empty list, so a descriptor without the
+  hook (or one that has not drawn anything yet) costs nothing. Hiding the indicator hides
+  the drawings with it; removing the indicator detaches them.
+
+`IndicatorDrawings` is exported, so the same layer works as a plain primitive with no
+indicator behind it:
+
+```ts
+import { IndicatorDrawings } from 'openalgo-charts';
+
+const layer = new IndicatorDrawings();
+chart.addPrimitive(layer, 0);       // pane index
+layer.setItems([{ kind: 'line', from: a, to: b, color: '#4f8cff' }]);
+layer.setVisible(false);
+```
+
+The constructor takes an optional callback returning the scale to measure prices on,
+read on every frame with that frame's render context; without it, or when it returns
+nothing, the layer uses the scale its pane binds it to. Pass `() => series.priceScale()`
+to follow one series on that series' own pane: the shapes are measured on whichever scale
+that series uses, and the layer binds no axis. The layer itself stays on the pane it was
+added to, so it is for a series that lives there. `new IndicatorDrawings((rc) => rc.readoutPriceScale)`
+measures them on the scale the pane quotes prices on, which is what a study's price-pane
+shapes use.
+
+## Drawing and marker targets
+
+A study in its own pane often has something to say about the candles: the range a signal
+fired in, a Buy plate under the bar that triggered it, the regime each bar belongs to. A
+study whose plots sit on two axes has shapes and marks measured on each. Any drawing
+returned by `draws`, any marker returned by `markers` and any
+[shading column](#background-targets-256) (2.5.6) returned by `background` can name where it goes
+with two optional fields, together typed as `IndicatorOutputTarget`:
+
+| Field | Drawing | Marker | Shading (2.5.6) |
+|---|---|---|---|
+| `overlay: true` | Drawn on the price pane in the instrument's units, measured on the scale that pane quotes prices on: the candles' own, whichever axis that is. | Anchored to the instrument's candles, so `belowBar` sits under the low. Drawn once the chart has a primary series. | Fills the price pane's full height behind the candles. Binds no axis. |
+| `plot: 'key'` | Drawn on that declared plot's pane and measured on its effective scale. | Anchored to that plot's series: its pane, its scale and its values. Where the plot has no value, the candle stands in when that plot is on the price pane and shares the candles' scale. | Fills that plot's pane, bound to the plot's effective scale so the layer never holds an axis the plot has left. |
+
+With neither field, an output stays where it always went: drawings in the study's own
+layer on its first local plot's scale, markers on the first plot or, with
+`markerAnchor: 'price'`, on the candles, shading behind the study's own pane. Such a
+descriptor renders exactly as before.
+
+```ts
+registerIndicator({
+  id: 'momentum-signals', name: 'Momentum signals', placement: 'pane', inputs: [],
+  plots: [{ key: 'momentum', type: 'histogram', title: 'Momentum' }],
+  calc: (bars) => ({ momentum: bars.map((b, i) => i < 10 ? null : b.close - bars[i - 10].close) }),
+  markers: ({ bars, values }) => values.momentum.flatMap((v, i) => {
+    const prev = values.momentum[i - 1];
+    if (v === null || prev == null || Math.sign(v) === Math.sign(prev)) return [];
+    return [{
+      time: bars[i].time, position: v > 0 ? 'belowBar' : 'aboveBar',
+      shape: v > 0 ? 'labelUp' : 'labelDown', size: 'small',
+      color: v > 0 ? '#26a69a' : '#ef5350', text: v > 0 ? 'Buy' : 'Sell',
+      overlay: true,                    // on the candles, not in the histogram pane
+    }];
+  }),
+  draws: ({ bars, values }) => {
+    const last = bars.length - 1;
+    if (last < 20) return [];
+    const recent = bars.slice(last - 20);
+    return [
+      { kind: 'box', overlay: true, color: '#4f8cff', fillColor: '#4f8cff', opacity: 0.08,
+        from: { time: recent[0].time, price: Math.max(...recent.map((b) => b.high)) },
+        to: { time: bars[last].time, price: Math.min(...recent.map((b) => b.low)) },
+        text: '20-bar range', id: 'range', tooltip: 'Where momentum is measured from' },
+      { kind: 'label', plot: 'momentum', text: 'Now', align: 'left',
+        at: { time: bars[last].time, price: values.momentum[last] ?? 0 } },
+    ];
+  },
+});
+```
+
+What the runtime does with a target:
+
+- **One layer per target.** Each distinct target is its own layer, owned by the instance.
+  Two instances, or two charts, never share one.
+- **Moves.** Moving the study with `moveIndicator` takes its own-pane layers with it and
+  leaves price-pane layers on the price pane. A `plot` target follows its plot, so an
+  `overlay: true` plot takes it to the price pane.
+- **Scales.** A `plot` target follows that plot through `setPlotPriceScales` and
+  `setPriceScale`. Price-pane drawings and markers both follow the candles: moving the
+  price axis to the left, or the instrument onto another scale, takes them along. Neither
+  holds an axis of its own, so neither stops the price axis from moving, and price-pane
+  shading has no price at all.
+- **Hiding and removal.** Hiding the study hides every target. A target that a later
+  calculation no longer returns is released rather than kept empty, and removing the study,
+  or the pane it lives in, releases all of them.
+- **Stacking.** A study's layers stack in a fixed order: its own marks, its marker
+  targets, its own shapes, its drawing targets, its own shading, then its shading
+  targets, with each kind's targets taking the price pane first and then the plots in
+  declaration order. Shading paints behind every series on its pane, so it always sits
+  under the candles, the plots, the marks and the shapes; the order decides which study's
+  shading covers another's where two overlap. A targeted layer made after
+  the study was added, for a target returned again or for the first time, is put back in
+  that order among the targeted layers on its pane, below those of the studies added
+  after it. Only targeted layers move to do it, and nothing is recomputed or recoloured.
+  A descriptor that names no target stacks exactly as before, even beside a study that
+  routes on the same pass: its layers stay where they landed.
+- **Hits.** A `box` or `label` with an `id` or `tooltip`, and a marker with an `id`, report
+  through `subscribeClick` where they are drawn: on the price pane or on the plot's axis.
+- **Saved state.** Targets are descriptor data, so a restored layout routes the same way.
+- **Errors.** An unknown plot, or `plot` together with `overlay: true`, throws before any
+  layer of that kind changes, and so does an invalid style on any shape or mark, or two
+  shading columns for one target: every drawing layer, marker layer or shading layer
+  keeps what the last good pass drew. `addIndicator`
+  throws; a later pass publishes an error status instead. The rest of that pass is not
+  rolled back. A pass syncs plots and fills, markers, the table, drawings, then background,
+  bar colours, levels and alerts: those before the failing output stay applied, and those
+  after it wait for the next pass that succeeds.
+
+Marks sent to the series the study's own marks already use, `overlay: true` from a study
+on the price pane with `markerAnchor: 'price'` or `plot` naming the first plot, join the
+study's own layer in the order they were returned, so marks at one bar stack one under
+the other. The exception is a study in its own pane whose first plot is an `overlay`
+plot: marks naming that plot keep a layer of their own, because they take the candle
+where the plot has no value and the study's own marks there do not. Marks on different
+series, the candles and a plot, are measured against different values and do not stack
+against each other.
+
+### Background targets (2.5.6)
+
+`background` has two return forms. The plain one is one colour per bar for the study's own
+pane, as [before](#shading-the-pane-by-regime). The list form returns columns typed as
+`IndicatorBackgroundSpec`: each holds `colors`, one entry per bar with `null` for none, and
+may name a target.
+
+```ts
+registerIndicator({
+  id: 'momentum-regime', name: 'Momentum regime', placement: 'pane', inputs: [],
+  plots: [{ key: 'momentum', type: 'histogram', title: 'Momentum' }],
+  calc: (bars) => ({ momentum: bars.map((b, i) => i < 10 ? null : b.close - bars[i - 10].close) }),
+  background: ({ values }) => [
+    // Behind the candles: the regime is a statement about the price bars.
+    { overlay: true, colors: values.momentum.map((v) =>
+      v === null ? null : v > 0 ? 'rgba(38,166,154,0.08)' : 'rgba(239,83,80,0.08)') },
+    // No target: the study's own pane, exactly as the plain form shades it.
+    { colors: values.momentum.map((v) => (v !== null && Math.abs(v) > 5 ? 'rgba(79,140,255,0.10)' : null)) },
+  ],
+});
+```
+
+- **One column per target.** Two columns for the price pane, for one plot, or with no
+  target at all throw, as does a list mixing colours and columns, a list with a hole in it,
+  or a column without a `colors` array. Nothing changes on any shading layer when a pass
+  throws; the outputs the pass synced before shading stay applied, and the candle colours
+  after it wait for the next good pass, a settings change included.
+- **The column naming no target** is the study's own layer: created on the first pass that
+  shades anything, kept through passes that shade nothing, hidden rather than released
+  with the study. A pass whose list leaves it out clears it.
+- **A targeted layer** is created on the first column with entries for its target and kept
+  while that target is returned at all, even with nothing shaded; a pass that returns no
+  column for it releases it. `[]` clears the study's own layer and releases every target.
+- **Moves, hiding, scales and removal** follow the rules above: price-pane shading stays on
+  the price pane when the study moves, a `plot` column follows its plot, and every layer
+  hides and goes with the study.
+
+## Trading sessions
+
+An indicator that accumulates within a trading day (VWAP, TWAP, daily pivots) has to know
+where one day ends. A calendar midnight is the wrong answer for every exchange but the
+one whose timezone you picked: 00:00 IST is 18:30 UTC, which is the middle of a New York
+session. Anchoring there restarts a VWAP every afternoon, and builds a "daily" range out
+of one session's tail plus the next session's head across the overnight gap.
+
+Setting the chart's [`timezone`](/docs/timezones) fixes which calendar is consulted, and on
+a US symbol you should. It does not remove the need to read the session, though: a calendar
+day is still not a trading day, and the bars know better than either.
+
+The session is visible in the bars themselves, as the widest recurring gap, so read it
+back rather than assuming:
+
+```ts
+import { sessionStartFlags, calendarPeriodFlags, DEFAULT_TIMEZONE } from 'openalgo-charts';
+
+calc: (bars, settings) => {
+  // The chart puts its zone on the settings blob under the reserved `timezone`
+  // key, so the calendar fallback follows the axis without threading a global.
+  const zone = typeof settings.timezone === 'string' ? settings.timezone : DEFAULT_TIMEZONE;
+  const times = bars.map((b) => b.time);
+  const newSession = sessionStartFlags(times, zone); // first bar of each trading day
+  let sum = 0;
+  const out = bars.map((b, i) => {
+    if (newSession[i]) sum = 0;
+    sum += b.close;
+    return sum;
+  });
+  return { running: out };
+}
+```
+
+| Export | Returns | Use |
+|---|---|---|
+| `sessionStartIndices(times)` | `number[] \| null` | The bar indices that open a session, or `null` when the series shows no readable break. |
+| `sessionStartFlags(times, zone?)` | `boolean[]` | One flag per bar. Falls back to calendar days in `zone` (default `Asia/Kolkata`) when sessions are unreadable. |
+| `calendarPeriodFlags(times, isNew)` | `boolean[]` | A week, month or year boundary, tested on session opens so a session is never cut in half. |
+
+`sessionStartIndices` returns `null`, and the flag helpers fall back to a calendar day,
+in exactly the cases where there is nothing to read: bars already a day or coarser, a
+market that never closes, or a feed whose only gaps are weekends. An intraday lunch break
+is shorter than the four-hour floor, so it is not mistaken for a close.
+
+### A window you state rather than read
+
+The helpers above read a session back from the bars, which is right when what you mean is
+"the trading day". It is the wrong tool when you mean a *particular* window inside one: an
+opening range, the cash session inside an extended one, or one exchange's hours drawn on
+another exchange's chart. The bars cannot tell you which part of a continuous session you
+meant, so you state it:
+
+```ts
+import { sessionFlags, parseSessionSpec, inSessionAt, DEFAULT_TIMEZONE } from 'openalgo-charts';
+
+calc: (bars, settings, store, ctx) => {
+  const zone = ctx?.timezone ?? DEFAULT_TIMEZONE;
+  // The first hour, on whichever calendar the axis is labelled in.
+  const opening = sessionFlags(bars.map((b) => b.time), '0915-1015', zone);
+  let hi = -Infinity, lo = Infinity;
+  return {
+    orHigh: bars.map((b, i) => {
+      if (i > 0 && opening[i] && !opening[i - 1]) { hi = -Infinity; lo = Infinity; }
+      if (opening[i]) { hi = Math.max(hi, b.high); lo = Math.min(lo, b.low); }
+      return Number.isFinite(hi) ? hi : null;
+    }),
+  };
+}
+```
+
+| Export | Returns | Use |
+|---|---|---|
+| `parseSessionSpec(spec)` | `SessionSpec \| null` | Parse `'0915-1015'`, or `'0930-1600:23456'` with a day filter. `null` on anything it does not recognise, never a throw. |
+| `inSessionAt(utcSeconds, spec, zone?)` | `boolean` | One instant against a parsed spec. |
+| `sessionFlags(times, spec, zone?)` | `boolean[]` | One flag per bar. Takes the raw string or a parsed spec. |
+
+The grammar is `HHMM-HHMM`, optionally followed by `:` and the days the window runs on,
+**1 = Sunday** through 7 = Saturday, so `'0930-1600:23456'` is Monday to Friday and an
+absent filter means every day. Whitespace around the parts is ignored.
+
+- **The window is half-open**: the start minute is inside it, the end minute is not. A bar
+  stamped exactly 10:15 belongs to what comes *after* a `0915-1015` window, which is what an
+  opening-range comparison needs.
+- **An end at or before the start runs past midnight**, so `'2330-0030'` is a one-hour
+  overnight window, and `'0000-0000'` is the whole day.
+- **The day filter names the day the window opens on**, not the day the bar falls on. For a
+  window inside one day those are the same; for one that crosses midnight it keeps the
+  session whole instead of lopping its tail off at 00:00.
+- `zone` defaults to `Asia/Kolkata` like every other zoned helper. Pass the chart's, which a
+  `calc` reads from [`ctx.timezone`](#the-calculation-context) or from the reserved
+  `settings.timezone` key.
+- **An unparseable string marks nothing**: `sessionFlags` returns an all-false array rather
+  than throwing, because the spec is usually something a user is halfway through typing.
+  Call `parseSessionSpec` yourself when you need to tell a bad spec from an empty window.
+
+## The IndicatorApi handle
+
+`addIndicator` returns a handle:
+
+| Member | Type | Description |
+|---|---|---|
+| `id` | `string` | Unique instance id (several instances of one indicator can coexist). |
+| `indicatorId` | `string` | The descriptor id, e.g. `'macd'`. |
+| `name` | `string` | Display name. |
+| `paneIndex` | `number` | Pane the indicator drew into. |
+| `settings()` | `IndicatorSettings` | Current settings, as a copy. |
+| `setSettings(patch, options?)` | `boolean` | Merge a patch, recompute, and restyle. False when the study's policy is not `configurable` and `options` is not `{ force: true }`. |
+| `series(plotKey)` | `SeriesApi \| undefined` | The series behind one plot, for direct styling. The study must be its only writer: since 2.5.8 a tick updates only the points that moved, so data written into it survives wherever the study did not move a point. |
+| `priceScaleId()` | `PriceScaleId \| null` | Whole-study override, or null for descriptor defaults. Per-plot overrides can still apply. |
+| `setPriceScale(id, options?)` | `boolean` | Assign local resources together and clear their per-plot overrides. Null restores local descriptor defaults. Refused like `setSettings` for a study that is not `configurable`. |
+| `plotPriceScaleId(plotKey)` | `PriceScaleId \| null` | Effective scale of a declared plot, or null for an unknown key. |
+| `plotPriceScaleIds()` | `Readonly<Record<string, PriceScaleId>>` | Detached map of explicit per-plot overrides. |
+| `setPlotPriceScales(patch, options?)` | `boolean` | Apply selected plot assignments atomically. Null values remove those overrides. Refused like `setSettings` for a study that is not `configurable`. |
+| `values()` | `IndicatorValues` | Latest computed columns. |
+| `policy()` / `setPolicy(policy)` | `IndicatorPolicy` / `void` | The restrictions its host set (only the flags that are false), and the host's call that replaces them; `null` lifts them. See [Study policies](#study-policies). |
+| `remove(options?)` | `boolean` | Remove every series and level it created. False when it is already gone, or is not `removable` and `options` is not `{ force: true }`. |
+
+`chart.indicators()` lists the live instances; `chart.removeIndicator(id, options?)` removes one by id.
+Removing an indicator also prunes the pane it emptied, so a host UI cannot strand a blank
+pane under the chart.
+
+A new study takes an id nothing has used on this chart, even one a removed study
+held. A host that brings a removed study back, as an undo does, passes that id with
+`addIndicator(indicatorId, settings, { instanceId })`, and the study comes back as
+itself: the studies reading its output and the alerts naming it find it again. An id
+a study on the chart holds now throws, since two studies cannot answer to one id.
+
+```ts
+const rsi = chart.addIndicator('rsi', { length: 14 });
+const saved = { id: rsi.id, settings: rsi.settings(), paneIndex: rsi.paneIndex };
+chart.removeIndicator(rsi.id);
+// Undo: the same study, the same identity.
+chart.addIndicator('rsi', saved.settings, { instanceId: saved.id, paneIndex: saved.paneIndex });
+```
+
+### Study policies
+
+A host that places a study of its own (a strategy's signal line, a session band, a
+study a desk requires) needs restrictions the user cannot lift, one at a time, while it
+keeps changing the study itself. `IndicatorPolicy` carries four independent flags. Each
+defaults to `true`, so a study without a policy behaves exactly as before, and the
+contract mirrors the [drawing policies](/docs/drawing-tools#drawing-policies).
+
+```ts
+const signal = chart.addIndicator('vwap', {}, {
+  policy: { removable: false, configurable: false, movable: false },
+});
+
+// The host that placed it still changes and retires it.
+signal.setSettings({ anchor: 'week' }, { force: true });
+chart.removeIndicator(signal.id, { force: true });
+```
+
+| Flag | `false` means | Calls it restricts |
+|---|---|---|
+| `removable` | No legend close button, no Objects remove, the widget's menu row and the picker's remove button greyed with the note "protected". | `chart.removeIndicator(id)`, `indicator.remove()` and `chart.removePane(index)` for a pane holding it. |
+| `configurable` | No legend gear (so no `indicatorSettings` event from it), no Objects settings, the widget's settings dialog declines with the reason. | `indicator.setSettings(patch)`, `setPriceScale(id)` and `setPlotPriceScales(patch)`. |
+| `movable` | It keeps its pane and its place in the pane's stack: no Objects move, Earlier, Later or drag. Other objects still move past it, and the pane controls on its legend still move the pane. | `chart.moveIndicator(id, pane)`, `chart.reorderIndicator(id, direction)` and `chart.moveInSeriesStack(id, ...)`. |
+| `listed` | Left out of `ChartObjects`, every Objects panel, the widget's indicator picker list and its alert source lists (unless the alert being edited already names it). | Every caller of those lists. The legend still shows it. |
+
+A policy restricts **user-facing actions**. Every call in the right-hand column treats
+its caller as the user, because host controls make exactly these calls, and returns false
+with nothing changed when the policy forbids it. The owning host passes `{ force: true }`
+(`IndicatorEditOptions`) to make the change anyway. `setPolicy` is always the host's act:
+it is never restricted and applies at once to the legend buttons and the inventory. A
+legend row whose buttons the host set with `indicator.legend().setOptions({ actions })`
+keeps them through every restack, and the policy only withholds the close button and
+the gear from what the host set. A
+restore (`chart.restoreState`, a workspace load) is also the host's act and replaces a
+protected study like any other. Hiding a study is the user's view of the chart and stays
+available under every flag. The widget's chart-wide [undo and redo](/docs/undo-history)
+are the user's too: no press removes, reconfigures or moves a study against its policy,
+and a host's forced change to one is never an undo step.
+
+The chart state saves only the restrictions, as `IndicatorState.policy` (`{ removable: false }`),
+so an unrestricted study saves exactly what it always did and a layout from an older
+release restores its studies unrestricted. A malformed policy refuses the whole restore
+before anything changes; `parseIndicatorPolicy(input)` is the same validation for a host
+of its own, and keeps only the four boolean flags. Workspace documents keep policies.
+
+A portable indicator template is the user's own copy of the user's own studies. It
+leaves out every study the host keeps from the user, one that is not `removable` or
+not `listed`, and every study that reads the output of one, and a scale range such a
+study owned is let go; a study with other restrictions is copied without them. A
+template applied in `replace` mode keeps the host's studies, on their own panes, with
+the template's panes taking the free slots around them, so a replace neither copies a
+host study nor takes it away.
+
+### Plot scale assignments
+
+Plots with different units can share a calculation while using independent
+scales. Pass `plotPriceScaleIds` in the third argument to `addIndicator`, or
+change the handle later:
+
+```ts
+study.setPlotPriceScales({ upper: 'overlay:band', lower: 'overlay:band' });
+chart.setPriceAxisPlacement(study.paneIndex, 'overlay:band', 'left');
+study.setPlotPriceScales({ upper: null, lower: null });
+```
+
+Only declared plot keys are accepted. A patch keeps omitted keys unchanged and
+removes an override for each null. A fill's endpoints must share a pane and
+scale, so move the pair together. Invalid IDs, unknown plots, accessor properties,
+incompatible fills and empty/unchanged patches return false without mutation.
+Invalid creation options throw before resources are allocated.
+
+Effective precedence is per-plot override, local whole-study override,
+descriptor scale, then `right`. Explicit price-pane overlays ignore the
+whole-study override but accept their own per-plot assignments. A successful
+`setPriceScale`, including null, clears local plot overrides and keeps explicit
+price-overlay overrides. Clear those individually to restore every descriptor
+assignment.
+
+Levels and unbound price drawings follow the first local plot; a drawing that
+[names a plot](#drawing-and-marker-targets) follows that plot, and markers follow
+their series. Scale changes preserve handles, calculated values and provider
+attachments. `IndicatorState.plotPriceScaleIds` persists explicit overrides in
+chart state, workspace documents and legacy study templates. Known descriptor
+assignments are validated before chart restore changes resources.
+See [scale assignment details](/docs/scales-and-panes#reassign-individual-study-plots)
+and the [live example](/examples#assign-scales-to-individual-study-plots).
+
+## Using another study's output
+
+SMA, EMA and WMA accept a scalar plot from another indicator as their source:
+
+```ts
+const first = chart.addIndicator('sma', { length: 2, color: '#4f8cff' });
+const second = chart.addIndicator('sma', {
+  length: 2, color: '#f5a623',
+  source: { kind: 'indicator', instanceId: first.id, plotKey: 'ma' },
+});
+// Closes [1, 3, 5, 7] give [null, null, 3, 5] in second.values().ma.
+first.setSettings({ length: 3 }); // The last downstream value becomes 4 without a tick.
+```
+
+The base type `IndicatorStudySource` names an instance and a declared scalar plot.
+Its object has exactly the own data fields `kind`, `instanceId` and `plotKey`.
+The identifiers must be nonempty strings. Plain and null-prototype objects work;
+getters and extra fields do not. The chart rejects malformed references, cycles,
+self references and unsupported inputs before changing settings or resources.
+
+Try the [dependent moving-average example](/examples#study-outputs-as-moving-average-inputs)
+to change the final price, change a producer setting, hide or move the producer,
+remove and explicitly rebind it, and restore a saved consumer-first display order.
+
+The chart computes producers before consumers while keeping visual order separate.
+A producer's settings or external-data update refreshes its consumers without
+waiting for a price tick. The selected column follows the original primary bar
+indices, unaffected by visibility, pane, scale or painted plot offset. An OHLC
+plot requires a separately declared scalar output before it can be selected.
+
+Warmup and gaps remain gaps. For study references, these three averages require
+full windows of consecutive finite observations; EMA restarts its seed after a
+gap. Their existing price-source strings retain their prior calculations.
+Removing a producer retains the consumer's reference, clears its output and
+reports unavailable input through `dataStatus().state === 'error'`. A failed or
+unavailable producer also blocks consumers and their alerts. Adding a new instance
+does not retarget the old reference; pass its new ID in `setSettings` to rebind.
+References are copied when accepted and when returned by `settings()`.
+
+### Opting a custom descriptor in
+
+Declare `allowStudyOutputs: true` only on source inputs that your calculation can
+handle, and pass the calculation context to `sourceValues`:
+
+```ts
+import { registerIndicator, sourceValues,
+  type IndicatorSource, type IndicatorStudySource } from 'openalgo-charts';
+
+registerIndicator({
+  id: 'double-source', name: 'Double source', placement: 'pane',
+  inputs: [{ key: 'source', type: 'source', label: 'Source', default: 'close', allowStudyOutputs: true }],
+  plots: [{ key: 'value', title: 'Value', type: 'line' }],
+  calc: (bars, settings, _store, ctx) => {
+    const selected = settings.source as IndicatorSource | IndicatorStudySource;
+    const input = sourceValues(bars, selected, ctx);
+    return { value: input.map(value => typeof value === 'number' && Number.isFinite(value) ? value * 2 : null) };
+  },
+});
+```
+
+`IndicatorCalcContext.resolveSource` resolves only the references declared through
+those opted-in settings. `sourceValues` throws `IndicatorInputError` when a study
+reference has no resolver or the returned array is not exactly `bars.length`.
+It copies the column while preserving `null` and nonfinite values; the calculation
+chooses how to handle them. Do not convert missing entries to zero, or call another
+instance's `values()` from inside `calc`. Two-argument price-source calls keep
+their existing behavior. Other built-ins and the existing compiled-script adapter
+do not gain study-reference inputs automatically.
+
+### Saving and hosting dependencies
+
+`getState()` includes stable `IndicatorState.instanceId` values. `restoreState()`
+validates the whole graph before mutation, creates studies in dependency order,
+and retains saved display order. A missing descriptor is skipped as before,
+leaving references to it unavailable. Optional `IndicatorState.studyInputs` lists
+the settings keys carrying references so portable templates can remap identities.
+This metadata expresses template intent; each installed descriptor remains the
+authority for accepted source inputs. Include the producer group when saving a
+dependency template. The workspace `planIndicatorTemplate` copies the group with
+fresh IDs and rewrites its internal references; references outside the group are
+rejected.
+
+For a custom host using `IndicatorInstance` directly, four optional `IndicatorHost`
+hooks support the same contract:
+
+| Hook | Purpose |
+|---|---|
+| `validateIndicatorSettings(id, descriptor, settings)` | Validate proposed references against the complete graph before mutation. |
+| `studyOutput(reference)` | Supply a committed `IndicatorStudyOutput`, or `undefined` when missing. |
+| `indicatorOutputChanged(id, refresh)` | Schedule consumers when output or availability changes. |
+| `indicatorRecompute(id, refresh, fallback)` | Run the supplied calculation callback after its producers. |
+
+The base `IndicatorStudyOutput` type carries `generation`, `revision`,
+`historyRevision`, optional `source: Readonly<SeriesDataState>`, `available`, and
+readonly `values`. Generation distinguishes producer lifetimes; history revision
+changes whenever an earlier output prefix may have changed. Source metadata
+identifies the primary bars used by the result. Consumers require available,
+aligned, current snapshots. Custom hosts must maintain those guarantees and avoid
+recursive `values()` reads. Existing hosts can omit the hooks for independent
+indicators; native Chart already supplies them.
+
+A custom host's `addIndicatorSeries` must return a series with a working `update`
+(2.5.8). On a live tick a study writes each plot in place: `update` for the points
+that moved and for the last point, where it used to call `setData` with the whole
+history. That `update` must behave as `SeriesApi.update` documents: an item at an
+existing time replaces that point, an older one included, and a newer one appends.
+`setData` still carries a first write, new or older history, a filled gap and a
+pass that moved more than eight points. A series that ignores `update` shows the
+study frozen at its last whole write.
+
+## Inspecting the registry
+
+The registry is readable, so a host can build its indicator UI from what is actually
+registered rather than a hardcoded list, including anything you registered yourself. The
+yfinance example builds its whole picker this way, grouped by `category`.
+
+Every export below comes from the package root, `openalgo-charts`, not from the indicator
+tier: the registry is part of the base engine, and the tier only fills it.
+
+| Export | Signature | Use |
+|---|---|---|
+| `registeredIndicators()` | `-> IndicatorDescriptor[]` | Everything registered, in registration order. Read `id`, `name`, `category`, `inputs`, `plots`. |
+| `hasIndicator(id)` | `(string) -> boolean` | Guard before `addIndicator` when the id is user-supplied, because `addIndicator` throws on an unknown one. |
+| `indicatorDefaults(descriptor)` | `(IndicatorDescriptor) -> IndicatorSettings` | Default settings built from the descriptor's `inputs`, for pre-filling a form. Takes the **descriptor**, not an id. |
+| `indicatorStyleInputs(descriptor)` | `(IndicatorDescriptor) -> IndicatorInput[]` | Per-plot style inputs (colour, width, line style, opacity), so a settings dialog can be generated instead of written per indicator. |
+| `plotStyleKeys(plot)` | `(IndicatorPlot) -> { color, width, lineStyle, opacity, type }` | The settings keys belonging to one plot, for reading or patching its style. `type` overrides the chart type it draws as. |
+| `INDICATOR_LINE_STYLES` | `readonly { label, value }[]` | The line-style choices a generated form should offer. |
+| `INDICATOR_PLOT_STYLES` | `readonly { label, value }[]` | Chart types a plot can be re-rendered as (line, line with markers, step, area, histogram, columns). |
+| `INDICATOR_SOURCES` | `readonly { label, value }[]` | The price-source choices for a `type: 'source'` input. |
+
+The same plot-style list also arrives on the generated `<plotKey>:type` input, so a form
+built from `indicatorStyleInputs(descriptor)` already has it without a second import:
+
+```ts
+const typeInput = indicatorStyleInputs(getIndicator('rsi'))
+  .find((i) => i.key === 'rsi:type');
+typeInput.options;   // same list as INDICATOR_PLOT_STYLES
+```
+
+```ts
+import {
+  registeredIndicators, hasIndicator, indicatorDefaults,
+} from 'openalgo-charts';
+import 'openalgo-charts/indicators';   // registers the 112 built-ins
+
+// Group the catalog for a menu, with no per-indicator code.
+const byCategory = new Map<string, string[]>();
+for (const d of registeredIndicators()) {
+  const list = byCategory.get(d.category) ?? [];
+  list.push(d.name);
+  byCategory.set(d.category, list);
+}
+
+// Settings are the second argument, and the defaults come off the descriptor.
+const descriptor = registeredIndicators().find((d) => d.id === wanted);
+if (descriptor !== undefined) {
+  chart.addIndicator(descriptor.id, indicatorDefaults(descriptor));
+}
+```
+
+Generating a settings form is the same shape: walk `descriptor.inputs` for the values and
+`indicatorStyleInputs(descriptor)` for the per-plot styling, and render each by its `type`:
+
+```ts
+for (const input of [...descriptor.inputs, ...indicatorStyleInputs(descriptor)]) {
+  // input.type: 'number' | 'source' | 'color' | 'select' | 'boolean' | 'text'
+  renderField(input.key, input.type, input.label, instance.settings()[input.key]);
+}
+```
+
+<Callout type="info">
+The catalog is empty until the tier is imported. `registeredIndicators()` reflects what has
+been registered *so far*, so read it after your `import 'openalgo-charts/indicators'`.
+</Callout>
+
+## Writing your own
+
+An indicator is **data, not code in the core**: the chart never switches on an id. Each
+plot names a registered *chart type*, so your indicator draws through the same renderers as
+any other series and adds no drawing code.
+
+```ts
+import { registerIndicator, sourceValues } from 'openalgo-charts';
+
+registerIndicator({
+  id: 'momentum',
+  name: 'Momentum',
+  category: 'Momentum',
+  placement: 'pane',
+  inputs: [
+    { key: 'length', type: 'number', label: 'Length', default: 10, min: 1, max: 500 },
+    { key: 'source', type: 'source', label: 'Source', default: 'close' },
+    { key: 'color',  type: 'color',  label: 'Color',  default: '#4f8cff' },
+  ],
+  plots: [{ key: 'mom', type: 'line', title: 'Momentum', colorKey: 'color' }],
+  calc: (bars, s) => {
+    const v = sourceValues(bars, s.source);
+    const n = s.length;
+    return { mom: v.map((x, i) => (i >= n ? x - v[i - n] : null)) };
+  },
+  levels: () => [{ price: 0, color: '#5a6b8c', dashed: true }],
+});
+
+chart.addIndicator('momentum', { length: 14 });
+```
+
+### Shaded bands between plots
+
+A pair of lines is not the same picture as a filled region, so a descriptor can
+declare `fills`: the Ichimoku cloud, a Bollinger channel. 28 of the 112 built-ins
+declare one or more, 38 fills in total.
+
+```ts
+plots: [
+  { key: 'spanA', type: 'line', title: 'Senkou Span A', colorKey: 'spanAColor' },
+  { key: 'spanB', type: 'line', title: 'Senkou Span B', colorKey: 'spanBColor' },
+],
+fills: [{
+  between: ['spanA', 'spanB'],
+  colorUpKey: 'cloudUpColor',     // settings keys, so the band is restyleable
+  colorDownKey: 'cloudDownColor',
+  opacity: 0.14,
+}],
+```
+
+Two colours, because *which* side leads is itself the signal. The band draws
+behind the plots, contributes nothing to autoscale, splits at the exact crossing
+rather than the nearest bar, and breaks across a gap in either plot instead of
+bridging it. Pass `colorUp` / `colorDown` literals instead of the `*Key` forms
+for a fixed band.
+
+#### Filling against a column that is never plotted
+
+`between` names **`calc` output columns, not declared plots**, and that is the part
+worth internalising: `calc` may return more columns than there are plots, and a fill
+can use any of them. An edge that exists only to bound a shaded region does not have
+to be a line on the chart.
+
+Three built-ins lean on this:
+
+- **`rsi`** returns `upperLevel` and `lowerLevel` alongside `rsi`, both constant at the
+  `overbought` / `oversold` settings, and fills between them. The overbought/oversold
+  background is therefore a fill between two columns that are never drawn, so changing
+  `overbought` moves the shading with no extra plot to restyle. `stochastic` shades the
+  same way.
+- **`aroon-oscillator`** returns a `zero` column and fills `['osc', 'zero']`, so the
+  band flips colour with the sign of the oscillator. A `colorBy` would recolour the
+  stroke, but it is the shaded region between the line and zero that actually reads
+  on a chart.
+- **`supertrend`** returns a hidden `bodyMid` column, `(open + close) / 2` per bar, and
+  declares one fill from it to `up` and another to `down`. That shades the whole distance
+  between price and the trailing stop instead of drawing a second line through the
+  candles. Only one side is live at a time, so the other fill resolves to nothing and the
+  shading recolours at the flip along with the stop.
+
+```ts
+calc: (bars, s) => {
+  const osc = /* ... */ [];
+  return {
+    osc,
+    // No plot names this column. Match the warmup nulls or the band runs back
+    // past where the line starts.
+    zero: osc.map((v) => (v === null ? null : 0)),
+  };
+},
+fills: [{ between: ['osc', 'zero'], colorUpKey: 'upColor', colorDownKey: 'downColor' }],
+```
+
+A column with no plot costs one array and nothing on screen, so this is the cheap way
+to draw a region rather than a pair of lines.
+
+### Colouring a plot per bar
+
+One colour for a whole series cannot express a study whose meaning changes bar
+to bar, so a plot can name a `colorBy`:
+
+```ts
+{
+  key: 'histogram', type: 'histogram', title: 'Histogram',
+  colorBy: ({ value, index, values, settings }) =>
+    value >= 0 ? '#26a69a' : '#ef5350',
+}
+```
+
+Return `undefined` to fall back to the plot's own colour. It reaches the renderer
+as [`Bar.color`](/docs/series-and-styling#per-bar-colour), so every Family-A plot
+type honours it: histogram, column, line, step, area, candles and OHLC bars.
+`values` is the full `calc` result, so a rule can read columns no plot draws:
+MACD compares against the previous bar, and Williams VIX Fix reads its band even
+when the band is hidden.
+
+`calc` must return an array for every plot key, the same length as `bars`, plus any extra
+columns a `fill` or a `colorBy` needs. Use `null` for warmup slots: the line renderer
+breaks across them and autoscale skips them, so a gap draws as nothing rather than a spike
+to zero.
+
+### Reference levels
+
+`levels` draws horizontal lines across the indicator's pane: RSI 70/30, a zero line,
+yesterday's high. It runs after every `calc` and is handed the bars and the computed
+values as well as the settings, so a level can be **derived from the data** rather than
+only from a number the user typed.
+
+```ts
+levels: (ctx) => {
+  const bars = ctx.bars ?? [];
+  const last = bars.at(-1);
+  return [
+    { price: Number(ctx.oversold), title: 'Oversold' },          // from a setting
+    ...(last === undefined ? [] : [
+      { price: last.high, title: 'Day high', lineStyle: 'dotted' as const },
+    ]),
+  ];
+},
+```
+
+The context is a settings bag with three members added to it. That is why `ctx.oversold`
+reads a declared input directly, and why every descriptor written against the original
+`levels(settings)` signature keeps working unchanged:
+
+| Member | Type | Description |
+|---|---|---|
+| *(the settings keys)* | | Every setting, spread onto the context. |
+| `settings` | `IndicatorSettings` | The same values as one object, for a helper that takes a bag. |
+| `bars` | `Bar[]` | The bars the last `calc` ran over. |
+| `values` | `IndicatorValues` | What that `calc` returned. |
+
+`settings`, `bars` and `values` are reserved keys here, the way `timezone` is reserved in
+the settings a `calc` receives: an input declared under one of those names is shadowed.
+The three are typed optional so a caller holding only a settings bag can still call
+`levels` directly, but the runtime always passes all three. Default them anyway
+(`ctx.bars ?? []`).
+
+The returned list is compared against the previous one and the price lines are only
+rebuilt when something actually changed, so a constant 70/30 pair does not detach and
+reattach a line per level on every tick.
+
+**`IndicatorLevel`**
+
+| Field | Type | Description |
+|---|---|---|
+| `price` | `number` | Where the line sits. |
+| `color` | `string?` | Default `#8892a6`. |
+| `title` | `string?` | Right-axis tag text. |
+| `lineWidth` | `number?` | Media px, default 1. |
+| `lineStyle` | `'solid' \| 'dashed' \| 'dotted'?` | |
+| `dashed` | `boolean?` | The original two-state switch. `lineStyle` wins when both are set; with neither set a level draws dashed, which is how every built-in already drew. |
+
+### One plot on the price pane
+
+An oscillator sometimes has one column that belongs on the candles: a trailing stop, a
+band the price is measured against. Splitting the study in two would make the user
+configure the same inputs twice, so a single plot can force itself onto the price pane
+instead:
+
+```ts
+placement: 'pane',
+plots: [
+  { key: 'osc',  type: 'line', title: 'Oscillator' },
+  { key: 'stop', type: 'line', title: 'Stop', overlay: true },   // drawn on price
+],
+```
+
+It is still one instance: one legend row, one settings form, one `remove()`. `overlay` is
+ignored for an `onchart` descriptor, which is already on the price pane. Fills, levels,
+drawings and the table stay on the indicator's own pane; markers ride the **first** plot's
+series, so marking the first plot `overlay` takes them to the price pane with it.
+
+### A plot drawn as candles
+
+A single column cannot express a bar. A smoothed Heikin-Ashi overlay, a higher-timeframe
+candle, a synthetic spread instrument are all four numbers per bar, so a plot can name
+four `calc` columns instead of one:
+
+```ts
+plots: [{
+  key: 'ha',
+  type: 'candlestick',                 // or 'hollow-candle', 'bar', 'high-low'
+  title: 'Heikin-Ashi',
+  ohlc: { open: 'haOpen', high: 'haHigh', low: 'haLow', close: 'haClose' },
+}],
+calc: (bars) => ({
+  haOpen: [...], haHigh: [...], haLow: [...], haClose: [...],   // four ordinary columns
+}),
+```
+
+The four columns live in the **same `IndicatorValues`** every other descriptor returns, so
+`calc` keeps one shape and every helper written against it keeps working. A second return
+type would have forked the contract for all 112 built-ins.
+
+- `key` stays the series identity, the thing `instance.series('ha')` resolves and the thing
+  the style settings are keyed on. The legend reading falls back to the `close` column.
+- All four columns must exist and be exactly `bars.length` long. A wrong name throws out of
+  `chart.addIndicator`, because the first `calc` runs while the instance is being
+  constructed, so you get an error rather than an empty pane.
+- `colorBy` still applies and is judged on the close value, reaching body, border and wick
+  together the way [`Bar.color`](/docs/series-and-styling#per-bar-colour) does.
+- A user overriding the plot's chart type through its generated `<plotKey>:type` setting
+  degrades quietly: line, area and histogram read the `close` column.
+
+### Shading the pane by regime
+
+A regime study answers "which state is the market in right now", and that is a property of
+the whole bar, not a price. Drawn as a plot it would need a value to sit at and would drag
+the pane's autoscale around with it; drawn as a column behind the data it reads at a glance
+and costs the scale nothing.
+
+```ts
+background: ({ bars, values }) => values.trend.map((v) =>
+  v === null ? null : v > 0 ? 'rgba(38,166,154,0.10)' : 'rgba(239,83,80,0.10)'),
+```
+
+One entry per bar, `null` for a bar that should not be shaded. It runs after every `calc`
+alongside `markers`, `table` and `draws`, and the returned list replaces the previous one
+wholesale, so returning `[]` clears the layer. To shade the candles or another plot's pane
+from the same hook, return a list of columns instead, each naming its
+[target](#background-targets-256) (2.5.6).
+
+- The shading contributes **nothing to autoscale**, and it is drawn in the indicator's own
+  pane unless a column names a target.
+- Band edges are bar midpoints, so consecutive bars sharing a colour coalesce into one fill
+  and two neighbouring runs abut exactly rather than overlapping by a pixel. Everything
+  outside the visible range is dropped before any painting, so a two-state regime over 50k
+  bars is a handful of fills per frame, not one per bar.
+- **Pass a translucent `rgba()`.** The layer sits below the series but above the grid, so an
+  opaque colour hides the grid lines inside its band.
+- The colours are anchored to the first bar's **time**, so a page of history arriving at the
+  left edge does not slide the shading off the bars it describes.
+- The layer is created lazily on the first non-empty result, and hidden rather than detached
+  when the indicator is hidden.
+
+`IndicatorBackground` is exported, so the same layer works as a plain primitive with no
+indicator behind it, the way `IndicatorDrawings` does:
+
+```ts
+import { IndicatorBackground } from 'openalgo-charts';
+
+const shade = new IndicatorBackground();
+chart.addPrimitive(shade, 0);          // pane index
+shade.setColors(colors, bars);         // `bars` supplies the time anchor
+shade.setVisible(false);
+```
+
+### Recolouring the price candles
+
+`colorBy` paints the indicator's own series. `barColors` paints the **price bars**, which is
+a different statement: a trend filter, a volatility regime or a higher-timeframe bias is a
+claim about the candles themselves, and drawing it as a second series beside them says
+something weaker.
+
+```ts
+barColors: ({ bars, values }) => values.bias.map((v) =>
+  v === null ? null : v > 0 ? '#26a69a' : '#ef5350'),
+```
+
+One entry per price bar, `null` to leave that bar its own colour. Hiding the indicator
+withdraws the colours, and so does removing it.
+
+The engine never writes into the bar objects you handed `setData`: it clones only the bars
+whose colour actually changes and republishes those, so the overlay cannot reach back into
+your array or outlive the indicator. A pass where nothing changed writes nothing at all,
+which is the common case on a live tick.
+
+<Callout type="warning">
+**Only one indicator's colours can be on the candles at a time.** The most recent publisher
+wins, which is deterministic rather than arbitrary: publishers run in `addIndicator` order,
+so the same instance wins every frame. Two known gaps follow from keeping this cheap:
+
+- Removing the **winner** while a second publisher is still live drops the bars back to
+  their own colours until that publisher's next recompute.
+- The bars' own colours are snapshotted the first time an index is touched, and the
+  snapshot is dropped when the first bar's time changes. Prepending older history changes
+  it, so the snapshot is retaken from bars that already carry the overlay. That is
+  invisible while the indicator is live, and shows up as a tinted left-hand region if you
+  then remove it.
+</Callout>
+
+### The calculation context
+
+`calc` and `calcTail` take one more optional argument: what the calculation cannot read off
+the bars themselves. It is **optional and trailing**, so every descriptor written against
+`calc(bars, settings, store)` keeps its exact signature and its exact behaviour.
+
+```ts
+calc: (bars, settings, store, ctx) => {
+  const signal = compute(bars, settings);
+  // Do not signal off a bar that is still moving. Default to acting, so a
+  // caller that passes no context behaves the way it always did.
+  const settled = ctx?.barState.isConfirmed ?? true;
+  if (!settled) signal[signal.length - 1] = null;
+  return { signal };
+},
+calcTail: (bars, settings, from, previous, store, ctx) => { ... },
+```
+
+**`IndicatorCalcContext`**
+
+| Member | Type | Description |
+|---|---|---|
+| `barState.isNew` | `boolean` | The most recent update **appended** a bar rather than replacing one. False on a full history load, because there was no update to append. |
+| `barState.isConfirmed` | `boolean` | Explicit replay/provider state when available, otherwise interval/calendar clock inference. |
+| `barState.isRealtime` | `boolean` | This execution follows a live source update. False for initial calculations, historical loads, settings refreshes and replay on native charts. |
+| `barState.lastIndex` | `number` | `bars.length - 1`, and `-1` when there are no bars. |
+| `execution` | `IndicatorExecutionContext?` | Native provenance, change kind, source/history revisions and confirmation source. Optional for older custom hosts. |
+| `symbol` | `string?` | The instrument, when the host knows one. |
+| `interval` | `string?` | The timeframe (`'5m'`, `'1d'`), on the same terms. |
+| `timezone` | `string` | The chart's IANA zone, the calendar its axis is labelled in. |
+| `now()` | `number` | Chart wall clock in UTC seconds, the clock the countdown row reads. |
+| `transformed` | `boolean?` | `true` when the bars are a transform's elements (a study on the chart's own bars of a transformed series), so their times do not mark out the clock. Absent otherwise. |
+
+<Callout type="info">
+**`isConfirmed` uses the declared interval when available.** Fixed bars close at their
+recorded opening plus the interval duration. Calendar bars use the next boundary in the
+configured timezone. Unknown and count-driven intervals remain unconfirmed. Without an
+interval, the legacy gap estimate remains, including a confirmed single bar. Empty
+history is confirmed. Explicit `series.setData`/`update` confirmation metadata
+overrides inference; replay's own forming/completed state has first precedence.
+
+`symbol` and `interval` come from `chart.setDataContext`, or from a custom
+`IndicatorHost`. They remain undefined when the host has not supplied them.
+When you do have `interval`, the
+[interval introspection helpers](/docs/custom-intervals#reading-a-code-back) turn it into a
+count and a unit rather than a string match against the handful of codes you happened to
+test on.
+</Callout>
+
+`execution.sourceId` identifies the source series within its chart/host, keeping
+replacement sources from sharing cached results. `provenance` is `history`, `live`
+or `replay`. `change` is `initial`,
+`reset`, `prepend`, `append`, `replace`, `correction` or `refresh`. Its `revision`
+advances with source mutations; `historyRevision` also changes whenever a cached
+prefix may be invalid. This makes same-shaped history replacements and coalesced
+historical corrections take a full calculation. On a transformed chart, a forming
+element that a newer source bar dates again at its index (a Kagi vertex, a range bar)
+is a live `replace`, or an `append` when the bar also added elements after it. `confirmationSource` is `provider`,
+`replay`, `clock`, `unknown` or `empty`. Mutations can coalesce into one calculation;
+these counters do not promise one script execution per provider tick.
+
+Native replay remains non-realtime while paused, stepping or seeking. Stopping it
+restores historical execution and the saved tail confirmation. `now()` remains
+the chart wall clock. A custom host that omits `sourceState` retains the old
+timestamp-based tail inference and sticky realtime flag.
+
+### Alerts
+
+Descriptor conditions emit `indicator:alert`. For user-created price, drawing
+or study thresholds with expiry, lifecycle state and draggable lines, use
+[`AlertController`](/docs/alerts). The two event contracts are separate.
+
+A crossover of an indicator's own columns is something only that indicator knows how to
+name, so the condition is declared on the descriptor and the runtime watches it:
+
+```ts
+alerts: [{
+  id: 'cross-up',                       // stable within the descriptor
+  title: 'MACD crossed up',
+  frequency: 'oncePerBar',
+  message: 'MACD histogram turned positive',   // defaults to `title`
+  when: ({ values, index }) => {
+    const h = values.histogram;
+    return index > 0 && (h[index - 1] ?? 0) <= 0 && (h[index] ?? 0) > 0;
+  },
+}],
+```
+
+A trigger emits [`indicator:alert`](/docs/events#indicator-alerts) on the chart's own bus:
+
+```ts
+chart.on('indicator:alert', ({ indicatorId, instanceId, alertId, title, time }) => {
+  notify(`${title} at ${new Date(time * 1000).toLocaleTimeString()}`);
+});
+```
+
+`when` is handed `{ bars, values, settings, index }` and judges **one bar**, so a rule that
+compares against the previous bar reads `index - 1` itself.
+
+The optional `IndicatorAlertSpec.frequency` uses `IndicatorAlertFrequency`:
+
+| Frequency | When a true condition emits |
+| --- | --- |
+| omitted | Once for each newly appended bar, retaining the original tail-only rule. Same-time updates do not emit. |
+| `everyUpdate` | Each observed live calculation after chart batching. Several provider ticks on one bar can coalesce into one calculation. |
+| `oncePerBar` | The first matching live calculation for that bar, even when the condition was false at its opening. |
+| `onBarClose` | Once when native confirmation closes the bar. A false condition at close is not reconsidered. |
+| `once` | The first matching live result in this instance's lifetime. Removing and recreating the study creates a fresh lifetime. |
+
+Historical loads, settings changes, repaint, asynchronous requested-data refresh
+and replay do not emit alerts. They cannot consume a `once` alert. A delivered
+`once` remains spent across source changes, history resets and replay; bar
+checkpoints are seeded silently when history is replaced or replay restores it.
+
+Close confirmation uses the chart's own clock and interval or an explicit provider
+confirmation. A newer appended bar closes the previous observation, including
+count bars, even when the new tail is marked `forming`. Coalesced appends can
+close several observations. A same-time `series.update(bar, { confirmation:
+'confirmed' })` can close the current bar without a price change. Clock closure
+is observed on the next eligible live calculation, without a polling timer;
+repaint, settings and asynchronous refresh alone do not trigger it.
+
+A calculation that appends several bars after an unchanged history (ticks one frame
+batched, or one source bar that completes several Renko bricks; the other transforms
+add at most one element per source bar) judges each new bar in turn,
+as separate appends would, whatever the frequency. The newest may still be forming,
+so a close alert judges it only once it closes. A calculation that changed an earlier
+bar seeds silently instead. On a Kagi or range bar chart a newer source bar dates the
+forming element again at its index; that is the same bar revised, so it is not judged
+as new, and an alert that already delivered on it or closed it stays that way.
+
+A study on the underlying bars (`barSource: 'underlying'`) reads each element at the bar
+it was completed on, so the elements one bar completed all read that bar, and its alerts
+count the bars it computes on rather than the elements: such a bar is judged once, at the
+first element it completed, whatever the frequency. `oncePerBar` delivers at most once
+per underlying bar, `onBarClose` judges a bar after that bar has closed, and
+`everyUpdate` judges an update only when an element reads the bar it moved. On the
+chart's own bars every element is a bar of the study and is judged on its own.
+
+Close predicates and message functions, and any alert judged at a bar before the
+newest, receive only bars and output values through their evaluated index. Use
+causal calculations so those values do not already contain future information. A
+predicate or message error leaves that delivery unspent and reports through
+`dataStatus()`; a later live revision can retry, while repeated reads do not
+repeat successful sibling alerts. Subscriber
+exceptions happen after native dispatch is committed and do not retry that
+delivery.
+
+The event is native dispatch, with at-most-once checkpoints for synchronous
+reentry. The host owns any logging, notifications or delivery acknowledgement.
+Try the [live alert policy example](/examples#indicator-alerts-on-live-updates)
+to compare same-time ticks, confirmation, resets and replay.
+
+For a signal that arrives from outside the calculation entirely (a subscription your
+`attach` opened), use the imperative half instead: `ctx.emit(event, payload)` on
+[the attach context](#the-attach-context) puts anything you like on the same bus. Declare
+the name in `ChartEventMap` so a host's `chart.on` is typed for it; see
+[typed payloads](/docs/events#typed-payloads).
+
+### Calculation errors (2.4.0)
+
+A `calc` (or any hook) that throws once the indicator is on the chart is caught by the
+runtime rather than thrown into the render loop. The failure is published as
+`{ state: 'error', error }` on the instance's data status (`dataStatus()`,
+`subscribeDataStatus`, and the `indicator:data-status` chart event, the same channel a
+Tier-2 fetch failure uses), the previous plots stay up, the studies behind it still
+recompute that frame, and the next pass that succeeds publishes `ready`. The constructor's
+own pass is still unguarded on purpose: a descriptor that cannot compute at all is refused
+by `addIndicator`, not added as an empty pane.
+
+```ts
+import { IndicatorInputError } from 'openalgo-charts';
+
+calc: (bars, s) => {
+  const fast = Number(s.fast), slow = Number(s.slow);
+  if (fast >= slow) throw new IndicatorInputError('Fast length must be below slow length');
+  ...
+}
+```
+
+`IndicatorInputError` names a condition the user can fix, so a host can tell it from a bug
+and put the message beside the study instead of in a console.
+
+### Descriptor reference
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Registry key. |
+| `name` | `string` | Display name. |
+| `category` | `string?` | Grouping for a picker UI. |
+| `placement` | `'onchart' \| 'pane'` | Overlay the price pane, or take a new one. |
+| `hasSource` | `boolean?` | Opt into a source button that emits `indicatorSource`; the host owns and displays the code. |
+| `inputs` | `IndicatorInput[]` | Tunable settings; `type` is what a settings UI renders. |
+| `plots` | `IndicatorPlot[]` | One per drawn series. `type` is any registered chart type; `overlay: true` puts that one plot on the price pane; [`ohlc`](#a-plot-drawn-as-candles) names four columns so the plot draws as bars; `offset` (2.4.0) paints the column that many bars to the right, the shifted tail landing in the right margin; `colorParts` (2.4.0) colours a candle plot's body, wick and border apart. |
+| `fills` | `IndicatorFillSpec[]?` | Optional shaded bands. `between` names two `calc` columns, which need not be plots. `colorBy` computes each bar's color; `gradientBy` computes each bar's gradient; `gradient` supplies a static or computed price-anchored gradient for the whole band. Per-bar color takes precedence. `overlay: true` draws the band on the price pane beside overlay plots. |
+| `calc` | `(bars, settings, store, ctx?) => IndicatorValues` | Full recompute. `ctx` is the optional [calculation context](#the-calculation-context). |
+| `calcTail` | `(bars, settings, fromIndex, previous, store, ctx?) => IndicatorValues \| null` | Optional incremental path. Sixteen built-ins implement it (2.5.8), see below. |
+| `markers` | `({ bars, values, settings }) => IndicatorMarker[]` | Optional bar-anchored signal markers, run after every `calc`. Shapes include `cross` and `xcross`, and `paneTop` / `paneBottom` pin a glyph to the plot edge (2.4.0). A mark may name a [target](#drawing-and-marker-targets): `overlay: true` for the candles, `plot` for another plot. |
+| `markerAnchor` | `'plot' \| 'price'` | Defaults to the first plot. `'price'` selects the primary series for an indicator on the price pane when one exists. Applies to marks that name no target. |
+| `table` | `({ bars, values, settings }) => \{ rows, options \} \| null` | Optional corner-pinned summary grid, run after every `calc`. |
+| `tables` | `({ bars, values, settings }) => IndicatorTableSpec[]` | Multiple grids with stable, unique nonempty `id` values, `rows`, optional `options` and optional `overlay`. Omitted IDs are removed. Takes precedence over `table`. |
+| `draws` | `({ bars, values, settings }) => IndicatorDrawing[]` | Optional free-standing shapes anchored to time and price, run after every `calc`. A `label` or `box` with a `tooltip` or an `id` (2.4.0) is hit-testable: clicks reach `subscribeClick` and the tooltip paints on hover. A shape may name a [target](#drawing-and-marker-targets): `overlay: true` for the price pane, `plot` for another plot's pane and scale. |
+| `background` | `({ bars, values, settings }) => (string \| null)[] \| IndicatorBackgroundSpec[]` | Optional [per-bar shading](#shading-the-pane-by-regime) behind the indicator's own pane, run after every `calc`. The list form (2.5.6) sends columns to [targets](#background-targets-256): `overlay: true` for the price pane, `plot` for another plot's pane. |
+| `barColors` | `({ bars, values, settings }) => (string \| null)[]` | Optional [recolouring of the price candles](#recolouring-the-price-candles), run after every `calc`. |
+| `alerts` | `IndicatorAlertSpec[]?` | Optional [conditions the runtime watches](#alerts), emitted as `indicator:alert`. `message` may be a function of the bar that fired (2.4.0). |
+| `levels` | `(ctx) => IndicatorLevel[]` | Optional horizontal reference lines. `ctx` is the settings plus `bars` and `values`, so a level can be data-derived. |
+| `range` | `(settings) => \{ min, max \} \| null` | Optional fixed pane range (RSI 0..100). |
+| `attach` | `(ctx) => (() => void) \| void` | Optional lifecycle for external data (Tier 2). |
+
+`fills[].colorBy({ index, a, b, values, settings })` and `gradientBy` read calculation
+indices before any plot offset. The first plot's offset controls where the fill is
+drawn. `colorBy` returns a string and `gradientBy` returns a `FillGradient`; either
+may return `undefined`. A point color overrides its gradient, which overrides the
+whole-band gradient, which overrides the up/down colors.
+`gradient` can be a `FillGradient` object or
+`({ bars, values, settings }) => FillGradient | undefined`. It applies to the whole
+band, with optional `topValue` and `bottomValue` price anchors. All callbacks refresh
+after every calculation, including settings changes and same-bar updates.
+
+Both gradient forms use `{ topColor, bottomColor, topValue?, bottomValue? }`. Omitted
+anchors use the whole band's finite maximum and minimum. To shade each local range,
+return its `a` and `b` as the two anchors. A change starts at that bar's shared edge;
+a simultaneous plot crossing splits at the intersection. Gaps do not bridge. The
+stops follow their prices during panning, scale changes and inversion. Direct
+`IndicatorFill` users can set the same object on each `FillPoint.gradient`.
+
+```ts
+fills: [{
+  between: ['upper', 'lower'], opacity: 0.2,
+  gradientBy: ({ a, b }) => a === null || b === null ? undefined : {
+    topValue: a, bottomValue: b, topColor: '#26a69a', bottomColor: '#4f8cff',
+  },
+}]
+```
+
+Each `tables` entry uses `{ id, rows, options?, overlay? }`. Existing IDs reuse their
+grid when reordered or updated. `options` patches `ChartTableOptions`; `rows` replaces
+its cells. A missing ID removes its grid; `[]` removes all grids. `overlay: true` keeps
+a grid on the price pane; other grids follow the indicator when moved. Changing that
+flag recreates the grid. Hiding the indicator clears its grids until it is shown;
+removing the indicator disposes them. Invalid or duplicate IDs reject the table
+update and publish an error status without replacing existing grids. The single
+`table` hook remains supported. See the [live example](/examples#computed-fills-and-multiple-summary-grids).
+
+The [typed study input inventory](#typed-study-inputs) covers scalar, source,
+symbol, session and interactive inputs. A `source` input picks a price series;
+`INDICATOR_SOURCES` is the
+canonical option list for a UI. An `interval` holds a timeframe code the engine can bucket
+by (the widget renders a select over the built-in tokens and the registered codes, with an
+empty first entry for the chart's own interval); a `time` holds a wall-clock string in the
+chart's zone, `YYYY-MM-DD HH:MM`, which `zonedStringToUtcSeconds` turns into a bar time.
+
+<Callout type="warning">
+**Use `calcTail` when a full calculation is expensive.** Calculations are scheduled
+with rendering, so several ticks can share one calculation. Work depends on the
+formula and loaded history; fresh window calculations can cost O(n * period).
+A tail implementation returns values for `[fromIndex, bars.length)` and the runtime
+splices them onto the previous result. Return `null` to fall back to a full `calc`.
+Always recalculate the forming bar rather than reusing its previous value.
+
+The runtime only offers you the tail path when the previous result still describes every
+bar before it: the first bar's time must be unchanged, and the last bar must be either
+that same bar replaced or one appended after it. A symbol change or a page of history
+arriving at the left edge falls back to a full `calc` instead of splicing onto a history
+that no longer exists.
+</Callout>
+
+Whichever path computed the values, a recompute writes each plot in place: a pass
+whose bars begin with the times the last pass wrote sends only the points that
+changed, and the last point, to the plot's series, and the chart's shared time index
+is rebuilt only when the set of times changes (2.5.8). What each plot holds is the
+same as a whole rewrite would leave.
+
+#### The built-ins' tails (2.5.8)
+
+The built-in `sma`, `ema`, `wma`, `rsi`, `atr`, `adx`, `macd`, `bollinger`, `vwap`,
+`supertrend`, `stochastic`, `obv`, `cci`, `keltner-channel`, `donchian`,
+`parabolic-sar`, `zlema`, `vidya`, `elder-ray`, `schaff-trend-cycle`, `volatility-squeeze`,
+`zigzag` and `high-low-52-week` have a `calcTail` of their own. A tick costs them a step, or one window, instead of
+a pass over the loaded history, and the spliced result equals a full `calc` of the same
+bars value for value, NaN and negative zero included. A study that carries state from bar
+to bar rebuilds it once after each full calculation, so the first tick after a load or a
+settings change costs about one pass.
+
+A window length is read as a whole number, rounded and at least 1, in `calc` and in the
+tail alike (14.5 reads as 15), so a fractional length no longer turns the tail off. Their
+tail declines, and the full `calc` runs, for a negative Donchian `offset`, any VWAP
+`offset`, and a VWAP bar that changes how the history's sessions are read: the first
+overnight gap in a short history, or a bar that moves the median gap between bars.
+`zigzag` declines when a tick changes a bar before the tail, which is its last leg
+repainting (see [ZigZag](#zigzag)).
+
+A descriptor that spreads a built-in does not inherit its `calcTail`: the built-ins hold
+it as a property a spread does not copy. Such a descriptor recomputes in full on every
+tick through its own `calc`, as it did before the built-ins had tails, so a column it adds
+or a value it changes is never skipped. To keep the tail, copy it by name, and only when
+your `calc` returns the built-in's result unchanged for the settings it is given.
+
+```ts
+const ema = getIndicator('ema');
+registerIndicator({
+  ...ema,
+  id: 'ema-localized',
+  name: 'Exponential average',
+  // Same calc, same columns: the built-in's tail is safe to copy.
+  calcTail: ema.calcTail,
+});
+```
+
+## A built-in on a higher timeframe
+
+A 15-minute EMA or an hourly Supertrend on a 1-minute chart, without changing the chart's
+interval and without a second data source: 29 built-ins take a `timeframe` input, an
+interval whose empty default is the chart's own.
+
+```ts
+const ema = chart.addIndicator('ema', { length: 20, timeframe: '15m' });
+ema.setSettings({ timeframe: '1h' });
+ema.setSettings({ timeframe: '' });   // the chart's own timeframe again
+```
+
+Empty, which is the default, the study is exactly what it was: the same calculation and the
+same live tail, so a chart that never sets it draws what it drew before, and a layout saved
+by an earlier version loads and computes as it did. `getState()` and `indicatorDefaults()`
+carry the new key for these 29 studies only.
+
+Set, the chart's bars are folded to that interval, the study runs on the folded bars, and
+each bucket's value is drawn from the first bar of the bucket after it, then held across
+that bucket. A value appears once its period has closed and never changes after, live or on
+a reload. The bars of the first bucket are empty, and the legend names the timeframe
+(`EMA 20 close 15m`).
+
+Buckets follow the chart's calendar. Days and weeks are cut in the chart's timezone, and a
+sub-day bucket starts at the session open, which is read from the bars as the time of day
+most of the loaded days first trade at. An NSE hourly bucket therefore runs 09:15 to 10:15
+rather than 09:30 to 10:30, and the day's last is 15:15 to 15:30; a New York chart starts
+its buckets at 09:30, and a market that trades round the clock at midnight.
+
+| Case | What happens |
+|---|---|
+| A timeframe no coarser than the chart's interval | The chart's own timeframe: nothing is folded. |
+| An unknown code, a tick or volume interval, or a chart whose bars close on trade flow | Refused. `addIndicator` throws; a later `setSettings` sets the study's data status to `error` with the reason, and the next good setting clears it. A layout saved that way restores the study in that status. |
+| The `source` set to another study's output | Refused while a timeframe is set: an output is not a bar that can be folded. |
+| A live tick inside a bucket | The held values stand. The bar that opens a new bucket recomputes the fold once. |
+| A negative `offset` on VWMA or Donchian | It shifts a later bucket onto bars already shown, so it recomputes on every tick. |
+| A short history | The fold has only the loaded bars: an hourly EMA 20 needs about 20 hours of them. |
+| A chart that transforms its bars (Renko, Heikin Ashi and the rest), with the study on the chart's bars | Refused the same way: the elements' times are no clock. Compute the study on the underlying bars (**Compute on** in its settings, or `setBarSource('underlying')`) and it folds them, each value read at the bar its element completed on. |
+| Renko, Kagi or point and figure elements a host transformed itself and fed as the chart's bars | They cannot be told from time bars, so they are folded by their times, which means nothing. Compute a timeframe study on time bars. |
+
+The widget's study settings show the input as a select, **Chart** first and then the
+intervals the host serves (`intervals` in the widget options), and the reference host does
+the same with its own intervals. Try the
+[higher-timeframe example](/examples#a-built-in-study-on-a-higher-timeframe).
+
+**Which studies take it.** The moving averages: SMA, EMA, WMA, VWMA, Hull, DEMA, TEMA,
+ALMA, Smoothed, T3, Least Squares, KAMA, McGinley Dynamic, Zero Lag EMA and VIDYA. The
+bands: Bollinger, Keltner, Donchian and Envelope. Then Supertrend, Parabolic SAR, ATR, RSI,
+MACD, Stochastic, Stochastic RSI, Williams Percent Range, CCI and ADX.
+
+**Which do not, and why:**
+
+| Studies | Why |
+|---|---|
+| VWAP, TWAP | Anchored to the session or a period and accumulated within it: folded, the line barely moves and loses its anchor. |
+| CPR, Average Daily Range, 52 Week High/Low | Already computed from daily or longer periods. |
+| On-Balance Volume, Accumulation/Distribution, Price Volume Trend, Negative and Positive Volume Index, Net Volume | Running totals from the first loaded bar: a fold changes the step, not the reading. |
+| Volume and the three open interest studies | Each bar's own reading, which is the chart's timeframe. |
+| Ichimoku Cloud, Detrended Price Oscillator, Williams Alligator | Displaced or centred by a count of chart bars. |
+| HalfTrend, Williams Fractals, RSI Divergence, Consolidation and Breakout, AlphaTrend, WaveTrend Pro, ZigZag | Markers, pivots and swing lines dated at bars: folded they would repeat across a bucket, and a pivot is confirmed by later bars. |
+| Hull Suite, Seasonality | Recolour the candles or draw a table. |
+
+The rest are not in this first list. `withTimeframe` from `openalgo-charts/indicators` gives
+any study that computes from the bars alone, and reads no later bar, the same input:
+
+```ts
+import { registerIndicator, getIndicator } from 'openalgo-charts';
+import { withTimeframe } from 'openalgo-charts/indicators';
+
+registerIndicator(withTimeframe(getIndicator('mfi')));   // the built-in, with a timeframe
+```
+
+It throws for a descriptor that already has a `timeframe` input or that brings its own data
+through `attach`.
+
+## Higher timeframes: `securitySeries` (2.4.0)
+
+A study written for a script language asks for the daily high on a 5-minute chart and gets
+a column the same length as the chart. `securitySeries` is that fold, from the chart's own
+bars, one value per source bar, so it needs no second data source:
+
+```ts
+import { securitySeries } from 'openalgo-charts/indicators';
+
+calc: (bars, s) => {
+  const day = securitySeries(bars, '1d', { timezone: String(s.timezone ?? '') || undefined });
+  return { high: day.high, low: day.low };   // (number | null)[] aligned to bars
+}
+```
+
+It returns `open`, `high`, `low`, `close`, `volume`, `bucketStart` (the first source bar's
+time in the bucket) and `isNew` (true on the first bar of each bucket). The options pick
+one of three readings, and the difference is the whole point:
+
+| Option | What bar `i` reads | Repaints live? |
+|---|---|---|
+| default | The bucket **as it stood at bar i**: open so far, high and low so far, the bar's own close, volume so far. | No, it never uses a later bar. |
+| `offset: k` | The bucket completed `k` buckets before, held constant across the current one: `close[1]` on the higher timeframe. `null` until one exists. | No. |
+| `lookahead: true` | The current bucket's **final** values on all of its bars. | Yes. Uses bars that had not happened yet; here so a source that did this can be reproduced, not recommended. |
+
+Buckets follow the chart's calendar: a day is a day in `timezone`, a week starts on Monday
+there, a registered calendar interval cuts on its own period, and a sub-day interval is
+anchored to the epoch unless `session: '0915-1530'` is given, which anchors it to the
+session open the way an exchange cuts hourly bars (a 30-minute bucket on a 09:15 open runs
+09:15 to 09:45, not 09:00 to 09:30). A tick or volume interval, a negative `offset` and an
+unreadable `session` throw `IndicatorInputError`.
+
+### Calculate on requested bars before alignment
+
+Use `securityExpression` when the calculation itself needs the requested
+timeframe. It aggregates bars first, calculates there, then aligns the named
+columns back to the chart. An average of already aligned `securitySeries` values
+counts repeated values as extra observations.
+
+```ts
+import { securityExpression, sma, nulls } from 'openalgo-charts/indicators';
+
+calc: (bars, settings) => securityExpression(bars, '1h', requested => ({
+  mean: nulls(sma(requested.map(bar => bar.close), 20)),
+}), { timezone: String(settings.timezone), session: '0915-1530' })
+```
+
+`SecurityExpressionOptions` accepts `timezone`, `session` and `mode`:
+
+| Mode | Result on the chart |
+| --- | --- |
+| `confirmed` (default) | Previous observed bucket's result, held from the next bucket's first bar. |
+| `developing` | Current partial bucket's result, recalculated for every source prefix. |
+| `lookahead` | Current bucket's final result on its earlier bars too. Uses future observations in historical values. |
+
+The callback must be pure and causal. It receives frozen copies and returns named
+arrays, one result per requested bar. Confirmed and lookahead modes evaluate the
+complete folded history once, so causal indexing remains the callback's
+responsibility. Developing mode exposes no later source bars and calls the
+expression once per source bar; its column names must remain stable.
+Non-finite results become null. Empty source history returns an empty object
+without evaluating. Timestamps must be finite and strictly increasing.
+
+Source bars must be at the requested interval or finer. This helper uses supplied
+data only. It does not fetch other symbols or reconstruct lower-timeframe bars.
+Missing buckets are absent and the last bucket is never confirmed by the clock.
+Session anchors follow local wall-clock time across offset changes. Count-driven
+intervals are rejected. Try the [executable example](/examples#calculate-an-hourly-average-on-minute-bars).
+
+### Separate requested data and availability
+
+`alignRequestedExpression` calculates on supplied bars from another symbol or
+interval, then aligns the results to explicit evaluation times.
+`requestedIntrabars` groups those results into arrays inside explicit windows.
+Both helpers use data you supply. They do not fetch data, register a provider or
+aggregate candles. Existing `securitySeries` and `securityExpression` behavior
+is unchanged.
+
+```ts
+import { alignRequestedExpression, type RequestedExpression } from 'openalgo-charts/indicators';
+
+const snapshot = {
+  bars: [10, 20, 30].map((close, i) => ({ time: i * 120, open: close, high: close, low: close, close })),
+  availableAt: [60, 180, 300], confirmed: [true, true, true],
+};
+const expression: RequestedExpression = bars => ({
+  mean: bars.map((bar, i) => i === 0 ? null : (bar.close + bars[i - 1].close) / 2),
+});
+const times = [0, 60, 120, 180, 240, 300];
+const carried = alignRequestedExpression(times, snapshot, expression);
+// carried.mean: [null, null, null, 15, 15, 25]
+const sparse = alignRequestedExpression(times, snapshot, expression, { gaps: 'missing' });
+// sparse.mean: [null, null, null, 15, null, 25]
+```
+
+`RequestedBarsSnapshot` contains three aligned arrays: `bars`, `availableAt` and
+`confirmed`. Openings must be finite and strictly increasing. An availability
+timestamp is UTC seconds at or after that observation's opening; null means it is
+unknown. Confirmation is an explicit boolean, including on count-driven bars.
+
+Only the confirmed prefix with known availability can emit. An unconfirmed or
+unknown row blocks itself and every later row, without removing any observations
+from the expression's input. Earlier eligible values may still carry. Each result
+waits for the greatest availability timestamp in its prefix, so a delayed ancestor
+also delays dependent results.
+
+The `RequestedExpression` callback receives frozen copies of the entire requested
+history and runs once before alignment. Return named arrays with exactly one
+result per requested observation. The callback must be pure and causal: result
+`i` may depend only on observations through `i`. The helper cannot enforce that
+rule inside your calculation or reconstruct forming-bar history from final OHLC.
+Null and nonfinite numerical results become null; a newer null replaces an older
+finite value.
+
+`RequestedAlignmentOptions.gaps` controls alignment:
+
+| Mode | Result |
+| --- | --- |
+| `carry` (default) | Latest eligible requested row at or before each evaluation time, including null values. |
+| `missing` | Emit only when the selected requested row changes. The first target is an initial reading; other positions are null. |
+
+Evaluation times must be finite and strictly increasing. When several requested
+rows become available together, alignment selects the latest row.
+
+For arrays of intrabars, pass `RequestedTimeWindow` objects with finite
+`{ start, end }` UTC seconds, in order without overlap:
+
+```ts
+import { requestedIntrabars } from 'openalgo-charts/indicators';
+
+const grouped = requestedIntrabars([
+  { start: 0, end: 180 }, { start: 180, end: 360 },
+], snapshot, expression, { asOf: 270 });
+// grouped.times: [[0, 120], []]
+// grouped.values.mean: [[null, 15], []]
+```
+
+`RequestedIntrabarValues` has `times: number[][]` and named nested columns in
+`values`. A row belongs to a window by its opening in `[start, end)`, and its
+effective availability must be at or before both the window end and the optional
+finite `RequestedIntrabarOptions.asOf`. Delayed observations never move to later
+windows. Empty windows return empty arrays, and null results keep their row
+positions. Rolling calculations span requested history across window boundaries.
+Build session windows from the desired calendar explicitly; these helpers infer
+neither sessions nor closes from gaps between candles.
+
+All input validation happens before the callback, including rows after a blocked
+prefix. Malformed metadata, target order, options or output shapes throw
+`IndicatorInputError`. An empty snapshot returns no columns without evaluating;
+an empty target with nonempty requested history still produces named empty
+columns. Try the [runnable example](/examples#external-values-with-explicit-availability).
+
+## Managed requested snapshots
+
+Use `createRequestedIndicator` when a study requests another instrument's
+observations from the chart's native provider. It manages loading, replacement,
+cancellation, retry and replay cutoffs, then runs your expression on the requested
+bars before aligning the results to the chart. The existing pure helpers remain
+useful when you already own the snapshot lifecycle.
+
+The host supplies explicit metadata:
+
+```ts
+chart.setBarsProvider({
+  requestBars: request => history.loadBars(request),
+  requestSnapshot: request => history.loadSnapshot(request),
+});
+```
+
+`requestSnapshot` returns a `RequestedBarsSnapshot` with equally sized `bars`,
+`availableAt` and `confirmed` arrays. Each finite opening time is strictly later
+than the previous one. Availability is a UTC second at or after the opening,
+or null when unknown. Confirmation is an explicit boolean. The helper does not
+infer either property from the next candle or from the wall clock.
+
+```ts
+import { registerIndicator } from 'openalgo-charts';
+import { createRequestedIndicator } from 'openalgo-charts/indicators';
+
+registerIndicator(createRequestedIndicator({
+  id: 'requested-close', name: 'Requested close', placement: 'pane', inputs: [],
+  plots: [{ key: 'close', type: 'line', style: { color: '#e8a23a' } }],
+  request: ({ bars }) => ({
+    symbol: 'BENCHMARK', interval: '1h',
+    from: bars[0]?.time ?? 0,
+    to: bars[bars.length - 1]?.time ?? 0,
+  }),
+  expression: requested => ({ close: requested.map(bar => bar.close) }),
+}));
+const study = chart.addIndicator('requested-close');
+study.subscribeDataStatus(status => renderStatus(status.state));
+```
+
+The `RequestedIndicatorDescriptor` keeps the ordinary identity, placement, input,
+plot, level and range fields. `request(context)` selects a complete history
+window, including any warmup your calculation needs; returning null marks the
+selection unsupported. Its `RequestedIndicatorContext` contains source `bars`,
+current `settings`, optional `dataContext` and native `requestState`. The same
+context, with `calculation` when available, reaches
+`expression(requestedBars, settings, context)`.
+
+The expression receives frozen copies and returns each scalar plot key or
+declared OHLC source column with one value per requested bar. It must be pure and causal through each result
+index. Nonfinite results become null. `gaps: 'carry'` holds the latest eligible
+reading, including null; `'missing'` emits only newly selected readings.
+
+Targets default to source opening times. `targetTimes(context)` can supply
+finite strictly increasing evaluation times, exactly one per source bar. For a
+study that should observe releases after the final source bar opens, opt in to
+the replay playhead for that final target:
+
+```ts
+targetTimes: ({ bars, requestState }) => bars.map((bar, index) =>
+  index === bars.length - 1 ? Math.max(bar.time, requestState?.replay?.asOf ?? bar.time) : bar.time),
+```
+
+The maximum preserves ordered targets while replay updates its clock before
+replacing the source bars; the snapshot cutoff still limits availability.
+
+`IndicatorSnapshotRequest.asOf` is a historical knowledge cutoff, separate from
+opening-time bounds. Availability-aware replay clamps it to the playhead and
+notifies studies even when no new source observation appears. Every returned row
+is validated, then only the confirmed known prefix available by the cutoff
+reaches the expression. **The provider must return the historical value versions
+known then, or reject an unsupported cutoff.** Final OHLC and availability
+timestamps alone cannot recover those versions. Legacy replay without an `asOf`
+clock is unsupported for this strict helper; raw `requestBars` is unchanged.
+
+Call `chart.invalidateRequestedData()` when the current provider receives new
+values or confirmation metadata without a chart-price update. Replacing the
+provider, changing source identity/history, changing the requested instrument or
+explicit selector cutoff, and entering, leaving or moving backward in replay
+clear obsolete output and cancel its generation. Tail changes and forward
+refreshes coalesce into one active request plus one latest follow-up. An unchanged
+selection preserves pending work across style changes. The helper stores copied
+raw snapshots rather than cached aligned output.
+
+`dataStatus()` reports `loading`, `ready`, `empty`, `unsupported` or `error`;
+`retryData()` retries the current request. Ready describes a nonempty valid
+snapshot, so its aligned plot can still be entirely null. Removal and destruction
+cancel requests and reject stale publication. A raw function provider is still
+supported for raw bars; `hasSnapshotProvider()` tests the additional snapshot
+capability. The host supplies transport and announces updates.
+
+Try the [deferred-provider example](/examples#requested-snapshots-from-a-deferred-provider),
+which lets you release responses, revise values, replace the provider and confirm
+the latest observation independently.
+
+## Calculation helpers
+
+The calculation helpers used by the built-ins are exported, so your own descriptor
+can use the same primitives. Their initialization, missing-value and unit conventions
+are part of each helper's contract; a shared mathematical name does not guarantee
+identical values across implementations.
+
+They live in the indicator tier, not the base bundle:
+
+```ts
+import { registerIndicator } from 'openalgo-charts';
+import { linreg, stdev, nulls } from 'openalgo-charts/indicators';
+```
+
+They take flat arrays rather than bars (`readonly number[]`, or booleans for `barsSince`),
+return an array of the same length, and write `NaN` into warmup slots. `nulls(values)`
+converts that to the `null` a `calc` result wants; `sourceValues(bars, source)` (from the
+package root) is how you get the input array out of the bars in the first place.
+
+| Helper | Signature | Notes |
+|---|---|---|
+| `sma` | `(values, period, options?)` | First value at index `period - 1`. A non-finite input does not poison the running sum. |
+| `wma` | `(values, period, options?)` | Linear weights; the most recent observation carries weight `period`. |
+| `rma` | `(values, period, options?)` | Wilder smoothing, seeded with the SMA. The basis of RSI, ATR and ADX. |
+| `smaSeededEma` | `(values, period, options?)` | EMA seeded with an SMA, emitting NaN before the seed. The base bundle's `ema` seeds from the first value and emits from index 0. Choose the initialization required by your calculation. |
+| `stdev` | `(values, period, options?)` | Rolling population standard deviation. |
+| `dev` | `(values, period, options?)` | Mean absolute deviation from the SMA. |
+| `highest` / `lowest` | `(values, period, options?)` | Rolling maximum / minimum. |
+| `highestBars` / `lowestBars` | `(values, period, options?)` | Offset to the extreme bar: zero for current, negative into history. Ties choose the most recent bar. Skip mode retains original indices across gaps. |
+| `change` | `(values, n = 1)` | `values[i] - values[i - n]`. |
+| `roc` | `(values, n)` | `100 * (values[i] - values[i - n]) / values[i - n]`. |
+| `rollingSum` | `(values, period)` | Rolling sum over the window. |
+| `cumulative` | `(values)` | Running total from the first bar; non-finite terms count as zero. |
+| `alma` | `(values, period, offset, sigma)` | Gaussian-weighted average, `offset` 0..1 and `sigma` > 0. |
+| `vwma` | `(values, volumes, period)` | `sma(value * volume) / sma(volume)`. |
+| `linreg` | `(values, period, offset = 0)` | The least-squares line over the window, evaluated `offset` bars back from its right-hand end. That offset is how LSMA shifts its plot without refitting. |
+| `swma` | `(values)` | The fixed four-bar symmetric average, 1/2/2/1 over 6. |
+| `stoch` | `(source, high, low, period)` | Three independent series, which is why it does not take bars: Stochastic RSI passes the RSI in for all three. |
+| `cci` | `(values, period)` | `(value - sma) / (0.015 * dev)`. |
+| `correlation` | `(a, b, period)` | Population Pearson correlation over the window, in two passes oldest first: both means before any deviation, so it keeps its precision at high price levels. A window with a missing value or an overflowing step is `NaN`, and so is a flat window whose deviations are all exactly zero (three bars of 5). A flat window whose mean is inexact reads what the arithmetic gives, as in the companion scripting language: three bars of 0.1 average to slightly more than 0.1, so the deviations are a few units in the last place and the reading is exactly 0 against a bar index (Trend Strength Index) and within rounding of 0 against another series. |
+| `percentRank` | `(values, period, options?)` | Percentage of the previous `period` observations at or below the current one, excluding the current subject from the window. |
+| `percentileNearestRank` | `(values, period, percentage)` | Nearest-rank, so the result is an actual member of the window rather than an interpolation between two. Visible on a window as short as 3. |
+| `pivotHigh` / `pivotLow` | `(values, left, right)` | Confirmed `right` bars late: the answer lands on the confirming bar and refers to the value `right` bars back. Strict on both sides, so a tie is not a pivot. |
+| `barsSince` | `(cond: boolean[])` | Bars elapsed since `cond` was last true, `NaN` before the first. |
+| `valueWhen` | `(cond, source, occurrence)` | `source` at the n-th most recent true, counting the current bar. `0` is the latest. |
+| `nulls` | `(values)` | `NaN` to `null`, for the `calc` return. |
+
+`ema`, `rsi`, `atr`, `trueRange` and `supertrend` are **not** here: they ship in the base
+bundle and the tier imports them from it, so they come from `openalgo-charts`.
+
+### Missing observations
+
+The existing `sma`, `wma`, `rma`, `smaSeededEma`, `stdev`, `dev`, `highest`,
+`lowest`, `highestBars`, `lowestBars` and `percentRank` helpers accept an optional
+final `NumericalWindowOptions` argument. With a scalar period, omitting it
+selects each helper's default calculation and warmup behavior.
+Passing `{}` selects `missing: 'propagate'`; passing `{ missing: 'skip' }` selects
+finite-observation windows.
+
+Default `sma(values, period)` and `rollingSum(values, period)` with positive
+safe-integer scalar periods sum each current window chronologically, requiring
+finite inputs and a finite sum. SMA divides once after summation. Gaps and
+overflow expire with their window, so later valid windows recover. These paths
+use O(bars * period) time and O(1) extra space excluding output. Explicit SMA
+options, including `{}`, and varying-length SMA keep their separate compensated
+policy. Unsupported scalar periods retain their existing behavior.
+
+Default scalar `wma`, `stdev` and `dev` with valid periods accumulate their window
+terms oldest first and omit nonfinite final results. Explicit options, varying
+lengths and unsupported periods keep their existing behavior.
+
+Default scalar `rma` and `smaSeededEma` with positive safe-integer periods seed
+from the first complete finite window with a finite chronological sum. Missing
+or overflowing seed windows can expire, allowing a later window to seed. Once
+seeded, a missing input produces NaN while retaining the previous running state.
+An overflowing running update remains unavailable without restarting. Ordinary
+work is O(bars + period); repeated overflowing seed windows can cost
+O(bars * period). Explicit options retain their separate policies below. The
+base tier's first-value `ema` and the EMA descriptor's resolved study-source
+propagation keep their existing behavior.
+
+ADX/DMI treats unavailable high/low changes as absent observations, retaining
+each smoother's state across gaps. Zero or unavailable smoothed true range leaves
+directional ratios and strength absent. It does not feed an old displayed ratio
+into the strength calculation; later finite observations resume the saved states.
+
+With options, NaN and infinities are missing. Propagation requires a complete
+chronological finite window. Skip collects `period` finite observations and holds
+numeric window values across gaps. Extreme-bar offsets retain original indices,
+age across missing bars and choose the latest tie. Rank excludes the current
+observation and returns NaN when that observation is missing. Recursive smoothing
+resets and reseeds after a propagated gap, while skip retains its previous state.
+Option-path periods must be positive safe integers; invalid periods throw
+`RangeError` and invalid policies throw `TypeError`.
+
+```ts
+sma([1, 3, NaN, 5], 2, { missing: 'skip' }); // [NaN, 2, 2, 4]
+highestBars([5, 1, NaN, NaN], 2, { missing: 'skip' }); // [NaN, -1, -2, -3]
+```
+
+### Varying window lengths
+
+`sma`, `wma`, `stdev`, `dev`, `highest`, `lowest`, `highestBars`,
+`lowestBars` and `percentRank` also accept a `readonly number[]` for `period`.
+Every existing scalar call keeps its calculation, including calls with missing-value
+options. With an array, bar `i` uses `period[i]`; omitted options and `{}` both select
+`missing: 'propagate'`. A constant length array matches the scalar call with `{}`.
+
+Length arrays must match the source length exactly. Each element must be a positive
+safe integer or `NaN`. A `NaN` length produces a gap at that bar, without forgetting
+its source observation. Insufficient history also produces `NaN`. Zero, negative,
+fractional, infinite and unsafe lengths throw `RangeError`; nonnumeric elements
+and array holes throw `TypeError`. A length mismatch throws `RangeError`. The entire
+parameter array is validated even when the source is empty or still warming up.
+
+Propagation uses a complete chronological window. Skip mode collects the requested
+number of finite observations, keeping their original order and bar indices. A
+changed length reevaluates that history even on a missing source bar. Earlier
+observations remain available when a length grows after shrinking. Extremum offsets
+stay negative into the original history, and ties select the latest bar. Rank uses
+previous observations only, counts equality and requires a finite current subject.
+
+```ts
+import { barsSince, sma, highestBars, nulls } from 'openalgo-charts/indicators';
+
+const values = [100, 2, 4, 6, 8, 10];
+const resets = [false, true, false, false, true, false];
+const lengths = barsSince(resets).map(distance => distance + 1);
+const mean = sma(values, lengths);
+// [NaN, 2, 3, 4, 8, 9]: average since the latest reset, including that bar.
+const plotColumn = nulls(mean);
+
+sma([2, 4, NaN], [1, 2, 1], { missing: 'skip' }); // [2, 3, 4]
+highestBars([5, NaN, 5, 4], [1, 1, 2, 2], { missing: 'skip' }); // [0, -1, 0, -1]
+```
+
+These array overloads preserve output length and never mutate inputs. Work is
+proportional to the input plus the total evaluated window lengths, with linear
+working storage; choosing long windows on every bar can take quadratic time.
+`rma`, `smaSeededEma` and the statistics helpers below still take scalar periods.
+
+This example resets its average every 40 bars. The reset condition can instead
+come from another native calculation or your descriptor's own events.
+
+<RunnableExample height={340} tiers={['indicators']} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 200, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+const resets = bars.map((_, index) => index % 40 === 0);
+const lengths = lib.barsSince(resets).map(distance => distance + 1);
+const mean = lib.sma(bars.map(bar => bar.close), lengths);
+chart.addSeries('line', { style: { color: '#e0b020', lineWidth: 2 } })
+  .setData(bars.map((bar, index) => ({
+    time: bar.time,
+    open: mean[index], high: mean[index], low: mean[index], close: mean[index],
+  })));
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+### Varying pivot widths
+
+`pivotHigh(values, left, right)` and `pivotLow(values, left, right)` accept each
+width independently as a scalar or `readonly number[]`. Calls with two scalar
+widths keep their existing behavior. When either width is an array, arrays must
+align with the source, and widths must be nonnegative safe integers. `NaN` array
+elements give local gaps; a scalar companion cannot be `NaN`. Invalid numbers
+or mismatched lengths throw `RangeError`; malformed arrays or elements throw
+`TypeError`. Both sides are validated before calculation, including warmup bars.
+
+At confirmation index `i`, both widths come from that index. The candidate is
+`i - right[i]`, using the scalar right width when supplied. Its left neighbors and
+all bars through `i` must be available and finite. A high must be strictly greater
+than every neighbor; a low must be strictly smaller. Ties on either side reject the
+candidate. Zero widths are valid; two zero widths return the finite current value.
+
+```ts
+import { pivotHigh } from 'openalgo-charts/indicators';
+
+const highs = [1, 5, 2, 1, 0];
+const right = [1, 1, 1, 2, 3];
+const confirmed = pivotHigh(highs, 1, right);
+// [NaN, NaN, 5, 5, 5]
+// Confirmation indices 2, 3 and 4 all refer to candidate index 1.
+```
+
+Results stay on confirmation bars. A varying right width can confirm the same
+candidate more than once; the helpers do not deduplicate those results. Missing
+widths invalidate only the current evaluation. Candidate-bar widths do not control
+a later confirmation. To anchor a marker or drawing at the candidate, recover its
+index as `i - right[i]` and use that source bar's time. A single `plot.offset` cannot
+represent varying right widths. Numerical confirmation requires the supplied bars;
+it does not additionally check whether the current market bar has closed.
+
+### Statistics and conditions
+
+These additional helpers accept `NumericalWindowOptions`, with
+`missing: 'propagate'` by default or `'skip'` for finite-observation windows.
+Existing helpers retain their existing behavior.
+
+| Helper | Signature | Behavior |
+| --- | --- | --- |
+| `rollingMedian` | `(values, period, options?)` | Middle value, averaging the middle pair for even periods. |
+| `rollingMode` | `(values, period, options?)` | Most frequent value; frequency ties choose the smallest. |
+| `rollingVariance` | `(values, period, options?)` | Population variance. `RollingVarianceOptions.sample: true` uses the sample denominator; a one-value sample is undefined. |
+| `rollingRange` | `(values, period, options?)` | Maximum minus minimum. |
+| `percentileLinear` | `(values, period, percentage, options?)` | Interpolate at sorted rank `(period - 1) * percentage / 100`. |
+| `rankCorrelation` | `(values, period, options?)` | Rank correlation against chronological order, scaled to -100..100; average tied ranks. Constant windows are undefined. |
+| `centerOfGravity` | `(values, period, options?)` | Negative weighted sum divided by sum; newest weight 1, oldest weight `period`. A zero sum is undefined. |
+| `runningMin` / `runningMax` | `(values, options?)` | Extreme from the first bar through the current bar. |
+| `crossesAbove` / `crossesBelow` / `crosses` | `(a, b, options?)` | Crossing one aligned array past another. Previous equality qualifies; current equality does not. |
+| `rising` / `falling` | `(values, period, options?)` | Current value strictly above/below all `period` prior values, excluding the current bar. |
+
+The output length matches the input. Numeric warmup and undefined statistics are
+`NaN`; predicate warmup is `false`. A period must be a positive safe integer;
+percentages must be finite in 0..100. Crossing arrays must have equal lengths.
+Invalid numbers throw `RangeError`; invalid option values throw `TypeError`.
+
+NaN and infinities are missing observations. Rolling functions require a complete
+chronological window by default. In skip mode they collect the last `period`
+finite observations and hold results across gaps. Running extrema default to
+propagating a missing observation through the rest of history; skip mode holds the
+last finite extreme. Crossings default to adjacent finite pairs; skip mode uses
+the latest jointly finite pair. Rising/falling use prior chronological bars or
+prior finite observations, respectively. A missing current value always makes
+a predicate false.
+
+```ts
+import { rollingMedian, rollingVariance, crossesAbove, nulls } from 'openalgo-charts/indicators';
+
+const observations = [1, 3, NaN, 5];
+const median = rollingMedian(observations, 2, { missing: 'skip' });
+// [NaN, 2, 2, 4]
+const sample = rollingVariance(observations, 2, { missing: 'skip', sample: true });
+// [NaN, 2, 2, 2]
+const signals = crossesAbove(observations, median);
+const plotted = nulls(median);
+```
+
+## Numerical contract
+
+The built-in studies are compared cell by cell with the companion scripting
+language, which runs the same published formulas under its own rules for missing
+data and floating point. Most readings agree to the last bit. Where they do not,
+the difference is either a defect, corrected as it is found and listed in the
+changelog, or one of the thirteen documented choices below. These are deliberate
+and stay as they are. Each gives the chart's rule, the language's rule, the
+studies it touches with the number of differing cells in the audit corpus, and
+the one thing you can rely on. The engineering record, with the specification
+references, is `docs/reference-coverage/numerical-audit.md` in the repository.
+
+Here a missing observation is a price field that is `NaN`, or a bar without
+volume.
+
+### K1: extremes skip a missing bar
+
+- **Chart:** `highest`, `lowest`, `highestBars` and `lowestBars` without
+  options ignore a missing value in the window and report the extreme of the
+  bars that are present, including when the window reaches into a chained
+  study's warmup.
+- **Language:** every windowed function has no value while any bar of its
+  window is missing, and warmups add up.
+- **Studies:** Ichimoku, Stochastic, Williams VIX Fix, Donchian, Chande Kroll
+  Stop, Chandelier Exit, Aroon, Aroon Oscillator, Fisher Transform, Bollinger
+  BandWidth expansion and contraction, Chop Zone, SMI, Ulcer Index, Stochastic
+  RSI and Williams %R (6,704 cells).
+- **You can rely on:** channel, range and extreme-age studies keep printing
+  across a missing bar. In your own descriptor, pass `{ missing: 'propagate' }`
+  to these helpers when a window with a gap must have no reading.
+
+### K2: no volume means no trade
+
+- **Chart:** a bar whose volume is `undefined` traded nothing. The money-flow
+  studies also count a bar with a missing price as no flow, so running totals
+  print their unchanged value and averages over them advance on that bar.
+- **Language:** a missing volume is missing, not zero, and a missing bar
+  prints a gap and leaves totals and averages where they were.
+- **Studies:** VWAP, MFI, Volume, OBV, A/D, Chaikin Money Flow, Chaikin
+  Oscillator, Elder Force Index, Net Volume, VWMA, PVT, PVO and AlphaTrend
+  (6,200 cells).
+- **You can rely on:** every built-in reads an `undefined` volume as zero
+  traded. A `NaN` volume is a different case, covered under
+  [Missing volume](#missing-volume) below.
+
+### K3: CCI on a flat window
+
+- **Chart:** when every typical price in the window is the same, the mean
+  deviation is exactly 0 and CCI prints 0; its average and bands follow.
+- **Language:** dividing by a zero deviation has no value, so CCI is absent.
+- **Studies:** CCI (1,915 cells).
+- **You can rely on:** CCI reads 0 only on a genuinely flat window. A window
+  holding a missing bar, or one whose deviation overflows, has no reading.
+
+### K4: first reading one bar early
+
+- **Chart:** Supertrend prints its raw band on the ATR seed bar, PVT prints 0
+  on the first bar, and Choppiness counts the first bar's high minus low as its
+  true range.
+- **Language:** each of these withholds that bar and starts one bar later.
+- **Studies:** Supertrend, PVT and Choppiness Index (42 cells).
+- **You can rely on:** these three print one bar before the language
+  equivalent; every later bar is unaffected by this rule.
+
+### K5: host exponential and logarithms
+
+- **Chart:** ALMA, Choppiness and Fisher Transform use the JavaScript engine's
+  `Math.exp`, `Math.log10` and `Math.log`, which are not required to be
+  correctly rounded.
+- **Language:** uses correctly rounded recipes for these functions.
+- **Studies:** ALMA, Fisher Transform and Choppiness Index (6,078 cells).
+- **You can rely on:** these three can differ from the language, and between
+  browsers, in the last bit only.
+
+### K6: units and scaling
+
+- **Chart:** Historical Volatility is a percentage,
+  `(100 * stdev) * sqrt(365 / per)`, and Ease of Movement applies its divisor
+  (10000 by default) inside each bar's term before averaging.
+- **Language:** historical volatility is a ratio and ease of movement has no
+  scaling constant, so a comparison applies the factor at a different step.
+- **Studies:** Historical Volatility and Ease of Movement (5,013 cells).
+- **You can rely on:** Historical Volatility reads in percent and Ease of
+  Movement is scaled per bar; a converted language reading can differ in the
+  last bits.
+
+### K7: Aroon Oscillator in one step
+
+- **Chart:** the oscillator is `(100 * (upAge - downAge)) / length`, rounded
+  once.
+- **Language:** has no oscillator call; composing one subtracts two separately
+  rounded Aroon readings.
+- **Studies:** Aroon Oscillator (2,117 cells).
+- **You can rely on:** the oscillator can differ in the last bits from Aroon Up
+  minus Aroon Down.
+
+### K8: Parabolic SAR conventions
+
+- **Chart:** the stop is held outside the previous two bars' range, a reversal
+  puts the new stop at the larger of the extreme and the reversal bar's high
+  (the lower of the extreme and its low for a short), and a tie on the first
+  pair starts long.
+- **Language:** its parabolic stop is the unclamped recurrence, a reversal stop
+  is the extreme reached, and the first pair starts long only on a strictly
+  higher close.
+- **Studies:** Parabolic SAR (1,570 cells).
+- **You can rely on:** the chart's stop never enters the previous two bars'
+  range and includes the reversal bar, so on most bars of a fast trend it is a
+  different line from the language's.
+
+### K9: overflow near the largest number
+
+- **Chart:** arithmetic that overflows keeps an infinity, which can settle to a
+  finite limit (a zero weight, a 90 degree angle, a sign) or be skipped.
+- **Language:** a step that overflows has no value at once, and a condition on
+  a missing value is false.
+- **Studies:** Connors RSI, Chop Zone, Net Volume, Klinger Oscillator,
+  McGinley Dynamic, Volatility Stop and AlphaTrend (1,240 cells).
+- **You can rely on:** only values near 1.8e308 are affected; ordinary prices
+  and volumes never reach them.
+
+### K10: negative zero
+
+- **Chart:** the Chop Zone angle and Net Volume can return `-0`.
+- **Language:** always stores `0`.
+- **Studies:** Chop Zone and Net Volume (143 cells).
+- **You can rely on:** `-0` plots and prints as 0. Compare with `=== 0`, not
+  `Object.is`.
+
+### K11: Klinger and a NaN volume
+
+- **Chart:** Klinger skips a bar whose volume is `NaN`, as a missing bar, and
+  reads an `undefined` volume as zero.
+- **Language:** a missing volume is missing, not zero. The comparison supplies
+  zero for it explicitly (`orElse(volume, 0)`), to test the chart's documented
+  rule rather than the language's.
+- **Studies:** Klinger Oscillator (904 cells).
+- **You can rely on:** send a bar without volume as `undefined`, and Klinger
+  reads it as zero like every other volume study.
+
+### K12: Relative Volatility Index warmup
+
+- **Chart:** the study's two 14-bar averages restart after every missing value
+  until the standard deviation has its first reading. During that warmup the
+  upper average has nothing on a bar that rose and the lower one nothing on a
+  bar that did not, so a fourteen-bar one-way run can seed one of them only for
+  the next bar the other way to restart it. After the warmup, a missing close
+  is held across instead.
+- **Language:** has no call for this study. Composed from its exponential
+  average, each average keeps a seed made in the warmup and holds it across the
+  missing values that follow.
+- **Studies:** Relative Volatility Index with a Length above 16, on a series
+  whose warmup holds a fourteen-bar one-way run followed by a turn. The default
+  Length 10 is never affected. On a 400-bar test wave the first reading is bar
+  42 against the language's 38 at Length 30, and 52 against 39 at Length 40;
+  later readings differ by an amount that shrinks bar by bar.
+- **You can rely on:** on complete data the study reads exactly as it always
+  has, at every Length.
+
+### K13: PVO signal after a stretch with no volume
+
+- **Chart:** PVO has no reading where its slow volume average is exactly 0, and
+  its signal average then starts again: once PVO prints again, the signal and
+  histogram wait `signalLength - 1` bars for a fresh seed.
+- **Language:** has no call for this study. Composed from its exponential
+  average, the signal holds across the missing readings and continues on the
+  next one.
+- **Studies:** PVO with the SMA oscillator type, after zero or missing volume
+  for at least a slow window. With the default EMA oscillator the slow average
+  never returns to 0 once it has seen volume. On a 300-bar test series with 40
+  bars of zero volume the chart's signal is missing on 8 bars where the
+  language prints, and later values differ.
+- **You can rely on:** a stretch with no traded volume costs the PVO signal
+  one signal window after PVO returns; a series without such a stretch reads
+  as it always has.
+
+### Missing volume
+
+An `undefined` volume is zero traded in every built-in; that is the rule to
+build on. A `NaN` volume is not handled the same way everywhere yet, so there is
+no single rule for it. Each built-in that reads volume does one of two things
+with it:
+
+| A `NaN` volume is read as | Built-ins |
+| --- | --- |
+| Zero, exactly like `undefined` | Chaikin Money Flow, Chaikin Oscillator, Ease of Movement, Elder Force Index, Net Volume, VWMA, the VWMA lines of MA Ribbon, NVI, PVI, PVT, PVO, OBV with its smoothing and bands, A/D |
+| A missing bar: that bar, and any window or average holding it, has no reading, then the study recovers | Volume and its average, MFI, Klinger Oscillator, AlphaTrend, the VWMA smoothing option of CCI and of Relative Volatility Index, VWAP and its bands (the running totals leave that bar out) |
+
+Neither treatment loses the rest of the history. Until every study treats
+`NaN` the same way, map a feed's missing or unparseable volume to `undefined`
+before it reaches the chart.
+
+## Open interest studies
+
+Three built-ins read optional `Bar.oi` observations:
+
+| Indicator ID | Display |
+| --- | --- |
+| `open-interest` | A line in its own pane |
+| `open-interest-change` | Adjacent OI differences as a separate histogram |
+| `open-interest-buildup` | Price-candle colors for four adjacent price/OI regimes |
+
+Import `openalgo-charts/indicators`, supply observations on bars, and call
+`chart.addIndicator` with the desired ID. Missing OI leaves a gap. Change and
+buildup require both adjacent observations; they do not compare across a gap.
+Zero is a real reading. A tick without OI clears the forming bar's reading, so
+the live pane can have a gap even when its historical bars contain OI.
+
+Open interest is a level, not a flow. When aggregating bars, take the latest
+defined reading in each bucket and never add OI values. Declare instrument
+support through `ChartDataContext.hasOpenInterest`: supported with a missing
+reading, unsupported and unknown support are distinct states. See the
+[live OI example](/examples#open-interest-and-instrument-rules) and
+[Open interest guide](/docs/open-interest).
+
+## Tier 2: indicators with their own data
+
+Some series aren't derived from the chart's OHLCV at all: open interest, cumulative volume
+delta, PCR, an external analytics feed. `createTier2Indicator` wraps a fetch / subscribe
+lifecycle into an ordinary descriptor, so the runtime, settings, panes, and removal all work
+identically. There is no second runtime.
+
+```ts
+import { registerIndicator } from 'openalgo-charts';
+import { createTier2Indicator } from 'openalgo-charts/indicators';
+
+registerIndicator(createTier2Indicator({
+  id: 'provider-open-interest',
+  name: 'Provider Open Interest',
+  placement: 'pane',
+  inputs: [{ key: 'symbol', type: 'text', label: 'Symbol', default: 'NIFTY' }],
+  plots: [{ key: 'oi', type: 'line', title: 'OI' }],
+  refetchOn: ['symbol'],                       // these settings invalidate the data
+  fetch: async ({ settings, from, to }) => {
+    const rows = await loadOpenInterest(settings.symbol, from, to);
+    return rows.map((r) => ({ time: r.time, values: { oi: r.oi } }));
+  },
+  subscribe: (ctx, push) => streamOi(ctx.settings.symbol, (r) =>
+    push({ time: r.time, values: { oi: r.oi } })),
+}));
+```
+
+**Alignment rule.** External points carry their own timestamps, which rarely match bar
+times. Each bar takes the most recent point **at or before** it, last-known-value, never
+interpolated and never forward-looking. Bars before the first point are `null`.
+An external OI host carrying observations forward must expose their age or stale
+state. The built-in OI studies consume `Bar.oi` directly and preserve missing bars.
+
+**Combining with the chart's bars (2.4.0).** `series` names external columns to align
+besides the plots, and `calc(bars, external, settings, store, ctx)` folds them into the
+chart's own bars, so a relative strength or a beta against a benchmark is one descriptor.
+`Tier2Context.requestBars` carries the host's bar provider into `fetch`, so the benchmark
+comes from wherever the host keeps history rather than from a transport of your own:
+
+```ts
+registerIndicator(createTier2Indicator({
+  id: 'relative-strength', name: 'Relative Strength', placement: 'pane',
+  inputs: [{ key: 'against', type: 'text', label: 'Against', default: 'NIFTY' }],
+  plots: [{ key: 'ratio', type: 'line', title: 'Ratio' }],
+  series: ['bench'],
+  refetchOn: ['against'],
+  fetch: async ({ settings, from, to, requestBars }) => {
+    const bars = await requestBars!({ symbol: String(settings.against), interval: '1d', from, to });
+    return bars.map((b) => ({ time: b.time, values: { bench: b.close } }));
+  },
+  calc: (bars, external) => ({
+    ratio: bars.map((b, i) => (external.bench[i] ? b.close / external.bench[i]! : null)),
+  }),
+}));
+```
+
+Without `calc` the wrapper returns the aligned plot columns exactly as before.
+
+`refetchOn` names the settings that identify the external dataset. Changing one clears
+the previous dataset immediately and starts a new fetch, so old values cannot appear
+under a new symbol while its history loads or after that load fails. Include every
+data-affecting setting, such as symbol, exchange or resolution, in this list.
+
+A style change that leaves the data key unchanged reuses loaded data or the pending
+request. Live points received while history is loading are merged into the result and
+win at matching timestamps. A failed fetch keeps only live points belonging to the
+current key; `retryData()` or a context/settings change can retry the history request. Late results and
+callbacks from an earlier attachment are ignored after a settings change or removal.
+An empty successful history result is still loaded data and does not trigger another
+fetch on a style change. Omitting `refetchOn` uses no settings-derived key; chart context still identifies the dataset.
+
+### Native revisions and replay for external points
+
+`Tier2Context` includes optional `requestState: Readonly<IndicatorRequestState>`
+and `asOf`. Native request state identifies source and provider revisions, explicit
+external-data invalidation and the replay clock. `asOf` is the finite historical
+knowledge cutoff; `from` and `to` still describe the source-bar time window.
+
+A history-only study refreshes its forming overlap when a source update keeps
+the same timestamp. Repeated updates retain one active request and coalesce the
+latest desired window. New history at both ends can require separate prefix and
+tail requests. A prepend preserves loaded history only when the previous bars
+remain a proven unchanged suffix. Provider replacement, source identity changes, history reset or
+correction, and changed dataset settings clear old values and cancel obsolete
+work. Style changes preserve the dataset and its pending request. A live study
+uses subscription updates for ordinary source ticks.
+
+Call `chart.invalidateRequestedData()` when the external dataset changes
+independently of the price bars. This refetches the complete window, including for
+a subscribed study. Live arrivals after that request begins can override its
+response at matching timestamps; earlier cached live values cannot override a
+corrected history response.
+
+Native replay is unsupported by default for raw-point studies. The wrapper clears
+their values and stops live subscriptions. Set `supportsReplay: true` only when
+your loader can honor the replay cutoff:
+
+```ts
+supportsReplay: true,
+fetch: ({ from, to, asOf, signal }) => analytics.loadPoints({ from, to, asOf, signal }),
+```
+
+This opt-in promises that `fetch` returns the historical value versions known at
+`asOf`, with `Tier2Point.time` representing availability. The wrapper excludes
+points after the cutoff, but timestamps alone cannot recover older values from
+today's final dataset. Raw `requestBars` calls keep their existing behavior;
+they do not provide this guarantee. Your fetch must forward the cutoff to a
+source that supports it.
+
+Replay entry, exit and backward seeks clear the old dataset and cancel its work.
+Forward replay fetches the complete window and replaces the previous response.
+Live subscriptions remain stopped during replay. Alignment still reads the most
+recent available point at or before each source opening. Legacy replay without a
+finite availability clock remains unsupported even after opting in. Hand-built
+contexts without native request state retain their previous behavior.
+
+Try the [deferred external-point example](/examples#external-points-with-live-revisions).
+Use [managed requested snapshots](#managed-requested-snapshots) for calculations
+on another instrument's OHLC with explicit confirmation metadata.
+
+### The attach context
+
+`createTier2Indicator` is a wrapper over the descriptor's own `attach` hook, which any
+descriptor can implement directly. It is called once per instance and again after every
+settings change, and it returns a teardown function. The context it is handed:
+
+| Member | Type | Description |
+|---|---|---|
+| `settings()` | `IndicatorSettings` | Current settings. Read at call time, so do not capture the result. |
+| `bars()` | `Bar[]` | The chart's current source bars. |
+| `requestRecompute()` | `void` | Run `calc` again and repaint. Call it when external data arrives. |
+| `store` | `IndicatorStore` | Per-instance scratch, the same object `calc` receives. Survives a settings change, so a descriptor that caches there can no-op when nothing data-affecting moved. |
+| `symbol?()` | `string \| undefined` | The instrument on screen, when the host knows it. |
+| `interval?()` | `string \| undefined` | The timeframe, on the same terms. |
+| `timezone?()` | `string` | The chart's IANA zone, the one its axis is labelled in. |
+| `now?()` | `number` | Chart wall clock in UTC seconds: the same clock the countdown reads, so an indicator deciding whether the last bar is still forming agrees with the axis about it. |
+| `paneIndex?()` | `number` | The pane this instance drew into. Moves when panes are reordered, so read it rather than storing it. |
+| `addPrimitive?(p)` / `removePrimitive?(p)` | `void` | Attach an arbitrary primitive to this indicator's pane, and detach it again. Anything you attach is yours to remove in the teardown. |
+| `emit?(event, payload)` | `void` | Put an event on the chart's own bus, the one `chart.on(name, cb)` listens to. The imperative half of [`alerts`](#alerts): use it when the signal arrives from outside the calculation rather than from the bars. |
+| `requestBars?(request)` | `Promise<readonly Bar[]>` | Another instrument's or interval's bars from `chart.setBarsProvider`. The request has `symbol`, optional `exchange`, `interval`, opening-time bounds `from`/`to`, and optional `signal`. Caller, instance and provider cancellation compose. No registered provider rejects the request. |
+| `requestSnapshot?(request)` | `Promise<RequestedBarsSnapshot>` | Explicit availability and confirmation. `IndicatorSnapshotRequest` adds optional `asOf`, clamped to the availability-aware replay clock. Missing capability or legacy replay without a cutoff rejects. |
+| `requestState?()` | `Readonly<IndicatorRequestState>` | Current optional source provenance, `providerRevision`, `dataRevision`, `supportsSnapshots` and optional `replay: { time, asOf?, forming }`. Read at request time. |
+| `subscribeRequestChanges?(listener)` | `() => void` | Observe source/provider revisions, external-data invalidation and replay movement within a source observation. The returned function unsubscribes. |
+
+Everything after `store` is optional so a minimal context can be hand-built (a unit test
+exercising one descriptor's lifecycle), but the runtime always supplies them.
+
+<Callout type="info">
+**Supply source identity explicitly.** `chart.setDataContext({ symbol, exchange, interval })`
+makes that identity available under `chart.addIndicator`; without it, symbol and interval
+remain undefined. A custom host can supply the same identity through `IndicatorHost`.
+Clear the old source data before changing context, then install the new source bars.
+</Callout>
+
+## Supertrend
+
+`supertrendSeries(bars, period, multiplier)` returns `{ up, down }` so you can color the
+uptrend and downtrend legs differently (direction `-1` = up, `+1` = down).
+
+This is the raw function. The managed `chart.addIndicator('supertrend')` draws the same
+two legs and additionally shades the gap between the active stop and the candle bodies,
+using the hidden `bodyMid` column described under
+[filling against a column that is never plotted](#filling-against-a-column-that-is-never-plotted).
+
+<RunnableExample height={340} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+const st = lib.supertrendSeries(bars, 10, 3);
+chart.addSeries('line', { style: { color: '#26a69a', lineWidth: 2 } }).setData(st.up);
+chart.addSeries('line', { style: { color: '#ef5350', lineWidth: 2 } }).setData(st.down);
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+### Return type: SupertrendPoint
+
+`supertrend(bars, period?, multiplier?)` returns `SupertrendPoint[]`. Each element carries:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `value` | `number` | The band price level. `NaN` during ATR warmup (the first `period - 1` bars on complete data) and on a bar with no ATR or no close, which leaves the bands and direction as they were. |
+| `direction` | `-1` or `1` | `-1` = uptrend: band is support below price (bullish). `1` = downtrend: band is resistance above price (bearish). |
+
+`supertrendSeries` converts that array into `{ up: Bar[], down: Bar[] }`. The `up` series
+carries `value` only while `direction === -1`; the `down` series only while `direction === 1`.
+Non-active slots hold `NaN` so the renderer breaks the line at each trend flip, producing two
+separately colored segments. `SupertrendPoint` is a named export; see [Types](/docs/types)
+for the full type catalogue.
+
+## RSI
+
+Plot RSI in its own pane with 70/30 guide lines:
+
+<RunnableExample height={360} code={`const chart = lib.createChart(el);
+const bars = lib.generateBars(1700000000, 220, 3600);
+chart.addSeries('candlestick').setData(bars);
+
+chart.addSeries('line', { paneIndex: 1, style: { color: '#e0b020', lineWidth: 2 } })
+     .setData(lib.rsiSeries(bars, 14));
+chart.addPriceLine({ price: 70, color: '#ef5350', lineWidth: 1, dashed: true, id: 'r70' }, 1);
+chart.addPriceLine({ price: 30, color: '#26a69a', lineWidth: 1, dashed: true, id: 'r30' }, 1);
+
+chart.timeScale.fitContent(bars.length);
+return chart;`} />
+
+## EMA
+
+`emaSeries(bars, period)` returns a line you overlay on price (see
+[Series & Styling](/docs/series-and-styling)). Stack several periods for a ribbon.
+
+<Callout type="info">
+Need an indicator that is not built in? Compute it however you like - these helpers just
+return `Bar[]` (set close to the indicator value). Plot the result as a `line` series. For
+an entirely new on-chart drawing, write a [primitive](/docs/primitives-and-plugins).
+</Callout>
+
+## ATR
+
+The ATR family consists of two functions that build on each other. Both accept flat
+`readonly number[]` arrays rather than `Bar` objects, so they work on any OHLC source.
+
+### trueRange
+
+```ts
+trueRange(
+  high: readonly number[],
+  low: readonly number[],
+  close: readonly number[],
+): number[]
+```
+
+Returns the **raw true range per bar** with no smoothing. The first bar is `high[0] - low[0]`
+because there is no previous close. Every subsequent bar is the maximum of:
+
+- `high[i] - low[i]`
+- `Math.abs(high[i] - close[i - 1])`
+- `Math.abs(low[i] - close[i - 1])`
+
+Every output slot is finite; there is no warmup period.
+
+### atr
+
+```ts
+atr(
+  high: readonly number[],
+  low: readonly number[],
+  close: readonly number[],
+  period?: number,   // default 14
+): number[]
+```
+
+Smooths `trueRange` output using Wilder's formula. On complete data the first output lands
+at index `period - 1` (a plain average of the first `period` true ranges); from there each
+value is `(prev * (period - 1) + tr[i]) / period`. Slots before `period - 1` are `NaN`, which
+the line renderer skips as whitespace. A missing true range is a `NaN` slot that keeps the
+average, and the next finite one carries on from it; a gap before the seed moves it later.
+
+```ts
+import { atr, trueRange } from 'openalgo-charts';
+
+const rawTR   = trueRange(highs, lows, closes);   // complete data: finite for every bar, no warmup
+const atrVals = atr(highs, lows, closes, 14);     // complete data: NaN for bars 0-12, then Wilder ATR
+```
+
+<Callout type="info">
+`atr` is consumed internally by `supertrend`. Call it directly when you need a volatility
+measure for position sizing or stop distances, without computing the full band.
+</Callout>
+
+## Managed external data (2.1.6)
+
+`createTier2Indicator` now receives `ctx.dataContext` (optional symbol, exchange,
+interval) and `ctx.signal`. Forward the signal to your fetch. Set identity through
+`chart.setDataContext(...)`; the widget does this for its own feed. Clear the old
+primary series before changing context, then install the new source bars.
+
+`supports(ctx)` may return false when classified trades, open interest or another
+required dataset is unavailable. Do not synthesize those values from OHLCV.
+Context changes cancel obsolete work and refetch. History-only studies refresh
+same-time forming updates as well as a growing tail; live studies use their
+subscription unless explicitly invalidated. Native replay requires the explicit
+[raw-point capability](#native-revisions-and-replay-for-external-points) above.
+
+`indicator.dataStatus()` returns `IndicatorDataStatus | null`. The states are
+`loading`, `ready`, `empty`, `unsupported` and `error`, with optional `error` detail.
+Use `subscribeDataStatus(listener)` and release its returned unsubscribe function.
+`retryData()` retries the current source. The widget renders these states and
+Retry automatically. An error the study's inputs caused (an `IndicatorInputError`, such
+as a timeframe on transformed bars) shows its message instead, with no Retry, since
+the same inputs are refused the same way (since 2.6.0). `indicator:data-status` emits `{ id, indicatorId, status }`
+on the chart event bus. Existing synchronous indicators return null status.

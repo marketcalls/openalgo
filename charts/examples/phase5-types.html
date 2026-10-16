@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 5, all chart types</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+    select { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046; border-radius: 6px; padding: 4px 8px; }
+    #chart { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 5</strong>
+    <label>Type
+      <select id="type"></select>
+    </label>
+    <span style="margin-left:auto;opacity:.6">one registry, 13 chart types · pan / zoom / crosshair all work</span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars, registeredChartTypes } from '../dist/openalgo-charts.mjs';
+
+    const bars = generateBars(1_705_286_700, 300, 60);
+    const sel = document.getElementById('type');
+    for (const t of registeredChartTypes()) {
+      if (t === 'histogram') continue; // histogram shown as the volume pane
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t;
+      sel.appendChild(opt);
+    }
+
+    let chart, series;
+    function build(type) {
+      if (chart) chart.destroy();
+      document.getElementById('chart').innerHTML = '';
+      chart = createChart(document.getElementById('chart'), { priceAxisWidth: 64 });
+      series = chart.addSeries(type);
+      series.setData(bars);
+      window.__chart = chart;
+    }
+    sel.addEventListener('change', () => build(sel.value));
+    build('candlestick');
+  </script>
+</body>
+</html>

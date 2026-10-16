@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Drawing tools | OpenAlgo Charts</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #10141c; color: #d1d4dc; font: 13px system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #2a3445; }
+    header strong { margin-right: 4px; }
+    select, button { background: #1e2737; border: 1px solid #44516a; border-radius: 5px; color: inherit; font: inherit; min-height: 32px; padding: 5px 9px; }
+    select { max-width: min(270px, 100%); appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, #a6b3c8 50%), linear-gradient(135deg, #a6b3c8 50%, transparent 50%); background-position: calc(100% - 12px) 13px, calc(100% - 8px) 13px; background-size: 4px 4px; background-repeat: no-repeat; }
+    button { cursor: pointer; }
+    button:hover { border-color: #80a8f1; }
+    button:disabled { opacity: .45; cursor: default; }
+    button:focus-visible, select:focus-visible { outline: 2px solid #80a8f1; outline-offset: 2px; }
+    #chart { flex: 1; min-height: 330px; min-width: 0; }
+    #status { min-height: 38px; padding: 8px 14px; color: #a7b6cc; border-top: 1px solid #2a3445; }
+    #status strong { color: #d1d4dc; }
+    * { scrollbar-width: thin; scrollbar-color: #42506a #18202d; }
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: #18202d; }
+    ::-webkit-scrollbar-thumb { background: #42506a; border-radius: 4px; }
+    @media (max-width: 600px) { header { gap: 6px; padding: 8px; } header strong { width: 100%; } #status { padding: 8px; font-size: 12px; } }
+  </style>
+</head>
+<body>
+  <header aria-label="Drawing gallery controls">
+    <strong>Drawing tools</strong>
+    <select id="tool" aria-label="Drawing tool"></select>
+    <button id="sample">Show sample</button>
+    <button id="draw">Draw</button>
+    <button id="cursor">Cursor</button>
+    <button id="undo">Undo</button>
+    <button id="redo">Redo</button>
+    <button id="clear">Clear</button>
+  </header>
+  <main id="chart" aria-label="Simulated NIFTY drawing chart"></main>
+  <div id="status" role="status" aria-live="polite"></div>
+  <script type="module" src="./gallery.js"></script>
+</body>
+</html>

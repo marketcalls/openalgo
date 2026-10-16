@@ -1,0 +1,24 @@
+node_modules/
+.worktrees/
+dist/
+docs/api/
+__pycache__/
+website/public/api/
+*.log
+.DS_Store
+coverage/
+.vitest/
+tests/**/__screenshots__/*.actual.png
+tests/**/__screenshots__/*.diff.png
+test-results/
+playwright-report/
+.playwright/
+
+# Browser-validation screenshots written by the e2e/validation runs.
+artifacts/
+
+# Never let an npm auth token reach the repository.
+.npmrc
+
+# baseline build for e2e render-parity checks (scripts/build-baseline.mjs)
+dist-baseline/

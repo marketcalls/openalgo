@@ -1,0 +1,107 @@
+---
+title: Open Interest
+description: Carry optional OI observations through feeds, studies, replay and chart readouts.
+---
+
+# Open interest
+
+Open interest is the optional `oi` field on a `Bar`. It is the number of
+contracts outstanding at that observation, not traded volume. An omitted
+reading means unknown; `0` means the feed reported zero.
+
+## Supply readings and add studies
+
+Provide a container with `id="chart"`. Import the indicator tier to register
+the built-in OI studies; custom feeds can supply `oi` through the same series API.
+
+```ts
+import { createChart } from 'openalgo-charts';
+import 'openalgo-charts/indicators';
+
+const chart = createChart(document.getElementById('chart')!);
+chart.setDataContext({
+  symbol: 'CONTRACT', exchange: 'DEMO', interval: '1m', hasOpenInterest: true,
+});
+chart.setStatusLineOptions({ openInterest: true });
+const series = chart.addSeries('candlestick');
+series.setData([
+  { time: 60, open: 100, high: 103, low: 99, close: 102, volume: 20, oi: 140 },
+  { time: 120, open: 102, high: 104, low: 101, close: 103, volume: 10, oi: 150 },
+  { time: 180, open: 103, high: 104, low: 101, close: 102, volume: 15 },
+]);
+chart.addIndicator('open-interest');
+chart.addIndicator('open-interest-change');
+chart.fitContent();
+```
+
+The final bar produces a gap in the OI line. It does not add a zero reading or
+reuse the preceding bar's value. See the
+[live OI example](/examples#open-interest-and-instrument-rules).
+
+| Study ID | Output |
+| --- | --- |
+| `open-interest` | Pane line with plot key `oi` and compact quantity formatting. |
+| `open-interest-change` | Pane histogram with plot key `change`, showing adjacent OI differences. The first reading and a pair containing missing OI are null. |
+| `open-interest-buildup` | Main candle colors from adjacent price and OI changes. It adds no price plot or axis. |
+
+Buildup classifies long buildup, short buildup, short covering and long
+unwinding, with color inputs `longBuildupColor`, `shortBuildupColor`,
+`shortCoveringColor` and `longUnwindingColor`. Its calculated `state` is 1, 2, 3
+or 4 in that order. Missing readings leave the candle's own color. The default
+`unchanged: 'neutral'` leaves zero changes neutral; `'up'` treats them as
+nonnegative. Line and histogram styles use the normal generated plot controls.
+
+## Capability is separate from data
+
+`ChartDataContext.hasOpenInterest` and `chart.hasOpenInterest` have three states:
+
+| Value | Meaning |
+| --- | --- |
+| `true` | The instrument supports OI. A particular bar may still lack a reading. |
+| `false` | The instrument does not support OI. |
+| `undefined` | The host has not supplied capability metadata. |
+
+Do not infer capability from zero or an absent forming-bar reading. The OI
+status-line preference defaults off; enabling it shows a field only when a
+reading exists. Explicitly unsupported capability suppresses the field without
+clearing that preference. The preference survives chart state restoration;
+instrument capability must be supplied again from current host metadata.
+
+`InstrumentAdapter` can apply the same capability with the instrument's calendar
+and price rules. The widget retains it for an interval change on the same
+instrument and clears it when symbol or exchange changes. See
+[instruments](/docs/instruments) and [crosshair and legend](/docs/crosshair-and-legend).
+
+## Aggregation, live updates and replay
+
+Historical aggregation sums volume and retains the latest defined OI within
+each bucket. If none of its source bars contains OI, the bucket has no reading;
+it never borrows a level from the preceding bucket. `securitySeries` exposes a
+nullable `oi` column with the same developing/confirmed-bucket timing as its
+price columns. Enabling `lookahead` has the same future-data implications.
+
+Live `CandleBuilder` and `TickBarAggregator` replace OI with each finite tick
+reading. A tick that omits OI clears the forming bar's prior value, so a stale
+historical position is not presented as a fresh observation. A delayed history
+reply preserves the newer live observation, including absence or zero.
+
+Heikin Ashi retains OI because each output maps to one input bar. Price-generated
+Renko, Range, Line Break, Point and Figure and Kagi bars omit it. Arithmetic
+expressions also omit OI: combining contract prices does not define one contract's
+position size. During partial replay, only revealed sub-bars contribute OI;
+the final candle's reading appears at its completion.
+
+## Feed adapters and persistence
+
+Adapters should omit unavailable or nonfinite OI and retain genuine zero values.
+`OpenAlgoConfig.hasOpenInterest(request)` can explicitly return `false` to remove
+an unsupported instrument's placeholder history column. The callback receives
+the actual request, so it can handle concurrent instruments independently.
+The bundled OpenAlgo quote adapter does not supply live OI; do not manufacture a
+current value from its historical reading.
+
+Closed-bar caches preserve valid optional readings and reject malformed levels.
+Chart configuration snapshots store preferences and studies, not bar history.
+The host remains responsible for restoring the appropriate data and capability.
+[CSV export](/docs/chart-data-export) writes `oi` as its own column with blank
+missing cells and unchanged zero values.

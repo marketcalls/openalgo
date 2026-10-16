@@ -1,0 +1,509 @@
+---
+title: Timezones
+description: Set the chart's IANA timezone at construction or at runtime, and know exactly which labels, calendars and sessions move when you do.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Timezones
+
+Every chart labels time in one **IANA timezone**. It defaults to `Asia/Kolkata`, and one
+option changes it:
+
+```ts
+import { createChart } from 'openalgo-charts';
+
+const chart = createChart(el, { timezone: 'America/New_York' });
+```
+
+That single setting drives the time axis, the crosshair time tag, and every calendar
+boundary an indicator or a profile resets on. It never touches your data.
+
+## Why the default is IST
+
+`Asia/Kolkata` is the default for two reasons, and neither of them is that the engine is
+IST-only.
+
+1. **OpenAlgo is an Indian-market stack first.** Its REST history endpoint speaks IST
+   wall-clock strings, and NSE/BSE is the exchange most users point this at. A chart that
+   needs no configuration for the common case is the right default.
+2. **It keeps upgrades silent.** Before this option existed, the axis was hard-wired to
+   IST. A chart that passes no `timezone` draws labels that are byte-for-byte what it drew
+   in 1.2.0, so adding the option cannot move a label under anyone.
+
+There is a performance consequence worth knowing: IST observes no DST, so the default zone
+stays on fixed-offset integer arithmetic on the per-bar paths (session detection, profile
+bucketing) instead of going through `Intl`. Passing nothing costs nothing.
+
+<Callout type="info">
+IST is a **default**, not an assumption. Nothing in the engine hard-codes it: the axis, the
+crosshair, the session-anchored indicators and the profiles all read the zone you set.
+</Callout>
+
+## Set it at construction
+
+```ts
+import { createChart } from 'openalgo-charts';
+
+const chart = createChart(el, {
+  timezone: 'America/New_York',
+});
+```
+
+The name must be one the host runtime's `Intl` recognises. An unrecognised name **throws**
+at the call site rather than quietly labelling in the old zone, because a chart showing the
+wrong hours is the kind of wrong nobody notices until it costs money.
+
+## Change it at runtime
+
+A terminal that switches between an NSE symbol and a US one must not rebuild the chart to
+relabel it. `setTimezone` relabels in place, on the next frame, with no reload and no
+refetch:
+
+```ts
+chart.setTimezone('America/New_York');   // relabels, recomputes session-anchored studies
+chart.timezone();                        // -> 'America/New_York'
+```
+
+`applyOptions` sets it alongside anything else you are changing:
+
+```ts
+chart.applyOptions({ timezone: 'Europe/London', theme: lightTheme });
+```
+
+If the name comes from user input, a URL, or a saved profile, guard it instead of catching
+a throw:
+
+```ts
+import { isValidTimezone, DEFAULT_TIMEZONE } from 'openalgo-charts';
+
+const wanted = localStorage.getItem('tz') ?? DEFAULT_TIMEZONE;
+chart.setTimezone(isValidTimezone(wanted) ? wanted : DEFAULT_TIMEZONE);
+```
+
+<Callout type="info">
+The zone is also a **settings control** now, `time.timezone` on the Axes tab, so a generated
+dialog gets a zone picker without the host bolting one on and doing its own Cancel
+bookkeeping. It is a select over a curated IANA list with whatever zone the chart was built
+with folded in, so a chart configured outside the list still shows its own setting selected.
+A zone the runtime does not know is skipped rather than thrown, so one stale entry in a
+saved workspace cannot lose the rest of the apply. See
+[Settings & Menus](/docs/settings-and-menus#the-timezone-is-a-control-now).
+</Callout>
+
+### Following the symbol
+
+Most terminals derive the zone from the instrument's exchange rather than asking the user:
+
+```ts
+const EXCHANGE_ZONE: Record<string, string> = {
+  NSE: 'Asia/Kolkata',
+  BSE: 'Asia/Kolkata',
+  NASDAQ: 'America/New_York',
+  NYSE: 'America/New_York',
+  LSE: 'Europe/London',
+  TSE: 'Asia/Tokyo',
+};
+
+function loadSymbol(symbol: string, exchange: string, bars: Bar[]) {
+  chart.setTimezone(EXCHANGE_ZONE[exchange] ?? 'UTC');
+  series.setData(bars);
+}
+```
+
+## Copy-paste: the five common zones
+
+Each block is complete and independent. `chart.setTimezone(...)` takes the same string.
+
+```ts
+// India (NSE / BSE). This is the default, so the option can be omitted.
+const chart = createChart(el, { timezone: 'Asia/Kolkata' });
+```
+
+```ts
+// United States (NYSE / NASDAQ). Follows EST/EDT automatically.
+const chart = createChart(el, { timezone: 'America/New_York' });
+```
+
+```ts
+// United Kingdom (LSE). Follows GMT/BST automatically.
+const chart = createChart(el, { timezone: 'Europe/London' });
+```
+
+```ts
+// Japan (TSE). No DST.
+const chart = createChart(el, { timezone: 'Asia/Tokyo' });
+```
+
+```ts
+// UTC, for a desk that would rather read one clock everywhere.
+const chart = createChart(el, { timezone: 'UTC' });
+```
+
+The same bar, `2024-06-05 13:30 UTC` (the US regular open), reads differently in each:
+
+| Zone | Axis label | Crosshair tag |
+|---|---|---|
+| `Asia/Kolkata` | `19:00` | `Wed 05 Jun '24 19:00` |
+| `America/New_York` | `09:30` | `Wed 05 Jun '24 09:30` |
+| `Europe/London` | `14:30` | `Wed 05 Jun '24 14:30` |
+| `Asia/Tokyo` | `22:30` | `Wed 05 Jun '24 22:30` |
+| `UTC` | `13:30` | `Wed 05 Jun '24 13:30` |
+
+### Try it
+
+The buttons call `chart.setTimezone(zone)` and nothing else. Watch the time axis relabel,
+and hover the chart to see the crosshair tag follow:
+
+<RunnableExample height={380} code={`const chart = lib.createChart(el, { timezone: 'Asia/Kolkata' });
+const bars = lib.generateBars(1717594200, 180, 900);   // 15-minute bars from 2024-06-05 13:30 UTC
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(bars.length);
+
+el.style.position = 'relative';
+const row = document.createElement('div');
+row.style.cssText = 'position:absolute;left:12px;top:10px;z-index:4;display:flex;gap:6px;flex-wrap:wrap';
+el.appendChild(row);
+
+['Asia/Kolkata', 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'UTC'].forEach(function (zone) {
+  const b = document.createElement('button');
+  b.textContent = zone;
+  b.style.cssText = 'font:600 11px ui-monospace,monospace;padding:4px 8px;border-radius:4px;cursor:pointer;color:inherit;border:1px solid rgba(127,140,160,0.35);background:rgba(127,140,160,0.16)';
+  b.onclick = function () {
+    chart.setTimezone(zone);
+    Array.prototype.forEach.call(row.children, function (c) {
+      const on = c === b;
+      c.style.background = on ? '#2962ff' : 'rgba(127,140,160,0.16)';
+      c.style.color = on ? '#fff' : 'inherit';
+    });
+  };
+  row.appendChild(b);
+});
+row.firstChild.style.background = '#2962ff';
+row.firstChild.style.color = '#fff';
+return chart;`} caption="One chart, one dataset. Only the labels move." />
+
+## What actually changes
+
+Setting the zone changes **display and calendar bucketing**. It never changes the data.
+
+### Display
+
+- **Time axis tick labels**, including which ticks escalate to a day, month or year mark.
+  A New York chart escalates at New York's midnight and New York's 1 January, not at IST's.
+- **The crosshair time tag**, in the same zone as the axis under it.
+
+### Calendar bucketing
+
+Anything that resets on a calendar unit resolves that unit in the chart's zone:
+
+| Study | Unit that follows the zone |
+|---|---|
+| **VWAP** | `session`, `week`, `month`, `quarter` and `year` anchors |
+| **CPR** | the weekly and monthly pivot frames |
+| **TWAP** | the session fallback used when bar gaps cannot be read |
+| **Seasonality** | which month a bar's close is attributed to |
+| **Market Profile** | `day` / `week` / `month` session grouping, and the session window |
+| **Volume Profile** | `day` / `week` / `month` session grouping |
+
+Indicators added through `chart.addIndicator(...)` follow automatically: `setTimezone`
+recomputes them, so the numbers move with the axis rather than lagging a frame behind it.
+
+<Callout type="warning">
+This is not cosmetic. On a US symbol, the last ninety minutes of the 30 April New York
+session fall on **1 May** in IST, because 18:30 UTC is IST midnight. Read on `Asia/Kolkata`,
+Seasonality attributes them to May, the CPR May frame inherits April's high, and a monthly
+VWAP restarts mid-afternoon. Set `America/New_York` and all three land in April, where the
+trader put them.
+</Callout>
+
+<RunnableExample height={380} tiers={['indicators']} code={`const chart = lib.createChart(el, { timezone: 'Asia/Kolkata' });
+const bars = lib.generateBars(1717594200, 180, 900);
+chart.addSeries('candlestick').setData(bars);
+chart.addIndicator('vwap', { anchor: 'session' });
+chart.timeScale.fitContent(bars.length);
+
+el.style.position = 'relative';
+const row = document.createElement('div');
+row.style.cssText = 'position:absolute;left:12px;top:10px;z-index:4;display:flex;gap:6px';
+el.appendChild(row);
+
+['Asia/Kolkata', 'America/New_York'].forEach(function (zone, i) {
+  const b = document.createElement('button');
+  b.textContent = zone;
+  b.style.cssText = 'font:600 11px ui-monospace,monospace;padding:4px 8px;border-radius:4px;cursor:pointer;color:inherit;border:1px solid rgba(127,140,160,0.35);background:rgba(127,140,160,0.16)';
+  b.onclick = function () {
+    chart.setTimezone(zone);
+    Array.prototype.forEach.call(row.children, function (c) {
+      const on = c === b;
+      c.style.background = on ? '#2962ff' : 'rgba(127,140,160,0.16)';
+      c.style.color = on ? '#fff' : 'inherit';
+    });
+  };
+  if (i === 0) { b.style.background = '#2962ff'; b.style.color = '#fff'; }
+  row.appendChild(b);
+});
+return chart;`} caption="Session VWAP over the same 180 bars. On Asia/Kolkata it restarts at bars 20 and 116; on America/New_York at bars 58 and 154. The candles never move." />
+
+### What never changes
+
+`Bar.time` is **UTC seconds**, always, everywhere. The zone is a lens over it.
+
+- Bars you pass to `setData` / `update` are not rewritten, re-sorted or re-fetched.
+- Series values, drawing anchors, order and position prices are untouched.
+- The visible range, the bar index, and everything in `getState()` other than the zone
+  itself are identical before and after a `setTimezone` call.
+- Two charts on the same data in different zones are showing the same instants.
+
+Feed adapters still convert broker formats at the edge: the OpenAlgo REST adapter sends and
+parses IST date strings because that is what its API speaks, and that is independent of what
+the axis displays. See [Data Loading](/docs/data-loading).
+
+<Callout type="info">
+An explicit `timeFormatter` outranks `timezone`. A host that formats its own axis labels has
+already settled the question, so the zone is not applied on top of it. The zone still drives
+the calendar units inside the studies.
+</Callout>
+
+## Why an IANA name and not an offset
+
+Because a fixed offset is wrong for roughly half the year everywhere that observes DST.
+
+The US regular open is 09:30 in New York on every trading day of the year. In January that
+is `14:30 UTC`; in June it is `13:30 UTC`, because New York is `-05:00` in winter and
+`-04:00` in summer. Label those two instants with a fixed `-05:00`:
+
+| Instant | 09:30 New York? | Fixed `-05:00` prints | `America/New_York` prints |
+|---|---|---|---|
+| `2024-01-17 14:30 UTC` | yes | `09:30` | `09:30` |
+| `2024-06-05 13:30 UTC` | yes | `08:30` | `09:30` |
+
+The fixed offset is an hour early for eight months of the year, silently, on a label a
+trader reads as the open. An IANA name carries the whole DST rule set, including the
+historical changes and the zones whose transitions do not follow a northern-hemisphere
+calendar, so the engine takes the name and looks the offset up per instant.
+
+If you genuinely want a constant offset, `UTC` is the honest way to ask for one.
+
+## Session windows and TRADING_HOURS
+
+There are two window shapes in the library, and they belong to different layers. The
+profiles take a `SessionWindow` object, described in this section. Anything else that needs
+a window (an indicator, a host's own filter) states one as a **string** and reads it with
+[`sessionFlags`](#stating-a-window-as-a-string), covered just below.
+
+A `SessionWindow` for the profiles is two minute counts from midnight. **Those minutes are
+now read on a wall clock, not on IST**, which makes a hand-written window mean what it says:
+
+```ts
+import { computeMarketProfile } from 'openalgo-charts/profile';
+
+// 09:30 to 16:00, on whichever zone the profile is computed for.
+computeMarketProfile(bars, {
+  tickSize: 0.01,
+  timezone: 'America/New_York',
+  window: { startMinute: 9 * 60 + 30, endMinute: 16 * 60, name: 'RTH' },
+});
+```
+
+A window may also name its own zone, and **the window's zone wins** over the display zone
+for both the window test and the day/week/month grouping:
+
+```ts
+computeMarketProfile(bars, {
+  tickSize: 0.05,
+  timezone: 'America/New_York',                       // how the rest of the chart reads
+  window: { startMinute: 9 * 60 + 15, endMinute: 15 * 60 + 30, zone: 'Asia/Kolkata' },
+});
+```
+
+That precedence is deliberate. An NSE session of 09:15 to 15:30 IST straddles New York
+midnight, so bucketing it on the display zone would cut one real session into two halves.
+A window pinned to its own market selects the same instants and forms the same sessions no
+matter who is looking at it; only the labels move.
+
+The built-in presets each carry the zone their numbers are written in:
+
+| Preset | Window | Zone |
+|---|---|---|
+| `all-hours` | every bar | none (never consulted) |
+| `india` | 09:15 to 15:30 | `Asia/Kolkata` |
+| `asia` | 09:00 to 15:00 | `Asia/Tokyo` |
+| `london` | 07:00 to 13:00 | `Europe/London` |
+| `new-york` | 08:00 to 15:30 | `America/New_York` |
+| `us-regular` | 09:30 to 16:00 | `America/New_York` |
+
+```ts
+import { computeMarketProfile, TRADING_HOURS } from 'openalgo-charts/profile';
+
+computeMarketProfile(bars, { tickSize: 0.01, window: TRADING_HOURS['us-regular'] });
+```
+
+<Callout type="warning">
+**`london`, `new-york` and `us-regular` shift by an hour in winter, and that is the fix.**
+The old table stored these as IST minutes (`us-regular` was the bare number `1140`), which
+is exactly 09:30 New York only while EDT is in force. Those presets therefore opened an
+hour early for the five winter months. They now reproduce the old instants exactly through
+the summer and are deliberately an hour later in winter, where the market actually is.
+`india`, `asia` and `all-hours` are unchanged year-round.
+</Callout>
+
+Volume profile takes the same option:
+
+```ts
+import { computeVolumeProfileSessions } from 'openalgo-charts/profile';
+
+computeVolumeProfileSessions(bars, { session: 'day', timezone: chart.timezone() });
+```
+
+<Callout type="info">
+`computeMarketProfile` and `computeVolumeProfileSessions` are pure functions and are never
+handed the chart, so they cannot read its zone for you. Pass `chart.timezone()` when you
+want the profile and the axis to agree. See
+[Market Profile](/docs/market-profile) and [Volume Profile](/docs/volume-profile).
+</Callout>
+
+## Stating a window as a string
+
+`sessionStartFlags` reads the trading day back out of the bar gaps, which is right when what
+you mean is "the session". It cannot answer which *part* of a session you meant: an opening
+range, the cash hours inside an extended session, or one exchange's hours drawn on another
+exchange's chart are all things you have to state. Three base-bundle helpers do that:
+
+```ts
+import { parseSessionSpec, inSessionAt, sessionFlags } from 'openalgo-charts';
+
+parseSessionSpec('0915-1015');        // { start: 555, end: 615 }
+parseSessionSpec('0930-1600:23456');  // { start: 570, end: 960, days: [2, 3, 4, 5, 6] }
+parseSessionSpec('2500-1000');        // null, hour 25 is out of range
+
+// One flag per bar, on whichever calendar the chart is labelled in.
+const rth = sessionFlags(bars.map((b) => b.time), '0930-1600:23456', 'America/New_York');
+```
+
+| Export | Returns | Use |
+|---|---|---|
+| `parseSessionSpec(spec)` | `SessionSpec \| null` | Validate what a user typed. Never throws. |
+| `inSessionAt(utcSeconds, spec, zone?)` | `boolean` | One instant against a parsed spec. |
+| `sessionFlags(times, spec, zone?)` | `boolean[]` | One flag per bar. Takes the raw string or a parsed spec. |
+
+The grammar is `HHMM-HHMM`, optionally followed by `:` and the days the window runs on, with
+**1 = Sunday** through 7 = Saturday. Whitespace around the parts is ignored, so
+`' 0915 - 1015 '` parses. Everything past that is decided the way an opening-range
+comparison needs it:
+
+- **Half-open.** The start minute is inside the window, the end minute is not: on a
+  `0915-1015` window a bar stamped 09:15 is in and one stamped 10:15 is out.
+- **An end at or before the start runs past midnight.** `'2330-0030'` is a one-hour
+  overnight window, and `'0000-0000'` is therefore the whole day rather than nothing.
+- **The day filter names the day the window opens on**, not the day the bar falls on. They
+  are the same thing for a window inside one day; for `'2330-0030:2'` (Monday) it means
+  Monday 23:45 and Tuesday 00:15 are both in the same session, and Tuesday 23:45 is not.
+- **`zone` defaults to `Asia/Kolkata`**, like every other zoned helper here. Pass
+  `chart.timezone()`, or the exchange's own zone when the numbers were written in it.
+- **An unparseable string marks nothing.** `sessionFlags` returns an all-false array rather
+  than throwing, because the spec is usually a settings field a user is halfway through
+  typing. Call `parseSessionSpec` when you need to tell a bad spec from an empty window.
+
+The [opening-range recipe](/docs/indicators#a-window-you-state-rather-than-read) on the
+indicators page shows this inside a `calc`.
+
+### Market phases follow the calendar's zone
+
+A `SessionCalendar` or an `Instrument` answers which part of the trading day an instant
+falls in: pre-open, regular, post-close, extended hours, closed or holiday (see
+[market phases and status](/docs/instruments#market-phases-and-status)). Its windows are
+read in the calendar's own IANA zone, never in the chart's display zone and never at a
+fixed offset, so the answer does not move when a user relabels the chart:
+
+```ts
+import { SessionCalendar } from 'openalgo-charts';
+
+const ny = new SessionCalendar({
+  timezone: 'America/New_York', sessions: ['0930-1600:23456'],
+  preMarketMinutes: 330, postMarketMinutes: 240,
+});
+ny.phaseAt(Date.parse('2026-03-06T09:00:00Z') / 1000);  // 'pre', 04:00 EST
+ny.phaseAt(Date.parse('2026-03-09T08:00:00Z') / 1000);  // 'pre', 04:00 EDT after the clocks went forward
+```
+
+- Each boundary is resolved on its own date, so a window across the night the clocks
+  change is an hour shorter or longer in UTC, as the market runs it.
+- The pre-open and post-close are counted in elapsed minutes from the opening and the
+  close, which matches the wall clock unless the clocks change inside that window.
+- A holiday runs from local midnight to local midnight in the calendar's zone.
+- IST has no daylight saving, so an Indian calendar's boundaries sit at the same UTC
+  times all year, and nothing changes for a chart that sets no calendar.
+
+## Saved layouts
+
+`getState()` includes the zone and `restoreState()` applies it, so a saved layout comes back
+labelled the way it was saved:
+
+```ts
+const saved = chart.getState();     // { ..., timezone: 'America/New_York' }
+localStorage.setItem('layout', JSON.stringify(saved));
+
+chart.restoreState(JSON.parse(localStorage.getItem('layout')));
+```
+
+A saved zone the current runtime does not recognise is **skipped**, not thrown: the chart
+keeps its present zone and restores everything else. One stale name from an old browser or
+an old ICU build must not cost a whole saved layout. That is the opposite of the
+constructor and `setTimezone`, which throw, because there the caller is right there to fix
+the typo.
+
+## Formatting outside the chart
+
+If your app renders its own legend, tooltip or session header, the same zoned helpers the
+engine uses are exported:
+
+```ts
+import {
+  DEFAULT_TIMEZONE,
+  isValidTimezone,
+  formatZonedTime,             // -> '09:30'
+  formatZonedTimeSeconds,      // -> '09:30:15'
+  formatZonedDate,             // -> '05 Jun'
+  formatZonedCrosshairLabel,   // -> "Wed 05 Jun '24 09:30"
+  utcSecondsToZonedParts,      // -> { year, month, day, hour, minute, second, weekday }
+  utcSecondsToZonedDateString, // -> '2024-06-05'
+  zonedStringToUtcSeconds,     // '2024-06-05 09:30' on a zone -> UTC seconds
+  zoneOffsetSeconds,           // -> -14400 for New York in June
+} from 'openalgo-charts';
+
+const zone = chart.timezone();
+legend.textContent = formatZonedCrosshairLabel(bar.time, zone);
+```
+
+Boundary tests take the same zone argument, so a custom indicator can reset on the chart's
+calendar:
+
+```ts
+import { isNewZonedDay, isNewZonedPeriod, sessionStartFlags } from 'openalgo-charts';
+
+isNewZonedDay(prev.time, bar.time, zone);
+isNewZonedPeriod(prev.time, bar.time, 'quarter', zone);
+sessionStartFlags(bars.map((b) => b.time), zone);
+```
+
+Inside a registered indicator's `calc`, the chart populates a reserved `timezone` key on the
+settings blob, so you do not have to thread it yourself:
+
+```ts
+calc: (bars, settings) => {
+  const zone = typeof settings.timezone === 'string' ? settings.timezone : DEFAULT_TIMEZONE;
+  const restarts = sessionStartFlags(bars.map((b) => b.time), zone);
+  // ...
+}
+```
+
+A settings blob that predates the option has no such key and falls back to
+`DEFAULT_TIMEZONE`, which is why an old saved indicator computes exactly what it used to.
+Calling a `calc` directly, outside a chart, is the one case where you must pass the key in
+yourself.
+
+See also: [Timeframes & Tick Charts](/docs/timeframes-and-tick-charts),
+[Indicators](/docs/indicators), [Chart State](/docs/state),
+[Constants & Helpers](/docs/constants).

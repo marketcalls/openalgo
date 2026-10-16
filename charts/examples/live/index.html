@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts - LIVE (history + WebSocket)</title>
+  <style>
+    :root {
+      --bg: #0a0c11; --panel: #0f121a; --elev: #151925; --elev-2: #1b2030;
+      --bd: #232a3a; --bd-soft: #1a1f2c; --tx: #d7dce8; --mut: #8b93a7; --faint: #5b6376;
+      --acc: #22c1a4; --acc-2: #2dd4bf; --buy: #26a69a; --sell: #ef5350;
+      --amber: #e6b53c; --live: #ff6b6b; --analyze: #38bdf8; --r: 8px; --h: 30px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: radial-gradient(1100px 500px at 78% -12%, rgba(34,193,164,0.06), transparent), var(--bg);
+      background-color: var(--bg);
+      color: var(--tx); font: 13px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+    }
+
+    /* ── top toolbar ─────────────────────────────────────────────── */
+    .topbar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 9px 14px; background: linear-gradient(180deg, var(--panel), #0c0f16);
+      border-bottom: 1px solid var(--bd-soft);
+    }
+    .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .2px; padding-right: 4px; }
+    .brand em { color: var(--sell); font-style: normal; font-weight: 700; font-size: 11px; letter-spacing: 1px;
+      border: 1px solid #40232a; background: #1c1216; padding: 1px 6px; border-radius: 5px; }
+    .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 8px var(--acc); }
+    .group { display: inline-flex; align-items: center; gap: 6px; }
+    .divider { width: 1px; height: 22px; background: var(--bd-soft); margin: 0 2px; }
+
+    .field {
+      height: var(--h); background: var(--elev); color: var(--tx);
+      border: 1px solid var(--bd); border-radius: 7px; padding: 0 9px; font: inherit; outline: none;
+      transition: border-color .15s, box-shadow .15s, background .15s;
+    }
+    .field::placeholder { color: var(--faint); }
+    .field:hover { border-color: #2c3446; }
+    .field:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(34,193,164,.15); background: var(--elev-2); }
+    select.field { cursor: pointer; padding-right: 6px; }
+    .field--key { width: 220px; } .field--sym { width: 108px; font-weight: 600; letter-spacing: .3px; }
+    .field--ws { width: 158px; } .field--qty { width: 58px; text-align: center; }
+
+    .btn {
+      height: var(--h); display: inline-flex; align-items: center; gap: 6px; padding: 0 13px;
+      background: var(--elev); color: var(--tx); border: 1px solid var(--bd); border-radius: 7px;
+      cursor: pointer; font: inherit; font-weight: 600; transition: all .15s;
+    }
+    .btn:hover { border-color: #33405a; background: var(--elev-2); }
+    .btn:active { transform: translateY(1px); }
+    .btn--primary { background: linear-gradient(180deg, var(--acc-2), var(--acc)); color: #04231d; border-color: transparent; }
+    .btn--primary:hover { filter: brightness(1.08); background: linear-gradient(180deg, #35e0c0, var(--acc-2)); }
+    .btn--ghost { color: var(--mut); }
+
+    .status { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--mut);
+      max-width: 42vw; overflow: hidden; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none;
+      box-shadow: 0 0 0 3px rgba(139,147,167,.12); }
+    #status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── secondary bar ──────────────────────────────────────────── */
+    .subbar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 7px 14px; background: #0c0f16; border-bottom: 1px solid var(--bd-soft); color: var(--mut);
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font-size: 12px;
+      background: var(--elev); border: 1px solid var(--bd-soft); border-radius: 999px; color: var(--mut);
+    }
+    .chip code { color: var(--tx); font-size: 11px; }
+    .chip--ltp { color: var(--amber); border-color: #3a3116; }
+    #mode.analyze { color: var(--analyze); border-color: #1d3a4a; background: #0e1a22; font-weight: 600; }
+    #mode.live { color: var(--live); border-color: #4a2226; background: #1e1013; font-weight: 700; }
+    .lbl { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: 11px;
+      text-transform: uppercase; letter-spacing: .6px; }
+    .lbl .field { text-transform: none; letter-spacing: normal; }
+    .chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+      padding: 4px 10px; border-radius: 7px; border: 1px solid var(--bd-soft); background: var(--elev); color: var(--mut); }
+    .chk:hover { border-color: #33405a; color: var(--tx); }
+    .chk input { accent-color: var(--acc); width: 14px; height: 14px; }
+    .spacer { flex: 1 1 auto; }
+    .hint { color: var(--faint); font-size: 12px; font-style: italic; }
+
+    /* ── chart stage ────────────────────────────────────────────── */
+    .stage { position: relative; flex: 1 1 auto; min-height: 0; }
+    #chart { position: absolute; inset: 0; cursor: crosshair; }
+    .legend {
+      position: absolute; top: 14px; left: 16px; z-index: 10; pointer-events: none;
+      padding: 8px 12px; border-radius: 10px; font: 12px system-ui;
+      background: rgba(15,18,26,.72); border: 1px solid var(--bd-soft);
+      backdrop-filter: blur(8px); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    .legend:empty { display: none; }
+    .legend b { color: #eef1f7; font-size: 13px; }
+    .up { color: var(--buy); } .dn { color: var(--sell); } .ltp { color: var(--amber); }
+
+    /* ── right-click order menu ─────────────────────────────────── */
+    #ctxmenu {
+      position: fixed; z-index: 30; min-width: 210px; padding: 6px;
+      background: var(--elev); border: 1px solid var(--bd); border-radius: 11px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.55); font: 13px system-ui;
+    }
+    #ctxmenu .ctx-head { color: var(--faint); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; padding: 4px 10px 2px; }
+    #ctxmenu button {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+      background: transparent; border: 0; border-radius: 7px; color: var(--tx);
+      padding: 7px 10px; cursor: pointer; font: inherit; transition: background .12s, color .12s;
+    }
+    #ctxmenu button:hover { background: var(--elev-2); }
+    #ctxmenu button:disabled { cursor: not-allowed; opacity: .35; }
+    #ctxmenu button.buy:hover { background: #12332e; color: #7fe6d2; }
+    #ctxmenu button.sell:hover { background: #331a1d; color: #f7a6a4; }
+    #ctxmenu button::before { content: ''; width: 7px; height: 7px; border-radius: 2px; flex: none; }
+    #ctxmenu button.buy::before { background: var(--buy); }
+    #ctxmenu button.sell::before { background: var(--sell); }
+    #ctxmenu button span { margin-right: auto; }
+    #ctxmenu hr { border: 0; border-top: 1px solid var(--bd-soft); margin: 5px 8px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-dot"></span> OpenAlgo <em>LIVE</em></div>
+    <div class="divider"></div>
+    <div class="group">
+      <input type="password" id="apikey" class="field field--key" placeholder="OpenAlgo API key" autocomplete="off" spellcheck="false" title="Kept in memory for this session only. Never stored, never committed. In production a broker backend holds this and the browser never sees it." />
+    </div>
+    <div class="divider"></div>
+    <div class="group">
+      <input type="text" id="symbol" class="field field--sym" value="RELIANCE" title="instrument symbol" />
+      <select id="exchange" class="field" title="exchange (OpenAlgo constant)">
+        <option>NSE</option><option>NFO</option><option>BSE</option><option>BFO</option><option>MCX</option><option>NSE_INDEX</option>
+      </select>
+      <select id="interval" class="field" title="bar interval">
+        <option value="1m">1m</option><option value="5m" selected>5m</option><option value="15m">15m</option><option value="1h">1h</option><option value="D">D</option>
+      </select>
+      <select id="ctype" class="field" title="chart type">
+        <option value="candlestick">Candles</option>
+        <option value="hollow-candle">Hollow candles</option>
+        <option value="bar">Bars</option>
+        <option value="high-low">High-low</option>
+        <option value="volume-candle">Volume candles</option>
+        <option value="line">Line</option>
+        <option value="line-markers">Line with markers</option>
+        <option value="step">Step line</option>
+        <option value="area">Area</option>
+        <option value="hlc-area">HLC area</option>
+        <option value="baseline">Baseline</option>
+        <option value="heikin-ashi">Heikin Ashi</option>
+        <option value="renko">Renko</option>
+        <option value="range">Range bars</option>
+        <option value="line-break">Line break</option>
+      </select>
+    </div>
+    <div class="divider"></div>
+    <div class="group">
+      <button id="connect" class="btn btn--primary">Connect</button>
+      <button id="disconnect" class="btn btn--ghost">Disconnect</button>
+      <button id="fit" class="btn" title="restore the default view (fit bars + auto price scale), same as double-click">Fit</button>
+      <button id="snap" class="btn" title="save the chart as a PNG (composites all layers; browser right-click save only captures the crosshair overlay)">Save PNG</button>
+    </div>
+    <div class="status"><span class="status-dot"></span><span id="status">enter your API key and Connect</span></div>
+  </header>
+
+  <div class="subbar">
+    <span class="chip">REST <code>/api/v1/history</code></span>
+    <label class="lbl">WS <input type="text" id="wsurl" class="field field--ws" value="ws://127.0.0.1:8765" title="OpenAlgo WebSocket proxy" /></label>
+    <span class="chip" id="wsstate">WS idle</span>
+    <span class="chip" id="ticks">0 ticks</span>
+    <span class="chip chip--ltp" id="ltp">LTP -</span>
+    <span class="spacer"></span>
+    <label class="lbl">Qty <input type="number" id="qty" class="field field--qty" value="1" min="1" title="order quantity" /></label>
+    <select id="product" class="field" title="product"><option>MIS</option><option>CNC</option><option>NRML</option></select>
+    <label class="chk"><input type="checkbox" id="live-trading" /> <span>Live trading</span></label>
+    <span class="chip" id="mode" title="OpenAlgo order routing mode">mode -</span>
+    <span class="hint">right-click chart to order</span>
+  </div>
+
+  <main class="stage">
+    <div id="chart"></div>
+    <div class="legend" id="legend"></div>
+  </main>
+
+  <!-- right-click order menu (price under the cursor) -->
+  <div id="ctxmenu" hidden>
+    <div class="ctx-head">Market</div>
+    <button class="buy" data-side="BUY" data-type="MARKET"><span>Buy Market</span></button>
+    <button class="sell" data-side="SELL" data-type="MARKET"><span>Sell Market</span></button>
+    <hr>
+    <div class="ctx-head">Limit</div>
+    <button class="buy" data-side="BUY" data-type="LIMIT"><span>Buy Limit</span></button>
+    <button class="sell" data-side="SELL" data-type="LIMIT"><span>Sell Limit</span></button>
+    <hr>
+    <div class="ctx-head">Stop</div>
+    <button class="buy" data-side="BUY" data-type="SL"><span>Buy Stop (SL)</span></button>
+    <button class="sell" data-side="SELL" data-type="SL"><span>Sell Stop (SL)</span></button>
+  </div>
+
+  <script type="module">
+    import { createChart, DataLoadingController, OpenAlgoDataFeed, OpenAlgoWsFeed, OpenAlgoTradeFeed, CandleBuilder, intervalToSeconds } from '/dist/openalgo-charts.mjs';
+    import { runTransform, HeikinAshiTransform, RenkoTransform, RangeBarsTransform, LineBreakTransform, PointFigureTransform, KagiTransform } from '/dist/openalgo-charts.transform.mjs';
+
+    const el = (id) => document.getElementById(id);
+    const fmt = (n) => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const nowSec = () => Math.floor(Date.now() / 1000);
+    // Deliberately NOT restored from storage. See the note next to the input:
+    // this key can place orders, and localStorage is readable by any script that
+    // ends up on the page.
+
+    // Lookback per interval (seconds) for the history request.
+    const LOOKBACK = { '1m': 10 * 86400, '5m': 45 * 86400, '15m': 90 * 86400, '1h': 250 * 86400, 'D': 800 * 86400 };
+
+    let chart, price, volume, ws, rest, ltpLine, offLtp = null, tickN = 0;
+    let data = null, offData = null, lastReq = null; // the controller owns history, its repair and live merges
+    let rawBars = [], builder = null, liveAgg = false; // the controller's latest snapshot (history + forming bar)
+
+    // Chart types: base types render directly; Family-B run a transform first.
+    const boxOf = () => { const c = rawBars.length ? rawBars[rawBars.length - 1].close : 100; return Math.max(0.05, Math.round(c * 0.0015 / 0.05) * 0.05); };
+    const CHART_TYPES = {
+      candlestick: { series: 'candlestick' }, 'hollow-candle': { series: 'hollow-candle' }, bar: { series: 'bar' },
+      'high-low': { series: 'high-low' }, 'volume-candle': { series: 'volume-candle' }, line: { series: 'line' },
+      'line-markers': { series: 'line-markers' }, step: { series: 'step' }, area: { series: 'area' }, 'hlc-area': { series: 'hlc-area' },
+      baseline: { series: 'baseline', style: () => ({ baseValue: rawBars.reduce((s, b) => s + b.close, 0) / (rawBars.length || 1) }) },
+      'heikin-ashi': { series: 'candlestick', tf: () => new HeikinAshiTransform() },
+      renko: { series: 'candlestick', tf: () => new RenkoTransform({ boxSize: boxOf() }) },
+      range: { series: 'candlestick', tf: () => new RangeBarsTransform({ range: boxOf() }) },
+      'line-break': { series: 'candlestick', tf: () => new LineBreakTransform({ lines: 3 }) },
+      'point-figure': { series: 'point-figure', style: () => ({ boxSize: boxOf() }), tf: () => new PointFigureTransform({ boxSize: boxOf(), reversal: 3 }) },
+      kagi: { series: 'kagi', tf: () => new KagiTransform({ reversal: boxOf() * 2 }) },
+    };
+    const chartType = () => CHART_TYPES[el('ctype').value] || CHART_TYPES.candlestick;
+    // Push price + volume from the raw bars, applying the selected transform.
+    // Transformed types (Renko / Range / Line Break / Kagi / P&F) emit their own
+    // element times; the volume pane must use THOSE times too: feeding it the
+    // raw bars would re-add every raw timestamp to the shared time axis and
+    // scatter the bricks with gaps.
+    function bucketVolume(tbars) {
+      const out = []; let ri = 0;
+      for (const tb of tbars) {
+        let v = 0;
+        while (ri < rawBars.length && rawBars[ri].time <= tb.time) { v += rawBars[ri].volume || 0; ri++; }
+        out.push({ time: tb.time, open: 0, high: v, low: 0, close: v });
+      }
+      let rest = 0;
+      while (ri < rawBars.length) { rest += rawBars[ri].volume || 0; ri++; }
+      if (out.length && rest) { const last = out[out.length - 1]; last.high += rest; last.close += rest; }
+      return out;
+    }
+    function setPriceData() {
+      if (!price || !rawBars.length) return;
+      const cfg = chartType();
+      if (cfg.tf) {
+        const t = runTransform(cfg.tf(), rawBars);
+        price.setData(t);
+        volume.setData(bucketVolume(t)); // brick-bucketed volume, same time axis
+      } else {
+        price.setData(rawBars);
+        volume.setData(rawBars.map((b) => ({ time: b.time, open: 0, high: b.volume || 0, low: 0, close: b.volume || 0 })));
+      }
+    }
+    // chart trading (real OpenAlgo orders via the proxy)
+    let trade = null, bookTimer = null, lastLtp = null;
+    const orderLines = new Map(); // orderid -> PriceLine
+    let posLine = null, ctxPrice = 0, position = null;
+
+    function setLegend(sym, ex, intv, bar, ltp) {
+      const col = bar && bar.close >= bar.open ? 'up' : 'dn';
+      // Every interpolated value is escaped, including the two that come from
+      // <select> and therefore "cannot" contain markup. They cannot today; the
+      // rule is what stops the day someone makes one of them free text.
+      el('legend').innerHTML =
+        `<b>${esc(sym)}</b> <span style="opacity:.5">· ${esc(intv)} · ${esc(ex)}</span>` +
+        (bar ? ` <span class="${col}">O ${fmt(bar.open)} H ${fmt(bar.high)} L ${fmt(bar.low)} C ${fmt(bar.close)}</span>` : '') +
+        (ltp != null ? ` <span class="ltp">LTP ${fmt(ltp)}</span>` : '');
+    }
+
+    function disconnect() {
+      if (offLtp) { offLtp(); offLtp = null; }
+      if (ws) { ws.close(); ws = null; }
+      if (offData) { offData(); offData = null; }
+      if (data) { data.destroy(); data = null; }
+      clearTrading();
+      el('wsstate').textContent = 'WS idle';
+    }
+
+    // Every snapshot from the controller is the whole series: history, a repair
+    // or a live push. Repainting from it is the simplest correct thing and fast
+    // enough for one chart.
+    function applySnapshot(s) {
+      if (s.reason === 'state') {
+        if (s.status === 'stale' && s.error) el('status').textContent = 'history stale: ' + s.error.message;
+        return;
+      }
+      rawBars = [...s.bars];
+      if (s.reason === 'refresh' && builder) {
+        // History's view of the bar still forming: the true open when the
+        // builder opened the bucket mid-way, the union of the extremes and the
+        // larger volume. The close stays with the ticks.
+        const current = builder.current();
+        const i = current ? rawBars.findIndex((b) => b.time === current.time) : -1;
+        if (i >= 0) { const merged = builder.reconcile(rawBars[i]); if (merged) rawBars[i] = merged; }
+      }
+      if (chart) setPriceData(); // before the first load completes there is no chart yet
+    }
+    // A hidden tab pauses repairs; coming back refreshes once.
+    document.addEventListener('visibilitychange', () => { if (data) data.setVisible(!document.hidden); });
+
+    // ── chart trading (real OpenAlgo orders via the proxy) ──────────────────
+    const round2v = (n) => Math.round(n * 100) / 100;
+    function setMode(m) {
+      const e = el('mode');
+      if (m === 'analyzer' || m === 'analyze') { e.textContent = 'ANALYZE (sandbox)'; e.className = 'chip analyze'; }
+      else if (m === 'live') { e.textContent = 'LIVE - real orders'; e.className = 'chip live'; }
+      else { e.textContent = 'mode -'; e.className = 'chip'; }
+    }
+    // Ask the server, never infer. OpenAlgo stamps `mode: "analyze"` on sandbox
+    // responses and stamps NOTHING on live ones, so reading the mode off a
+    // positionbook reply left this chip blank in live mode: the confirm dialog
+    // below was skipped and a real-money order went out labelled 'analyzer'.
+    async function refreshMode() {
+      if (!trade) return;
+      try { setMode(await trade.getServerMode()); }
+      catch (_) { setMode(null); } // unknown stays unknown, and place() will refuse
+    }
+    const isLiveMode = () => el('mode').classList.contains('live');
+    // Reference market price for stop/limit direction checks: live LTP, else last close.
+    const marketPrice = () => (lastLtp != null ? lastLtp : (rawBars.length ? rawBars[rawBars.length - 1].close : null));
+    // A stop's trigger must be on the correct side of the market: BUY stop above, SELL stop below.
+    function stopSideOk(side, type, price) {
+      if (type !== 'SL' && type !== 'SL-M') return true;
+      const m = marketPrice();
+      if (m == null) return true;
+      return side === 'BUY' ? price > m : price < m;
+    }
+    function makeOrderLine(o) {
+      return chart.addPriceLine({
+        price: o.triggerPrice ?? o.price, color: o.side === 'BUY' ? '#26a69a' : '#ef5350',
+        lineWidth: 1, dashed: true, id: `order:${o.id}`, cursor: 'ns-resize', extentFromRight: 0.30,
+        closeButton: true, badge: o.side, qty: o.qty, leftLabel: o.type,
+      }, 0);
+    }
+    async function pollBook() {
+      if (!trade) return;
+      try {
+        const orders = await trade.getOrders(); // also caches ctx so modify works
+        const seen = new Set();
+        for (const o of orders) {
+          if (o.status !== 'working' || o.symbol !== lastReq.symbol) continue;
+          seen.add(o.id);
+          const px = o.triggerPrice ?? o.price;
+          const rec = orderLines.get(o.id);
+          if (rec) { rec.order = o; rec.line.setPrice(px); }
+          else orderLines.set(o.id, { line: makeOrderLine(o), order: o });
+        }
+        for (const [id, rec] of orderLines) if (!seen.has(id)) { chart.removePrimitive(rec.line); orderLines.delete(id); }
+      } catch (_) { /* transient */ }
+      try {
+        const res = await fetch('/api/v1/positionbook', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apikey: el('apikey').value.trim() }) });
+        const j = await res.json();
+        renderPosition((j.data || []).find((p) => p.symbol === lastReq.symbol && Number(p.quantity) !== 0));
+      } catch (_) {}
+      refreshMode();
+    }
+    // Position P&L marks to the live LTP (the sandbox/broker pnl field can read 0).
+    function posLabel() {
+      if (!position) return '';
+      const mark = lastLtp != null ? lastLtp : position.avg;
+      const pnl = (mark - position.avg) * position.net; // net is signed, correct for long/short
+      return `@ ${fmt(position.avg)}  ${pnl >= 0 ? '+' : '-'}Rs ${Math.round(Math.abs(pnl)).toLocaleString('en-IN')}`;
+    }
+    function renderPosition(pos) {
+      if (posLine && chart) { chart.removePrimitive(posLine); posLine = null; }
+      position = pos ? { net: Number(pos.quantity), avg: Number(pos.average_price), product: pos.product } : null;
+      if (!position || !chart) return;
+      posLine = chart.addPriceLine({
+        price: position.avg, color: position.net > 0 ? '#2e7d6b' : '#a14a52', lineWidth: 2, dashed: false,
+        id: 'position', extentFromRight: 0.30, closeButton: true, // close = exit position
+        badge: position.net > 0 ? 'LONG' : 'SHORT', qty: Math.abs(position.net), leftLabel: posLabel(),
+      }, 0);
+    }
+    // Exit the open position at market (square off to flat via placesmartorder position_size 0).
+    async function exitPosition() {
+      if (!trade || !position) return;
+      if (!el('live-trading').checked) { el('status').textContent = 'Turn on "Live trading" to exit the position'; el('live-trading').focus(); return; }
+      const qty = Math.abs(position.net), side = position.net > 0 ? 'SELL' : 'BUY';
+      const summary = `close ${position.net > 0 ? 'LONG' : 'SHORT'} ${qty} ${lastReq.symbol} @ market`;
+      if (isLiveMode() && !window.confirm(`LIVE - ${summary}\n\nProceed?`)) return;
+      el('status').textContent = summary + ' ...';
+      try {
+        const res = await fetch('/api/v1/placesmartorder', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apikey: el('apikey').value.trim(), strategy: 'openalgo-charts', exchange: lastReq.exchange, symbol: lastReq.symbol,
+            action: side, product: position.product || el('product').value, pricetype: 'MARKET', quantity: String(qty), position_size: '0', price: '0', trigger_price: '0', disclosed_quantity: '0' }) });
+        const j = await res.json();
+        el('status').textContent = j.status === 'success' ? 'position closed' : ('exit error: ' + (j.message || 'failed'));
+        pollBook();
+      } catch (e) { el('status').textContent = 'exit error: ' + e.message; }
+    }
+    async function placeFromMenu(side, type) {
+      if (!trade) { el('status').textContent = 'connect first (click Connect)'; return; }
+      if (!el('live-trading').checked) { el('status').textContent = 'Turn on "Live trading" in the toolbar to place orders'; el('live-trading').focus(); return; }
+      const qty = Math.max(1, Number(el('qty').value) || 1), product = el('product').value;
+      const price = type === 'MARKET' ? 0 : round2v(ctxPrice);
+      if (!stopSideOk(side, type, price)) {
+        const m = marketPrice();
+        el('status').textContent = `${side} Stop must be ${side === 'BUY' ? 'ABOVE' : 'BELOW'} the price (LTP ${fmt(m)})`;
+        return;
+      }
+      const summary = `${side} ${type} ${qty} ${lastReq.symbol}` + (type === 'MARKET' ? '' : ` @ ${fmt(price)}`) + ` (${product})`;
+      if (isLiveMode() && !window.confirm(`LIVE ORDER - real money:\n\n${summary}\n\nPlace this order?`)) return;
+      el('status').textContent = 'placing: ' + summary + ' ...';
+      const reqBody = { symbol: lastReq.symbol, exchange: lastReq.exchange, side, type, qty, product,
+        price: type === 'MARKET' ? undefined : price, triggerPrice: type === 'SL' ? price : undefined, mode: isLiveMode() ? 'live' : 'analyzer' };
+      console.log('[order] place', reqBody);
+      try {
+        const r = await trade.place(reqBody);
+        console.log('[order] placed', r);
+        el('status').textContent = `placed ${summary} (id ${r.orderId})`;
+        pollBook();
+      } catch (e) { console.error('[order] error', e); el('status').textContent = 'order error: ' + e.message; }
+    }
+    function clearTrading() {
+      if (bookTimer) { clearInterval(bookTimer); bookTimer = null; }
+      for (const [, rec] of orderLines) if (chart) chart.removePrimitive(rec.line);
+      orderLines.clear();
+      if (posLine && chart) { chart.removePrimitive(posLine); posLine = null; }
+      position = null;
+      trade = null;
+    }
+
+    // (Re)build the chart for the current type from rawBars; WS/trade feeds persist.
+    function buildChart() {
+      if (chart) chart.destroy();
+      el('chart').innerHTML = '';
+      chart = createChart(el('chart'), { priceAxisWidth: 72 });
+      const cfg = chartType();
+      price = chart.addSeries(cfg.series, { style: cfg.style ? cfg.style() : {} });
+      volume = chart.addSeries('histogram', { paneIndex: 1, style: { color: '#33415e' } });
+      setPriceData();
+      // Denser x-axis: fitContent stretches few bars to fill the width, cap the bar
+      // width so candles stay a comfortable size (only tightens, never widens).
+      if (chart.timeScale.barSpacing > 6) chart.timeScale.setBarSpacing(6);
+      const lp = lastLtp != null ? lastLtp : (rawBars.length ? rawBars[rawBars.length - 1].close : null);
+      ltpLine = lp != null ? chart.addPriceLine({ price: lp, color: '#e0b020', lineWidth: 1, dashed: true, id: 'ltp' }, 0) : null;
+      wireChart();
+      orderLines.clear(); posLine = null; // primitives belonged to the destroyed chart
+      if (trade) pollBook();              // redraw order/position lines on the rebuilt chart
+      window.__chart = () => chart;
+    }
+
+    // Per-chart interaction wiring (drag-to-modify on release, cancel/exit clicks).
+    function wireChart() {
+      chart.subscribeDrag(
+        (id, p) => {
+          if (!id.startsWith('order:') || id.endsWith('::close')) return;
+          const rec = orderLines.get(id.slice(6)); if (!rec) return;
+          if (rec.dragFrom == null) { rec.dragFrom = rec.line.price; rec.line.setDragGhost(rec.dragFrom); } // dimmed pre-drag reference
+          rec.line.setPrice(round2v(p));
+        },
+        (id, p) => {
+          if (!id.startsWith('order:') || id.endsWith('::close')) return;
+          const oid = id.slice(6), rec = orderLines.get(oid); if (!rec) return;
+          rec.line.setDragGhost(null); rec.dragFrom = null;
+          const px = round2v(p), stop = rec.order.type === 'SL' || rec.order.type === 'SL-M';
+          el('status').textContent = `modifying ${rec.order.side} ${rec.order.type} to ${fmt(px)} ...`;
+          trade.modify(oid, stop ? { triggerPrice: px } : { price: px })
+            .then(() => { el('status').textContent = `modified ${rec.order.side} ${rec.order.type} to ${fmt(px)}`; pollBook(); })
+            .catch((e) => { el('status').textContent = 'modify error: ' + e.message; pollBook(); });
+        },
+      );
+      chart.subscribeClick((id) => {
+        if (id === 'position::close') { exitPosition(); return; }
+        if (id.startsWith('order:') && id.endsWith('::close')) trade.cancel(id.slice(6, -7)).then(pollBook).catch(() => {});
+      });
+    }
+
+    async function connect() {
+      disconnect();
+      const apiKey = el('apikey').value.trim();
+      const symbol = el('symbol').value.trim().toUpperCase();
+      const exchange = el('exchange').value;
+      const interval = el('interval').value;
+      if (!apiKey) { el('status').textContent = 'please enter your OpenAlgo API key'; return; }
+      // The key is held in this closure for the session and written nowhere.
+      //
+      // It used to be persisted to localStorage so a reload kept it. That is the
+      // single worst habit a broker integration can copy from a demo: an
+      // order-capable credential, in a store readable by any script that reaches
+      // the page, surviving until someone clears it. A retyped key each reload is
+      // the correct cost. In production the browser should never hold this at
+      // all: see the note in the header.
+
+      // ── history (REST via the same-origin proxy to OpenAlgo /api/v1/history) ──
+      rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey }); // baseUrl '' -> relative -> proxy
+      const to = nowSec(), from = to - (LOOKBACK[interval] || 30 * 86400);
+      lastReq = { symbol, exchange, interval, from };
+      lastLtp = null; rawBars = [];
+      el('status').textContent = `loading ${symbol} ${interval} history...`;
+      // One owner for history and its repair. The repairs are driven by the
+      // stream: one refresh a moment after each bar closes, an immediate one when
+      // the stream skips a bucket, and a slow poll as the backstop for silent
+      // drift. Each asks history for the tail only.
+      const mine = new DataLoadingController(rest, {
+        refreshOnBarClose: true, refreshOnGap: true, refreshWindowBars: 5, pollIntervalMs: 120_000,
+      });
+      data = mine;
+      offData = mine.subscribe(applySnapshot);
+      await mine.load({ symbol, exchange, interval, from, to });
+      if (data !== mine) return; // a newer Connect took over while history loaded
+      if (!rawBars.length) {
+        const err = mine.getState().error;
+        el('status').textContent = err ? 'history error: ' + err.message : `no history for ${symbol} ${exchange} ${interval}`;
+        return;
+      }
+      buildChart();
+      const lastBar = rawBars[rawBars.length - 1];
+      setLegend(symbol, exchange, interval, lastBar, lastBar.close);
+      el('status').textContent = `${symbol} · ${rawBars.length} bars loaded · subscribing live...`;
+
+      // ── live (WebSocket LTP -> CandleBuilder -> rawBars -> setPriceData) ──
+      ws = new OpenAlgoWsFeed({ url: el('wsurl').value.trim(), apiKey });
+      ws.onState((s) => { el('wsstate').textContent = 'WS ' + s; });
+      ws.onControl((m) => {
+        if (m.type === 'client_warning') {
+          el('wsstate').textContent = 'WS ' + m.code;
+          // The socket came back, so ticks were missed and the bar that was
+          // forming across the gap is wrong. Reseeding the builder from its own
+          // bar marks the next bucket it opens provisional, and the refresh
+          // fetches whatever closed while the socket was down.
+          if (m.code === 'STREAM_RESYNC') {
+            const last = builder && builder.current();
+            if (last) builder.seed(last);
+            if (data) data.refresh();
+          }
+          return;
+        }
+        if (m.type === 'auth') el('wsstate').textContent = m.status === 'success' ? 'WS authenticated' : `auth ${m.status}`;
+        else if (m.type === 'subscribe') el('wsstate').textContent = `subscribe ${m.status}` + (tickN ? '' : ' (waiting for ticks)');
+        else if (m.type === 'error' || m.status === 'error') el('wsstate').textContent = 'WS error: ' + (m.message || 'unknown');
+      });
+      ws.connect();
+      // Event-driven order lines: broker/sandbox pushes fills, cancels and
+      // rejections instantly; the slow poll below stays as reconciliation.
+      ws.onOrderUpdate((e) => {
+        if (!lastReq || e.symbol !== lastReq.symbol || !chart) return;
+        const working = e.status === 'open' || e.status === 'trigger pending' || e.status === 'pending';
+        const rec = orderLines.get(e.orderId);
+        const o = { id: e.orderId, side: e.action, type: e.pricetype, qty: e.quantity, filledQty: e.filledQuantity,
+          price: e.price, triggerPrice: e.triggerPrice, status: working ? 'working' : e.status };
+        if (working) {
+          if (rec) { rec.order = o; rec.line.setPrice(e.triggerPrice ?? e.price); }
+          else orderLines.set(e.orderId, { line: makeOrderLine(o), order: o });
+        } else if (rec) { chart.removePrimitive(rec.line); orderLines.delete(e.orderId); }
+        el('status').textContent = `order ${e.orderId} ${e.status}` +
+          (e.status === 'complete' ? ` @ ${fmt(e.averagePrice || e.price)}` : '') +
+          (e.rejectionReason ? ': ' + e.rejectionReason : '');
+        if (!working) pollBook(); // a fill/cancel changes the position book too
+      });
+      ws.subscribeOrders();
+      liveAgg = /^\d+(m|h)$/i.test(interval); // aggregate ticks into candles for intraday only
+      builder = new CandleBuilder({ intervalSec: intervalToSeconds(interval), volumeMode: 'ltq-sum' });
+      // Seeded with the bar history ended on. If that is the bucket still forming,
+      // the ticks fold into it. If history stopped one bucket short, the first tick
+      // opens the current bucket provisionally and the bar-close repair brings the
+      // open it missed.
+      if (liveAgg && rawBars.length) builder.seed(rawBars[rawBars.length - 1]);
+      tickN = 0;
+      offLtp = ws.onLtp((e) => {
+        if (e.symbol && e.symbol !== symbol) return;
+        tickN += 1;
+        el('wsstate').textContent = 'WS live';
+        el('ticks').textContent = `${tickN} ticks`;
+        el('ltp').textContent = `LTP ${fmt(e.ltp)}`;
+        lastLtp = e.ltp;
+        if (ltpLine) ltpLine.setPrice(e.ltp);
+        if (position && posLine) posLine.setLeftLabel(posLabel()); // live mark-to-LTP P&L
+        if (liveAgg) {
+          const u = builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq });
+          if (u) {
+            // The controller merges the push into the series it owns and publishes
+            // the snapshot that repaints. A bar the builder opened mid-bucket is
+            // provisional: it keeps the open history holds, not its first tick.
+            data.pushBar(u.bar, u.provisional ? { provisional: true } : undefined);
+            setLegend(symbol, exchange, interval, rawBars[rawBars.length - 1] || u.bar, e.ltp);
+          }
+        } else {
+          setLegend(symbol, exchange, interval, rawBars[rawBars.length - 1], e.ltp);
+        }
+      });
+      ws.subscribe('LTP', symbol, exchange);
+
+      // ── chart trading: real OpenAlgo orders ──
+      trade = new OpenAlgoTradeFeed({ baseUrl: '', apiKey, strategy: 'openalgo-charts', defaultProduct: el('product').value });
+      bookTimer = setInterval(pollBook, 8000); // slow reconciliation; order updates stream via WS
+      pollBook();
+    }
+
+    el('connect').addEventListener('click', connect);
+    el('disconnect').addEventListener('click', () => { disconnect(); el('status').textContent = 'disconnected'; });
+    el('fit').addEventListener('click', () => { if (chart) chart.resetScale(); });
+    el('snap').addEventListener('click', () => {
+      if (!chart) return;
+      const name = lastReq ? `${lastReq.symbol}-${lastReq.interval}-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png` : 'chart.png';
+      chart.downloadScreenshot(name);
+    });
+
+    // right-click the chart -> order menu at the cursor price (place via OpenAlgoTradeFeed)
+    const ctxMenu = el('ctxmenu');
+    el('chart').addEventListener('contextmenu', (e) => {
+      if (!chart) return;
+      e.preventDefault(); // always show our menu over the chart (not the browser's)
+      const p = chart.coordinateToPrice(e.clientY - el('chart').getBoundingClientRect().top, 0);
+      if (p == null) return;
+      ctxPrice = round2v(p);
+      const m = marketPrice(); // grey out wrong-side stops/limits relative to the market
+      ctxMenu.querySelectorAll('button[data-type]').forEach((b) => {
+        const side = b.getAttribute('data-side'), v = side === 'BUY' ? 'Buy' : 'Sell', t = b.getAttribute('data-type');
+        const label = t === 'MARKET' ? `${v} Market` : t === 'LIMIT' ? `${v} Limit @ ${fmt(ctxPrice)}` : `${v} Stop (SL) @ ${fmt(ctxPrice)}`;
+        const sp = b.querySelector('span'); if (sp) sp.textContent = label; else b.textContent = label;
+        let ok = true;
+        if (m != null) {
+          if (t === 'SL') ok = side === 'BUY' ? ctxPrice > m : ctxPrice < m;          // buy stop above, sell stop below
+          else if (t === 'LIMIT') ok = side === 'BUY' ? ctxPrice < m : ctxPrice > m;  // buy limit below, sell limit above
+        }
+        b.disabled = !ok;
+      });
+      ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - 230) + 'px';
+      ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
+      ctxMenu.hidden = false;
+    });
+    window.addEventListener('click', () => { ctxMenu.hidden = true; });
+    ctxMenu.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      e.stopPropagation(); ctxMenu.hidden = true;
+      placeFromMenu(b.getAttribute('data-side'), b.getAttribute('data-type'));
+    });
+    el('symbol').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+    // switching chart type rebuilds the price series from cached raw bars (no refetch)
+    el('ctype').addEventListener('change', () => {
+      if (!rawBars.length) return;
+      buildChart();
+      const lb = rawBars[rawBars.length - 1];
+      setLegend(lastReq.symbol, lastReq.exchange, lastReq.interval, lb, lastLtp != null ? lastLtp : lb.close);
+    });
+  </script>
+</body>
+</html>

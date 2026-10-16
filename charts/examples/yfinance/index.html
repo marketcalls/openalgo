@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>OpenAlgo Charts - yfinance historical demo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!--
+    The symbol box lives here rather than inside the legacy toolbar below. It is
+    hidden until the shell's search button gives it `.is-live`, and an ancestor
+    set to `display: none` takes its whole subtree out of the box tree, so while
+    it sat inside `.topbar.legacy` no rule on the input itself could bring it
+    back and the symbol could not be changed at all. It is `position: fixed`
+    when live, so it needs no layout parent.
+  -->
+  <input type="text" id="symbol" class="field field--sym" value="AAPL" aria-label="Symbol" title="A symbol (AAPL, RELIANCE.NS, ^NSEI, BTC-USD) or arithmetic over several (AAPL/MSFT)" />
+  <!-- Operator keypad for symbol arithmetic; filled by src/expression.js. -->
+  <div id="symkeys" class="symkeys" role="group" aria-label="Symbol arithmetic"></div>
+  <header class="shellbar" id="shellbar" role="toolbar" aria-label="Chart toolbar"></header>
+  <header class="topbar legacy">
+    <div class="brand"><span class="brand-dot"></span> OpenAlgo <em>yfinance</em></div>
+    <div class="divider"></div>
+    <div class="group">
+      <select id="interval" class="field" title="bar interval">
+        <option>1d</option><option>1h</option><option>30m</option><option>15m</option><option>5m</option><option>1wk</option>
+      </select>
+      <select id="period" class="field" title="history range">
+        <option>1mo</option><option>1y</option><option>6mo</option><option selected>5y</option><option>max</option>
+      </select>
+      <!-- The primary chart's trading session, like the interval and period above:
+           the shell's session menu writes it and load() reads it. -->
+      <select id="session" class="field" title="trading session">
+        <option value="regular" selected>Regular hours</option><option value="extended">Extended hours</option>
+      </select>
+      <select id="ctype" class="field" title="chart type">
+        <optgroup label="Time-indexed">
+          <option value="candlestick">Candles</option>
+          <option value="hollow-candle">Hollow Candles</option>
+          <option value="bar">Bars (OHLC)</option>
+          <option value="high-low">High-Low</option>
+          <option value="volume-candle">Volume Candles</option>
+          <option value="line">Line</option>
+          <option value="line-markers">Line + Markers</option>
+          <option value="step">Step Line</option>
+          <option value="area">Area</option>
+          <option value="hlc-area">HLC Area</option>
+          <option value="baseline">Baseline</option>
+        </optgroup>
+        <optgroup label="Transforms (movement-driven)">
+          <option value="t:heikin-ashi">Heikin Ashi</option>
+          <option value="t:renko">Renko</option>
+          <option value="t:range">Range Bars</option>
+          <option value="t:line-break">Line Break</option>
+          <option value="t:point-figure">Point &amp; Figure</option>
+          <option value="t:kagi">Kagi</option>
+        </optgroup>
+      </select>
+    </div>
+    <div class="divider"></div>
+    <div class="group">
+      <button id="load" class="btn btn--primary">Load</button>
+      <button id="save" class="btn" title="Save the full chart as a PNG (right-click only captures the overlay)">Save PNG</button>
+      <button id="fit" class="btn" title="restore the default view (fit bars + auto price scale), same as double-click">Fit</button>
+    </div>
+    <!-- The readout is moved into the shell bar on the first render and stays
+         the same node, so the live region survives every toolbar rebuild. -->
+    <div class="status"><span class="status-dot"></span><span id="status" role="status" aria-live="polite"></span></div>
+  </header>
+
+  <div class="subbar legacy">
+    <span class="lbl">Indicators</span>
+    <div class="group">
+      <select id="indpick" class="field" title="add an indicator from the openalgo-charts/indicators tier"></select>
+      <button id="indadd" class="btn">Add</button>
+      <span id="indlist" class="indlist"></span>
+    </div>
+    <div class="divider"></div>
+    <span class="lbl">Draw</span>
+    <div class="group">
+      <select id="drawtool" class="field" title="drawing tool (openalgo-charts/draw)"></select>
+      <button id="drawundo" class="btn" aria-label="Undo">Undo</button>
+      <button id="drawredo" class="btn" aria-label="Redo">Redo</button>
+      <button id="drawdel" class="btn" title="delete selected">Del</button>
+      <button id="drawclear" class="btn btn--ghost" title="remove all drawings">Clear</button>
+      <label class="chk" title="snap anchors to O/H/L/C"><input type="checkbox" id="magnet" /> <span>Magnet</span></label>
+    </div>
+    <div class="divider"></div>
+    <span class="lbl">Layout</span>
+    <div class="group">
+      <button id="lsave" class="btn" title="chart.getState() -> localStorage">Save</button>
+      <button id="lload" class="btn" title="chart.restoreState() from localStorage">Restore</button>
+      <button id="lexport" class="btn" title="download the layout as a JSON file">Export</button>
+      <button id="limport" class="btn" title="apply a layout JSON file">Import</button>
+      <input type="file" id="limport-file" accept="application/json,.json" hidden />
+      <label class="chk"><input type="checkbox" id="vgrid" checked /> <span>V Grid</span></label>
+      <label class="chk"><input type="checkbox" id="hgrid" checked /> <span>H Grid</span></label>
+      <label class="chk" title="show the volume histogram"><input type="checkbox" id="volshow" checked /> <span>Volume</span></label>
+    </div>
+    <div class="divider"></div>
+    <span class="lbl">Order</span>
+    <div class="group">
+      <input type="number" id="qty" class="field field--qty" value="100" min="1" title="order quantity" />
+      <select id="product" class="field" title="product (OpenAlgo order constant)">
+        <option value="MIS">MIS</option><option value="CNC">CNC</option><option value="NRML">NRML</option>
+      </select>
+      <button id="buy" class="btn btn--buy" title="Place a Buy OCO bracket: entry + target + stop (target and stop are OCO)">Buy Bracket</button>
+      <button id="sell" class="btn btn--sell" title="Place a Sell OCO bracket: entry + target + stop (target and stop are OCO)">Sell Bracket</button>
+      <button id="cancel" class="btn btn--ghost" title="Cancel the bracket + all orders">Cancel</button>
+    </div>
+    <span class="spacer"></span>
+    <span class="hint">bracket = entry + OCO target/stop · right-click for single orders · hover the bottom of the chart for zoom / step controls</span>
+  </div>
+
+  <div class="split" id="split">
+    <main class="stage has-rail">
+      <div class="rail" id="rail" role="toolbar" aria-label="Drawing tools" aria-orientation="vertical"></div>
+      <div class="inspect-layout oac-widget" id="inspect-layout-1">
+        <div id="chart" role="region" aria-label="Price chart"></div>
+      </div>
+      <div id="legend"></div>
+
+      <div class="mobilebar" id="mobilebar" role="toolbar" aria-label="Touch drawing and navigation controls">
+        <select id="mobile-draw" aria-label="Drawing tool"></select>
+        <button id="mobile-cursor" type="button">Cursor</button>
+        <button id="mobile-undo" type="button">Undo</button>
+        <button id="mobile-redo" type="button">Redo</button>
+        <button id="mobile-magnet" type="button" aria-pressed="false">Magnet: off</button>
+        <button id="mobile-zoom-out" type="button">Zoom out</button>
+        <button id="mobile-zoom-in" type="button">Zoom in</button>
+        <button id="mobile-fit" type="button">Reset view</button>
+      </div>
+
+      <!-- What the stage says when there are no bars to draw. One overlay,
+           three states (`data-state`): bars on their way, none for this
+           request, or a request that failed and can be retried. A load in
+           flight shows three pulsing dots and nothing else, because a chart
+           that is not there yet should not be impersonated; the empty and
+           failed states show the card, whose wording setChartState() writes.
+           The card is the only part that takes the pointer, so a failed load
+           still leaves the last chart underneath it usable. -->
+      <div id="chartstate" class="chartstate" hidden>
+        <div class="chartstate__dots" id="cs-dots" aria-hidden="true" hidden></div>
+        <div class="chartstate__card" id="cs-card" role="status" aria-live="polite">
+          <span class="chartstate__spin" aria-hidden="true"></span>
+          <div class="chartstate__body">
+            <div class="chartstate__title" id="cs-title"></div>
+            <div class="chartstate__text" id="cs-text"></div>
+            <div class="chartstate__actions">
+              <button id="cs-dismiss" class="btn btn--ghost" type="button" hidden>Dismiss</button>
+              <button id="cs-retry" class="btn btn--primary" type="button">Try again</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Market-replay transport. Built by buildReplayBar() from the controller's
+           state(), because the engine ships no DOM. Lives inside the stage so it
+           comes along into chart-only full screen. -->
+      <div id="replaybar" role="toolbar" aria-label="Replay transport" hidden></div>
+
+      <!-- Select-bar prompt. Replay opens here rather than jumping straight in:
+           the bar you start from is the whole premise of the exercise, so it is
+           chosen, not guessed at from the viewport. -->
+      <div id="replaypick" role="status" hidden>
+        <button id="rp-pick-scope" type="button" aria-label="Replay scope: Chart 1">Chart 1</button>
+        <span><strong>Select a bar</strong> <span class="hint">then replay from its close</span></span>
+        <span class="hint" id="rp-picked"></span>
+        <button id="rp-pick-cancel">Cancel</button>
+      </div>
+
+      <!-- Leaving replay throws away the playhead, so it asks first. -->
+      <div id="replayleave" hidden>
+        <div class="box" role="alertdialog" aria-modal="true" aria-labelledby="rp-leave-title" aria-describedby="rp-leave-text">
+          <h4 id="rp-leave-title">Exit replay?</h4>
+          <p id="rp-leave-text">The chart goes back to the live session and the playhead is lost.</p>
+          <div class="row">
+            <button id="rp-leave-stay">Stay</button>
+            <button id="rp-leave-go" class="primary">Exit</button>
+          </div>
+        </div>
+      </div>
+    </main>
+    <!-- The linked second chart. Its header is built by renderPane2Bar(); the
+         plot is a whole second Chart joined to the same link group, which is the
+         only way the crosshair / viewport / symbol switches have anything to
+         demonstrate. -->
+    <div class="splitbar" id="splitbar" role="separator" aria-orientation="vertical" aria-label="Resize the split" hidden></div>
+    <aside class="pane2" id="pane2" hidden>
+      <div class="p2bar" id="p2bar" role="toolbar" aria-label="Second chart toolbar"></div>
+      <div class="p2plot">
+        <div class="inspect-layout oac-widget" id="inspect-layout-2">
+          <div id="chart2" role="region" aria-label="Second chart"></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Bracket panel (positions tracked to price every frame) -->
+  <div id="bracket" aria-label="Bracket order" hidden>
+    <div class="bk tp" id="bk-tp">
+      <span>TP: <b class="pts">0</b> Pts (<span class="pct">0%</span>)</span>
+      <span class="pnl">+0</span>
+    </div>
+    <div class="bk entry" id="bk-entry">
+      <button class="bk-x" data-act="cancel" aria-label="Cancel bracket" title="Cancel bracket">x</button>
+      <span>Qty: <b class="q">0</b></span>
+      <span>Risk/Reward: <b class="rr">0</b></span>
+      <button class="bk-buy" data-act="place">1-Click</button>
+      <button class="bk-mod" data-act="modify">Show bracket summary</button>
+    </div>
+    <div class="bk sl" id="bk-sl">
+      <span>SL: <b class="pts">0</b> Pts (<span class="pct">0%</span>)</span>
+      <span class="pnl">-0</span>
+    </div>
+  </div>
+
+  <!-- Indicator settings. The form is GENERATED from the descriptor's `inputs`,
+       so it works for every registered indicator, including your own. -->
+  <div id="setmodal" hidden>
+    <div class="set-card" role="dialog" aria-modal="true" aria-labelledby="set-title">
+      <div class="set-head"><span id="set-title"></span><button id="set-x" aria-label="Close" title="Close">&times;</button></div>
+      <div class="set-tabs" role="tablist">
+        <button class="set-tab is-on" data-tab="inputs" role="tab">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14"/><circle cx="7.5" cy="6" r="1.8"/><circle cx="12.5" cy="10" r="1.8"/><circle cx="8.5" cy="14" r="1.8"/></svg>
+          <span>Inputs</span>
+        </button>
+        <button class="set-tab" data-tab="style" role="tab">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 16.5c2.6 0 3.6-1.6 4.1-3.6"/><path d="M8 12.5 15.3 4.2a1.9 1.9 0 0 1 2.7 2.7L10.2 14.5"/></svg>
+          <span>Style</span>
+        </button>
+      </div>
+      <div id="set-body" class="set-body"></div>
+      <div class="set-foot">
+        <button id="set-reset" class="btn btn--ghost set-lead">Defaults</button>
+        <button id="set-ok" class="btn btn--primary">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="indsource" hidden>
+    <div class="set-card source-card" role="dialog" aria-modal="true" aria-labelledby="indsource-title">
+      <div class="set-head"><span id="indsource-title">Indicator source</span><button id="indsource-close" type="button">Close</button></div>
+      <div class="set-body">
+        <p id="indsource-owner" class="ws-hint"></p>
+        <p class="ws-hint">Read-only host source. This deterministic example alternates every 12 bars to demonstrate labels and plot gaps.</p>
+        <pre id="indsource-code" tabindex="0" aria-label="Indicator source code"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="templatemodal" hidden>
+    <div class="set-card ws-card" role="dialog" aria-modal="true" aria-labelledby="tp-title">
+      <div class="set-head"><span id="tp-title">Indicator templates</span><button id="tp-close" type="button">Close</button></div>
+      <div class="set-body ws-body">
+        <p id="tp-owner" class="ws-hint"></p>
+        <div class="set-row"><label for="tp-select">Saved templates</label><div class="set-ctl"><select id="tp-select"></select></div></div>
+        <div class="set-row"><label for="tp-name">Template name</label><div class="set-ctl"><input id="tp-name" type="text" maxlength="120" autocomplete="off" /></div></div>
+        <p id="tp-summary" class="ws-hint"></p>
+        <div class="ws-actions"><button id="tp-new" class="btn" type="button">Save new template</button><button id="tp-update" class="btn" type="button">Update selected</button><button id="tp-rename" class="btn" type="button">Rename</button><button id="tp-duplicate" class="btn" type="button">Duplicate</button></div>
+        <p class="ws-hint">Replace changes this chart's studies. Append keeps existing studies and adds separate copies.</p>
+        <div class="set-row"><label for="tp-scale-policy">Scale ownership</label><div class="set-ctl"><select id="tp-scale-policy"><option value="copy">Independent copies</option><option value="share">Share existing scales</option></select></div></div>
+        <div class="set-row"><label for="tp-range-policy">Saved view</label><div class="set-ctl"><select id="tp-range-policy"><option value="auto">Reset manual view</option><option value="preserve">Keep saved view</option></select></div></div>
+        <p class="ws-hint">The current price scale keeps its settings. Sharing also keeps existing destination scales. Older templates without layout settings use their original behavior.</p>
+        <div class="ws-actions"><button id="tp-import" class="btn btn--ghost" type="button">Import file</button><button id="tp-export" class="btn btn--ghost" type="button">Export selected</button><button id="tp-delete" class="btn btn--ghost" type="button">Delete selected</button></div>
+        <input id="tp-file" type="file" accept="application/json,.json" hidden />
+        <div id="tp-confirm" class="ws-confirm" hidden><p id="tp-delete-name"></p><div class="ws-actions"><button id="tp-keep" class="btn" type="button">Keep template</button><button id="tp-confirm-delete" class="btn" type="button">Confirm delete</button></div></div>
+        <p id="tp-error" class="ws-error" role="alert" hidden></p><p id="tp-notice" class="ws-hint" role="status" aria-live="polite"></p>
+      </div>
+      <div class="set-foot"><button id="tp-refresh" class="btn btn--ghost set-lead" type="button">Reload templates</button><button id="tp-append" class="btn" type="button">Append studies</button><button id="tp-replace" class="btn btn--primary" type="button">Replace studies</button></div>
+    </div>
+  </div>
+
+  <div id="workspacemodal" hidden>
+    <div class="set-card ws-card" role="dialog" aria-modal="true" aria-labelledby="ws-title">
+      <div class="set-head"><span id="ws-title">Layouts</span><button id="ws-close" type="button">Close</button></div>
+      <div class="set-body ws-body">
+        <p id="ws-current">Current: Unnamed</p>
+        <div class="set-row"><label for="ws-select">Saved layouts</label><div class="set-ctl"><select id="ws-select"></select></div></div>
+        <div class="set-row"><label for="ws-name">Layout name</label><div class="set-ctl"><input id="ws-name" type="text" maxlength="120" autocomplete="off" /></div></div>
+        <div class="ws-actions"><button id="ws-new" class="btn" type="button">New from current</button><button id="ws-save" class="btn" type="button">Save current</button><button id="ws-rename" class="btn" type="button">Rename</button><button id="ws-duplicate" class="btn" type="button">Duplicate</button></div>
+        <div id="ws-recent-row"><p class="set-group">Recent layouts</p><div id="ws-recent" class="ws-actions"></div></div>
+        <label class="ws-autosave"><input id="ws-autosave" type="checkbox" /> Autosave current layout</label>
+        <p class="ws-hint">With autosave off, reload restores the last saved version. Session recovery is kept separately.</p>
+        <div class="ws-actions"><button id="ws-import" class="btn btn--ghost" type="button">Import file</button><button id="ws-grid" class="btn btn--primary" type="button" hidden>Open in grid view</button><button id="ws-export" class="btn btn--ghost" type="button">Export selected</button><button id="ws-delete" class="btn btn--ghost" type="button">Delete selected</button></div>
+        <input id="ws-file" type="file" accept="application/json,.json" hidden />
+        <div class="ws-actions"><button id="ws-data" class="btn btn--ghost" type="button" aria-describedby="ws-data-source">Download chart data (CSV)</button></div>
+        <p id="ws-data-source" class="ws-hint"></p>
+        <div id="ws-confirm" hidden><p id="ws-delete-name"></p><div class="ws-actions"><button id="ws-keep" class="btn" type="button">Keep layout</button><button id="ws-confirm-delete" class="btn" type="button">Confirm delete</button></div></div>
+        <p id="ws-error" role="alert" hidden></p><p id="ws-notice" role="status" aria-live="polite"></p>
+      </div>
+      <div class="set-foot"><button id="ws-refresh" class="btn btn--ghost set-lead" type="button">Reload saved layouts</button><button id="ws-open" class="btn btn--primary" type="button">Open selected</button></div>
+    </div>
+  </div>
+
+  <div id="chartdatamodal" hidden>
+    <div class="set-card ws-card csv-card" role="dialog" aria-modal="true" aria-labelledby="csv-title">
+      <div class="set-head"><span id="csv-title">Download chart data</span><button id="csv-close" type="button">Close</button></div>
+      <div class="set-body ws-body">
+        <p id="csv-source" class="ws-hint"></p>
+        <div class="ws-actions"><button id="csv-all-rows" class="btn btn--ghost" type="button">All loaded rows</button><button id="csv-visible" class="btn btn--ghost" type="button">Use visible bounds</button></div>
+        <div class="set-row"><label for="csv-from">From</label><div class="set-ctl"><input id="csv-from" type="datetime-local" step="1" autocomplete="off" /></div></div>
+        <div class="set-row"><label for="csv-to">To</label><div class="set-ctl"><input id="csv-to" type="datetime-local" step="1" autocomplete="off" /></div></div>
+        <p id="csv-zone" class="ws-hint"></p>
+        <p class="ws-hint">Bounds are inclusive. Studies keep their full loaded-history warmup.</p>
+        <div class="set-row"><label for="csv-alignment">Alignment</label><div class="set-ctl"><select id="csv-alignment"><option value="source">Source rows</option><option value="display">Displayed plot positions</option></select></div></div>
+        <p class="ws-hint">Display alignment follows study plot offsets. Projected times are spacing estimates, not future observations.</p>
+        <div class="ws-actions"><button id="csv-all-studies" class="btn btn--ghost" type="button">All studies</button><button id="csv-no-studies" class="btn btn--ghost" type="button">No studies</button></div>
+        <div id="csv-studies" role="group" aria-label="Studies to export"></div>
+        <label class="csv-study"><input id="csv-comparisons" type="checkbox" checked /><span>Include comparison closes</span></label>
+        <p id="csv-error" class="ws-error" role="alert" hidden></p>
+      </div>
+      <div class="set-foot"><button id="csv-cancel" class="btn btn--ghost" type="button">Cancel</button><button id="csv-download" class="btn btn--primary" type="button">Download CSV</button></div>
+    </div>
+  </div>
+
+  <!-- Compare: a second instrument on the primary's pane. The engine aligns it
+       by timestamp and rebases the pane; the symbol list and the scale choice
+       are ours. -->
+  <div id="cmpmodal" hidden>
+    <div class="set-card" role="dialog" aria-modal="true" aria-labelledby="cmp-title">
+      <div class="set-head"><span id="cmp-title">Compare symbol</span><button id="cmp-x" aria-label="Close" title="Close">&times;</button></div>
+      <div class="set-body">
+        <div class="set-row">
+          <label for="cmp-sym">Symbol</label>
+          <div class="set-ctl"><input type="text" id="cmp-sym" placeholder="MSFT, ^NSEI, BTC-USD" spellcheck="false" /></div>
+        </div>
+        <div class="set-row">
+          <label for="cmp-mode">Price scale</label>
+          <div class="set-ctl">
+            <select id="cmp-mode">
+              <option value="percentage">Percent</option>
+              <option value="indexed-to-100">Indexed to 100</option>
+              <option value="none">Own scale</option>
+            </select>
+          </div>
+        </div>
+        <div class="set-group">On the chart</div>
+        <div id="cmp-list"></div>
+      </div>
+      <div class="set-foot">
+        <button id="cmp-close" class="btn btn--ghost">Close</button>
+        <button id="cmp-add" class="btn btn--primary">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart settings. Every control here is generated from chartSettingsSchema(),
+       so a control the engine adds shows up without a line of demo code. -->
+  <div id="chartset" hidden>
+    <div class="cset-card" role="dialog" aria-modal="true" aria-labelledby="cset-title">
+      <div class="set-head"><span id="cset-title">Chart settings</span><button id="cset-x" aria-label="Close" title="Close">&times;</button></div>
+      <div class="cset-main">
+        <nav class="cset-tabs" id="cset-tabs" aria-label="Settings sections"></nav>
+        <div id="cset-body" class="set-body"></div>
+      </div>
+      <div class="set-foot">
+        <button id="cset-defaults" class="btn btn--ghost set-lead">Restore this tab</button>
+        <button id="cset-cancel" class="btn btn--ghost">Cancel</button>
+        <button id="cset-ok" class="btn btn--primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Point and figure and Renko settings, from the button beside the chart
+       type while either is drawn. The body is built by src/box-settings.js:
+       the paired colour row is the generated form's, the rest is its own. -->
+  <div id="boxmodal" hidden>
+    <div class="set-card box-card" role="dialog" aria-modal="true" aria-labelledby="box-title">
+      <div class="set-head"><span id="box-title">Chart type settings</span><button id="box-x" aria-label="Close" title="Close">&times;</button></div>
+      <div id="box-body" class="set-body"></div>
+      <p id="box-error" class="ws-error box-error" role="alert" hidden></p>
+      <div class="set-foot">
+        <button id="box-cancel" class="btn btn--ghost">Cancel</button>
+        <button id="box-ok" class="btn btn--primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Price-axis menu and its level flyout. Both are built from
+       chart.priceAxisState() and the PriceLevels primitive, never hardcoded. -->
+  <div id="axmenu" class="axmenu" role="menu" aria-label="Price axis" hidden></div>
+  <div id="axsub" class="axmenu" role="menu" aria-label="Price levels" hidden></div>
+
+  <!-- The properties bar for the selected drawing, its popovers, the inline
+       text editor and the level editor are built by src/properties.js on
+       mount, inside the stage, so they come along into full screen. -->
+
+  <!-- Right-click menu: order entry at the price under the cursor, drawings, settings. -->
+  <div id="ctxmenu" role="menu" aria-label="Chart menu" hidden>
+    <button role="menuitem" data-act="alert-create">Create alert</button>
+    <button role="menuitem" data-act="alert-list">Alerts</button>
+    <hr data-sec="alerts">
+    <button class="buy" role="menuitem" data-side="BUY" data-type="MARKET">Buy market</button>
+    <button class="sell" role="menuitem" data-side="SELL" data-type="MARKET">Sell market</button>
+    <hr data-sec="order">
+    <button class="buy" role="menuitem" data-side="BUY" data-type="LIMIT">Buy limit</button>
+    <button class="sell" role="menuitem" data-side="SELL" data-type="LIMIT">Sell limit</button>
+    <hr data-sec="order">
+    <button class="buy" role="menuitem" data-side="BUY" data-type="SL">Buy stop (SL)</button>
+    <button class="sell" role="menuitem" data-side="SELL" data-type="SL">Sell stop (SL)</button>
+    <hr data-sec="order">
+    <button role="menuitem" data-act="cancelall">Cancel orders and close position</button>
+    <hr>
+    <button role="menuitem" data-act="delsel">Delete drawing</button>
+    <button role="menuitem" data-act="delall">Remove all drawings</button>
+    <!-- Session marks (src/session-marks.js): host-owned lines the user can
+         select and copy but not move or delete, left out of saved layouts
+         and the Objects dock. -->
+    <button role="menuitem" data-act="mark">Mark price for this session</button>
+    <button role="menuitem" data-act="unmark">Clear session marks</button>
+    <!-- A study the host protects (src/host-study.js): no user control removes
+         it, changes its settings or moves it; this row adds it and, with
+         force, takes it away. -->
+    <button role="menuitem" data-act="hoststudy">Add protected VWAP</button>
+    <!-- Clipboard. The chord is shown beside the label because the engine binds
+         no keys: nothing else on screen would say what Ctrl+C does here. It is
+         kept out of the name (aria-keyshortcuts carries it), and menus.js
+         writes Cmd for it on a Mac. -->
+    <hr data-sec="clip">
+    <button role="menuitem" data-act="copy" aria-keyshortcuts="Control+C">Copy drawing<em aria-hidden="true">Ctrl+C</em></button>
+    <button role="menuitem" data-act="cut" aria-keyshortcuts="Control+X">Cut drawing<em aria-hidden="true">Ctrl+X</em></button>
+    <button role="menuitem" data-act="paste" aria-keyshortcuts="Control+V">Paste drawing<em aria-hidden="true">Ctrl+V</em></button>
+    <!-- Only drawn when the chart says the pointer was over an indicator. -->
+    <hr data-sec="ind">
+    <button role="menuitem" data-act="indset">Indicator settings...</button>
+    <!-- The pane under the pointer moves a slot up or down, the price pane
+         included: that is how the price goes below the studies. A study pane
+         also folds to its header strip and opens again; the price pane always
+         stays open, in whatever slot, so it never offers that. -->
+    <hr data-sec="pane">
+    <button role="menuitem" data-act="paneup">Move pane up</button>
+    <button role="menuitem" data-act="panedown">Move pane down</button>
+    <button role="menuitem" data-act="panecollapse">Collapse pane</button>
+    <!-- The volume histogram's second control. The eye on its legend row is the
+         one that sits over the bars; this is the one a reader finds by
+         right-clicking the chart and reading down the list. -->
+    <hr data-sec="vol">
+    <button role="menuitemcheckbox" data-act="volshow" aria-checked="false">Volume</button>
+    <hr>
+    <button role="menuitem" data-act="chartset">Chart settings...</button>
+  </div>
+
+  <!-- Toasts stack here, newest at the bottom; the region is polite so a
+       message waits for the reader. The second region carries what has no
+       visible readout of its own (a theme switch), and is never shown. -->
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <div id="live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

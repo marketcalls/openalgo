@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:#0d0e12;color:#cbd5e1;font:13px system-ui}
+header{height:42px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid #273244}
+#chart{position:absolute;inset:43px 0 0}
+</style></head>
+<body>
+<header>Alert rendering and drawing interaction</header>
+<div id="chart"></div>
+<script type="module">
+  import { createChart, AlertController } from '/dist/openalgo-charts.mjs';
+  import { DrawingController } from '/dist/openalgo-charts.draw.mjs';
+  const chart = createChart(document.getElementById('chart'), { timeNavigator: false, priceAxisWidth: 72 });
+  chart.setDataContext({ symbol: 'ALERT FIXTURE', exchange: 'SIM', interval: '1m' });
+  const series = chart.addSeries('candlestick');
+  const bars = Array.from({ length: 40 }, (_, i) => {
+    const close = i === 39 ? 100 : 99 + Math.sin(i / 3);
+    return { time: 1735689600 + i * 60, open: close - 0.3, high: close + 1, low: close - 1, close, volume: 100 + i };
+  });
+  series.setData(bars);
+  chart.setVisibleLogicalRange({ from: -2, to: 44 });
+  chart.panes()[0].priceScale.setFixedRange({ min: 88, max: 120 });
+  const draw = new DrawingController(chart, { defaultStyle: { color: '#e879f9', lineWidth: 2 } });
+  const drawing = draw.add({ tool: 'horizontal-line', points: [{ time: bars[20].time, price: 108 }], style: {}, paneIndex: 0 });
+  const spentLines = new URLSearchParams(location.search).get('spentLines') === 'hide' ? 'hide' : 'show';
+  const alerts = new AlertController(chart, { drawings: draw, now: () => 1000, spentLines });
+  const ids = {
+    touch: alerts.add({ source: { kind: 'price', price: 105 }, title: 'Intrabar threshold', condition: 'crossingUp', policy: 'onTouch' }).id,
+    close: alerts.add({ source: { kind: 'price', price: 110 }, title: 'Confirmed threshold', condition: 'crossingUp' }).id,
+    drawing: alerts.add({ source: { kind: 'drawing', drawingId: drawing.id }, title: 'Drawing threshold', condition: 'crossingUp', policy: 'onTouch' }).id,
+    disabled: alerts.add({ source: { kind: 'price', price: 94 }, title: 'Disabled level', state: 'disabled' }).id,
+    expired: alerts.add({ source: { kind: 'price', price: 90 }, title: 'Expired level', expiresAt: 995 }).id,
+  };
+  const fired = [];
+  chart.on('alert:triggered', event => fired.push(event));
+  window.__alertsDemo = { chart, series, draw, alerts, bars, ids, drawingId: drawing.id, fired };
+  window.addEventListener('pagehide', () => { alerts.destroy(); draw.destroy(); chart.destroy(); }, { once: true });
+</script>
+</body>
+</html>

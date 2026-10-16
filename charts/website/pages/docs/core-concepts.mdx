@@ -1,0 +1,99 @@
+---
+title: Core Concepts
+description: The data model, gapless time axis, price scales, panes, and the render loop.
+---
+
+import { Callout } from 'nextra/components'
+
+# Core concepts
+
+A quick mental model of how the engine fits together. You can skip straight to
+[Chart Types](/docs/chart-types) if you just want to draw something.
+
+## The bar
+
+Every price series is a list of **bars**. Time is **UTC seconds** (an integer), never a
+`Date`:
+
+```ts
+interface Bar {
+  time: number;   // UTC seconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+```
+
+Line/area series use the same shape and read `close`. Gaps in a series are expressed with a
+**whitespace** item (`{ time }` with no OHLC) - the renderer breaks the line there instead
+of interpolating across it.
+
+## Gapless time axis
+
+The x position of a bar is `logicalIndex × barSpacing`, **not** a function of its timestamp.
+Each bar gets the next integer index regardless of the real-time gap before it, so
+weekends, holidays, and overnight session breaks **collapse automatically** - there is no
+empty space to draw. This is why panning and zooming feel continuous on intraday data.
+
+<Callout type="info">
+Because x is a logical index, all panes share one time scale and stay aligned bar-for-bar.
+</Callout>
+
+Dragging the time axis left expands bar spacing; dragging right compresses it. Mouse and
+pen drags inside the plot pan time and price by default; `navigation.mousePan: 'horizontal'`
+limits movement to time. Touch pans both axes.
+
+`navigation.defaultVisibleBars` sets the initial and reset view. The default `0` fits all
+loaded bars; a positive count targets the newest N bars plus four right-padding slots,
+within the data and bar-spacing limits. This controls the viewport, not the history your
+feed loads or retains. See [Scales & Panes](/docs/scales-and-panes#default-visible-bars).
+
+## Price scale
+
+Each pane has its own price scale: linear or logarithmic, auto-scaling to the visible range
+by default, with optional inversion and manual override. Dragging the price axis rescales
+that pane; double-click restores autoscale (except while a drawing tool is armed, where
+it finishes the shape). See [Scales & Panes](/docs/scales-and-panes).
+
+## Panes
+
+A chart has one or more stacked **panes** sharing the time axis. The main pane holds price;
+add `paneIndex: 1`, `2`, ... to put volume or an oscillator (RSI) below. Panes are created on
+demand the first time you reference them.
+
+## Series, primitives, and the registry
+
+- **Series** are registry-driven. `addSeries('candlestick' | 'line' | 'area' | ...)` looks the
+  type up in the chart-type registry; you can [register your own](/docs/primitives-and-plugins).
+- **Primitives** are everything else drawn on the chart - markers, event badges, price
+  lines, profiles, and the entire trading layer. They implement a small `IPrimitive`
+  interface (`draw`, optional `hitTest` / `hitBounds` / `autoscaleInfo` / lifecycle) and attach with
+  `chart.addPrimitive(primitive, paneIndex)`.
+
+## The render loop
+
+Drawing is centralized in a single `requestAnimationFrame` loop driven by an **invalidation
+mask**. Cursor moves only repaint the crosshair layer, while repeated data updates before
+the next frame are coalesced. A live tick repaints the price pane and the panes of the studies
+computed from it, and a study recompute repaints only the panes its output lands on; a write
+that moves the shared time scale, such as an appended bar, repaints every pane. While the
+corner clock or the bar countdown is on, the panes that show them repaint on each such write
+too, since both read the time as their pane paints. Kinetic scroll and the eased wheel zoom
+are stepped inside the same frame, so each frame paints the step it made. Every study still
+does work over its full history on each tick frame, so sustained charts should keep retained
+history within a measured budget. See [Performance & Operations](/docs/performance-and-operations).
+
+## Time at the edge
+
+Internally everything is UTC seconds. The OpenAlgo adapters convert at the boundary - IST
+date/time strings and epoch milliseconds become UTC seconds on the way in, because that is
+what the broker API speaks. On the way out, labels are formatted in the chart's
+**timezone**, an IANA name that defaults to `Asia/Kolkata` and is one option to change:
+`createChart(el, { timezone: 'America/New_York' })`, or `chart.setTimezone(...)` at runtime.
+
+The zone is a lens, never a rewrite. It moves axis labels, the crosshair tag, and the
+calendar units that session-anchored studies reset on; it never touches a `Bar.time`, which
+is UTC seconds always. Your application code never juggles timezones. See
+[Timezones](/docs/timezones).

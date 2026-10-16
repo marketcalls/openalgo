@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><style>
+body { margin: 24px; background: #171923; }
+#host { width: 1000px; height: 620px; }
+</style></head>
+<body><div id="host"></div><script type="module">
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+
+const bars = Array.from({ length: 160 }, (_, i) => {
+  const close = 100 + Math.sin(i / 12) * 4;
+  return { time: 1700000000 + i * 60, open: close - 0.4, high: close + 1, low: close - 1, close, volume: 100 + i };
+});
+const widget = createWidget(document.querySelector('#host'), {
+  symbol: 'PIN SIM', interval: '1m', intervals: ['1m'], theme: 'dark',
+  rail: false, statusline: false, panels: false, navigation: { defaultVisibleBars: 100 },
+});
+widget.series.setData(bars);
+// A box drawn around live bars, in data space: the Anchor row pins it.
+const rectId = widget.draw.add({ tool: 'rectangle', paneIndex: 0,
+  points: [{ time: bars[110].time, price: 105.5 }, { time: bars[130].time, price: 103.5 }],
+  style: { color: '#ff00ff', lineWidth: 4 },
+}).id;
+window.__viewport = { widget, rectId, bars };
+</script></body></html>

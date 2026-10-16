@@ -1,0 +1,8 @@
+{
+  "name": "openalgo-charts",
+  "version": "1.0.0",
+  "exports": {
+    ".": { "types": "./types/index.d.ts" },
+    "./extra": { "types": "./types/extra/index.d.ts" }
+  }
+}

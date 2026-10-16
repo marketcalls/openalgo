@@ -1,0 +1,173 @@
+---
+title: Watchlists & News
+description: Named symbol lists with live quote rows and a symbol news reader in the widget's panel dock, from optional quote and news providers.
+---
+
+# Watchlists and news
+
+The widget's panel dock can carry two more panels beside Data and Objects: a
+**Watchlist** of named symbol lists with live quote rows, and a **News** reader for
+the chart's instrument. Both are optional. A panel, its tab and its top bar entry
+appear only when the host supplies its source.
+
+Three pieces work together, each in the tier where it belongs:
+
+| Piece | Where | What it is |
+| --- | --- | --- |
+| `WatchlistRepository` | `openalgo-charts/workspace` | DOM-free named lists with revision-checked storage |
+| `QuoteFeed`, `NewsFeed` | `openalgo-charts` (types only) | the provider contracts your data source implements |
+| The panels | `openalgo-charts/widget` | the Watchlist and News panels, and their DOM-free controllers |
+
+Added in 2.5.5.
+
+## Add both panels to a widget
+
+```ts
+import { createWidget } from 'openalgo-charts/widget';
+import { WatchlistRepository, createIndexedDbWatchlistStorage } from 'openalgo-charts/workspace';
+
+const lists = new WatchlistRepository(createIndexedDbWatchlistStorage(indexedDB), 'account-7');
+
+const widget = createWidget('#chart', {
+  feed, symbol: 'INFY', exchange: 'NSE', interval: '5m',
+  watchlist: { store: lists, quotes: myQuoteFeed },
+  news: { feed: myNewsFeed, pageSize: 20 },
+});
+
+widget.openWatchlist();
+```
+
+Choosing a row charts that instrument, on its own exchange. The widget charts every
+symbol upper-cased, so the panel treats a row as the instrument it will chart: a
+lower-case entry is the chart's own row, and its upper-case twin is refused as already
+listed. `openWatchlist()` and `openNews()` return false when the source was not
+supplied, when `panels` is off, or after `destroy()`.
+
+## Named lists
+
+A list entry is the exact pair `{ symbol, exchange }`. Neither part is parsed or
+case-folded, so `RELIANCE` on NSE and `RELIANCE` on BSE are two entries, and a symbol
+that contains a colon cannot collide with another instrument. An exact repeat in one
+list is refused.
+
+```ts
+const tech = await lists.createList('Tech', [{ symbol: 'INFY', exchange: 'NSE' }]);
+await lists.addEntry(tech.id, { symbol: 'TCS', exchange: 'NSE' });
+await lists.moveEntry(tech.id, { symbol: 'TCS', exchange: 'NSE' }, 0);
+await lists.setActiveList(tech.id);
+const off = lists.subscribe(catalog => render(catalog));
+```
+
+Writes are queued, and each is applied to the catalog as it is stored at that moment,
+so a list edited in another tab keeps that edit. A change computed from a position,
+such as a move, can pass `{ expectedRevision }`: if the catalog has moved since, the
+change is refused with `WatchlistConflictError` and nothing is written. A write that
+loses a race with another tab gets the same error. The panel shows "The watchlists
+changed in another session" and reloads the saved lists.
+
+`createIndexedDbWatchlistStorage` compares and writes in one IndexedDB transaction.
+`createMemoryWatchlistStorage` keeps lists for the life of the page, for tests and
+previews. A server-backed store can implement the `WatchlistStore` contract directly:
+the repository's methods without `duplicateList`, which the panel never calls. Its
+`subscribe` listeners must run before a change's promise resolves, as the repository's
+do, because the panel computes a queued move from the catalog they deliver. Corrupt
+stored data is reported, never replaced.
+
+## Quote rows
+
+A row's price comes only from a `QuoteFeed`. The panel never reads the chart's bars:
+a last candle shown as a quote is a wrong number with nothing to say so. Without a
+quote source, rows show their symbols and `n/a`.
+
+```ts
+const myQuoteFeed: QuoteFeed = {
+  getQuotes: ({ instruments, signal }) => fetchSnapshots(instruments, signal),
+  subscribeQuotes(instruments, { onQuote, onStatus }) {
+    const stop = socket.subscribe(instruments, onQuote);
+    socket.onState(state => onStatus?.(state)); // 'connecting' | 'live' | 'reconnecting' | 'disconnected'
+    return stop;
+  },
+};
+```
+
+- **Only rows on screen hold a stream.** The panel subscribes one instrument per call
+  as rows scroll into view and releases each as it leaves. Switching lists, hiding
+  the page, closing or switching the panel, and `destroy()` release them all.
+- **Stale is visible.** While a stream reports `reconnecting` or `disconnected`, its
+  quotes are shown muted and underlined, and the status line says they may be stale;
+  with no value on screen it says only that quotes are reconnecting or disconnected.
+  When it is live again the panel asks for fresh snapshots. A source without
+  `subscribeQuotes` is polled every `pollMs` (15 seconds by default) while rows are
+  visible, and a snapshot older than `staleAfterMs` (60 seconds) is stale. The panel
+  waits only for the next row that can still age into stale, so a quiet board holds
+  no timer and repaints nothing.
+- **Change figures need a reference.** Change and percent change come from the
+  provider's `previousClose`; without one they stay blank.
+- **Sorting holds still.** Sort by symbol, last, change or percent change from the
+  column headers; a third click returns to list order. Ties keep list order and
+  unknown values sink in either direction. While the pointer or focus is on the rows,
+  prices update in place but rows do not move. The sort outlives a panel switch.
+
+Keyboard: ArrowUp and ArrowDown move between rows, Enter charts a row, and
+Alt+ArrowUp or Alt+ArrowDown reorders it in list order, one saved move at a time, so
+a held key lands every step.
+
+## The news reader
+
+```ts
+const myNewsFeed: NewsFeed = {
+  getNews: ({ symbol, exchange, cursor, limit, signal }) =>
+    fetch(`/news?symbol=${encodeURIComponent(symbol)}&cursor=${cursor ?? ''}&limit=${limit}`, { signal })
+      .then(response => response.json()), // { items: NewsItem[], nextCursor?: string | null }
+};
+```
+
+The reader follows the chart's instrument. A new symbol or exchange cancels the
+request in flight and loads the newest page; an interval change is the same
+instrument and loads nothing. "Load older news" asks for the next page with the
+provider's cursor, and an item repeated across pages is shown once. The status line
+reports loading, no news, errors, and news that has aged past `staleAfterMs` (five
+minutes) or could not be refreshed.
+
+Every provider string is shown as text. A headline containing markup shows the
+markup, and runs nothing. The detail view shows the summary, and an "Open article"
+link only for an absolute http or https URL without credentials, opened in a new tab
+with `rel="noopener noreferrer"` and no referrer. `safeNewsUrl(url)` is the same check
+for a custom host.
+
+Coverage, delay and redistribution rights are the provider's. The panels only show
+what the provider returns.
+
+## Custom hosts
+
+A host with its own chrome can mount the same panels into its own dock, as the yfinance
+reference host does with `mountPanelDock` (its grid view instead passes `watchlist` and
+`news` to `createChartGrid`, which hands them to every chart):
+
+```ts
+import {
+  mountPanelDock, mountDataWindow, createObjectsPanelContent, mountWatchlistPanel, mountNewsPanel,
+} from 'openalgo-charts/widget';
+
+const dock = mountPanelDock(ctx, stage, {
+  data: host => mountDataWindow(ctx, host),
+  objects: host => {
+    const panel = createObjectsPanelContent(ctx);
+    host.appendChild(panel.element);
+    return panel;
+  },
+  watchlist: host => mountWatchlistPanel(ctx, host, { store: lists, quotes: myQuoteFeed, onSelect: open }),
+  news: host => mountNewsPanel(ctx, host, { feed: myNewsFeed }),
+});
+```
+
+`mountWatchlistPanel` also takes `normalize(instrument)`, the instrument your host
+charts for an entry, when your symbol box folds case or otherwise renames what it
+opens. Or use the DOM-free controllers under your own view: `QuoteBoard` (`setVisible`,
+`row`, `status`) keeps streams to the instruments you mark visible and reports each
+row's `live`, `delayed`, `snapshot`, `stale`, `loading`, `unavailable` or `error` state;
+`NewsReader` (`setInstrument`, `refresh`, `loadMore`, `snapshot`) owns paging,
+deduplication, cancellation and staleness.
+
+See the [live example](/examples#watchlists-and-news) and the
+[Widget tier](/docs/widget) for the rest of the dock.

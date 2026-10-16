@@ -1,0 +1,258 @@
+---
+title: Trader Alerts
+description: Create, evaluate, drag and persist chart-owned alerts without requiring the widget.
+---
+
+import AlertDragDemo from '../../components/AlertDragDemo'
+import AlertLifecycleDemo from '../../components/AlertLifecycleDemo'
+
+# Trader alerts
+
+`AlertController` is part of the base `openalgo-charts` package. It evaluates
+conditions and manages their lifecycle. Your application handles notification,
+sound or webhook delivery. An alert never sends an order.
+
+## Create an alert
+
+Provide a container with `id="chart"`. Set the instrument context before creating
+alerts so each record belongs to the correct symbol, exchange and interval.
+
+```ts
+import { createChart, AlertController, type AlertTriggeredPayload } from 'openalgo-charts';
+
+const chart = createChart(document.getElementById('chart')!);
+chart.setDataContext({ symbol: 'SAMPLE', exchange: 'DEMO', interval: '1m' });
+const series = chart.addSeries('candlestick');
+series.setData([
+  { time: 60, open: 98, high: 99, low: 97, close: 98 },
+  { time: 120, open: 98, high: 100, low: 98, close: 99 },
+]);
+const alerts = new AlertController(chart);
+const off = chart.on('alert:triggered', payload => {
+  const event = payload as AlertTriggeredPayload;
+  console.info(event.title, event.time, event.price);
+});
+const level = alerts.add({
+  title: 'Confirmed breakout',
+  source: { kind: 'price', price: 100 },
+  condition: 'crossingUp',
+  policy: 'onBarClose',
+  repeat: 'once',
+});
+
+series.update({ time: 120, open: 98, high: 103, low: 98, close: 102 });
+series.update({ time: 180, open: 102, high: 103, low: 101, close: 102 });
+// The new bar confirms the preceding close and triggers the alert once.
+```
+
+Create one controller per chart. `chart.destroy()` destroys its controller;
+`alerts.destroy()` can release that owner earlier. Call `off()` when disposing
+the example's listener. For a widget, use `widget.alerts` and
+`widget.openAlerts()`; the widget already owns a controller.
+
+## Sources and timing
+
+| Source | Configuration |
+| --- | --- |
+| Instrument price | `{ kind: 'price', price: 100 }`; add `upperPrice` for a range. |
+| Study plot | `{ kind: 'indicator', instanceId: study.id, plotKey: 'rsi', value: 70 }`; add `upperValue` for a range. |
+| Drawing level | `{ kind: 'drawing', drawingId, level? }`; supply the drawing provider when constructing the controller. |
+| Named bar condition | `{ kind: 'barCondition', id: 'bullish' }`, with condition `matches`. |
+
+Study sources use a particular instance and declared plot key, in that plot's
+units. They do not compare an oscillator against price wicks. Missing study
+readings are unavailable rather than zero. Pass an existing `DrawingController`
+as `new AlertController(chart, { drawings: draw })` to resolve drawing anchors.
+A drawing on a study pane also needs `input: { instanceId, plotKey }` identifying
+the study whose readings should be compared with that level.
+
+Numeric sources support `crossing`, `crossingUp`, `crossingDown`, `greaterThan`,
+`lessThan`, `enteringRange` and `leavingRange`. Ranges need finite ordered bounds;
+equality is allowed and boundaries count as inside. Built-in bar predicates are
+`bullish`, `bearish`, `inside`, `outside`, `gap-up` and `gap-down`.
+`registerBarCondition` adds a custom predicate before its records are restored.
+Keep predicates free of delivery effects; handle those through events.
+
+`onBarClose` and `once` are the defaults. A new live primary bar confirms the
+previous bar. Loading or prepending history seeds observations without firing
+past conditions. With `onTouch`, newly observed extrema and price movement can
+trigger before close, so a signal may disappear from the final candle. At most
+one match is consumed per alert and bar, including matches suppressed by
+`cooldownSeconds`.
+
+From 2.6.0, an update that appends several bars at once is judged bar by bar, in
+order, as the same number of single appends would be. That happens when one source
+bar completes two or more Renko bricks on a [transformed chart](/docs/transforms) (the other
+transforms add at most one element per source bar), or when
+a custom `AlertChartHost` writes two bars before it emits `data:update`. Every bar
+the update closes is confirmed, and each match reports its own bar in `time` and
+`index`. The newest bar may still be forming, so `onBarClose` judges it only once a
+newer bar follows it; a forming Kagi vertex or range bar that moves to a newer time
+is still that bar. Repeats, cooldowns and expiry work as they would for separate
+appends at the same moment: a `once` alert fires at the first matching bar and stops.
+A reload, a page of older history, a late correction of an older bar, or a symbol or
+interval change still seeds silently, and a corrected bar is never judged.
+
+Use `repeat: 'everyTime'` to keep a triggered condition armed. `expiresAt` is an
+absolute UTC timestamp in seconds; expiration takes priority over a new trigger.
+Programmatic alerts have no expiry unless you supply one. The widget editor
+defaults a new expiry to two chart-calendar months, clamped at month end, and
+keeps the timezone captured when the editor opened.
+
+## Edit, pause and inspect
+
+`list()` returns records with states `armed`, `triggered`, `disabled` or
+`expired`. Use `update(id, patch)`, `enable(id)`, `disable(id)` and `remove(id)`
+for lifecycle changes. Updates reject invalid configuration before changing the
+record. An expired record needs a future or cleared expiry before it can remain
+armed again.
+
+`availability(id)` reports whether the source can currently evaluate, with a
+reason when it cannot. This is separate from lifecycle state: a disabled alert
+can still have an available source.
+
+`setPaused(true)` suppresses evaluation and threshold edits during a host loading
+or replay-selection transition. Resume with `setPaused(false)` after the correct
+source is ready. The controller also observes chart replay start/stop events.
+Context mismatches and replay suppress delivery; resuming does not deliver a
+backlog. The host still owns pausing live series writes while replay is active.
+
+## Switching timeframes
+
+From 2.5.0, a fixed price alert stays visible on every timeframe for the same
+symbol and exchange. Its label shows the original timeframe when you view
+another one. An armed alert shows `Paused` there and cannot be dragged.
+Triggered, disabled and expired price alerts keep their lifecycle badges.
+
+Visibility does not change evaluation. An alert created on `5m` still needs
+`5m` bars, including when its policy is `onTouch`. Switching to `1m` does not
+turn a five-minute close condition into a one-minute close condition.
+`availability(id)` explains which timeframe to return to. Study and drawing
+levels remain visible only on their original timeframe because their values
+and geometry can change with the bars. The alert list retains every record.
+
+When changing data context, clear the old source bars, call `setDataContext`,
+then load the new bars. Returning to the original timeframe seeds observations
+silently and resumes with fresh live updates. Bars from another timeframe do
+not advance that alert's evaluated-bar checkpoint. Saved alerts use the same
+rules after a reload; no document migration is needed.
+
+This chart-owned controller only evaluates the chart data it receives. To keep
+alerts running on an unseen timeframe, your application needs a separate
+evaluator receiving that timeframe's data, and one owner for delivery.
+
+## Data variants
+
+An alert also belongs to the [data variant](/docs/data-variants) the chart
+showed when it was set: extended hours, raw prices, a quote currency or a unit.
+`alert.scope.variant` records it, and an alert set on the provider's default
+series has no `variant` field at all, so its scope is the same as before
+variants existed. It evaluates only on that series, the way it evaluates only on
+its own timeframe, and `availability(id)` asks you to switch back to it.
+
+A fixed price stays visible, paused, on another session or adjustment of the
+same instrument, because the price means the same there. In another currency or
+unit it is a different price, so the level is not drawn. A saved document naming
+a variant this build cannot read is refused by `parseAlertsDocument`.
+
+## Finished alert lines
+
+From 2.5.1, custom hosts can hide triggered and expired lines without deleting
+the alerts:
+
+```ts
+const alerts = new AlertController(chart, { spentLines: 'hide' });
+```
+
+The default is `'show'`. Hidden alerts stay in `list()` and saved state; a
+once-only alert cannot fire again just because the chart reloads. Armed,
+repeating and disabled alerts keep their normal lines. Re-arm with `enable(id)`
+to restore a line. Clear or extend an elapsed `expiresAt` before re-arming an
+expired record. A drawing-anchored alert never deletes its source drawing.
+
+This setting belongs to the controller, so pass it again after recreating the
+controller. It is not stored in alert documents. Keep the saved runtime;
+removing a spent alert merely to hide its line loses its once-only protection.
+The packaged widget and yfinance example keep the default display policy.
+
+<AlertLifecycleDemo />
+
+## Drag a threshold
+
+<AlertDragDemo />
+
+An armed price or study line previews its value during a drag. `list()`, saved
+state and market evaluation keep the committed value until a changed, valid
+release. That release emits one `alert:updated`, followed by
+`alerts:changed` with `{ id, reason: 'dragged' }`.
+
+Clicking without movement, Escape, pointer cancellation or pinch cancellation
+does not commit. Pause, replay, source/context changes and alert lifecycle changes
+discard an unfinished draft. Triggered, disabled and expired lines do not drag.
+A range bound stops at its opposite bound without swapping them. Study lines
+use their own scale; a line on a different scale omits the right-axis price tag
+to avoid displaying the wrong units. Drawing-owned levels follow the drawing
+instead of intercepting its drag.
+
+## Save and restore
+
+```ts
+const snapshot = alerts.toJSON();
+const serialized = JSON.stringify(snapshot);
+alerts.fromJSON(serialized);
+```
+
+The versioned document validates completely before replacement. Restore seeds
+evaluation from the current bars and retains consumed-bar guards, cooldowns and
+once-triggered state. It does not replay historical notifications. A runtime
+`payload` can be opaque, but persistence requires finite JSON data; functions,
+cycles and class instances are rejected.
+
+`chart.getState()` includes the alert document. For complete chart restoration,
+load the required study descriptors, create the primary series with the correct
+data/context, and attach the drawing/controller owners before calling
+`chart.restoreState(saved)`. Drawing restoration precedes alert restoration.
+Stable study instance IDs preserve anchors. When an available provider reports
+a missing study, plot or drawing, restore drops that record and emits
+`alert:removed` with `indicator-missing`, `plot-missing` or `drawing-missing`.
+If the provider itself is absent, the record stays unavailable. Reusable study
+templates create fresh identities and cannot claim old alert anchors.
+
+Persist lifecycle events (`alert:created`, `alert:updated`, `alert:removed`,
+`alert:triggered`, `alert:expired`, `alerts:restored`) and `alerts:checkpoint`
+when consumed-bar guards advance. A checkpoint requests a save, not a notification.
+Only `alert:triggered` is the trader-alert delivery event. Descriptor-authored
+`indicator:alert` events remain a separate [study contract](/docs/indicators).
+
+See [chart state](/docs/state), [workspaces](/docs/workspaces) and the
+[widget alert controls](/docs/widget#trader-alerts) for host integration.
+
+## Tick snapping and keyboard removal
+
+From 2.5.0, preview and release both snap alert thresholds to their source
+scale's tick: the primary series for price alerts, the chosen plot for study
+alerts. Left and independent scales keep their own units. A range bound stops
+at a valid tick inside the opposite bound. No declared tick means no rounding.
+Manually entered thresholds are preserved until you move them.
+
+An instrument whose tick depends on the price snaps by band. With a tick schedule
+on the chart (`chart.setTickSchedule(schedule)`, or `Instrument.applyTo` with
+`tickBands`), a dragged price alert lands on the tick of the band it is dropped in:
+with 0.01 below 100 and 0.25 from 100, a drop at 105.87 stores 105.75, where the
+axis grid alone would have kept 105.87. A range bound stops a whole band tick inside
+an off-tick opposite bound. Without a schedule nothing changes.
+
+`Chart.snapPrice(paneIndex, price)` uses that pane's right-axis tick, and the band
+of the schedule on the price pane. For another
+series scale, use `series.priceScale().snapToTick(price)`. A custom
+`AlertChartHost` may expose `primarySeries()` for the owning scale, or use the
+optional `snapPrice` fallback when it has no series handle. Without scale tick
+metadata, a callback that rounds the opposite bound outside the range cancels
+the move and keeps the saved threshold. Expose the source scale for exact inner
+tick snapping.
+
+`alerts.hovered()` returns the alert id under the pointer, or `undefined`.
+The widget and yfinance host bind Delete and Backspace to it only when a
+selected or hovered drawing, an active drawing tool, or text editing does not
+own the key. Custom hosts should keep the same priority and clear their saved
+record on `alert:removed`. The controller itself never installs keyboard input.

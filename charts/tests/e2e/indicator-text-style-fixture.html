@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Native annotation typography</title>
+  <style>html,body{margin:0;background:#101722;color:#dce2ee;font:13px system-ui,sans-serif}main{max-width:1040px;margin:12px auto;padding:0 12px}p{margin:0 0 12px;line-height:20px}#chart{width:100%;height:560px}</style>
+</head>
+<body><main><p>Native labels, zone captions and independently styled marker text.</p><div id="chart"></div></main>
+<script type="module">
+import { createChart, darkTheme, registerIndicator } from '/dist/openalgo-charts.mjs';
+const chart = createChart(document.getElementById('chart'), { branding: false, timeNavigator: false,
+  shortcuts: false, animAutoscale: false, animZoom: false, theme: darkTheme });
+const bars = Array.from({ length: 80 }, (_, index) => ({ time: 1700000000 + index * 60,
+  open: 100, high: 108, low: 92, close: 100 + 5 * Math.sin(index / 7) }));
+const price = chart.addSeries('line'); price.setData(bars);
+registerIndicator({ id: 'annotation-style-browser', name: 'Annotation type', placement: 'onchart',
+  inputs: [{ key: 'size', type: 'number', label: 'Text size', default: 18 },
+    { key: 'align', type: 'select', label: 'Row alignment', default: 'left', options: ['left','center','right'].map(value => ({ value, label: value })) },
+    { key: 'plain', type: 'boolean', label: 'Plain type', default: false }],
+  plots: [{ key: 'value', type: 'line', title: 'Value', style: { color: 'transparent' } }],
+  calc: source => ({ value: source.map(bar => bar.close) }),
+  draws: ({ bars: source, settings }) => {
+    const style = settings.plain ? {} : { fontSize: settings.size, fontFamily: 'ui-monospace, monospace', bold: true, italic: true, textAlign: settings.align };
+    return [
+      { kind: 'label', at: { time: source[18].time, price: 114 }, text: 'Styled\ncaption',
+        color: '#22354b', textColor: '#baf2ff', align: 'left', verticalAlign: 'top', ...style },
+      { kind: 'box', from: { time: source[34].time, price: 107 }, to: { time: source[65].time, price: 98 },
+        text: 'Zone\nreading', color: '#27425e', fillColor: '#27425e', opacity: 0.2,
+        textColor: '#baf2ff', align: 'right', verticalAlign: 'top', ...style },
+      { kind: 'label', at: { time: source[source.length - 1].time + 300, price: 112 },
+        text: 'Clipped', color: '#22354b', textColor: '#baf2ff', fontSize: 32, align: 'left' },
+    ];
+  },
+  markers: ({ bars: source, settings }) => [{ time: source[54].time, position: 'atPrice', price: 93,
+    shape: 'circle', size: 'big', color: '#ed4568', text: 'Mark\ntext', id: 'signal',
+    textColor: '#d3f34a', fontSize: settings.size, fontFamily: 'ui-monospace, monospace',
+    italic: !settings.plain, bold: !settings.plain, textAlign: settings.align }],
+});
+const study = chart.addIndicator('annotation-style-browser');
+chart.panes()[0].priceScale.setPriceRange({ min: 85, max: 120 }); chart.panes()[0].priceScale.setAutoScale(false); chart.fitContent();
+const hash = canvas => {
+  const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+  let value = 2166136261; for (const byte of pixels) value = Math.imul(value ^ byte, 16777619); return value >>> 0;
+};
+window.__annotationStyle = { chart, study, price,
+  info() {
+    const pane = chart.panes()[0], canvas = pane.base.element;
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    const dpr = canvas.width / canvas.clientWidth, edge = Math.round(chart.timeScale.width * dpr);
+    const colors = { caption: [186,242,255], text: [211,243,74], glyph: [237,69,104] };
+    const counts = { caption: 0, text: 0, glyph: 0, outside: 0 };
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+      const at = (y * canvas.width + x) * 4;
+      for (const [key, color] of Object.entries(colors)) if (data[at] === color[0] && data[at + 1] === color[1] && data[at + 2] === color[2]) {
+        counts[key]++; if (x >= edge) counts.outside++;
+      }
+    }
+    return { ...counts, baseHash: hash(canvas) };
+  },
+};
+</script></body></html>

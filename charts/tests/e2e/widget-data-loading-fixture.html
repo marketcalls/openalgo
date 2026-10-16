@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Managed widget loading fixture</title>
+<style>html,body{margin:0;height:100%;background:#0d0e12}#chart{position:absolute;inset:0}</style></head>
+<body><div id="chart"></div>
+<script type="module">
+import { VERSION, registerIndicator } from '/dist/openalgo-charts.mjs';
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+import { createTier2Indicator } from '/dist/openalgo-charts.indicators.mjs';
+const T = 1700000040;
+const history = [], pages = [], studies = [], streams = [];
+let supported = false;
+const bars = (from = 30, count = 40, base = 100) => Array.from({ length: count }, (_, n) => {
+  const close = base + Math.sin((from + n) / 4) * 5;
+  return { time: T + (from + n) * 60, open: close - 1, high: close + 2, low: close - 2, close, volume: 100 + n };
+});
+const pending = (list, request) => new Promise((resolve, reject) => list.push({ request, resolve, reject }));
+const feed = {
+  getBars: request => pending(history, request),
+  getBarsPage: request => pending(pages, request),
+  subscribeBars: (request, push, options) => {
+    const stream = { request, push, options, stopped: false };
+    streams.push(stream);
+    return () => { stream.stopped = true; };
+  },
+};
+registerIndicator(createTier2Indicator({
+  id: 'fixture-external-value', name: 'External value', placement: 'pane', inputs: [],
+  plots: [{ key: 'v', title: 'Value', type: 'line' }],
+  supports: () => supported,
+  fetch: request => pending(studies, request),
+}));
+const widget = createWidget(document.getElementById('chart'), {
+  feed, symbol: 'AAA', exchange: 'NSE', interval: '1m', now: () => (T + 80 * 60) * 1000,
+  lookbackBars: 80, navigation: { defaultVisibleBars: 20 }, rail: false,
+  topbar: !new URLSearchParams(location.search).has('compact'),
+  statusline: !new URLSearchParams(location.search).has('compact'),
+});
+window.fixture = {
+  version: VERSION, widget, history, pages, studies, streams, bars,
+  ready: (index, from = 30, count = 40, base = 100) => history[index].resolve(bars(from, count, base)),
+  fail: index => history[index].reject(new Error('Fixture history unavailable')),
+  addStudy: () => widget.chart.addIndicator('fixture-external-value'),
+  support: value => { supported = value; },
+  recover: () => streams[streams.length - 1].options.onResync(),
+  live: (index, close = 110) => streams[streams.length - 1].push({ time: T + index * 60, open: close - 1, high: close + 2, low: close - 2, close, volume: 50 }),
+};
+</script></body></html>

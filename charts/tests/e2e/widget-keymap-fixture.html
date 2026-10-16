@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><style>html,body{margin:0;height:100%;background:#0d0e12}body.light{background:#f5f6f8}#t,#u{position:absolute;inset:0}body.two #t{right:50%}body.two #u{left:50%}</style></head>
+<body>
+  <div id="t"></div>
+  <script type="module">
+    // The widget tier against the static server, for the shortcuts editor:
+    // the same sibling-path loading a page gets by serving dist/ as is.
+    import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+    import '/dist/openalgo-charts.indicators.mjs';
+
+    // Deterministic OHLCV (no network): a seeded random walk of five-minute
+    // bars in NSE hours, 09:15 IST on weekdays, so a screenshot of the
+    // editor over the chart shows a chart that reads like a traded stock.
+    let seed = 20260929;
+    const uniform = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return (seed + 0.5) / 4294967296; };
+    const normal = () => Math.sqrt(-2 * Math.log(uniform())) * Math.cos(2 * Math.PI * uniform());
+    const tick = (value) => Math.round(value * 20) / 20;
+    const bars = [];
+    let price = 2318.6;
+    let vol = 0.0015;
+    for (let day = Date.UTC(2026, 7, 10) / 1000; bars.length < 300; day += 86400) {
+      const weekday = new Date(day * 1000).getUTCDay();
+      if (weekday === 0 || weekday === 6) continue;
+      price *= 1 + normal() * 0.006;
+      for (let slot = 0; slot < 75 && bars.length < 300; slot++) {
+        vol = Math.min(0.004, Math.max(0.0008, vol * (1 + normal() * 0.08)));
+        const open = tick(price);
+        const close = tick(open * (1 + normal() * vol));
+        const high = tick(Math.max(open, close) * (1 + Math.abs(normal()) * vol * 0.5));
+        const low = tick(Math.min(open, close) * (1 - Math.abs(normal()) * vol * 0.5));
+        const busy = slot < 6 || slot > 68 ? 2.2 : 1;
+        bars.push({ time: day + 13_500 + slot * 300, open, high, low, close, volume: Math.round(busy * 38_000 * (0.6 + uniform())) });
+        price = close;
+      }
+    }
+    const feed = {
+      getBars: async () => bars,
+      subscribeBars: () => () => {},
+    };
+
+    const params = new URLSearchParams(location.search);
+    const theme = params.get('theme') === 'light' ? 'light' : 'dark';
+    document.body.classList.toggle('light', theme === 'light');
+    const errors = [];
+    window.__widgetErrors = errors;
+    const make = (el, name) => createWidget(el, {
+      feed, symbol: 'FIXTURE', exchange: 'NSE', interval: '5m', theme,
+      rail: { favorites: ['trend-line'] },
+      persist: params.has('persist') ? name : false,
+    });
+    const widget = make(document.getElementById('t'), 'keymap-fixture');
+    widget.on('data', (e) => { if (e.error) errors.push(e.error); window.__loaded = e.bars; });
+    window.__widget = widget;
+    // `?two` puts a second chart beside the first, as a page or a grid does:
+    // both keymaps then listen on the one document.
+    if (params.has('two')) {
+      document.body.classList.add('two');
+      const el = document.createElement('div');
+      el.id = 'u';
+      document.body.appendChild(el);
+      const second = make(el, 'keymap-fixture-2');
+      second.on('data', (e) => { if (e.error) errors.push(e.error); window.__loaded2 = e.bars; });
+      window.__second = second;
+    }
+    // Persisted chords are the widget's store's, IndexedDB by default since
+    // 2.5.10: the page is ready once it has answered and the chords are on,
+    // and the spec reads and clears that store rather than localStorage.
+    const DATABASE = 'openalgo-charts-widget';
+    const records = () => new Promise((resolve, reject) => {
+      const open = indexedDB.open(DATABASE, 1);
+      open.onupgradeneeded = () => { if (!open.result.objectStoreNames.contains('entries')) open.result.createObjectStore('entries'); };
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const db = open.result;
+        const out = {};
+        const tx = db.transaction('entries', 'readonly');
+        const cursor = tx.objectStore('entries').openCursor();
+        cursor.onsuccess = () => { const at = cursor.result; if (at) { out[at.key] = at.value; at.continue(); } };
+        tx.oncomplete = () => { db.close(); resolve(out); };
+        tx.onabort = () => { db.close(); reject(tx.error); };
+      };
+    });
+    window.__stored = async (key) => {
+      await widget.context.storage.flush();
+      const text = (await records())[key];
+      return text === undefined ? null : JSON.parse(text);
+    };
+    window.__clearStore = () => new Promise((resolve) => {
+      localStorage.clear();
+      const request = indexedDB.deleteDatabase(DATABASE);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    });
+    await Promise.all([widget.ready, window.__second?.ready]);
+    window.__ready = true;
+  </script>
+</body>
+</html>

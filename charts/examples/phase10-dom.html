@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 10, depth-of-market ladder</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 10px; align-items: center; }
+    select { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046; border-radius: 6px; padding: 4px 8px; }
+    #chart { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+    #log { margin-left: auto; opacity: .8; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 10</strong>
+    <label>Depth levels
+      <select id="levels"><option>5</option><option>20</option><option>50</option><option selected>200</option><option>0</option></select>
+    </label>
+    <label>Group ticks
+      <select id="group"><option selected>1</option><option>2</option><option>5</option></select>
+    </label>
+    <span style="opacity:.6">depth-agnostic · virtualized · click a level to place</span>
+    <span id="log"></span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars } from '../dist/openalgo-charts.mjs';
+    import { FakeBroker, DomLadder } from '../dist/openalgo-charts.trade.mjs';
+
+    const bars = generateBars(1_705_286_700, 300, 60);
+    const last = bars[bars.length - 1].close;
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 60 });
+    chart.addSeries('candlestick').setData(bars);
+
+    const broker = new FakeBroker();
+    let ladder = new DomLadder({ tickSize: 0.05, width: 110, maxRows: 60, groupBy: 1 });
+    chart.tradeHost(0).addPrimitive(ladder);
+    broker.onDepth((_s, d) => ladder.setDepth(d));
+
+    let levels = 200, group = 1, t = 0;
+    document.getElementById('levels').onchange = (e) => { levels = +e.target.value; };
+    document.getElementById('group').onchange = (e) => {
+      group = +e.target.value;
+      chart.removePrimitive(ladder);
+      ladder = new DomLadder({ tickSize: 0.05, width: 110, maxRows: 60, groupBy: group });
+      chart.addPrimitive(ladder);
+      ladder.setDepth(FakeBroker.makeDepth(ltp(), levels, 0.05));
+      window.__ladder = ladder;
+    };
+
+    function ltp() { return last * (1 + Math.sin(t / 25) * 0.004); }
+    setInterval(() => {
+      t++;
+      const d = FakeBroker.makeDepth(ltp(), levels, 0.05);
+      broker.emitDepth('SIM', d);
+      document.getElementById('log').textContent = `${levels} levels · tier ${ladder.tier()}`;
+    }, 150);
+
+    chart.subscribeClick((id) => { document.getElementById('log').textContent = 'click-to-place: ' + id; });
+    window.__chart = chart; window.__ladder = ladder;
+  </script>
+</body>
+</html>

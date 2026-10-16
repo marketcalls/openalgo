@@ -1,0 +1,123 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'website/**'
+      - 'examples/phase11-profiles.html'
+      - 'examples/market-profile/**'
+      - 'examples/orderflow/**'
+      - 'examples/drawings/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'rollup.config.js'
+      - 'tsconfig.json'
+      - 'tsconfig.build.json'
+      - 'typedoc.json'
+      - 'scripts/check-btc-usd-feed.test.mjs'
+      - 'scripts/check-depth-demo.mjs'
+      - 'scripts/check-profile-website.mjs'
+      - 'scripts/check-navigation-website.mjs'
+      - 'scripts/check-data-loading-website.mjs'
+      - 'scripts/check-objects-website.mjs'
+      - 'scripts/check-drawing-demo.mjs'
+      - 'scripts/check-analysis-website.mjs'
+      - 'scripts/check-alert-drag-website.mjs'
+      - 'scripts/check-table-website.mjs'
+      - 'scripts/check-alert-lifecycle-website.mjs'
+      - 'docs/api-introduction.md'
+      - 'docs/architecture-diagram.svg'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress production deploy.
+#
+# Not `pages`: run #54 hit a startup_failure on 2026-07-25 and never released
+# that group's lock. Being already completed it cannot be cancelled, so every
+# run after it queued behind a run that will never finish -- 25 of them, each
+# cancelled by the next push. A fresh group name is the only way out.
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build the charting library (dist/)
+        run: |
+          npm ci
+          npm run build
+
+      - name: Generate the API reference (TypeDoc) into the site
+        run: npx typedoc --out website/public/api
+
+      - name: Verify homepage market data handling
+        run: node --test scripts/check-btc-usd-feed.test.mjs
+
+      - name: Build the docs site (Nextra static export)
+        working-directory: website
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify depth, profiles and orderflow before deployment
+        run: |
+          npx playwright install --with-deps chromium
+          node website/scripts/serve-preview.mjs 4174 &
+          website_preview_pid=$!
+          trap 'kill "$website_preview_pid"' EXIT
+          curl --retry 10 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:4174/openalgo-charts/docs/depth-of-market/ > /dev/null
+          node scripts/check-depth-demo.mjs
+          node scripts/check-profile-website.mjs
+          node scripts/check-navigation-website.mjs
+          node scripts/check-data-loading-website.mjs
+          node scripts/check-objects-website.mjs
+          node scripts/check-drawing-demo.mjs
+          node scripts/check-site-design.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-analysis-website.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-alert-drag-website.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-table-website.mjs
+          OAC_WEBSITE_BROWSERS=chromium node scripts/check-alert-lifecycle-website.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: failure()
+        with:
+          name: website-check-artifacts
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Disable Jekyll (serve _next assets as-is)
+        run: touch website/out/.nojekyll
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b  # v5
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3
+        with:
+          path: website/out
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4

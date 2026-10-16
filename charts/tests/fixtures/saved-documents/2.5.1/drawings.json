@@ -1,0 +1,145 @@
+{
+  "version": 2,
+  "drawings": [
+    {
+      "tool": "trend-line",
+      "points": [
+        {
+          "time": 1788771300,
+          "price": 2860.2
+        },
+        {
+          "time": 1788853800,
+          "price": 2992.65
+        }
+      ],
+      "style": {
+        "extendLeft": false,
+        "extendRight": true,
+        "color": "#2962ff",
+        "lineWidth": 2
+      },
+      "paneIndex": 0,
+      "id": "trend-1",
+      "zIndex": 0,
+      "createdAt": 1789021920000
+    },
+    {
+      "tool": "horizontal-line",
+      "points": [
+        {
+          "time": 1788770700,
+          "price": 2860.2
+        }
+      ],
+      "style": {
+        "showLabels": true,
+        "color": "#089981",
+        "lineStyle": "dashed"
+      },
+      "paneIndex": 0,
+      "text": {
+        "value": "Support"
+      },
+      "id": "support-1",
+      "zIndex": 0,
+      "createdAt": 1789021920000
+    },
+    {
+      "tool": "fib-retracement",
+      "points": [
+        {
+          "time": 1788771300,
+          "price": 2860.2
+        },
+        {
+          "time": 1788853800,
+          "price": 2992.65
+        }
+      ],
+      "style": {
+        "showLabels": true,
+        "levels": [
+          {
+            "ratio": 0,
+            "color": "#787b86"
+          },
+          {
+            "ratio": 0.236,
+            "color": "#f23645"
+          },
+          {
+            "ratio": 0.382,
+            "color": "#ff9800"
+          },
+          {
+            "ratio": 0.5,
+            "color": "#4caf50"
+          },
+          {
+            "ratio": 0.618,
+            "color": "#089981"
+          },
+          {
+            "ratio": 0.786,
+            "color": "#00bcd4"
+          },
+          {
+            "ratio": 1,
+            "color": "#787b86"
+          }
+        ],
+        "fill": true,
+        "fillOpacity": 0.06
+      },
+      "paneIndex": 0,
+      "id": "fib-1",
+      "zIndex": 0,
+      "createdAt": 1789021920000
+    },
+    {
+      "tool": "rectangle",
+      "points": [
+        {
+          "time": 1788940500,
+          "price": 2922.6
+        },
+        {
+          "time": 1789016400,
+          "price": 2894.7
+        }
+      ],
+      "style": {
+        "fill": true,
+        "color": "#ff9800",
+        "fillOpacity": 0.1
+      },
+      "paneIndex": 0,
+      "locked": true,
+      "id": "box-1",
+      "zIndex": 0,
+      "createdAt": 1789021920000
+    },
+    {
+      "tool": "text",
+      "points": [
+        {
+          "time": 1789028400,
+          "price": 2858.6
+        }
+      ],
+      "style": {
+        "color": "#e0e3eb"
+      },
+      "text": {
+        "value": "Results day",
+        "fontSize": 13,
+        "bold": true
+      },
+      "paneIndex": 0,
+      "id": "note-1",
+      "zIndex": 0,
+      "createdAt": 1789021920000
+    }
+  ]
+}

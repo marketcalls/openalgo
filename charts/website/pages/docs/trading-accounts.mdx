@@ -1,0 +1,216 @@
+---
+title: Accounts and Advanced Orders
+description: Account selection and figures, order preview, durations and leverage, and provider-native close, partial close, reverse and brackets in the trade tier.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+import { ACCOUNT_SUMMARY_EXAMPLE } from '../../components/account-examples'
+
+# Accounts and advanced orders
+
+The trade tier (`openalgo-charts/trade`) reads account state and sends the operations
+that came after place, modify and cancel: order preview, durations and expiry,
+leverage, and a provider's own close, partial close, reverse and bracket commands.
+Every one of them is declared by the provider and refused when it is not. None is
+approximated: a close is never an opposite order in disguise.
+
+<Callout type="warning">
+Order authority stays with the host and the broker. Selecting an account, previewing
+an order or reconnecting never sends anything. Each command is sent only when the
+host calls it, once per idempotency token, and its outcome comes from the broker.
+</Callout>
+
+## Declaring what a provider supports
+
+The original `TradingCapabilities` flags (`place`, `modify`, `cancel`) keep an old
+provider working when they are omitted. The newer operations work the other way round:
+**an omitted feature is unsupported**, because nothing written before them can carry
+an account, a duration or a close.
+
+```ts
+import type { TradingFeatures } from 'openalgo-charts/trade';
+
+const features: TradingFeatures = {
+  accounts: true,          // account list, snapshots, positions, selection
+  executions: true,        // execution history
+  orderHistory: true,      // order history
+  preview: true,
+  durations: ['DAY', 'IOC', 'GTD'],
+  leverage: false,
+  close: true,
+  partialClose: true,
+  reverse: 'unknown',      // unknown support refuses, like false
+  brackets: true,          // stop and target legs the provider links itself
+};
+```
+
+A feed exposes them as `features` (an object, or a synchronous function of the request).
+`OrderEngineOptions.features` and `AccountManagerOptions.features` add host restrictions;
+either side can refuse. `checkTradingFeature(source, { feature })` answers the same way
+for host controls, and `ORDER_DURATIONS` lists the five durations the schema knows.
+
+| Feature | Refusal when not declared |
+| --- | --- |
+| `accounts` | Account data is not declared by this provider |
+| `preview` | Order preview is not declared by this provider |
+| `durations` | Order duration is not declared by this provider |
+| `close` | Closing a position is not declared by this provider |
+| `reverse` | Reversing a position is not declared by this provider |
+| `brackets` | Bracket placement is not declared by this provider |
+
+## Accounts
+
+`AccountManager` is read-only. It lists the provider's accounts for one mode, loads the
+selected account's snapshot, follows its stream, and reads positions, executions and
+order history.
+
+```ts
+import { AccountManager } from 'openalgo-charts/trade';
+
+const accounts = new AccountManager({ feed: broker, mode: 'analyzer' });
+accounts.subscribe(state => render(state));
+await accounts.refresh();          // list, select, load the snapshot, subscribe
+await accounts.select('SBX-2');    // cancels anything still loading for the old account
+
+const fills = await accounts.executions({ symbol: 'SBIN', limit: 20 });
+if (fills.ok) drawFills(fills.rows);
+```
+
+`getState()` returns the status (`unsupported` with its reason, `idle`, `loading`, `ready`,
+`stale`, `error`), the accounts, the selection and the snapshot: balance, equity, margin
+used and available, unrealized and realized P&L and leverage, stamped with the provider's
+`asOf` time in UTC seconds.
+
+- **Stale responses are dropped.** Switching accounts aborts the old snapshot and history
+  requests and unsubscribes the old stream. An answer that still arrives for the old
+  account is never shown, and a pushed reading older than the one on screen is ignored.
+- **The ledgers stay apart.** An analyzer (sandbox) view lists only analyzer accounts, and a
+  snapshot from the other ledger is refused rather than displayed.
+- **Rows for another account are dropped and counted.** Executions and order history rows
+  always name their account. A position row names one only when the provider sets
+  `Position.accountId`; a row without it is taken as the selected account's, since that is
+  the account the provider was asked for.
+- **Unreadable figures fail closed.** A non-finite balance makes the snapshot unreadable
+  instead of showing zero.
+- **A dropped connection keeps the last figures, marked stale.** Call `disconnected()` (a
+  stream's error does it for you), then `reconnect()`.
+
+## Account, duration and leverage on an order
+
+`PlaceRequest` carries `account`, `duration` (`DAY`, `IOC`, `FOK`, `GTC`, `GTD`),
+`expiresAt` (UTC seconds, `GTD` only) and `leverage`. The engine checks each against the
+provider's declaration before confirmation and again after it.
+
+```ts
+const engine = new OrderEngine({
+  feed: broker, mode: 'analyzer', constraints,
+  selectedAccount: accounts,         // the account view, not just its id
+  gate: req => confirmDialog(req),   // req.account is the account on screen
+});
+await engine.placeOrder({ symbol: 'SBIN', side: 'BUY', type: 'LIMIT', price: 800, qty: 10,
+  duration: 'GTD', expiresAt: Date.now() / 1000 + 86400 });
+```
+
+With `selectedAccount` configured, every order names the selected account, an order naming
+a different one is refused, and **an account switch while the user is confirming sends
+nothing**. An order already in flight stays with the account it was sent for
+(`orderAccount(clientId)`). Pass the account view itself, as above, rather than a function
+returning its id: the engine then also refuses a selection from the other ledger, so a
+sandbox engine wired to a live view never stamps a live account on its orders. A function
+(`() => accounts.selectedAccount()`) still works, but a bare id cannot be checked that way.
+
+`OpenAlgoTradeFeed` refuses these four fields before any network call: OpenAlgo's
+`placeorder` has no field for them and one API key is one account.
+
+## Preview
+
+`previewOrder(request)` asks the provider what an order would cost: estimated price and
+value, margin required, margin available afterwards, fees and warnings, or the reason the
+provider would refuse it. It claims no idempotency token, runs no confirmation and never
+calls `place`. A preview that answers after the account changed comes back `stale`.
+
+## Close, partial close, reverse and brackets
+
+```ts
+await engine.closePosition({ symbol: 'SBIN' });            // the whole position
+await engine.closePosition({ symbol: 'SBIN', qty: 5 });    // partial close
+await engine.reversePosition({ symbol: 'SBIN' });
+await engine.placeBracket({ symbol: 'SBIN', side: 'BUY', type: 'MARKET', qty: 10,
+  stopLoss: 790, takeProfit: 830 });                       // legs linked by the provider
+```
+
+Each command has its own `clientToken`, and a repeated token is never sent twice. Each
+needs its feature and the feed method (`closePosition`, `reversePosition`, `placeBracket`);
+otherwise it is refused with the reason. When the engine is not `armed`, `confirmCommand`
+approves each command, and omitting it declines them. The place flag and accepted modes
+still apply, so a host lock during replay stops them too.
+
+- **Authoritative outcome.** A command's intent reaches `SETTLED` only when the broker
+  reports it, through `onBrokerUpdate(brokerId, status)` or
+  `onBrokerOrder({ id, clientToken, status, parentId, role })`. The second binds an unknown broker id
+  through the client token the broker echoes, which is how a write whose answer was lost
+  learns its outcome.
+- **Write ambiguity.** A transport failure leaves the command `AMBIGUOUS` with its token
+  held. While a close or reverse on a position has no known outcome, another close or
+  reverse on it is refused, whether or not either names the exchange (an omitted one is
+  the provider's default, so it may be the same position). When the broker later reports the write, its status replaces
+  the client's guess: a working order is live again, and can be modified and cancelled.
+  `releaseAmbiguous(clientId)` frees it once the host has established from the broker's
+  complete book that it never arrived.
+- **Server rejection.** A feed error marked `rejected: true` (`isBrokerRejection`) is the
+  broker's explicit refusal and settles the command as rejected.
+- **Bracket legs.** The engine gives each leg a client token, `<token>:stop` and
+  `<token>:target`, and sends them to the feed as `legClientTokens`. A leg is adopted the
+  first time the broker reports it, by that token or by its entry's broker id and role
+  (`parentId`, `role`), so a bracket whose answer was lost still has legs the host can
+  cancel, modify and see filled. A leg that names an entry not yet bound, as in a history
+  listed newest first or a stream that reports the legs before the entry's id comes back,
+  is held and applied when the entry binds, so the rows can be passed in any order. An
+  `Order` row passes as it is: `onBrokerOrder({ ...order, clientToken })`.
+- **Reconnect.** `beginReconcile()` and `onReconnect(presentIds)` treat commands like orders:
+  an absent one becomes `AMBIGUOUS`, not cancelled. After a dropped connection, read the
+  broker's order history for every account written to, pass every row to `onBrokerOrder`,
+  call `onReconnect` with the ids it lists, and `releaseAmbiguous` each write that complete
+  history never mentions. The sandbox example on the examples page and the reference
+  host's Account panel reconnect this way; without it, a close left unresolved by the drop
+  refuses every later close.
+
+## Account summary in the widget
+
+Pass the manager as the widget's `account` option to show the selected account, its
+equity and margin in the status line, with a menu to switch. A source whose provider
+declares no accounts shows disabled with the reason. The summary has no order controls.
+In a narrow status line the figures drop out, least important first, and the summary
+moves beside the title, so the account and its Analyzer tag stay in view; the account
+button's tooltip keeps the figures.
+
+```ts
+import { createWidget } from 'openalgo-charts/widget';
+
+createWidget('#chart', { feed, symbol: 'SBIN', exchange: 'NSE', account: accounts });
+```
+
+`mountAccountSummary(context, host, { source })` mounts the same summary in a host's own
+chrome.
+
+<RunnableExample height={480} tiers={['widget', 'trade']} caption="Simulated sandbox broker. Switch accounts from the status line menu; Buy 40 places the one order this page sends." code={ACCOUNT_SUMMARY_EXAMPLE} />
+
+## FakeBroker
+
+`new FakeBroker({ accounts })` simulates a provider with account ledgers, so the engine,
+the account manager, the widget and the reference host run against the same contract with
+no network. It fills market orders at a mark price (`setMark`, or `emitLtp`), keeps
+balances, margin, positions, executions and order history per account, cancels an
+unmarketable `IOC` or `FOK` order at once, lapses a `GTD` order at its expiry, and links
+bracket legs itself. It refuses the way a server would: an unknown account, the other
+ledger, an undeclared feature, missing margin, a close larger than the position, or a
+cancel or modify of an order that has already filled. Test
+hooks hold (`latency`), fail or lose (`failNext`) any answer, drop the connection
+(`disconnect`, `reconnect`) and mute the order stream (`muteOrderUpdates`). While the
+connection is down a call never leaves, and fails as a pre-flight failure, so the engine
+blocks it and frees its token; a call already out when it drops is not applied and fails
+the way a lost answer does.
+
+Constructed without `accounts`, it is the original book simulator and declares none of
+this, so the engine refuses every operation on this page against it.

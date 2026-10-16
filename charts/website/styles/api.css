@@ -1,0 +1,116 @@
+/* Shared visual language for the generated API reference. */
+:root {
+  --light-color-background: #fcfcfc;
+  --light-color-background-secondary: #ffffff;
+  --light-color-accent: #e4e4e4;
+  --light-color-active-menu-item: #f0f0f0;
+  --light-color-text: #151515;
+  --light-color-text-aside: #686868;
+  --light-color-link: #242424;
+  --light-color-focus-outline: #242424;
+  --dark-color-background: #0b0b0b;
+  --dark-color-background-secondary: #121212;
+  --dark-color-accent: #292929;
+  --dark-color-active-menu-item: #202020;
+  --dark-color-text: #f2f2f2;
+  --dark-color-text-aside: #a1a1a1;
+  --dark-color-link: #f2f2f2;
+  --dark-color-focus-outline: #f2f2f2;
+}
+html { scroll-padding-top: 96px; }
+body {
+  font-family: Manrope, ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  background: var(--color-background);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { letter-spacing: -.035em; line-height: 1.25; }
+h1 { font-size: clamp(1.9rem, 3.2vw, 3rem); font-weight: 650; }
+h2 { font-size: 1.6rem; font-weight: 600; }
+h3 { font-weight: 600; }
+a { text-underline-offset: 4px; }
+a, button, input, select { transition: background-color .18s ease, border-color .18s ease, color .18s ease; }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--color-focus-outline); outline-offset: 4px; border-radius: 4px;
+}
+.tsd-page-toolbar {
+  height: 68px;
+  background: color-mix(in srgb, var(--color-background) 88%, transparent);
+  border-bottom: 1px solid var(--color-accent);
+  backdrop-filter: blur(18px);
+  box-shadow: none;
+}
+.tsd-toolbar-contents { min-height: 68px; }
+.tsd-page-toolbar .table-cell { line-height: 68px; }
+.tsd-page-toolbar .tsd-toolbar-icon { height: 68px; padding: 26px 0; }
+.tsd-page-toolbar .title { display: inline-block; max-width: calc(100% - 44px); overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+#tsd-search .field input { height: 68px; }
+#tsd-search .results { top: 68px; border: 1px solid var(--color-accent); border-radius: 0 0 12px 12px; overflow: hidden; }
+.tsd-page-toolbar .title { font-size: 1rem; font-weight: 700; letter-spacing: -.035em; }
+.tsd-page-toolbar .title::before {
+  content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 10px;
+  border-radius: 50%; background: var(--color-link);
+}
+#tsd-toolbar-links { display: flex; gap: 22px; font-size: .83rem; font-weight: 500; }
+#tsd-toolbar-links a { color: var(--color-text-aside); }
+#tsd-toolbar-links a:hover { color: var(--color-link); }
+/* Full width with the padding inside it: typedoc leaves these content-box, so
+   width 100% plus the side padding ran past the viewport at every width. */
+.container, .tsd-toolbar-contents { box-sizing: border-box; width: 100%; max-width: none !important; }
+.container-main { box-sizing: border-box; width: 100%; max-width: none !important; padding: 45px clamp(20px, 3vw, 64px) 0; }
+.tsd-page-title { padding: 12px 0 26px; border-bottom: 1px solid var(--color-accent); margin-bottom: 32px; }
+.tsd-page-title h1 { margin-bottom: 10px; }
+/* A type name is one word, and the longest are wider than a phone: they
+   wrap where they would overflow. Tables keep their own scroll instead. */
+.col-content { overflow-wrap: break-word; }
+.col-content h1, .col-content h2, .col-content h3, .col-content h4,
+.tsd-hierarchy-target, .tsd-member-summary-name, .tsd-member-summary-name a { overflow-wrap: anywhere; min-width: 0; }
+.tsd-breadcrumb { color: var(--color-text-aside); font-size: .8rem; }
+.col-content { min-width: 0; }
+.col-sidebar { padding-top: 18px; }
+.site-menu, .page-menu { top: 92px; scrollbar-width: thin; }
+.tsd-navigation a, .tsd-page-navigation a { border-radius: 7px; padding-top: 5px; padding-bottom: 5px; }
+.tsd-navigation a.current { color: var(--color-link); font-weight: 600; }
+.tsd-navigation .tsd-accordion-summary, .tsd-page-navigation .tsd-accordion-summary { color: var(--color-text-aside); }
+.tsd-panel, .tsd-member-group {
+  padding: 24px; border: 1px solid var(--color-accent); border-radius: 16px;
+  background: var(--color-background-secondary); box-shadow: none; margin: 24px 0;
+}
+.tsd-panel .tsd-panel, .tsd-panel .tsd-member-group { box-shadow: none; }
+.tsd-signature {
+  background: var(--color-background); border: 1px solid var(--color-accent);
+  border-radius: 10px; padding: 17px; line-height: 1.8;
+}
+pre, code { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; font-size: .86em; }
+pre { border: 1px solid var(--color-accent); border-radius: 12px; padding: 20px; line-height: 1.75; }
+pre code { font-size: 1em; }
+.tsd-comment code, .tsd-typography code { border-radius: 5px; padding: 2px 5px; }
+.tsd-typography pre code { padding: 0; }
+.tsd-typography table { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid var(--color-accent); border-radius: 12px; overflow: hidden; }
+.tsd-typography th { background: var(--color-background-secondary); font-weight: 600; text-align: left; }
+.tsd-typography th, .tsd-typography td { padding: 14px; border: 0; border-bottom: 1px solid var(--color-accent); font-size: .9rem; }
+.tsd-typography tr:last-child td { border-bottom: 0; }
+.tsd-member-summaries dt, .tsd-member-summaries dd { padding-top: 8px; padding-bottom: 8px; }
+.tsd-sources { color: var(--color-text-aside); font-size: .8rem; }
+.oac-api-eyebrow { color: var(--color-link); font-size: .68rem; letter-spacing: .18em; font-weight: 700; margin: 32px 0 12px; }
+.oac-api-links { display: flex; flex-wrap: wrap; gap: 12px; margin: 26px 0 36px; }
+.oac-api-links a { padding: 10px 17px; border: 1px solid var(--color-accent); border-radius: 999px; background: var(--color-background-secondary); font-size: .84rem; font-weight: 600; }
+.oac-api-links a:hover { border-color: var(--color-link); text-decoration: none; }
+footer { max-height: none; border-top: 1px solid var(--color-accent); background: var(--color-background-secondary); margin-top: 72px; padding: 38px clamp(20px, 3vw, 64px); }
+.oac-api-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; width: 100%; margin: auto; }
+.oac-api-footer strong { font-size: 1.2rem; letter-spacing: -.025em; font-weight: 600; }
+.oac-api-footer span { width: 100%; color: var(--color-text-aside); font-size: .8rem; }
+.tsd-generator { color: var(--color-text-aside); font-size: .75rem; }
+@media (max-width: 1024px) { #tsd-toolbar-links { gap: 12px; } }
+@media (max-width: 769px) {
+  #tsd-toolbar-links { display: none; }
+  .container-main { padding-top: 24px; }
+  .tsd-panel, .tsd-member-group { padding: 16px; border-radius: 12px; }
+  /* The headings bleed to the panel edge by the panel's own padding. */
+  .tsd-panel > h1, .tsd-panel > h2, .tsd-panel > h3 { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
+  .tsd-signature, pre { max-width: 100%; overflow-x: auto; }
+  .tsd-page-toolbar .title { font-size: .84rem; }
+  .tsd-typography table { display: block; overflow-x: auto; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" /><style>html,body{margin:0;height:100%;background:#0d0e12}#t{position:absolute;inset:0}</style></head>
+<body>
+  <div id="t"></div>
+  <script type="module">
+    // The widget with its bottom bar, over a feed that answers any window at
+    // any interval from one seeded random walk per symbol, so a range's fetch
+    // and a manual interval change read the same prices. NIFTY trades NSE
+    // hours; AAPL trades New York hours with the pre-open and post-close its
+    // calendar declares, so the session shading has bars to wash. With
+    // ?grid=1 the page is a two-chart grid with one bar under it instead.
+    import {
+      createWidget, createChartGrid, mountBottombar, createOverlayStack, createTipController, BOTTOMBAR_HEIGHT,
+    } from '/dist/openalgo-charts.widget.mjs';
+    import { SessionCalendar, zonedWallClockToUtcSeconds, utcSecondsToZonedParts } from '/dist/openalgo-charts.mjs';
+
+    const params = new URLSearchParams(location.search);
+    const HOURS = {
+      NIFTY: { zone: 'Asia/Kolkata', open: 9 * 60 + 15, close: 15 * 60 + 30, pre: 0, post: 0, price: 24_610 },
+      AAPL: { zone: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60, pre: 330, post: 240, price: 227.4 },
+    };
+    const CALENDARS = {
+      NIFTY: new SessionCalendar({ timezone: HOURS.NIFTY.zone, sessions: ['0915-1530:23456'] }),
+      AAPL: new SessionCalendar({ timezone: HOURS.AAPL.zone, sessions: ['0930-1600:23456'], preMarketMinutes: 330, postMarketMinutes: 240 }),
+    };
+    // Wednesday 1 October 2025, 14:20 in Mumbai and 04:50 in New York: NSE
+    // is open, and the US pre-open has just begun.
+    const NOW = Date.UTC(2025, 9, 1, 8, 50) / 1000;
+    window.__now = NOW * 1000;
+    window.__requests = [];
+
+    function walk(symbol) {
+      let seed = [...symbol].reduce((s, c) => Math.imul(s ^ c.charCodeAt(0), 16777619) >>> 0, 2166136261);
+      const uniform = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return (seed + 0.5) / 4294967296; };
+      return () => Math.sqrt(-2 * Math.log(uniform())) * Math.cos(2 * Math.PI * uniform());
+    }
+
+    /** The weekdays of the last `count` dates up to NOW, oldest first, as local dates in the venue's zone. */
+    function weekdays(zone, count) {
+      const out = [];
+      const today = utcSecondsToZonedParts(NOW, zone);
+      for (let back = 0; out.length < count; back++) {
+        const d = new Date(Date.UTC(today.year, today.month - 1, today.day - back));
+        if (d.getUTCDay() !== 0 && d.getUTCDay() !== 6) out.unshift([d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]);
+      }
+      return out;
+    }
+
+    const cache = new Map();
+    /** One-minute bars for the last 30 weekdays and daily bars for six years before them, one walk. */
+    function series(symbol) {
+      if (cache.has(symbol)) return cache.get(symbol);
+      const h = HOURS[symbol] ?? HOURS.NIFTY;
+      const normal = walk(symbol);
+      const recent = weekdays(h.zone, 30);
+      const older = weekdays(h.zone, 30 + 1560).slice(0, 1560);
+      const daily = [];
+      // The daily walk runs backwards from the first minute's price, so the
+      // two meet without a jump.
+      let price = h.price;
+      for (let i = older.length - 1; i >= 0; i--) {
+        const [y, m, d] = older[i];
+        const close = price;
+        const open = close / (1 + normal() * 0.012);
+        const high = Math.max(open, close) * (1 + Math.abs(normal()) * 0.005);
+        const low = Math.min(open, close) * (1 - Math.abs(normal()) * 0.005);
+        daily.unshift({ time: zonedWallClockToUtcSeconds(y, m, d, Math.floor(h.open / 60), h.open % 60, 0, h.zone), open, high, low, close, volume: Math.round(2e6 * (0.6 + Math.abs(normal()) * 0.4)) });
+        price = open;
+      }
+      const minutes = [];
+      price = h.price;
+      let vol = 0.0007;
+      for (const [y, m, d] of recent) {
+        const first = zonedWallClockToUtcSeconds(y, m, d, 0, 0, 0, h.zone) + (h.open - h.pre) * 60;
+        const last = zonedWallClockToUtcSeconds(y, m, d, 0, 0, 0, h.zone) + (h.close + h.post) * 60;
+        price *= 1 + normal() * 0.004;
+        for (let t = first; t < last && t <= NOW; t += 60) {
+          const regular = t >= first + h.pre * 60 && t < last - h.post * 60;
+          vol = Math.min(0.0016, Math.max(0.0003, vol * (1 + normal() * 0.05)));
+          const step = regular ? vol : vol * 0.45;
+          const open = price;
+          const close = open * (1 + normal() * step);
+          const high = Math.max(open, close) * (1 + Math.abs(normal()) * step * 0.4);
+          const low = Math.min(open, close) * (1 - Math.abs(normal()) * step * 0.4);
+          minutes.push({ time: t, open, high, low, close, volume: Math.round((regular ? 9000 : 1500) * (0.5 + Math.abs(normal()))), day: first });
+          price = close;
+        }
+      }
+      const out = { daily, minutes, hours: h };
+      cache.set(symbol, out);
+      return out;
+    }
+
+    const STEP = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
+    const round = (v) => Math.round(v * 100) / 100;
+    /** Bars of `interval` for `symbol`, buckets counted from each session's first minute. */
+    function bars(symbol, interval) {
+      const { daily, minutes } = series(symbol);
+      const step = STEP[interval];
+      const out = [];
+      const fold = (key, bar) => {
+        const lastBar = out[out.length - 1];
+        if (lastBar && lastBar.time === key) {
+          lastBar.high = Math.max(lastBar.high, bar.high); lastBar.low = Math.min(lastBar.low, bar.low);
+          lastBar.close = bar.close; lastBar.volume += bar.volume;
+        } else out.push({ time: key, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume });
+      };
+      if (step !== undefined) {
+        for (const bar of minutes) fold(bar.day + Math.floor((bar.time - bar.day) / step) * step, bar);
+      } else {
+        const days = [...daily];
+        for (const bar of minutes) {
+          const d = days[days.length - 1];
+          if (d && d.time >= bar.day) { d.high = Math.max(d.high, bar.high); d.low = Math.min(d.low, bar.low); d.close = bar.close; d.volume += bar.volume; }
+          else days.push({ time: bar.day + (series(symbol).hours.pre) * 60, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume });
+        }
+        if (interval === '1w') {
+          for (const bar of days) {
+            const weekday = new Date(bar.time * 1000).getUTCDay();
+            fold(bar.time - ((weekday + 6) % 7) * 86400, bar);
+          }
+        } else out.push(...days);
+      }
+      return out.map(b => ({ ...b, open: round(b.open), high: round(b.high), low: round(b.low), close: round(b.close) }));
+    }
+
+    const feed = {
+      getBars: async (request) => {
+        window.__requests.push({ symbol: request.symbol, interval: request.interval, from: request.from, to: request.to });
+        return bars(request.symbol, request.interval).filter(b => b.time >= (request.from ?? -Infinity) && b.time <= (request.to ?? Infinity));
+      },
+    };
+
+    const errors = [];
+    window.__widgetErrors = errors;
+    const common = {
+      feed,
+      symbol: params.get('symbol') ?? 'NIFTY', exchange: 'NSE', interval: params.get('interval') ?? '5m',
+      theme: params.get('theme') === 'light' ? 'light' : 'dark',
+      sessionShading: params.get('shade') !== 'off',
+      sessionCalendar: ({ symbol }) => CALENDARS[symbol] ?? null,
+      now: () => window.__now,
+      loading: { now: () => Math.floor(window.__now / 1000) },
+    };
+    if (params.get('grid') === '1') {
+      // One bar under a grid, acting on the focused chart, built from the
+      // public API the way the grid would build it: a root over the whole
+      // grid (so a menu can open above the bar without the cells clipping
+      // it) that inherits the grid's tokens, its own overlay stack and tips,
+      // and a target read at every use.
+      const grid = createChartGrid(document.getElementById('t'), { ...common, preset: '1x2' });
+      const root = document.createElement('div');
+      root.className = 'oac-widget oac-alert-host';
+      root.dataset.theme = grid.theme();
+      const strip = document.createElement('div');
+      strip.style.cssText = 'position:absolute;left:0;right:0;bottom:0;pointer-events:auto';
+      root.appendChild(strip);
+      grid.root.appendChild(root);
+      grid.root.style.boxSizing = 'border-box';
+      grid.root.style.paddingBottom = `${BOTTOMBAR_HEIGHT}px`;
+      const overlays = createOverlayStack(root, document);
+      const tips = createTipController(root, overlays.layer, document);
+      const bar = mountBottombar({
+        document, tips,
+        openOverlay: (el, options) => overlays.open(el, options),
+        status: (text, kind) => grid.active().widget.context.status(text, kind),
+      }, strip, {
+        target: () => grid.active().widget,
+        onGoTo: () => grid.active().widget.openDateNavigation(),
+        now: () => window.__now,
+      });
+      grid.on('active', () => bar.refresh());
+      grid.on('layout', () => bar.refresh());
+      grid.on('theme', ({ theme }) => { root.dataset.theme = theme; });
+      grid.cells()[0].widget.on('data', (e) => { if (e.error) errors.push(e.error); window.__loaded = e.bars; });
+      window.__grid = grid;
+      window.__bar = bar;
+      window.__widget = grid.cells()[0].widget;
+    } else {
+      const widget = createWidget(document.getElementById('t'), {
+        ...common,
+        mobile: params.get('mobile') ?? 'auto',
+        topbar: params.get('topbar') !== 'off',
+        bottombar: params.get('bar') !== 'off',
+      });
+      widget.on('data', (e) => { if (e.error) errors.push(e.error); window.__loaded = e.bars; });
+      window.__widget = widget;
+    }
+    window.__ready = true;
+  </script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><style>html,body{margin:0;height:100%;background:#0d0e12}#t{position:absolute;inset:0}</style></head>
+<body>
+  <div id="t"></div>
+  <script type="module">
+    // The widget tier against the static server: the same sibling-path
+    // loading a page gets by serving dist/ as is, no import map. The indicator
+    // tier is imported the way a host would, so the picker has rows.
+    import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+    import '/dist/openalgo-charts.indicators.mjs';
+
+    // Deterministic synthetic OHLCV (no network); the same series the base
+    // fixture draws.
+    const bars = [];
+    let p = 100;
+    for (let i = 0; i < 300; i++) {
+      const o = p; p += Math.sin(i / 9) * 1.5 + ((i % 7) - 3) * 0.3;
+      bars.push({ time: 1_700_000_000 + i * 300, open: o, high: Math.max(o, p) + 1, low: Math.min(o, p) - 1, close: p, volume: 100 + i });
+    }
+    const feed = {
+      getBars: async () => bars,
+      subscribeBars: () => () => {},
+    };
+
+    const errors = [];
+    window.__widgetErrors = errors;
+    const widget = createWidget(document.getElementById('t'), {
+      feed, symbol: 'FIXTURE', exchange: 'NSE', interval: '5m',
+      theme: 'dark', rail: { favorites: ['trend-line'] },
+      persist: new URLSearchParams(location.search).has('persist'),
+      onOrder: (o) => { window.__lastOrder = o; },
+    });
+    widget.on('data', (e) => { if (e.error) errors.push(e.error); window.__loaded = e.bars; });
+    window.__widget = widget;
+    window.__ready = true;
+  </script>
+</body>
+</html>

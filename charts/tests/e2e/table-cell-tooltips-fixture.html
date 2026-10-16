@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Table cell hover verification</title>
+  <style>
+    html,body{margin:0;background:#101722;color:#dce2ee;font:13px system-ui,sans-serif}
+    main{max-width:1040px;margin:12px auto;padding:0 12px}
+    p{margin:0 0 12px;line-height:20px}#chart{height:620px;width:100%}
+  </style>
+</head>
+<body>
+  <main><p>Hover the merged heading or individual readings. Both tables keep the same click ID.</p><div id="chart"></div></main>
+  <script type="module">
+    import { ChartTable, createChart, darkTheme, registerIndicator } from '/dist/openalgo-charts.mjs';
+    const element = document.getElementById('chart');
+    const chart = createChart(element, { branding: false, timeNavigator: false, shortcuts: false,
+      animAutoscale: false, animZoom: false, theme: { ...darkTheme, axisText: '#fedcba' } });
+    chart.addSeries('line').setData(Array.from({ length: 80 }, (_, index) => ({
+      time: 1700000000 + index * 60, value: 100 + index % 9,
+    })));
+    const options = { id: 'shared-table', position: 'top-left', margin: 40, cellWidth: [80, 80],
+      cellHeight: 28, background: '#112233', borderColor: '#445566', fontSize: 11 };
+    const rows = (owner, tips, alternate = false) => [
+      [{ text: 'Merged heading', colSpan: 2, textColor: '#ffffff',
+        ...(tips ? { tooltip: 'Merged detail\nLiteral <text> and a longer explanation which wraps inside narrow plots.' } : {}) },
+       { text: 'Covered', tooltip: 'Covered detail must never appear' }],
+      [{ text: 'Left', textColor: '#ffffff', ...(tips ? { tooltip: alternate ? 'Updated cell detail' : owner + ' left detail' } : {}) },
+       { text: 'Right', textColor: '#ffffff', ...(tips ? { tooltip: owner + ' right detail' } : {}) }],
+      [{ text: 'Plain', textColor: '#ffffff' },
+       { text: '', ...(tips ? { tooltip: 'No observation is available' } : {}) }],
+    ];
+    const table = new ChartTable(options); table.setRows(rows('First', true)); chart.addPrimitive(table);
+    registerIndicator({ id: 'table-hover-browser', name: 'Table readings', placement: 'pane',
+      inputs: [{ key: 'tips', type: 'boolean', label: 'Details', default: true },
+        { key: 'alternate', type: 'boolean', label: 'Updated', default: false }],
+      plots: [{ key: 'value', title: 'Value', type: 'line' }],
+      calc: bars => ({ value: bars.map(bar => bar.close / 10) }),
+      tables: ({ settings }) => [{ id: 'readings', options, rows: rows('Second', settings.tips, settings.alternate) }],
+    });
+    const study = chart.addIndicator('table-hover-browser');
+    chart.setPaneWeight(0, 1); chart.setPaneWeight(1, 1); chart.fitContent();
+    const clicks = [], hovers = [];
+    chart.on('click', event => clicks.push(event.id)); chart.on('hover', event => hovers.push(event.id));
+    const tableAt = pane => pane === 0 ? table : chart.panes()[pane].primitives().find(item => item instanceof ChartTable);
+    const point = (pane, row = 1, column = 0) => {
+      const rect = chart.panes()[pane].element.getBoundingClientRect();
+      return { x: rect.left + 40 + column * 80 + 40, y: rect.top + 40 + row * 28 + 14 };
+    };
+    window.__tableTooltips = {
+      chart, study, table, clicks, hovers, point,
+      setTooltips(tips) { table.setRows(rows('First', tips)); study.setSettings({ tips }); },
+      hit(pane, row = 1, column = 0) { return tableAt(pane)?.hitTest(40 + column * 80 + 40, 40 + row * 28 + 14) ?? null; },
+      measure(pane) {
+        const canvas = chart.panes()[pane].top.element;
+        const dpr = canvas.width / canvas.clientWidth, pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        const plotRight = Math.round((canvas.clientWidth - chart.priceAxisLayout(pane).reduce((sum, slot) => sum + slot.width, 0)) * dpr);
+        let ink = 0, axisHash = 2166136261;
+        for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+          const at = (y * canvas.width + x) * 4;
+          if (x < plotRight && pixels[at] === 254 && pixels[at + 1] === 220 && pixels[at + 2] === 186 && pixels[at + 3] === 255) ink++;
+          if (x >= plotRight) for (let c = 0; c < 4; c++) axisHash = Math.imul(axisHash ^ pixels[at + c], 16777619);
+        }
+        return { ink, axisHash: axisHash >>> 0, dpr };
+      },
+      resize() { element.style.width = 'calc(100% - 18px)'; chart.applySize(element.clientWidth, 620); },
+    };
+    window.__ready = true;
+  </script>
+</body>
+</html>

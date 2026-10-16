@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenAlgo Charts alert preview</title>
+<style>
+html,body{margin:0;height:100%;background:#0d0e12;color:#cbd5e1;font:13px system-ui}
+body{display:flex;flex-direction:column}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid #273244}
+header span{flex:1 1 270px}header button{background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:5px;padding:6px 10px;cursor:pointer}
+#host{flex:1;min-height:0}output{min-width:66px;font-variant-numeric:tabular-nums}
+</style></head>
+<body>
+<header><span>Alert preview: simulated prices. Open Alerts, then Create alert.</span>
+<button id="up">Price +5</button><button id="down">Price -5</button><button id="next">Close bar</button><output id="price"></output>
+<button id="reset">Reset demo</button></header>
+<div id="host"></div>
+<script type="module">
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+import '/dist/openalgo-charts.indicators.mjs';
+
+const prefix = 'oac-alert-preview:';
+const storage = {
+  getItem: key => localStorage.getItem(prefix + key),
+  setItem: (key, value) => localStorage.setItem(prefix + key, value),
+  removeItem: key => localStorage.removeItem(prefix + key),
+};
+const savedBars = localStorage.getItem(prefix + 'bars');
+const bars = savedBars ? JSON.parse(savedBars) : Array.from({ length: 100 }, (_, i) => {
+  const close = i === 99 ? 100 : 99 + Math.sin(i / 5) * 3;
+  return { time: 1735689600 + i * 60, open: close - 0.3, high: close + 1, low: close - 1, close, volume: 100 + i,
+    ...(i < 99 ? { oi: 1000 + i * 8 } : {}) };
+});
+// Page-exit handlers may be skipped; sample seeding must survive a reload.
+localStorage.setItem(prefix + 'bars', JSON.stringify(bars));
+const widget = createWidget(document.querySelector('#host'), {
+  symbol: 'ALERT DEMO', exchange: 'SIM', interval: '1m', intervals: ['1m'],
+  storage, persist: true, timeNavigator: false, theme: 'dark',
+});
+widget.series.setData(bars);
+widget.chart.setDataContext({ symbol: 'ALERT DEMO', exchange: 'SIM', interval: '1m', hasOpenInterest: true });
+if (!savedBars) {
+  widget.chart.addIndicator('ema', { length: 9 });
+  widget.chart.addIndicator('open-interest');
+  widget.draw.add({ tool: 'horizontal-line', points: [{ time: bars[80].time, price: 105 }], style: {}, paneIndex: 0 });
+}
+widget.chart.fitContent();
+const fired = [];
+widget.chart.on('alert:triggered', event => fired.push(event));
+function tick(delta, next = false) {
+  const tail = bars[bars.length - 1];
+  const close = tail.close + delta;
+  const bar = next ? { time: tail.time + 60, open: close, high: close, low: close, close, volume: 0 }
+    : { ...tail, close, high: Math.max(tail.high, close), low: Math.min(tail.low, close) };
+  if (next) bars.push(bar); else bars[bars.length - 1] = bar;
+  localStorage.setItem(prefix + 'bars', JSON.stringify(bars));
+  widget.series.update(bar);
+  document.querySelector('#price').textContent = close.toFixed(2);
+}
+document.querySelector('#up').onclick = () => tick(5);
+document.querySelector('#down').onclick = () => tick(-5);
+document.querySelector('#next').onclick = () => tick(0, true);
+document.querySelector('#price').textContent = bars[bars.length - 1].close.toFixed(2);
+let reset = false;
+document.querySelector('#reset').onclick = () => {
+  reset = true;
+  widget.destroy();
+  for (const key of Object.keys(localStorage)) if (key.startsWith(prefix)) localStorage.removeItem(key);
+  location.reload();
+};
+window.__widgetAlerts = { widget, fired, bars, tick };
+window.addEventListener('pagehide', () => {
+  if (!reset) localStorage.setItem(prefix + 'bars', JSON.stringify(bars));
+  widget.destroy();
+}, { once: true });
+</script></body></html>

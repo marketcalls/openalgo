@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Table layout verification</title>
+  <style>
+    html,body{margin:0;background:#101216;color:#dce2ee;font:14px system-ui,sans-serif}
+    main{max-width:800px;margin:24px auto}h1{font-size:22px}h2{font-size:14px;font-weight:500;margin:18px 0 6px}
+    p{color:#9ba7bd}canvas{display:block;width:640px;height:160px;background:#171c26}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Table layout verification</h1>
+    <p>Automatic widths, weighted rows and fixed column clipping.</p>
+    <h2>Automatic columns with a short heading row</h2>
+    <canvas id="automatic"></canvas>
+    <h2>Automatic columns with weighted percentage heights</h2>
+    <canvas id="weighted"></canvas>
+    <h2>Long text clipped inside fixed columns</h2>
+    <canvas id="clipped"></canvas>
+    <h2>Merged heading and multiline row label</h2>
+    <canvas id="formatted"></canvas>
+  </main>
+  <script type="module">
+    import { ChartTable, darkTheme } from '/dist/openalgo-charts.mjs';
+
+    const dpr = devicePixelRatio;
+    const width = 640, height = 160, margin = 16;
+    const entries = {};
+    function render(id, options, rows, following = true) {
+      const canvas = document.getElementById(id);
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.font = `${23 * dpr}px monospace`;
+      ctx.fillStyle = '#22cc88';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      const incomingFont = ctx.font;
+      const table = new ChartTable({
+        id, position: 'top-left', margin, cellWidth: 'auto', cellHeight: 18,
+        background: '#223344', ...options,
+      });
+      table.setRows(rows);
+      table.draw(ctx, { dpr, plotWidth: width, plotHeight: height, theme: darkTheme });
+      const afterTable = {
+        font: ctx.font, fillStyle: ctx.fillStyle,
+        textAlign: ctx.textAlign, textBaseline: ctx.textBaseline,
+      };
+      if (following) ctx.fillText('Following primitive', 16 * dpr, 112 * dpr);
+      entries[id] = { table, canvas, ctx, rows, incomingFont, afterTable };
+    }
+
+    render('automatic', { fontSize: 40 }, [
+      [{ text: 'Moving averages', bold: true, fontSize: 40 }, { text: 'Oscillators' }, { text: '' }],
+      [{ text: 'SMA 20: 1244.95', fontSize: 30 }, { text: 'RSI: 27.22', fontSize: 9 }],
+    ]);
+    render('weighted', { fontSize: 40, heightPercent: 25, rowWeights: [1, 3] }, [
+      [{ text: 'Wide short row label' }, { text: 'Short', bold: true }],
+      [{ text: 'Tall row' }, { text: 'Signal strength', fontSize: 8 }],
+    ]);
+    render('clipped', { cellWidth: [40, 70], fontSize: 11 }, [[
+      { text: 'MMMMMMMMMMMMMMMM', textColor: '#ff3344', align: 'left' },
+      { text: 'Next', textColor: '#22cc88', align: 'left' },
+    ]]);
+    render('formatted', {
+      cellWidth: [100, 100, 100], cellHeight: 40, fontSize: 16,
+      frameColor: '#ffcc00', frameWidth: 2, borderColor: '#778899',
+    }, [
+      [{ text: 'Session readings', colSpan: 3, bold: true, bgColor: '#334455' },
+       { text: 'hidden', bgColor: '#ff00ff' }, { text: 'hidden', bgColor: '#ff00ff' }],
+      [{ text: 'A\nB', rowSpan: 2, italic: true, verticalAlign: 'top', align: 'left',
+         fontFamily: 'monospace', bgColor: '#123456', textColor: '#00ffcc' },
+       { text: 'Open' }, { text: '102.50', fontFamily: 'monospace', align: 'right' }],
+      [{ text: 'hidden', bgColor: '#ff00ff' }, { text: 'Range' }, { text: '4.75', verticalAlign: 'bottom' }],
+    ], false);
+
+    window.__tableLayout = { entries, dpr, width, height, margin };
+    window.__ready = true;
+  </script>
+</body>
+</html>

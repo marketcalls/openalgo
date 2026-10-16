@@ -1,0 +1,191 @@
+---
+title: Order flow and market profile
+description: Live footprint, imbalance, zone alert, market profile and volume profile charts built with the profile tier, each with a short guide to reading it.
+---
+
+import Link from 'next/link'
+import { FootprintBasics, ImbalanceExample, DisplayModesExample, CellStylesExample, SignalsExample, StatsTableExample, VisibleProfileExample, ThemesExample, TradeFilterExample } from '../components/OrderFlowExamples'
+import { ZonesLiveExample } from '../components/OrderFlowLive'
+import { MarketProfileExample, VolumeProfileExample } from '../components/OrderFlowProfiles'
+
+<div className="oac-examples">
+
+# Order flow and market profile
+
+A candle tells you where price went. Order flow tells you who took it there. A
+footprint chart opens each bar and shows how much traded at every price, split by
+the side that started each trade: a buyer lifting the offer (the ask) or a seller
+hitting the bid. Read that way, a bar shows where buyers or sellers pressed, where
+their orders were soaked up, and where price moved through a level with almost
+nothing traded.
+
+Market profile steps back to the whole session. A TPO profile prints one letter at
+each price for every half hour that traded there, so the shape of the day (where
+it spent most of its time, its value area and its point of control) stands out at
+a glance. A volume profile does the same with traded volume.
+
+Every chart below runs the real `openalgo-charts/profile` tier in your browser on a
+seeded, simulated tape, so each visit shows the same bars. Scroll over a chart to
+zoom and drag to pan. The footprints share one tape of fourteen one-minute bars
+from 09:15, so a bar named in one example can be found in all of them.
+
+<div className="oac-of-links">
+  <a href="/openalgo-charts/demos/orderflow/index.html" target="_blank" rel="noreferrer">Full-size order flow demo</a>
+  <a href="/openalgo-charts/demos/market-profile/index.html" target="_blank" rel="noreferrer">Full-size market profile demo</a>
+  <Link href="/docs/profiles-and-orderflow">Profiles and order flow guide</Link>
+  <Link href="/docs/market-profile">Market profile guide</Link>
+  <Link href="/docs/volume-profile">Volume profile guide</Link>
+</div>
+
+<div className="oac-example-path" aria-label="Explore order flow examples">
+
+[Footprint](#reading-a-footprint-bid-by-ask) / [Imbalances](#imbalances-and-stacked-imbalances) /
+[Signals](#order-flow-signals) / [Zone alerts](#zones-and-zone-alerts) /
+[Statistics](#the-statistics-table) / [Themes](#footprint-colour-themes) /
+[Market profile](#market-profile-tpo) / [Volume profile](#volume-profile-by-session)
+
+</div>
+
+## Reading a footprint: bid by ask
+
+Each column is one bar. Every row is a price, with the volume sold into the bid on
+the left and the volume bought from the ask on the right, and a slim candle beside
+it. The outlined row is the point of control (POC), the price with the most volume
+in that bar. Wider rows group neighbouring prices together: try 2 or 4 points to see
+a busy bar condense into a few readable rows.
+
+<FootprintBasics />
+
+## Imbalances and stacked imbalances
+
+Imbalances compare diagonally, because at any moment the best bid sits one row below
+the best ask: the ask volume at a price is weighed against the bid volume that stood one
+row under it. An ask cell is a buying imbalance
+when it is at least the ratio times the bid one row below it; a bid cell is a selling
+imbalance against the ask one row above. Three or more in a row on one side form a
+stacked imbalance, drawn as a bracket: a strong sign one side was in control.
+
+A row inside a bar that never traded counts as zero volume, so the cell beside it
+is compared with zero, and any positive volume against zero is an imbalance (new in
+2.6.4). The 09:16 bar shows it: price jumped two points at a time on its way up,
+leaving 24004, 24006 and 24008 untraded, and every traded row beside a gap lights up.
+
+<ImbalanceExample />
+
+## One value per row: the display modes
+
+When bid and ask side by side is more than you need, print one number per row.
+**Delta** is ask minus bid, **Delta %** is that as a share of the row's volume, and
+**Volume** is the total. **Delta-shaded volume** (new in 2.6.4) prints the row's volume
+on a cell coloured by the sign of its delta and shaded by its size, so you read size
+and direction together: a deep green cell was bought hard, a deep red one sold hard,
+and a pale one was close to balanced. **Volume and delta** prints both numbers.
+
+<DisplayModesExample />
+
+## Cell styles: heatmap, profile and ladder
+
+The style changes only the drawing, never the numbers. **Heatmap** shades each cell by
+its volume, **Profile** draws bars that grow out from the middle (bid to the left, ask
+to the right) so a bar reads as a small histogram, and **Ladder** draws square,
+high-contrast cells. Shading against the busiest row on screen, instead of within each
+bar, makes the heaviest clusters on the chart stand out.
+
+<CellStylesExample />
+
+## Order flow signals
+
+Each layer marks one pattern that traders look for, and each is off until you ask
+for it. A **large-volume cell** (`bigOrderMultiple`) is a single cell several times the
+average near the bar's high or low, often read as a large resting order, though the chart
+only sees executed volume. **Absorption** bands rows near the high or low where both bid
+and ask volume were heavy. **Multiple nodes** highlights a POC that two bars share. A
+**delta flip** marks a bar whose delta turned after a run of the other sign at a
+swing. **Divergence** boxes the delta label when it disagrees with the candle, such as
+the up bar at 09:18 that closed with net selling. **Unfinished auctions** draw a
+dash-dot line at a high or low that traded on both sides, a level price often
+revisits.
+
+<SignalsExample />
+
+## Zones and zone alerts
+
+With zones on, stacked imbalances, shared POCs and absorption extend to the right as
+price levels until price deals with them. `zoneKinds` picks which of the three to
+draw and alert on, and `zoneLookback` lets zones start only in the newest bars, so an
+old, crowded chart stays readable. `onZoneAlert` calls you once per zone when the
+newest bar's range comes back to it after it became active (a jump across the zone counts,
+as it would trigger a stop there), the moment to raise an alert
+or play a sound. Zones touched in the bars a chart first loads are history, not news,
+so they are not reported. Press Play to run the tape forward and watch the log.
+
+<ZonesLiveExample />
+
+## The statistics table
+
+A table under the footprints gives each bar its numbers: the session letter (here one
+per five minutes, so the fourteen bars run from A to C), ask and bid volume, delta
+(ask minus bid), delta % (delta over volume), the highest and lowest the running
+delta reached inside the bar, cumulative delta and cumulative delta per volume
+(running totals across bars, the second a ratio between -1 and 1), volume and
+cumulative volume. Signed rows are shaded green when positive and red when negative,
+more strongly the larger the value.
+
+<StatsTableExample />
+
+## Volume profile of the visible bars
+
+A profile against the left edge adds up every visible bar's volume at each price,
+split into ask and bid, so you can see where the whole visible range traded most
+without reading forty columns. It is rebuilt as you pan and zoom.
+
+<VisibleProfileExample />
+
+## Footprint colour themes
+
+`FOOTPRINT_THEMES` (new in 2.6.4) holds six ready colour sets. Each is a plain options
+patch you spread under your own choices, and covers cells, imbalances, candles, the
+POC, the signal layers, the visible profile, session letters and the table. A theme
+never sets the chart background: Daylight is made for a light chart and the other
+five for dark ones, so this example sets a matching background as you switch.
+
+<ThemesExample />
+
+## Trade size filter and lot display
+
+A feed reports raw quantity, while traders often think in lots. `volumeDivisor` divides
+every printed quantity, so the same bars read in lots or units without rebuilding.
+`minTradeSize` on the aggregator counts only prints of at least that size, to see what
+the larger participants did. Smaller prints are not thrown away: they still open their
+row (it shows zero) and still set the bar's open, high, low and close, so each column
+keeps its full range.
+
+<TradeFilterExample />
+
+## Market profile (TPO)
+
+Each session is a column of letters: A for the first half hour, B for the second and
+so on, one letter at every price that period traded. The widest row is the POC, the
+shaded band is the value area (where 70% of the letters sit), and the line at the
+left of each profile marks the initial balance, the range of the first hour. A lone
+letter at an extreme, a single print, shows price moved through quickly. Colour by
+value area or by volume to read the same day another way, or split the periods to see
+how the day built over time.
+
+<MarketProfileExample />
+
+## Volume profile by session
+
+A volume profile is the market profile's volume twin: a horizontal histogram of how
+much traded at each price, with the POC and value area marked. Build one per day, or
+one over the whole range for a longer view. This chart has only bars, not classified
+trades, so its buy and sell split takes each bar's direction as its side; a footprint
+is the place for real bid and ask volume.
+
+<VolumeProfileExample />
+
+The examples use the public API exactly as a host would. For every option, see the
+[profiles and order flow guide](/docs/profiles-and-orderflow), the
+[market profile guide](/docs/market-profile) and the [volume profile guide](/docs/volume-profile).
+
+</div>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><style>
+html,body{margin:0;height:100%;background:#0d0e12}
+#chart{position:absolute;left:0;top:0;width:620px;height:600px}
+#terminal{position:absolute;left:620px;top:0;right:0;height:600px}
+</style></head>
+<body>
+  <div id="chart"></div>
+  <div id="terminal"></div>
+  <!-- A page with no bundler and no modules: classic scripts only, the base
+       first, then every tier, the draw tier before the widget that reads it. -->
+  <script src="/dist/openalgo-charts.standalone.js"></script>
+  <script src="/dist/openalgo-charts.trade.standalone.js"></script>
+  <script src="/dist/openalgo-charts.transform.standalone.js"></script>
+  <script src="/dist/openalgo-charts.profile.standalone.js"></script>
+  <script src="/dist/openalgo-charts.indicators.standalone.js"></script>
+  <script src="/dist/openalgo-charts.draw.standalone.js"></script>
+  <script src="/dist/openalgo-charts.webgl.standalone.js"></script>
+  <script src="/dist/openalgo-charts.workspace.standalone.js"></script>
+  <script src="/dist/openalgo-charts.widget.standalone.js"></script>
+  <script>
+    (function () {
+      // Deterministic OHLCV (no network): a seeded random walk of five-minute
+      // bars in NSE hours, 09:15 IST on weekdays, so the screenshot shows a
+      // chart that reads like a traded stock.
+      var seed = 20260930;
+      var uniform = function () { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return (seed + 0.5) / 4294967296; };
+      var normal = function () { return Math.sqrt(-2 * Math.log(uniform())) * Math.cos(2 * Math.PI * uniform()); };
+      var tick = function (value) { return Math.round(value * 20) / 20; };
+      var bars = [];
+      var price = 1486.4;
+      var vol = 0.0015;
+      for (var day = Date.UTC(2026, 8, 7) / 1000; bars.length < 220; day += 86400) {
+        var weekday = new Date(day * 1000).getUTCDay();
+        if (weekday === 0 || weekday === 6) continue;
+        price *= 1 + normal() * 0.006;
+        for (var slot = 0; slot < 75 && bars.length < 220; slot++) {
+          vol = Math.min(0.004, Math.max(0.0008, vol * (1 + normal() * 0.08)));
+          var open = tick(price);
+          var close = tick(open * (1 + normal() * vol));
+          var high = tick(Math.max(open, close) * (1 + Math.abs(normal()) * vol * 0.5));
+          var low = tick(Math.min(open, close) * (1 - Math.abs(normal()) * vol * 0.5));
+          var busy = slot < 6 || slot > 68 ? 2.2 : 1;
+          bars.push({ time: day + 13500 + slot * 300, open: open, high: high, low: low, close: close, volume: Math.round(busy * 38000 * (0.6 + uniform())) });
+          price = close;
+        }
+      }
+
+      // The engine, a study from the indicator tier and a drawing from the
+      // draw tier, all on the base the first script defined.
+      var charts = window.OpenAlgoCharts;
+      var chart = charts.createChart(document.getElementById('chart'), { timezone: 'Asia/Kolkata', theme: charts.darkTheme });
+      chart.addSeries('candlestick').setData(bars);
+      var rsi = chart.addIndicator('rsi', { color: '#00e5ff' });
+      var draw = new charts.draw.DrawingController(chart);
+      var a = bars[60];
+      var b = bars[180];
+      draw.add({ tool: 'trend-line', paneIndex: 0, points: [{ time: a.time, price: a.low }, { time: b.time, price: b.high }],
+        style: { color: '#ff00ff', lineWidth: 3 } });
+
+      // The widget tier over the same engine, fed by a host feed.
+      var feed = { getBars: function () { return Promise.resolve(bars); }, subscribeBars: function () { return function () {}; } };
+      var widget = charts.widget.createWidget(document.getElementById('terminal'), {
+        feed: feed, symbol: 'FIXTURE', exchange: 'NSE', interval: '5m', theme: 'dark', persist: false,
+      });
+      widget.on('data', function (e) { window.__loaded = e.bars; });
+      window.__page = { chart: chart, rsi: rsi, draw: draw, widget: widget };
+      widget.ready.then(function () { window.__ready = true; });
+    })();
+  </script>
+</body>
+</html>

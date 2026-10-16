@@ -1,0 +1,292 @@
+---
+title: Keyboard Shortcuts
+description: A rebindable keyboard shortcut system - default keymap, combo format, presets, scope, custom commands, persistence, events, and the widget's shortcuts editor.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+import { STOCK_BARS_SOURCE } from '../../components/synthetic-market'
+
+# Keyboard Shortcuts
+
+The chart ships a small, framework-free keyboard system: a default keymap wired to real chart
+actions, layout-independent combos, live rebinding, an alternate preset, hover-vs-global
+scope, custom commands, and optional persistence. It is **on by default** - pass
+`shortcuts: false` to `createChart` to turn it off.
+
+## Try it
+
+Hover (or click) this chart and use the keys:
+
+<RunnableExample height={340} code={`${STOCK_BARS_SOURCE}
+const chart = lib.createChart(el);
+chart.addSeries('candlestick').setData(stockBars(1700000000, 160, 3600, 1480, 11, 0.004));
+chart.timeScale.fitContent(160);
+return chart;`} caption="Arrows pan · = / - zoom · Home or 0 reset · Alt+V / Alt+H toggle grids · Alt+M crosshair magnet · Alt+Shift+S screenshot." />
+
+## Default keymap
+
+`Mod` is the platform accelerator: **Ctrl** on Windows/Linux, **⌘** on macOS.
+
+| Command | Action | Default |
+|---|---|---|
+| `panLeft` / `panRight` | Pan two bars | `ArrowLeft` / `ArrowRight` |
+| `panLeftFast` / `panRightFast` | Pan ten bars | `Mod + ArrowLeft` / `Mod + ArrowRight` |
+| `panLeftBar` / `panRightBar` | Step one bar (time navigator buttons) | *unbound* |
+| `panUp` / `panDown` | Pan price | `ArrowUp` / `ArrowDown` |
+| `zoomIn` / `zoomOut` | Zoom | `=` / `-` |
+| `resetScale` | Fit + re-enable autoscale | `Home` / `0` |
+| `fitContent` | Fit all bars | `Alt + F` |
+| `screenshot` | Download a PNG | `Alt + Shift + S` |
+| `toggleGridVert` / `toggleGridHorz` | Toggle grid lines | `Alt + V` / `Alt + H` |
+| `toggleCrosshairMagnet` | Free vs magnet crosshair | `Alt + M` |
+
+## Combo format
+
+Combos are strings of zero or more modifiers then one key, joined with `+`, using
+**physical key codes** so bindings survive keyboard layouts.
+
+- **Modifiers**, in this order: `Mod`, `Ctrl`, `Meta`, `Alt`, `Shift`.
+- **Keys** are codes: `KeyA`-`KeyZ`, `Digit0`-`Digit9`, `ArrowLeft/Right/Up/Down`, `Home`,
+  `Equal`, `Minus`, `Space`, `Escape`, `F1`-`F12`, …
+
+Examples: `'Alt+KeyR'`, `'Mod+ArrowLeft'`, `'Shift+Digit0'`.
+
+## Configure at creation
+
+```ts
+import { createChart } from 'openalgo-charts';
+
+const chart = createChart(el, {
+  shortcuts: {
+    preset: 'default',          // or 'alt'
+    scope: 'hover',             // or 'global'
+    overrides: {
+      panLeftFast: 'Alt+ArrowLeft', // rebind
+      screenshot: null,             // unbind (still listed)
+    },
+    disabledCommands: ['toggleCrosshairMagnet'],
+    customShortcuts: [
+      { command: 'openOrders', label: 'Open orders', combos: 'Alt+KeyO', onTrigger: () => openOrders() },
+    ],
+    persist: true,              // save rebinds to localStorage
+  },
+});
+```
+
+## Rebind live
+
+`chart.shortcuts` is the manager (or `null` when disabled):
+
+```ts
+chart.shortcuts?.setBinding('zoomIn', 'Shift+Equal'); // returns false for reserved combos
+chart.shortcuts?.disable('panUp');
+chart.shortcuts?.resetBinding('panUp');
+chart.shortcuts?.setPreset('alt');
+chart.shortcuts?.resetAll();
+
+chart.shortcuts?.list();   // [{ command, label, combos, isCustom, isDisabled }]
+chart.shortcuts?.state();  // { preset, overrides, disabled } - serializable
+chart.shortcuts?.onChange(() => refresh()); // since 2.5.10: after every change; returns an unsubscribe
+```
+
+The time navigator's key hints follow a rebind (since 2.5.10), unless the host passed its
+own `timeNavigator.hints`.
+
+<Callout type="info">
+Browser/OS-reserved combos (`Mod+KeyW`, `Mod+KeyT`, `Mod+KeyR`, …) can't be bound -
+`setBinding` returns `false` and leaves the command unchanged. Check with `isReservedCombo`.
+</Callout>
+
+## Alt preset
+
+`preset: 'alt'` (or `chart.shortcuts.setPreset('alt')`) is an overlay on the defaults - only
+the combos with a different convention change:
+
+| Command | Alt preset |
+|---|---|
+| `panLeftFast` / `panRightFast` | `Alt + ArrowLeft` / `Alt + ArrowRight` |
+| `screenshot` | `Mod + Shift + S` |
+
+User rebinds always win over the active preset.
+
+## Scope
+
+- **`hover`** (default) - shortcuts fire only while the pointer is over the chart, or while
+  it is focused. On a multi-chart page this routes each keystroke to one chart.
+- **`global`** - always active (for chart-centric, single-chart pages).
+
+Keys are always ignored while you type in an `input`, `textarea`, `select`, or any
+`contenteditable` element.
+
+## Chart grid
+
+A chart grid adds its own chords to each chart's keymap, in a Chart grid section of the
+shortcuts panel. Only the active chart answers them. They name no command, so the
+[shortcuts editor](#widget-shortcuts-editor) lists them without a Change
+button.
+
+| Keys | Action |
+|---|---|
+| `Alt + Enter` | Maximize or restore the active chart |
+| `Escape` | Restore the grid, when nothing else on the chart wants the key |
+| `Alt + Shift + Arrow` | Make the chart in that direction active |
+| `Mod + Shift + Arrow` | Swap the active chart with the chart in that direction |
+
+See [Chart grid](/docs/chart-grid).
+
+## Custom shortcuts
+
+Add your own commands - they join the keymap and fire your handler:
+
+```ts
+createChart(el, {
+  shortcuts: {
+    customShortcuts: [
+      { command: 'toggleHeatmap', label: 'Toggle heatmap', combos: 'Alt+KeyG', onTrigger: () => toggleHeatmap() },
+    ],
+  },
+});
+```
+
+A matched custom command runs its `onTrigger`, consumes the key, and emits the same trigger
+event as a built-in.
+
+## Persistence
+
+With `persist: true`, rebinds / preset / disabled commands round-trip through `localStorage`
+(key `openalgo-charts:shortcuts`, override with `storageKey`). It is guarded for non-browser
+environments, so SSR and tests are safe.
+
+## Helpers
+
+Exported for building your own shortcut UI:
+
+```ts
+import {
+  parseCombo, normalizeCombo, formatCombo, isValidCombo, isReservedCombo, eventToCombo,
+} from 'openalgo-charts';
+
+formatCombo('Alt+KeyR');            // 'Alt + R'  (or '⌥ R' on macOS)
+normalizeCombo('Shift+Mod+KeyA');   // 'Mod+Shift+KeyA'
+eventToCombo(keyboardEvent);        // 'Mod+ArrowLeft'
+```
+
+## Events
+
+Subscribe to every trigger (built-in or custom):
+
+```ts
+const off = chart.shortcuts?.on((e) => {
+  // e = { command, combo, isCustom }
+  analytics.track('shortcut', e.command);
+});
+// off?.() to unsubscribe
+```
+
+<a id="widget-shortcuts-editor"></a>
+
+## The widget's shortcuts editor (since 2.5.10)
+
+`openalgo-charts/widget` puts every chord it answers to in one keymap: its own editing keys
+and tool chords, the rail's keys, and the chart commands above. Press `?` over a widget and
+the shortcuts panel lists them all, and is also where a user changes them:
+
+- **Change** on a row records the next chord pressed. Escape cancels and leaves the panel
+  open; Tab ends the recording and moves on.
+- A chord another binding holds is not taken silently. The row names who has it and offers
+  **Replace**, which moves the chord and leaves the other binding without one (its row then
+  reads *Not set*), or **Cancel**.
+- A chord the browser keeps (`Ctrl+W`, `Ctrl+T` and the rest) is refused, and so is a
+  letter or digit without Ctrl or Alt, because on its own it starts typing a symbol or an
+  interval on the chart, and so is Space on its own, which presses the focused button. The
+  panel says why and keeps listening.
+- **Reset** on a changed row puts its default back; **Reset all**, after a confirmation,
+  puts every default back.
+
+Chart commands are rebound through `chart.shortcuts` with the physical key, in the engine's
+code grammar above, so they survive a keyboard layout. The widget's own commands keep the
+key grammar they were written in (`Alt+T`, `Mod+Z`). Changes apply at once. With `persist`
+on, they are saved in the widget's storage under the key `keymap` (`KEYMAP_KEY`) and put
+back when the widget mounts again.
+
+<Callout type="info">
+A chart command resets to the chord it had when the widget mounted, so bindings a host
+passes in `shortcuts.overrides` count as its defaults. The widget saves the chart's chords
+itself: leave the engine's own `shortcuts.persist` off on a widget, or a chord the user
+chose in an earlier visit is read back as the default and Reset has nothing to return to.
+</Callout>
+
+<RunnableExample height={480} tiers={['widget']} caption="Hover the chart and press ?. Change a row, press a chord, and try Alt+H on the trend line row to see a conflict. Alt+Y already picks the trend line: the example moved it." code={`${STOCK_BARS_SOURCE}
+const widget = lib.createWidget(el, {
+  symbol: 'DEMO',
+  exchange: 'NSE',
+  interval: '5m',
+  intervals: ['1m', '5m', '15m', '1h'],
+});
+widget.series.setData(stockBars(1700000000, 240, 300, 1480, 23, 0.003));
+widget.chart.timeScale.fitContent(160);
+
+// The same move the panel makes: the trend line answers to Alt+Y now.
+widget.context.keymap.rebind('tool:trend-line', 'Alt+Y');
+return widget;`} />
+
+### Commands
+
+Every binding a user may move has a stable command name, which is what `rebind`, `reset`
+and a saved record refer to: the chord is exactly what changes.
+
+| Command | Default | Rebindable |
+|---|---|---|
+| `undo`, `redo` | `Mod + Z`, `Mod + Shift + Z` | yes |
+| `redo-alt` (not listed) | `Mod + Y` | yes |
+| `copy`, `cut`, `paste`, `duplicate` | `Mod + C`, `Mod + X`, `Mod + V`, `Mod + D` | yes |
+| `delete` | `Delete` | yes |
+| `tool:<id>`, one per drawing tool with a chord | `Alt + T`, `Alt + H`, `Alt + J`, `Alt + V`, `Alt + C` | yes |
+| `chart:<command>`, every command in the default keymap | as above | yes |
+| `delete-back`, `finish`, `leave` | `Backspace`, `Enter`, `Escape` | no |
+| `nudge-left`, `nudge-right`, `nudge-up`, `nudge-down` | the arrows | no |
+| `shortcuts` | `?` | no, it is the way into the editor |
+
+The rail's arrow keys and the drawing toolbar's keys have no command and stay where they are.
+
+### From code
+
+`widget.context.keymap` is the widget's `Keymap`:
+
+```ts
+const km = widget.context.keymap;
+
+km.rebind('tool:trend-line', 'Alt+Y');       // { ok: true, conflicts: [] }
+km.rebind('tool:trend-line', 'Alt+H');       // { ok: false, reason: 'taken', conflicts: [...] }
+km.rebind('tool:trend-line', 'Alt+H', { replace: true }); // the horizontal line gives it up
+km.rebind('chart:fitContent', 'Alt+KeyG');   // an engine command, in its code grammar
+km.rebind('copy', null);                     // unbound
+
+km.chord('undo');                            // 'Mod+z', or '' while unbound
+km.conflictsFor('Alt+O');                    // who holds a chord, before taking it
+km.reset('tool:trend-line');                 // may report 'taken' too; pass { replace: true }
+km.resetAll();
+
+const saved = km.overrides();                // { 'tool:trend-line': 'Alt+h', 'chart:fitContent': ['Alt+KeyG'] }
+km.applyOverrides(saved);                    // replaces rather than merges
+const off = km.onChange(({ commands }) => console.log('moved', commands));
+```
+
+`rebind` refuses with a `reason`: `unknown` (no such command), `fixed` (not rebindable),
+`invalid` (not a chord), `reserved` (the browser keeps it) or `taken`, with the holders in
+`conflicts`. `applyOverrides` reads anything a store hands back: an entry it cannot use is
+dropped, and one for a command nothing has registered yet is kept for when it does.
+
+A host's own command joins the panel with a Change button once it has a `command`:
+
+```ts
+km.register('Alt+O', () => openOrders(), 'widget', {
+  command: 'orders', label: 'Open orders', group: 'Trading',
+});
+```
+
+For a host that does not want its users changing chords, `createWidget(el, { shortcutsEditor: false })`
+makes the `?` panel a plain list and applies no saved chords. `openShortcutsPanel(widget.context)` opens
+the same panel `?` does from a control of the host's own, and `{ edit: false }` asks for the plain list
+whatever the widget allows.

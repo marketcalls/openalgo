@@ -1,0 +1,197 @@
+---
+title: Render Backends & SVG Export
+description: The render backend port, the renderer option, the WebGL2 tier with its session-long fallback, and exportSVG.
+---
+
+import RunnableExample from '../../components/RunnableExample'
+import { Callout } from 'nextra/components'
+
+# Render backends and SVG export
+
+The series pass on each pane goes through a **render backend port**: `beginFrame`,
+`drawSeries`, `endFrame`. The shipped Canvas2D backend draws through the pane's own 2D
+context; the `openalgo-charts/webgl` tier registers a
+WebGL2 backend behind the same port; and `exportSVG` runs the same paint into a
+serialising context, so there is no second renderer to drift from the canvas one. Axes,
+text, price lines, markers, drawings and every primitive stay on the 2D path whichever
+backend paints the series.
+
+## Choosing a backend
+
+```ts
+import { createChart } from 'openalgo-charts';
+import 'openalgo-charts/webgl';                        // registers the 'webgl2' backend
+
+const chart = createChart(el, { renderer: 'auto' });  // 'canvas2d' (default) | 'webgl2' | 'auto'
+chart.rendererKind;                                    // what the chart actually paints with
+chart.on('renderer:fallback', ({ from, to, reason }) => log(reason));
+```
+
+| `renderer` | Behaviour |
+|---|---|
+| `'canvas2d'` | The default backend, drawing series directly into each pane's 2D context. |
+| `'webgl2'` | Asks for the GPU backend. Throws when `openalgo-charts/webgl` has not been imported (a missing import is a mistake in the code); on a device without WebGL2 it falls back to `canvas2d` with one console warning (a property of the machine the host should still hear about). |
+| `'auto'` | `webgl2` when the tier is registered and WebGL2 works on this device, `canvas2d` otherwise, silently. |
+
+The choice is made **once, at construction**, because a backend that could change under
+a frame would have to be checked by every renderer. Read the result from
+`chart.rendererKind` (a `RenderBackendKind`; the deprecated `chart.renderer` is the same
+value under the name it first shipped with, and goes in 3.0.0). It differs from the option when the chosen backend declined,
+and from the moment a GPU backend degrades.
+
+`renderBackend` takes a factory instead, one call per pane, bypassing `renderer` and the
+registry: for a host bringing its own backend, and for a test that wants to see what a
+pane asks a backend to paint. A factory that returns `null` gets the 2D backend for that
+pane.
+
+The `items` array `drawSeries` receives, and the objects in it, belong to the pane: it
+reuses them and rewrites them in place the next time it draws that series (2.5.8), so a
+backend that keeps them past the call must copy them. `priceToY` is one stable function
+per series. Under the level of detail (`conflate`, on by default) a built-in type's items
+are one merged stick or a few kept bars per device-pixel column once bars are narrower
+than about one CSS px.
+
+<RunnableExample height={320} caption="Pan and zoom. With WebGL2 available the candles are batched into one GPU draw call per frame and composited into the pane's own canvas; everything else about the chart is unchanged." code={`const chart = lib.createChart(el, { renderer: 'auto' });
+const bars = lib.generateBars(1700000000, 600, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.timeScale.fitContent(240);
+
+// Decided once, at construction: 'webgl2' where WebGL2 works, else 'canvas2d'.
+el.style.position = 'relative';
+const tag = document.createElement('div');
+tag.style.cssText = 'position:absolute;right:64px;bottom:30px;z-index:5;font:12px ui-monospace,monospace;background:light-dark(rgba(255,255,255,.9),rgba(0,0,0,.55));color:light-dark(#151515,#e6edf3);box-shadow:0 0 0 1px light-dark(#e4e4e4,transparent);padding:4px 8px;border-radius:6px;pointer-events:none';
+function show(note) { tag.textContent = 'rendererKind: ' + chart.rendererKind + (note ? '  ' + note : ''); }
+show(lib.isWebGL2Supported() ? '' : '(no WebGL2 on this device)');
+// A lost context moves the chart to the 2D path for the session and says so once.
+chart.on('renderer:fallback', function (e) { show('(fell back: ' + e.reason + ')'); });
+el.appendChild(tag);
+return chart;`} />
+
+## The WebGL2 tier
+
+`openalgo-charts/webgl` is optional and is not included in the base bundle.
+See [Getting started](/docs/getting-started) for the current measured tier sizes.
+Importing it registers the backend under `'webgl2'`, so `renderer: 'auto'` picks it up
+wherever WebGL2 is available and `renderer: 'webgl2'` stops throwing. The bare import is
+enough; `registerWebGL2Renderer()` is exported (idempotent) for a bundler that would drop
+a side-effect-only import.
+
+**How it paints.** The pane keeps its base canvas and its 2D context; the backend is
+handed that context at mount like the 2D backend is. It batches every native series into
+one offscreen WebGL2 surface shared by every pane of every chart on the page (browsers
+allow around sixteen live contexts, so one per pane would fail a dashboard of a few
+multi-pane charts), with analytic anti-aliasing, and at `endFrame` composites the result
+into the pane's base canvas with a single `drawImage`, under the plot clip and exactly
+where the 2D backend would have painted the series. The DOM is unchanged, so
+`takeScreenshot`, `exportSVG` and the context-menu snapshot read the same canvases they
+always did.
+
+Drawn natively: `candlestick`, `hollow-candle`, `volume-candle`, `bar`, `high-low`,
+`line`, `line-markers`, `step`, `area`, `hlc-area`, `baseline`, `column`, `histogram`.
+`kagi`, `point-figure` and any custom chart type flush the batch and draw through the 2D
+context, so z-order between series holds. Rect-based types land on the same device pixels
+as the 2D renderers because both read the same geometry helper (`candleGeometry`);
+anti-aliased edges (lines, fills, markers) differ by sub-pixel fringe amounts.
+
+**Falling back.** When a GPU backend loses its context, or its program fails to compile
+on a live context, the chart moves every pane to `canvas2d` for the rest of the session
+(a pane added later matches), `rendererKind` reads `'canvas2d'`, and one
+`renderer:fallback` event fires with a `RendererFallbackEvent`:
+`{ from, to: 'canvas2d', reason: 'context-lost' | 'unavailable' }`. The frame in which
+the context went away is painted through the backend's own 2D fallback, so the chart
+never shows a blank frame. The event is the host's cue to update anything that shows the
+renderer.
+
+<Callout type="info">
+`renderer: 'auto'` moves the series pass of the standard chart types to the GPU; it is
+not a second renderer for everything. Text, dashed lines, gradients, drawings,
+primitives and custom chart types stay on the 2D context, which already does them well.
+The two backends have not been compared in frame time.
+</Callout>
+
+The tier's exports: `createWebGL2Backend(device?)` (one backend for one pane, or `null`
+when WebGL2 is unavailable), `WebGL2Backend` (for a host that injects it through
+`renderBackend`), `isWebGL2Supported()`, `GlDevice` and `sharedGlDevice()`,
+`registerWebGL2Renderer()`, `WEBGL_TIER`. The registry behind the option is on the base
+entry for a tier or host that brings a backend: `registerRenderBackend`,
+`unregisterRenderBackend`, `registeredRenderBackends`, `resolveRenderBackend`,
+`createRenderBackend`, `backendDegradation`, `candleGeometry`, and the types
+`IRenderBackend`, `RenderBackendKind`, `RendererChoice`, `RenderBackendFactory`,
+`RenderDevice`, `RendererFallbackReason` and `RendererFallbackEvent`.
+
+## Vector export
+
+```ts
+const svg = chart.exportSVG();                                                    // the live size
+const figure = chart.exportSVG({ width: 1600, height: 900, background: false });  // transparent
+```
+
+`exportSVG(options?)` returns the chart as a standalone SVG string: the ordinary paint of
+every pane, base and top layers in DOM order, run once into a serialising 2D context at
+pixel ratio 1, so axis labels and tags stay `<text>` and lines stay paths, and the file
+scales without blur. Crosshairs and hover/drag emphasis are omitted, but the
+export paints current primitive values, which can include an in-progress visual
+preview. Export after release or cancellation when you need committed positions.
+
+For CSV rows, indicator values or a portable data snapshot, use
+[Chart data export](/docs/chart-data-export). Image and SVG exports capture
+appearance; they do not substitute for a structured data export or a saved workspace.
+
+| `ExportSvgOptions` | Default | Notes |
+|---|---|---|
+| `width`, `height` | the live size | Media px. A different size lays the chart out afresh for the export (the same bar spacing over a wider or narrower plot, every scale re-measured for its new height) and puts the live layout back before returning, without a blank frame. |
+| `background` | `true` | Paint the theme background under the chart. `false` leaves the document without a ground of its own, which is what an embedded figure usually wants. |
+| `dpr` | `1` | Only `1` is accepted, and anything else throws: SVG has no device pixels, and a renderer asked for 2 would snap its hairlines to half-pixel edges that scale as a blur. |
+
+<RunnableExample height={360} caption="The right half is the string the left half returned, inlined as markup and re-exported as you pan or zoom. Zoom the page: it stays crisp." code={`el.style.display = 'flex';
+el.style.gap = '10px';
+const live = document.createElement('div');
+live.style.cssText = 'flex:1 1 0;min-width:0;height:100%;position:relative';
+const out = document.createElement('div');
+out.style.cssText = 'flex:1 1 0;min-width:0;height:100%;overflow:hidden;border:1px dashed #5b6478;border-radius:6px;line-height:0';
+el.appendChild(live);
+el.appendChild(out);
+
+const chart = lib.createChart(live);
+const bars = lib.generateBars(1700000000, 120, 3600);
+chart.addSeries('candlestick').setData(bars);
+chart.addPriceLine({ price: bars[bars.length - 1].close, color: '#f5a623', lineWidth: 1, dashed: true, id: 'last' });
+chart.timeScale.fitContent(120);
+
+// One export per frame at most: the string is the whole paint, so exporting
+// on every zoom event during a wheel glide would repeat the work.
+let queued = false;
+function exportNow() {
+  // Sized to the target panel rather than the live chart: the chart lays
+  // itself out for the export and puts the live layout back before returning.
+  // queued stays set until the export is done, so nothing the export itself
+  // does can schedule the next one: an export that re-queued on its own
+  // relayout would run once per frame for as long as the page is open.
+  try { out.innerHTML = chart.exportSVG({ width: out.clientWidth, height: out.clientHeight }); }
+  finally { queued = false; }
+}
+function queueExport() { if (!queued) { queued = true; requestAnimationFrame(exportNow); } }
+chart.on('resize', queueExport);   // the first measured layout, and any later one
+chart.on('zoom', queueExport);
+chart.on('pan', queueExport);
+requestAnimationFrame(function () { requestAnimationFrame(queueExport); });
+return chart;`} />
+
+Saving is the host's job: wrap the string in a `Blob` of type `image/svg+xml` and hand it
+to an anchor. `takeScreenshot()` and `downloadScreenshot()` in
+[Interactions](/docs/interactions#screenshots--grid) are still there when a picture is
+what you want.
+
+The export path bypasses the render backend: `exportSVG` calls each renderer's `draw`
+directly on the serialising context, because a document has no pixels to take from a
+GPU, so the export reads the same whichever backend the live chart paints with.
+
+### `SvgContext`
+
+The serialiser behind the export is exported (with `SvgLinearGradient` and
+`SvgContextOptions`) for a host that wants to run its own primitive, or a bare renderer,
+into a document: construct it at the document size, hand `asCanvasContext()` to whatever
+paints, read `toString()`. Calls with no vector form (`setTransform`, radial gradients,
+`Path2D`, image data) throw with `strict: true` and are otherwise listed in `unsupported`
+and skipped; `measureText` is approximate (a per-character width table), which the tag
+boxes and label culling tolerate.

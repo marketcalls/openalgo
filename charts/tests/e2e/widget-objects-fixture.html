@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><style>
+body { margin: 24px; background: #171923; }
+#host { width: 950px; height: 600px; }
+</style></head>
+<body><div id="host"></div><script type="module">
+import { createWidget } from '/dist/openalgo-charts.widget.mjs';
+import { HorizontalProfile } from '/dist/openalgo-charts.profile.mjs';
+import '/dist/openalgo-charts.indicators.mjs';
+
+const bars = Array.from({ length: 160 }, (_, i) => {
+  const close = 100 + Math.sin(i / 12) * 4;
+  return { time: 1700000000 + i * 60, open: close - 0.4, high: close + 1, low: close - 1, close, volume: 100 + i };
+});
+const api = { widget: null, lineId: '', futureId: '', indicatorId: '', profileVisible: true, orderCalls: 0 };
+let unregister = () => {};
+function create(state) {
+  unregister();
+  api.widget?.destroy();
+  const widget = createWidget(document.querySelector('#host'), {
+    symbol: 'OBJECTS SIM', interval: '1m', intervals: ['1m'], theme: 'dark',
+    rail: false, statusline: false, panels: false, navigation: { defaultVisibleBars: 100 },
+    onOrder: () => { api.orderCalls++; },
+  });
+  api.widget = widget;
+  widget.series.setData(bars);
+  if (state) widget.restoreState(state);
+  else {
+    api.indicatorId = widget.chart.addIndicator('rsi').id;
+    api.lineId = widget.draw.add({ tool: 'trend-line', paneIndex: 0,
+      points: [{ time: bars[100].time, price: 97 }, { time: bars[140].time, price: 103 }],
+      style: { color: '#ff00ff', lineWidth: 4 },
+    }).id;
+    api.futureId = widget.draw.add({ tool: 'rectangle', paneIndex: 0,
+      points: [{ time: bars[159].time + 25 * 60, price: 107 }, { time: bars[159].time + 40 * 60, price: 110 }],
+      style: { color: '#f0a020', lineWidth: 3 },
+    }).id;
+  }
+  const profile = new HorizontalProfile({ buckets: [{ price: 100, value: 30 }, { price: 101, value: 20 }],
+    poc: 100, vah: 101, val: 100, width: 30, side: 'right', barColor: '#3b5168', vaColor: '#4a6fa5' });
+  let exists = true;
+  api.profileVisible = true;
+  widget.chart.addPrimitive(profile);
+  unregister = widget.objects.register({ id: 'session-profile',
+    get: () => exists ? { kind: 'profile', name: 'Session profile', paneIndex: 0, visible: api.profileVisible } : null,
+    setVisible(on) {
+      if (api.profileVisible === on) return;
+      api.profileVisible = on;
+      if (on) widget.chart.addPrimitive(profile); else widget.chart.removePrimitive(profile);
+    },
+    remove() { widget.chart.removePrimitive(profile); exists = false; },
+  });
+}
+api.recreate = () => create(JSON.parse(JSON.stringify(api.widget.getState())));
+create();
+window.__objectsDemo = api;
+</script></body></html>

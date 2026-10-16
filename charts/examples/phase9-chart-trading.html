@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAlgo Charts: Phase 9, chart trading (write)</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0d0e12; color: #c7ccd8;
+      font: 13px/1.4 system-ui, sans-serif; }
+    .bar { padding: 8px 12px; display: flex; gap: 8px; align-items: center; }
+    button { background: #1c2030; color: #c7ccd8; border: 1px solid #2a3046; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+    .buy { border-color: #26a69a; color: #26a69a; } .sell { border-color: #ef5350; color: #ef5350; }
+    .badge { padding: 2px 8px; border-radius: 4px; background: #2a2030; color: #f0a020; font-weight: 600; }
+    #chart { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; cursor: crosshair; }
+    #log { margin-left: auto; opacity: .8; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>Phase 9</strong>
+    <span class="badge">ANALYZER</span>
+    <button class="buy" id="buy">Buy (mkt)</button>
+    <button class="sell" id="sell">Sell (mkt)</button>
+    <button id="limit">Place limit below</button>
+    <span style="opacity:.6">drag the limit / SL / TP lines to modify · click the pill's close box to cancel</span>
+    <span id="log"></span>
+  </div>
+  <div id="chart"></div>
+
+  <script type="module">
+    import { createChart, generateBars } from '../dist/openalgo-charts.mjs';
+    import { OrderEngine, TradeController, FakeBroker } from '../dist/openalgo-charts.trade.mjs';
+
+    const SYM = 'SIM';
+    const bars = generateBars(1_705_286_700, 300, 60);
+    const last = bars[bars.length - 1].close;
+    const chart = createChart(document.getElementById('chart'), { priceAxisWidth: 130 });
+    chart.addSeries('candlestick').setData(bars);
+
+    const broker = new FakeBroker();
+    const tc = new TradeController(chart.tradeHost(0));
+    broker.onBook((o, p) => tc.reconcile(o, p));
+    broker.onLtp((s, ltp) => tc.onLtp(s, ltp));
+
+    // Armed analyzer-mode engine (no confirm dialog in this demo).
+    const eng = new OrderEngine({
+      feed: broker, armed: true, mode: 'analyzer',
+      constraints: { tickSize: 0.05, priceBand: { lower: last * 0.8, upper: last * 1.2 }, freezeQty: 100000 },
+    });
+
+    const brokerToClient = new Map();
+    async function place(req) {
+      const r = await eng.placeOrder(req);
+      if (r.ok) { const o = broker.orders(); brokerToClient.set('order:' + o[o.length - 1].id, r.clientId); }
+      document.getElementById('log').textContent = r.ok ? `placed ${req.side} ${req.type}: ${r.state}` : `blocked: ${r.reason}`;
+      return r;
+    }
+
+    document.getElementById('buy').onclick = () => place({ symbol: SYM, side: 'BUY', type: 'MARKET', qty: 10 });
+    document.getElementById('sell').onclick = () => place({ symbol: SYM, side: 'SELL', type: 'MARKET', qty: 10 });
+    document.getElementById('limit').onclick = () => place({ symbol: SYM, side: 'BUY', type: 'LIMIT', qty: 5, price: last * 0.985 });
+
+    // Dragging a working-order line sends a throttled modify; releasing commits it.
+    chart.subscribeDrag(
+      (id, price) => { const c = brokerToClient.get(id); if (c) eng.requestModify(c, price); },
+      (id, price) => { const c = brokerToClient.get(id); if (c) { eng.requestModify(c, price); eng.commitModify(c); } },
+    );
+
+    // The pill's close segment routes as `order:<id>::close`, which cancels via the engine.
+    chart.subscribeClick((id) => {
+      if (!id.endsWith('::close')) return;
+      const c = brokerToClient.get(id.slice(0, -'::close'.length));
+      if (c) { eng.cancelOrder(c); document.getElementById('log').textContent = 'cancelled'; }
+    });
+
+    // simulated LTP
+    let t = 0;
+    setInterval(() => { t++; broker.emitLtp(SYM, last * (1 + Math.sin(t / 9) * 0.015)); }, 120);
+    window.__chart = chart; window.__eng = eng;
+  </script>
+</body>
+</html>

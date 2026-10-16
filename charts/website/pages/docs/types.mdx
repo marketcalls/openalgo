@@ -1,0 +1,1568 @@
+---
+title: Types Reference
+description: Complete TypeScript type definitions exported from openalgo-charts.
+---
+
+import { Callout } from 'nextra/components'
+
+# Types Reference
+
+Every TypeScript type exported from `openalgo-charts`. Import only what you need:
+
+```ts
+import type { Bar, ChartOptions, SeriesApi } from 'openalgo-charts';
+```
+
+---
+
+## Data Model
+
+The core structures for time-series price data.
+
+### `UTCSeconds`
+
+```ts
+type UTCSeconds = number;
+```
+
+All internal time values are UTC seconds (integers). Feed adapters convert broker formats (IST strings, epoch milliseconds) at the edge. Display is a separate matter: the chart's [`timezone`](/docs/timezones) decides how a UTC second is labelled and which calendar day it falls in, and never changes the number itself.
+
+### `OriginalTime`
+
+```ts
+type OriginalTime = number | string;
+```
+
+The caller-supplied time value, echoed back untouched in callbacks.
+
+### `Bar`
+
+```ts
+interface Bar {
+  time: UTCSeconds;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+  color?: string;
+  wickColor?: string;
+  borderColor?: string;
+}
+```
+
+A single OHLC(V) bar. `volume` is optional. Line and area series read the `close` field. `color` overrides the bar's colour in every renderer; `wickColor` and `borderColor` (2.4.0) override the wick and border of a candle alone, falling back to `color`.
+
+### `LinePoint`
+
+```ts
+interface LinePoint {
+  time: UTCSeconds;
+  value: number;
+}
+```
+
+A single value point for line, area, and baseline series.
+
+### `Whitespace`
+
+```ts
+interface Whitespace {
+  time: UTCSeconds;
+}
+```
+
+A whitespace item occupies a logical index for alignment but draws nothing. Use it to introduce explicit gaps that the renderer respects instead of interpolating across.
+
+<Callout type="info">
+The exported `isWhitespace(point)` guard narrows a `Bar | LinePoint | Whitespace` union to `Whitespace` at runtime. It returns `true` when the point has neither an `open` field nor a `value` field.
+</Callout>
+
+---
+
+## Chart
+
+### `ChartOptions`
+
+```ts
+interface ChartOptions {
+  document?: Document;
+  pixelRatio?: () => number;
+  /** Injectable rAF for SSR / testing. */
+  raf?: { schedule: RafScheduler; cancel?: RafCanceller };
+  theme?: ChartTheme;
+  priceAxisWidth?: number;
+  timeAxisHeight?: number;
+  /** 'normal' follows the pointer exactly; 'magnet' snaps to nearest O/H/L/C. */
+  crosshairMode?: 'normal' | 'magnet';
+  now?: () => number;
+  /** Ease a wheel zoom over a few frames. Default true; false is the single-frame step. */
+  animZoom?: boolean;
+  /** Ease automatic price ranges during navigation. Defaults to animZoom. */
+  animAutoscale?: boolean;
+  /** What a wheel zoom holds still: the bar under the cursor, or the latest bar. Default 'cursor'. */
+  zoomAnchor?: 'cursor' | 'right';
+  /** What a double-click on a pane does. Default 'reset'; 'maximize' toggles that pane to the whole stack. */
+  doubleClick?: 'reset' | 'maximize' | 'none';
+  /** Mouse/pen pan direction and the initial/reset view. */
+  navigation?: Partial<ChartNavigationOptions>;
+  /** Level of detail: one OHLC-preserving stick per device-pixel column under about one CSS px per bar. Default true. */
+  conflate?: boolean;
+  /** Column width in sticks for the level of detail. Default 1. */
+  conflationFactor?: number;
+  /** Which backend paints the series. Default 'canvas2d'; 'webgl2' needs the webgl tier. */
+  renderer?: 'canvas2d' | 'webgl2' | 'auto';
+  /** Build the backend yourself, one call per pane, bypassing `renderer`. */
+  renderBackend?: RenderBackendFactory;
+  grid?: { vertLines?: boolean; horzLines?: boolean };
+  ariaLabel?: string;
+  /**
+   * IANA zone the time axis and crosshair label in. Default 'Asia/Kolkata'.
+   * An IANA name and not a fixed offset, because a zone that observes DST is a
+   * different offset in July than in January. Throws on a name the runtime does
+   * not recognise. Change it later with `chart.setTimezone(zone)`.
+   */
+  timezone?: string;
+  shortcuts?: ShortcutManager | Partial<ShortcutManagerOptions> | false;
+  /** Hover-revealed zoom, reset and step controls above the time axis. Default true. */
+  timeNavigator?: boolean | Partial<TimeNavigatorOptions>;
+  /**
+   * Where indicator legend rows start in the pane at the chart's top, in media px.
+   * Default `{ top: 6, left: 8 }`.
+   */
+  legendOffset?: { top?: number; left?: number };
+  /**
+   * Optional chrome on the axis strips: the corner session clock and the row
+   * counting down to the bar's close. Both off unless asked for, so a chart that
+   * omits this block draws the axes it always drew.
+   * See [Price Levels & Axis Chrome](/docs/price-levels#axis-chrome).
+   */
+  axisChrome?: AxisChromeOptions;
+}
+
+interface AxisChromeOptions {
+  /** Live clock in the corner between the price and time axes. */
+  sessionClock?: boolean | { showOffset?: boolean };
+  /** Second row in the last-price tag counting down to the bar's close. */
+  barCountdown?: boolean;
+  /**
+   * Wall-clock UTC seconds. Both readings are times of day, so neither can use
+   * `now`, which is a monotonic animation clock and not a calendar. Defaults to
+   * the system clock; pass the feed's clock to keep a delayed or replayed chart
+   * honest about what time its data thinks it is.
+   */
+  clock?: () => number;
+}
+```
+
+<Callout type="info">
+Set `legendOffset` when your host draws its own overlay in a pane's top-left
+corner: an OHLC readout, a symbol line. Without it the canvas legend an
+indicator adds lands underneath yours, and its settings and close buttons end up
+invisible and unclickable.
+
+```ts
+createChart(el, { legendOffset: { top: 40 } });   // clear a two-line overlay
+```
+
+It follows the price pane, which is the top pane until a user moves it below
+its studies: a readout of the price belongs to the price pane, wherever it sits.
+Maximizing a study pane hides the price pane and puts the maximized one in that
+corner, so the offset moves with it. Other panes keep the default corner, since a
+short study pane would have its legend, and its settings / close / move-pane
+buttons, pushed off it entirely. A readout drawn as DOM over the price pane should
+follow `chart.panes()[chart.primaryPaneIndex()].element` after `paneMoved`.
+</Callout>
+
+Options passed to `createChart(container, options)`. All fields are optional; defaults are sensible for browser use.
+
+### `ChartNavigationOptions`
+
+```ts
+interface ChartNavigationOptions {
+  /** Mouse and pen plot drags. Touch always retains two-axis panning. */
+  mousePan: 'horizontal' | 'both';
+  /** Newest loaded bars in the initial/reset view. 0 fits all loaded bars. */
+  defaultVisibleBars: number;
+  defaultBarSpacing?: number;
+}
+```
+
+Exported from `openalgo-charts`. Defaults are `{ mousePan: 'both', defaultVisibleBars: 0 }`.
+Pass a partial block as `ChartOptions.navigation`, read the resolved values with
+`chart.navigationOptions(): Readonly<ChartNavigationOptions>`, or update them with
+`chart.setNavigationOptions(patch: Partial<ChartNavigationOptions>): void`.
+
+A positive count targets the newest N loaded bars plus four empty slots on the right,
+bounded by the available data and bar-spacing limits. Updating the count applies the
+default view immediately; `resetScale()` restores it with price autoscale, while
+`fitContent()` explicitly fits all loaded bars. This setting does not limit history
+requests or discard data. See [Interactions](/docs/interactions).
+
+### `AddSeriesOptions`
+
+```ts
+interface AddSeriesOptions {
+  paneIndex?: number;
+  style?: SeriesStyle;
+  priceScaleId?: PriceScaleId;
+  priceFormat?:
+    | { type: 'price'; precision?: number; minMove?: number }
+    | { type: 'volume' }
+    | { type: 'custom'; formatter: (value: number) => string };
+}
+```
+
+Options passed to `chart.addSeries(type, options)`. `paneIndex` defaults to `0` (price pane); higher indices create sub-panes on demand. `priceScaleId` is `'right'`, `'left'`, `''` or a named `overlay:name` scale. Each ID has an independent range; the built-in side IDs default to that side and overlays default to hidden. `setPriceAxisPlacement` changes visible placement without changing identity. `priceFormat` sets that scale's axis and crosshair-tag formatting. See [Scales & panes](/docs/scales-and-panes#multiple-axes-on-the-same-side).
+
+### `CrosshairMoveEvent`
+
+```ts
+interface CrosshairMoveEvent {
+  time: number | null;
+  index: number | null;
+  price: number | null;
+  bar: Bar | null;
+  point: { x: number; y: number } | null;
+  paneIndex?: number | null;
+  pressed?: boolean;              // absent on the leave payload, like the four below
+  modifiers?: PointerModifiers;   // { shift, alt, ctrl, meta }
+  pointerType?: PointerKind;      // 'mouse' | 'touch' | 'pen'
+  pressure?: number;              // 0..1; 0.5 while a button that cannot measure is held
+  samples?: PointerSample[];      // only while pressed: { x, y, pressure } per coalesced position
+}
+```
+
+Emitted on every crosshair move via `chart.subscribeCrosshairMove(cb)`. All fields are `null` when the pointer leaves the plot. `bar` is the hovered bar of the primary price series. `point` is the cursor position in container-relative media px, useful for positioning a floating tooltip. `PointerModifiers`, `PointerKind`, `PointerSample` and `PointerInfo` (the three pointer facts together) are exported, as are `ChartClickEvent`, `ChartDragEvent` and `ChartDragEndEvent`, the payloads of `click`, `drag` and `drag:end`, which carry the same facts.
+
+### `SeriesApi`
+
+```ts
+interface SeriesApi {
+  setData(bars: readonly SeriesDataItem[]): void;
+  prependData(bars: readonly SeriesDataItem[]): void;
+  update(bar: SeriesDataItem): void;
+  getData(): Bar[];
+  applyOptions(style: Partial<SeriesStyle>): void;
+  remove(): void;
+  priceScale(): PriceScale;
+  createMarkers(): SeriesMarkers;
+}
+```
+
+The public handle returned by `chart.addSeries(...)`. Use `setData` for the initial load, `update` for live bar ticks, and `prependData` when paging older history. `applyOptions` merges a partial style and repaints (recolor, `{ visible: false }` to hide); `remove` detaches the series and frees its data; `priceScale()` returns the scale this series maps to; `createMarkers()` attaches a buy/sell signal layer bound to this series.
+
+### `ContextMenuEvent`
+
+```ts
+interface ContextMenuEvent {
+  paneIndex: number;
+  point: { x: number; y: number };
+  price: number | null;
+  time: number | null;
+  index: number | null;
+  target: ContextMenuTarget;
+  preventDefault(): void;
+}
+
+type ContextMenuTargetKind =
+  | 'drawing' | 'indicator' | 'legend' | 'primitive'
+  | 'series' | 'price-scale' | 'time-scale' | 'empty';
+
+interface ContextMenuTarget {
+  kind: ContextMenuTargetKind;
+  id: string | null;
+  instanceId?: string;        // kind === 'indicator'
+  seriesType?: SeriesType;    // kind === 'series'
+  side?: 'right' | 'left';    // kind === 'price-scale'
+  scaleId?: PriceScaleId;     // kind === 'price-scale'
+}
+```
+
+Payload of `chart.on('contextmenu', ...)`. `target` is the part a canvas cannot work out for itself: it hands your app an object rather than a pixel. On a `'price-scale'` hit, `scaleId` identifies the column under the pointer, including a named overlay exposed on either side. Pass it to the `priceAxis*` calls. Unused outer cells reserved for another pane do not target a price scale. See [Settings & Menus](/docs/settings-and-menus#the-right-click-menu).
+
+### `PriceAxisState`
+
+```ts
+interface PriceAxisState {
+  paneIndex: number;
+  scaleId: PriceScaleId;
+  side: 'right' | 'left';
+  active: boolean;      // attached series or an explicitly bound primitive uses this scale
+  autoFit: boolean;
+  inverted: boolean;
+  mode: PriceScaleMode;
+  scaled: boolean;      // false while the scale still sits on its 0..1 placeholder
+  lockRatio: boolean;
+  movable: boolean;     // something to move, and a free side
+}
+```
+
+Returned by `chart.priceAxisState(paneIndex, scaleId)`, or `null` for a pane that does not exist. Everything a menu over one axis needs to tick its own rows and grey what does not apply. The writers are `setPriceAxisOptions`, `setPriceAxisAutoFit`, `setPriceAxisLockRatio`, `setPriceAxisPlacement` and the deprecated `movePriceAxis` (removed in 3.0.0); the last three return whether the axis is now in the state asked for. See [Settings & Menus](/docs/settings-and-menus#the-price-axis-menu).
+
+### `PickKind`
+
+```ts
+type PickKind = 'price' | 'time';
+```
+
+What `chart.beginPick(kind, cb)` should resolve the next plot click to. A `'time'` pick snaps to the bar that was clicked. See [Picking a price or a bar](/docs/interactions#picking-a-price-or-a-bar).
+
+### `PickHost`
+
+```ts
+interface PickHost {
+  on(event: string, cb: (payload: unknown) => void): () => void;
+  emit(event: string, payload: unknown): void;
+  readonly dataLayer: {
+    timeToIndexFloat(time: number): number;
+    indexToTime(index: number): number | undefined;
+  };
+}
+```
+
+The slice of a chart the standalone `beginPick(host, kind, cb)` needs. Structural,
+so `Chart` satisfies it without a cast. The chart method additionally checks plot
+bounds and supports explicit pane and scale targets.
+
+### `PickHandle`
+
+`PickHandle` is the callable cancellation handle returned by a pick. Its
+readonly `active(): boolean` method reports ownership of that invocation. It
+becomes false before `pick:end`, including when a notification listener cancels
+or replaces the pick synchronously.
+
+### `PickOptions`
+
+```ts
+interface PickOptions {
+  paneIndex?: number;
+  priceScaleId?: PriceScaleId;
+}
+```
+
+The optional third argument to `chart.beginPick`. Price-scale targeting applies
+to price picks only. The pane and scale must already exist; omitted fields retain
+the ordinary chart pick behavior.
+
+---
+
+## Scales
+
+### `PriceAxisSide`, `PriceAxisPlacement`, `PriceAxisSlot`
+
+```ts
+type PriceAxisSide = 'left' | 'right' | 'hidden';
+
+interface PriceAxisPlacement {
+  side: PriceAxisSide;
+  order: number;       // zero is nearest the plot
+}
+
+interface PriceAxisSlot {
+  scaleId: PriceScaleId;
+  side: 'left' | 'right';
+  order: number;
+  x: number;           // left edge in absolute pane CSS pixels from Chart.priceAxisLayout
+  width: number;       // width of this column in CSS pixels
+}
+```
+
+These types are exported from `openalgo-charts`. `priceAxisPlacement(pane, id)`
+returns a detached placement or `null`; `setPriceAxisPlacement(pane, id, side,
+order?)` returns whether placement changed. `priceAxisLayout(pane = 0)` returns
+the active columns. Placement can remain configured when a scale has no column.
+The optional `PriceScaleState.placement` field saves it in full chart and
+workspace state; indicator templates do not yet preserve column placement.
+See [multiple axes](/docs/scales-and-panes#multiple-axes-on-the-same-side).
+
+### `PriceRange`
+
+```ts
+interface PriceRange {
+  min: number;
+  max: number;
+}
+```
+
+A visible price range (min/max pair).
+
+### `PriceScaleMode`
+
+```ts
+type PriceScaleMode = 'linear' | 'logarithmic' | 'percentage' | 'indexed-to-100';
+```
+
+The coordinate mapping mode for a pane's price scale. `percentage` and `indexed-to-100`
+rebase every price against a baseline (the close of the first visible bar, so panning
+re-bases) and relabel the axis in that domain. See
+[Scales and panes](/docs/scales-and-panes#percent-and-indexed-to-100).
+
+### `PriceScaleOptions`
+
+```ts
+interface PriceScaleOptions {
+  marginTop: number;
+  marginBottom: number;
+  minMove: number;
+  mode: PriceScaleMode;
+  inverted: boolean;
+}
+```
+
+Configuration for a pane's price scale. `marginTop` and `marginBottom` are fractions of the pane height kept empty at each edge (default `0.1`). `minMove` is the instrument tick size (e.g. `0.05`); `0` infers precision from the visible range. `inverted` flips the axis so price increases downward.
+
+### `LogicalRange`
+
+```ts
+interface LogicalRange {
+  from: number;
+  to: number;
+}
+```
+
+A range of logical bar indices as used by the time scale's visible window. Values are fractional and may fall outside the data bounds.
+
+### `TimeScaleOptions`
+
+```ts
+interface TimeScaleOptions {
+  barSpacing: number;
+  minBarSpacing: number;
+  maxBarSpacing: number;
+  rightOffset: number;
+}
+```
+
+Configuration for the shared time (x) axis. `barSpacing` is the media-px width per bar slot (default `8`). `rightOffset` is the number of empty bar slots kept to the right of the latest bar (default `4`).
+
+---
+
+## Rendering and Style
+
+### `SeriesStyle`
+
+```ts
+interface SeriesStyle {
+  // candle / bar family
+  upColor?: string;
+  downColor?: string;
+  borderUpColor?: string;
+  borderDownColor?: string;
+  wickUpColor?: string;
+  wickDownColor?: string;
+  borderVisible?: boolean;
+  wickVisible?: boolean;
+  /** No effect. Deprecated, removed in 3.0.0: use the 'hollow-candle' type. */
+  hollow?: boolean;
+
+  // line / area / baseline / hlc-area family
+  color?: string;
+  lineWidth?: number;
+  step?: boolean;
+  markers?: boolean;
+  markerRadius?: number;
+  areaTopColor?: string;
+  areaBottomColor?: string;
+  baseValue?: number;
+  topColor?: string;
+  bottomColor?: string;
+  /** Stroke for the top edge of an HLC band. Unset leaves the edge unstroked. */
+  highColor?: string;
+  /** Stroke for the bottom edge of an HLC band. Unset leaves it unstroked. */
+  lowColor?: string;
+  closeColor?: string;
+
+  // histogram / column family
+  base?: number;
+
+  // point & figure / kagi family
+  /** Fallback box size for P&F glyphs; a column's own `boxSize` wins. */
+  boxSize?: number;
+  /** Kagi thick (yang) line color. */
+  thickColor?: string;
+  /** Kagi thin (yin) line color. */
+  thinColor?: string;
+}
+```
+
+Unified optional-field style bag for all Family-A series types. Each renderer reads the fields it needs; unused fields are ignored. Pass a partial object to `AddSeriesOptions.style` to override defaults. Theme colors fill in any unset fields at render time.
+
+### `CandleStyle`
+
+```ts
+interface CandleStyle {
+  upColor: string;
+  downColor: string;
+  borderUpColor: string;
+  borderDownColor: string;
+  wickUpColor: string;
+  wickDownColor: string;
+  borderVisible: boolean;
+  wickVisible: boolean;
+  /** Draw up-candle bodies as outlines only (hollow candles). */
+  hollow?: boolean;
+  /** Per-bar body-width scale 0..1 (volume candles); 1 = full width. */
+  widthScale?: (bar: Bar) => number;
+}
+```
+
+Concrete style for the candlestick renderer. `widthScale` is a per-bar callback returning a `0..1` fraction of the optimal body width, used by the `volume-candle` type to scale each candle by relative volume.
+
+### `HistogramStyle`
+
+```ts
+interface HistogramStyle {
+  color: string;
+  base: number;
+}
+```
+
+Style for the histogram (volume column) renderer. `base` is the price level used as the zero line.
+
+### `Size`
+
+```ts
+interface Size {
+  width: number;
+  height: number;
+}
+```
+
+A width/height pair in pixels (media or device, depending on context). Returned by `bitmapSize`.
+
+### `SeriesType`
+
+```ts
+type SeriesType =
+  | 'candlestick'
+  | 'hollow-candle'
+  | 'volume-candle'
+  | 'bar'
+  | 'high-low'
+  | 'line'
+  | 'line-markers'
+  | 'step'
+  | 'area'
+  | 'hlc-area'
+  | 'baseline'
+  | 'column'
+  | 'histogram'
+  | 'point-figure'
+  | 'kagi';
+```
+
+The string token passed to `chart.addSeries(type)`. See [Chart Types](/docs/chart-types) for descriptions of each type.
+
+<Callout type="warning">
+`'point-figure'` and `'kagi'` are registered by the transform tier. Import `'openalgo-charts/transform'` before using them or the registry will throw.
+</Callout>
+
+### `DrawItem`
+
+```ts
+interface DrawItem {
+  x: number; // bar center, media px
+  bar: Bar;
+  /** Close of the bar left of the view, on the first item, when previous-close colouring asks. */
+  prevClose?: number;
+  /** On a neighbour beyond the view only: the x of the plot edge it lies past (media px). */
+  edgeX?: number;
+}
+```
+
+One rendered bar slot passed to a custom renderer's `draw` function. For a renderer that sets `connectsBars`, the first and last item can be the series' nearest bar beyond each edge of the view, marked by `edgeX` (since 2.5.9): `0` on the left, the plot width on the right. Such a neighbour can sit millions of pixels off screen, so cut the segment to it at `edgeX` rather than stroke it all the way out, and draw nothing of its own. It is the series' very next bar, value or not: when it, or the bar in view next to it, has no value, join nothing across it.
+
+### `SeriesRenderContext`
+
+```ts
+interface SeriesRenderContext {
+  plotHeight: number;
+  maxVolume: number;
+  theme: ChartTheme;
+}
+```
+
+Additional context passed to a renderer's `draw` function alongside the item list and the price-to-Y function.
+
+### `RendererEntry`
+
+```ts
+interface RendererEntry {
+  defaultStyle: SeriesStyle;
+  /** True for price series whose last close drives the last-price line. */
+  isPriceSeries: boolean;
+  /** True for a renderer that joins each bar to the next: its items gain the neighbour beyond each edge. */
+  connectsBars?: boolean;
+  draw(
+    ctx: CanvasRenderingContext2D,
+    items: readonly DrawItem[],
+    toY: (v: number) => number,
+    barSpacing: number,
+    dpr: number,
+    style: SeriesStyle,
+    rc: SeriesRenderContext,
+  ): void;
+  extents(bar: Bar, style: SeriesStyle): { min: number; max: number };
+}
+```
+
+Descriptor for a registered chart type. `extents` returns the min/max price contribution of a single bar for autoscaling. Register custom types with `registerChartType(name, entry)`. See [Chart Types](/docs/chart-types).
+
+`connectsBars` (since 2.5.9) is for a renderer that draws a segment from each bar to the next, as the built-in line, line-markers, step, area, HLC area and baseline do, and kagi in the transform tier. Its `items` then carry the series' nearest bar beyond each edge of the view as well as the bars in it, so the segment that crosses an edge is drawn: without them a sparse line (a level held for an hour, a position that steps twice a session) loses the part that enters from off screen, or all of it when none of its bars is in view. Autoscale still reads only the bars in view.
+
+---
+
+## Primitives
+
+Primitives are objects that draw on a pane independently of the series data model. They implement `IPrimitive` and attach via `chart.addPrimitive(primitive, paneIndex)`. See [Primitives and Plugins](/docs/primitives-and-plugins).
+
+### `ZOrder`
+
+```ts
+type ZOrder = 'bottom' | 'normal' | 'top';
+```
+
+Layer order of a primitive relative to series: `'bottom'` renders behind series, `'normal'` renders over them, `'top'` renders as the topmost overlay.
+
+### `PrimitiveRenderContext`
+
+```ts
+interface PrimitiveRenderContext {
+  timeScale: TimeScale;
+  priceScale: PriceScale;
+  dataLayer: DataLayer;
+  plotWidth: number;
+  plotHeight: number;
+  priceAxisWidth: number;
+  dpr: number;
+  theme: ChartTheme;
+  hoverId?: string | null;
+  dragId?: string | null;
+  /** The pane's primary price series, lazily. Optional: a synthetic context may omit it. */
+  bars?: () => readonly Bar[];
+}
+```
+
+Injected into a primitive's `draw` and `hitTest` methods. All coordinates in these methods are in media (CSS) px relative to the pane plot.
+
+### `DataLayer`
+
+```ts
+class DataLayer {
+  readonly length: number;
+  readonly baseIndex: number;
+  indexToTime(index: number): number | undefined;
+  timeToIndex(time: number): number | undefined;
+  /** Fractional index -> time, interpolating between bars and past either edge. */
+  indexToTimeFloat(index: number): number;
+  /** The inverse: what maps an anchor onto the gapless axis. */
+  timeToIndexFloat(time: number): number;
+  seriesBars(id: SeriesId): readonly Bar[];
+  visibleBars(id: SeriesId, fromIndex: number, toIndex: number): IndexedBar[];
+  lastIndexedBar(id: SeriesId): IndexedBar | null;
+}
+
+interface IndexedBar { index: number; bar: Bar }
+type SeriesId = number;
+```
+
+The shared time axis: every series is merged onto one logical index space, so panes
+stay aligned and non-trading gaps collapse. Reachable as `chart.dataLayer` and on
+every `PrimitiveRenderContext`. Exported since **1.0.14**. Before that the property
+was public but its type could not be named.
+
+### `PrimitiveHit`
+
+```ts
+interface PrimitiveHit {
+  externalId: string;
+  zOrder: ZOrder;
+  distance: number;
+  cursor?: string;
+}
+```
+
+Returned by `IPrimitive.hitTest` when the pointer lands on the primitive. `externalId` is routed to `chart.subscribeClick`. `distance` is the pixel distance from the cursor, never negative; smaller values win ties before `zOrder` is considered.
+
+### `PrimitiveHost`
+
+```ts
+interface PrimitiveHost {
+  requestUpdate(): void;
+}
+```
+
+Injected into a primitive's `attached` callback. Call `requestUpdate()` whenever the primitive's visual state changes so the render loop schedules a repaint.
+
+### `IPrimitive`
+
+```ts
+interface IPrimitive {
+  zOrder(): ZOrder;
+  draw(ctx: CanvasRenderingContext2D, rc: PrimitiveRenderContext): void;
+  autoscaleInfo?(): { min: number; max: number } | null;
+  hitTest?(x: number, y: number, rc: PrimitiveRenderContext): PrimitiveHit | null;
+  hitBounds?(rc: PrimitiveRenderContext): { left: number; top: number; right: number; bottom: number } | null;
+  attached?(host: PrimitiveHost): void;
+  detached?(): void;
+}
+```
+
+The extension point for custom overlays, indicators, and profiles. `autoscaleInfo` optionally expands the pane's price range so the primitive is not clipped by autoscale. `hitTest` receives media-px coordinates relative to the pane plot. `hitBounds` returns the box, in those coordinates, outside which `hitTest` answers `null` (or `null` when nothing can be hit): a pointer move then asks `hitTest` only where the point is inside it. The pane keeps the box until the scales, the pane's layout, hover or the primitive's own state (announced through `requestUpdate`) change.
+
+### `PriceLineOptions`
+
+```ts
+interface PriceLineOptions {
+  price: number;
+  color: string;
+  lineWidth?: number;
+  dashed?: boolean;
+  lineStyle?: CanvasLineStyle;
+  label?: string;
+  badge?: string;
+  qty?: string | number;
+  leftLabel?: string;
+  extentFromRight?: number;
+  closeButton?: boolean;
+  id: string;
+  cursor?: string;
+}
+```
+
+Options for `chart.addPriceLine(opts, paneIndex)`. `lineWidth` defaults to 1. `lineStyle` is the three-way form of `dashed` (`'solid' | 'dashed' | 'dotted'`, the same `CanvasLineStyle` the grid and crosshair use) and wins when both are set; with only `dashed` set, a line draws exactly as it always did. `id` is the `externalId` returned by hit-tests and routed to click/drag callbacks. `extentFromRight` (0..1) controls how far the line spans from the right axis (`1` = full width, the default). `badge`, `qty`, `leftLabel`, and `closeButton` compose the broker-style segmented pill group at the left end of the line (`[badge][qty][leftLabel][close]`), where `badge` is a solid segment in the line color (e.g. `BUY`, `SL`), `qty` and `leftLabel` are neutral boxed segments, and the close segment hit-tests as `${id}::close`. `PriceLine.setDragGhost(price | null)` shows a dimmed reference line at the pre-drag price while dragging.
+
+### `PriceLevelStyle`
+
+```ts
+type PriceLevelKind =
+  | 'previousClose' | 'sessionHigh' | 'sessionLow' | 'lastPrice'
+  | 'preMarketOpen' | 'preMarketClose' | 'postMarketOpen' | 'postMarketClose'
+  | 'bid' | 'ask';
+
+interface PriceLevelStyle {
+  line: boolean;               // the horizontal line across the plot
+  label: boolean;              // the matching tag on the price axis
+  color?: string;
+  lineWidth?: number;
+  lineStyle?: 'solid' | 'dashed' | 'dotted';
+  text?: string;
+  extentFromRight?: number;
+}
+
+type PriceLevelValues = Record<PriceLevelKind, number | null>;
+```
+
+One level of the `PriceLevels` family. `line` and `label` are two flags on the **same** group, so a level's line and its axis tag cannot drift apart. A level with no data in the current context reads `null`, never `0`, so nothing draws at zero and `levels.available(kind)` is the signal to render a control disabled with its state still visible. See [Price Levels & Axis Chrome](/docs/price-levels).
+
+### `SeriesMarker`
+
+```ts
+interface SeriesMarker {
+  time: number;
+  position: MarkerPosition;
+  price?: number;
+  shape: MarkerShape;
+  size: MarkerSize;
+  color: string;
+  text?: string;
+  id?: string;
+}
+```
+
+A single buy/sell signal or annotation anchored to a bar time. `price` is only used when `position` is `'atPrice'`. `id` enables click callbacks via `chart.subscribeClick`. `text` renders a label adjacent to the glyph.
+
+### `MarkerShape`
+
+```ts
+type MarkerShape =
+  | 'arrowUp'
+  | 'arrowDown'
+  | 'circle'
+  | 'square'
+  | 'diamond'
+  | 'triangleUp'
+  | 'triangleDown'
+  | 'flag'
+  | 'text'
+  | 'labelUp'
+  | 'labelDown'
+  | 'cross'
+  | 'xcross';
+```
+
+The glyph shape for a `SeriesMarker`. `'text'` draws no shape; only the `text` label is rendered. `'labelUp'` and `'labelDown'` are text plates with a tail pointing at the anchor and require `text`. `'cross'` and `'xcross'` (2.4.0) are a plus and a diagonal cross.
+
+### `MarkerPosition`
+
+```ts
+type MarkerPosition = 'aboveBar' | 'belowBar' | 'inBar' | 'atPrice' | 'paneTop' | 'paneBottom';
+```
+
+Vertical anchor for a marker. `'atPrice'` requires the `price` field on `SeriesMarker`. `'paneTop'` and `'paneBottom'` (2.4.0) pin the glyph to the plot edge, stacking inward, and need no bar under them and no `price`.
+
+### `MarkerSize`
+
+```ts
+type MarkerSize = 'tiny' | 'small' | 'medium' | 'big';
+```
+
+Discrete size presets (6, 9, 12, and 16 CSS px respectively). The actual rendered size is also clamped to the current bar spacing so glyphs never overflow their bar slot.
+
+### `LogoWatermarkOptions`
+
+```ts
+interface LogoWatermarkOptions {
+  src?: string;
+  image?: CanvasImageSource & { width: number; height: number };
+  position?: WatermarkPosition;
+  margin?: number;
+  height?: number;
+  opacity?: number;
+  tint?: string;
+  zOrder?: ZOrder;
+}
+```
+
+Options for `new LogoWatermark(opts)`. Pass `src` (a URL or data URI) or a preloaded `image` to skip loading. Since 2.1.9, omitting both draws the built-in OpenAlgo vector glyph. `tint` recolors the opaque pixels to a flat color so a single-tone logo reads correctly on both dark and light themes. Manual primitive defaults: `position 'bottom-right'`, `margin 12`, `height 28`, `opacity 0.7`, `zOrder 'top'`. The chart-owned `branding` option applies the responsive defaults described in [Branding and watermarks](/docs/branding-and-watermarks).
+
+### `WatermarkPosition`
+
+```ts
+type WatermarkPosition =
+  | 'top-left'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-right'
+  | 'center';
+```
+
+Corner (or center) anchor for `LogoWatermark`.
+
+### `ChartEvent`
+
+```ts
+interface ChartEvent {
+  time: number;
+  type: 'earnings' | 'dividend' | 'split' | 'news' | string;
+  label: string;
+  color?: string;
+  id?: string;
+}
+```
+
+A corporate-action or news event drawn as a colored badge near the bottom of the plot. The `label` string is truncated to two characters inside the badge. `id` enables click callbacks via `chart.subscribeClick`.
+
+---
+
+## Data Feed
+
+The data feed layer bridges broker APIs and the chart. The chart depends only on `DataFeed`; everything else in this section is an adapter or helper built on top of it.
+
+### `UnsubscribeFn`
+
+```ts
+type UnsubscribeFn = () => void;
+```
+
+Returned by `subscribeBars` and `subscribeDepth`; call it to cancel the subscription.
+
+### `BarsRequest`
+
+```ts
+interface BarsRequest {
+  symbol: string;
+  exchange: string;
+  interval: string;
+  from?: UTCSeconds;
+  to?: UTCSeconds;
+}
+```
+
+Parameters for a historical bars request. `interval` uses the OpenAlgo token format: `'1m'`, `'5m'`, `'1h'`, `'D'`, etc.
+
+### `DataFeed`
+
+```ts
+interface DataFeed {
+  getBars(req: BarsRequest): Promise<Bar[]>;
+  subscribeBars?(req: BarsRequest, onBar: (bar: Bar) => void): UnsubscribeFn;
+  subscribeDepth?(req: BarsRequest, onDepth: (depth: MarketDepth) => void): UnsubscribeFn;
+}
+```
+
+Broker-agnostic market-data source. `subscribeBars` and `subscribeDepth` are optional; detect their presence with a feature check before calling.
+
+### `DepthLevel`
+
+```ts
+interface DepthLevel {
+  price: number;
+  qty: number;
+  orders?: number;
+}
+```
+
+A single price level in an order book snapshot.
+
+### `MarketDepth`
+
+```ts
+interface MarketDepth {
+  bids: DepthLevel[];
+  asks: DepthLevel[];
+  ltp: number;
+  ltq?: number;
+}
+```
+
+An order book snapshot delivered to `DataFeed.subscribeDepth`. `bids` and `asks` length varies by broker (5 to 200 levels).
+
+### `OrderSide`
+
+```ts
+type OrderSide = 'BUY' | 'SELL';
+```
+
+Side of a `PlaceOrder` request.
+
+### `OrderType`
+
+```ts
+type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
+```
+
+Order type for a `PlaceOrder` request.
+
+### `PlaceOrder`
+
+```ts
+interface PlaceOrder {
+  symbol: string;
+  exchange: string;
+  side: OrderSide;
+  type: OrderType;
+  qty: number;
+  price?: number;
+  triggerPrice?: number;
+  /** Idempotency token so a retried request never double-fills. */
+  clientToken?: string;
+}
+```
+
+Parameters for `TradeFeed.placeOrder`.
+
+### `TradeFeed`
+
+```ts
+interface TradeFeed {
+  placeOrder(o: PlaceOrder): Promise<{ orderId: string }>;
+  modifyOrder(orderId: string, patch: Partial<PlaceOrder>): Promise<void>;
+  cancelOrder(orderId: string): Promise<void>;
+  subscribeOrders(cb: (orders: unknown[]) => void): UnsubscribeFn;
+  subscribePositions(cb: (positions: unknown[]) => void): UnsubscribeFn;
+}
+```
+
+Broker-agnostic trading source used by the order engine.
+
+### `IntervalParts`
+
+```ts
+interface IntervalParts {
+  multiplier: number;
+  unit: 's' | 'm' | 'h' | 'D' | 'W' | 'M' | 'tick' | 'other';
+}
+```
+
+What `intervalParts(code)` answers: a count and the unit it counts, or `null` when nothing resolves the code. Read off the bucketing rule rather than the code's spelling, so `'120m'` and `'2h'` both come back as 2 hours and a host's own registered code answers as readily as a built-in token. `'M'` is months, so a quarter reads as 3 and a year as 12; `'tick'` counts trades; `'other'` is a bucket with neither a clock length nor a trade count, which today means volume bars. See [Custom Intervals](/docs/custom-intervals#reading-a-code-back).
+
+### `SessionSpec`
+
+```ts
+interface SessionSpec {
+  /** Minutes from midnight, inclusive. */
+  start: number;
+  /** Minutes from midnight, exclusive. */
+  end: number;
+  /** Days the window opens on, 1..7 with 1 = Sunday. Absent means every day. */
+  days?: readonly number[];
+}
+```
+
+A trading window stated in local wall-clock terms, as returned by `parseSessionSpec('0915-1015')` and consumed by `inSessionAt` and `sessionFlags`. The window is half-open, and an `end` at or before `start` runs past midnight, which makes `start === end` the whole day. Distinct from the profiles' `SessionWindow`, which is the same idea for a different layer. See [Timezones](/docs/timezones#stating-a-window-as-a-string).
+
+### Candle Builder
+
+#### `VolumeMode`
+
+```ts
+type VolumeMode = 'ltq-sum' | 'day-delta';
+```
+
+How `CandleBuilder` accounts for volume. `'ltq-sum'` accumulates last-traded quantity from each tick; `'day-delta'` diffs a cumulative day-volume counter (Quote mode).
+
+#### `LateTickPolicy`
+
+```ts
+type LateTickPolicy = 'foldIntoBar' | 'dropOlderThanPrevBar';
+```
+
+What to do when a tick arrives with a timestamp older than the current bar's open. `'foldIntoBar'` merges it into the current bar; `'dropOlderThanPrevBar'` discards it.
+
+#### `CandleBuilderOptions`
+
+```ts
+interface CandleBuilderOptions {
+  intervalSec: number;
+  volumeMode: VolumeMode;
+  lateTickPolicy: LateTickPolicy;
+  sessionAnchorSec: number;
+}
+```
+
+Configuration for `CandleBuilder`. `sessionAnchorSec` is the UTC-seconds of a known session open so that, for example, 5-minute bars start at 09:15 IST rather than an arbitrary epoch floor.
+
+#### `Tick`
+
+```ts
+interface Tick {
+  time: UTCSeconds;
+  price: number;
+  ltq?: number;
+  cumDayVolume?: number;
+}
+```
+
+A single price tick fed to `CandleBuilder.onTick`. Provide `ltq` when `volumeMode` is `'ltq-sum'`, or `cumDayVolume` when it is `'day-delta'`.
+
+#### `CandleUpdate`
+
+```ts
+interface CandleUpdate {
+  bar: Bar;
+  isNew: boolean;
+}
+```
+
+Result of `CandleBuilder.onTick`. `isNew` is `true` when the tick started a new interval bar (append vs. mutate in place on the series).
+
+### Tick Aggregator
+
+#### `TickTimeframe`
+
+```ts
+type TickTimeframe =
+  | { mode: 'interval'; seconds: number; anchorSec?: number }
+  | { mode: 'ticks'; count: number }
+  | { mode: 'volume'; perBar: number };
+```
+
+Timeframe discriminant for `TickBarAggregator`. Three modes: clock-interval bars, tick-count bars, or traded-volume-per-bar.
+
+#### `AggTick`
+
+```ts
+interface AggTick {
+  time: number;
+  price: number;
+  qty: number;
+}
+```
+
+A single trade tick fed to `TickBarAggregator.onTick`.
+
+#### `BarUpdate`
+
+```ts
+interface BarUpdate {
+  bar: Bar;
+  isNew: boolean;
+}
+```
+
+Result of `TickBarAggregator.onTick`. Mirrors `CandleUpdate` in semantics.
+
+### OpenAlgo Adapters
+
+#### `OpenAlgoConfig`
+
+```ts
+interface OpenAlgoConfig {
+  baseUrl: string;
+  apiKey: string;
+  /** Injectable fetch for offline tests. Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+}
+```
+
+Connection config for `OpenAlgoDataFeed` (history REST) and the base for `OpenAlgoLiveConfig`.
+
+#### `OpenAlgoLiveConfig`
+
+```ts
+interface OpenAlgoLiveConfig extends OpenAlgoConfig {
+  /** WS proxy URL, e.g. ws://127.0.0.1:8765. */
+  wsUrl: string;
+  /** Volume accounting for the live candle builder. Default 'ltq-sum'. */
+  volumeMode?: VolumeMode;
+}
+```
+
+Config for `OpenAlgoLiveDataFeed`, which combines REST history and WebSocket live ticks into a single `DataFeed` implementation.
+
+#### `WsMode`
+
+```ts
+type WsMode = 'LTP' | 'Quote' | 'Depth';
+```
+
+OpenAlgo WebSocket data mode. `'LTP'` delivers price and last-traded quantity; `'Quote'` adds cumulative day volume; `'Depth'` adds a full order book.
+
+#### `WsState`
+
+```ts
+type WsState = 'connecting' | 'open' | 'closed' | 'error';
+```
+
+WebSocket lifecycle state reported by `OpenAlgoWsFeed.onState(cb)`.
+
+#### `WsControlMessage`
+
+```ts
+interface WsControlMessage {
+  type?: string;
+  status?: string;
+  message?: string;
+  [k: string]: unknown;
+}
+```
+
+A non-market-data control frame (auth ack, subscribe ack, or server error) surfaced by `OpenAlgoWsFeed.onControl(cb)`.
+
+#### `LtpEvent`
+
+```ts
+interface LtpEvent {
+  symbol: string;
+  exchange: string;
+  ltp: number;
+  ltq?: number;
+  /** Cumulative day volume (Quote mode). */
+  volume?: number;
+  timeSec: number;
+}
+```
+
+Normalised last-trade-price event emitted by `OpenAlgoWsFeed.onLtp(cb)`. `timeSec` is UTC seconds.
+
+#### `SocketLike`
+
+```ts
+interface SocketLike {
+  send(data: string): void;
+  close(): void;
+  onopen: (() => void) | null;
+  onclose: (() => void) | null;
+  onerror?: (() => void) | null;
+  onmessage: ((ev: { data: string }) => void) | null;
+  /** 1 === OPEN (matches browser WebSocket.OPEN). */
+  readyState?: number;
+}
+```
+
+The minimal socket surface required by `OpenAlgoWsFeed`. The browser `WebSocket` satisfies this interface. Pass a custom implementation via `socketFactory` in `OpenAlgoWsConfig` for testing.
+
+#### `OpenAlgoWsConfig`
+
+```ts
+interface OpenAlgoWsConfig {
+  url: string;
+  apiKey: string;
+  socketFactory?: SocketFactory;
+}
+```
+
+Config for `OpenAlgoWsFeed`. `socketFactory` has the shape `(url: string) => SocketLike` and is injectable for testing.
+
+#### `OpenAlgoTradeConfig`
+
+```ts
+interface OpenAlgoTradeConfig {
+  baseUrl: string;
+  apiKey: string;
+  /** Strategy label sent with every order. OpenAlgo groups orders by strategy. */
+  strategy?: string;
+  defaultProduct?: 'CNC' | 'NRML' | 'MIS';
+  fetchImpl?: typeof fetch;
+}
+```
+
+Config for `OpenAlgoTradeFeed`. `defaultProduct` defaults to `'MIS'`.
+
+---
+
+## Indicators
+
+### `SupertrendPoint`
+
+```ts
+interface SupertrendPoint {
+  /** The Supertrend band value, or NaN during ATR warmup and on a bar with no ATR or no close. */
+  value: number;
+  /** -1 = uptrend (bullish), +1 = downtrend (bearish). */
+  direction: -1 | 1;
+}
+```
+
+One element per bar in the array returned by `supertrend(bars, period, multiplier)`. `value` holds the Supertrend band level; it is `NaN` for warmup bars while ATR accumulates the required history, and on a bar with no ATR or no close, which leaves the bands and the direction as they were for the next complete bar. `direction` follows the OpenAlgo convention: `-1` means the band is below price and acting as support (uptrend, bullish); `+1` means it is above price and acting as resistance (downtrend, bearish).
+
+```ts
+import type { SupertrendPoint } from 'openalgo-charts';
+```
+
+See also `supertrendSeries`, which splits the same output into two `Bar[]` arrays, one per direction, so each renders as a separately-colored line that breaks at every trend flip.
+
+### `IndicatorCalcContext`
+
+```ts
+interface IndicatorCalcContext {
+  barState: {
+    isNew: boolean;         // the last update appended a bar rather than replacing one
+    isConfirmed: boolean;   // the last bar's own span has elapsed on the chart clock
+    isRealtime: boolean;    // a live feed is driving updates, not a one-off load
+    lastIndex: number;      // bars.length - 1, and -1 when there are none
+  };
+  symbol?: string;
+  interval?: string;
+  timezone: string;
+  now(): number;
+}
+```
+
+The optional trailing argument to a descriptor's `calc` (fourth) and `calcTail` (sixth): what the calculation cannot read off the bars themselves. Being optional and trailing is the point, since every descriptor written against `calc(bars, settings, store)` keeps its exact signature and behaviour.
+
+`isConfirmed` uses the declared duration or calendar boundary. Unknown and count-driven
+intervals remain unconfirmed. Hosts without an interval retain the legacy gap estimate;
+empty history is confirmed. `isRealtime` is sticky once set. `symbol` and `interval`
+come from `chart.setDataContext` or a custom host and remain undefined when not supplied.
+See [The calculation context](/docs/indicators#the-calculation-context).
+
+### `IndicatorAlertSpec`
+
+```ts
+interface IndicatorAlertSpec {
+  id: string;
+  title: string;
+  message?: string;
+  when(ctx: IndicatorAlertContext): boolean;
+}
+```
+
+A condition the runtime watches on the descriptor's behalf, declared in its `alerts` array. `id` is stable within the descriptor; `message` defaults to `title`.
+
+### `IndicatorAlertContext`
+
+```ts
+interface IndicatorAlertContext {
+  bars: readonly Bar[];
+  values: IndicatorValues;
+  settings: Readonly<IndicatorSettings>;
+  /** The bar being evaluated. */
+  index: number;
+}
+```
+
+What `when` is handed. It judges one bar, so a rule comparing against the previous bar reads `index - 1` itself.
+
+### `IndicatorAlertPayload`
+
+```ts
+interface IndicatorAlertPayload {
+  indicatorId: string;
+  instanceId: string;
+  alertId: string;
+  title: string;
+  message: string;
+  /** The bar that triggered it: UTC seconds, and its index in `bars`. */
+  time: number;
+  index: number;
+}
+```
+
+The payload of the `'indicator:alert'` event on the chart's own bus. See [Indicator alerts](/docs/events#indicator-alerts).
+
+---
+
+## Trading
+
+Types for the data-driven trading visualization layer. See [Trading API](/docs/trading-api).
+
+### `PositionSide`
+
+```ts
+type PositionSide = 'long' | 'short';
+```
+
+### `TradingOrderSide`
+
+```ts
+type TradingOrderSide = 'buy' | 'sell';
+```
+
+### `TradingOrderType`
+
+```ts
+type TradingOrderType = 'limit' | 'stop' | 'stop_limit';
+```
+
+### `TradeMarkerVariant`
+
+```ts
+type TradeMarkerVariant = 'chevron' | 'bubble' | 'count';
+```
+
+Visual style of a fill marker. `'chevron'` draws a directional triangle at the fill price; `'bubble'` draws a labeled circle; `'count'` groups fills at the same bar and draws a count badge at the VWAP.
+
+### `TradingLineVariant`
+
+```ts
+type TradingLineVariant = 'standard' | 'line-only';
+```
+
+Whether a position or order line renders with its pill label and cancel button (`'standard'`) or as a plain line without interactive controls (`'line-only'`).
+
+### `TradingLineStyle`
+
+```ts
+type TradingLineStyle = 'solid' | 'dashed' | 'dotted';
+```
+
+Stroke style for an order line.
+
+### `TradingPosition`
+
+```ts
+interface TradingPosition {
+  id: string;
+  side: PositionSide;
+  entryPrice: number;
+  size: number;
+  pnlText?: string;
+  pnlPercent?: string;
+  color?: string;
+  readOnly?: boolean;
+  variant?: TradingLineVariant;
+}
+```
+
+A position record pushed to `chart.trading.setPositions`. The chart renders a horizontal price line at `entryPrice` with a pill showing side, size, and optional P&L text. Clicking the cancel box emits `'trading:position_close'`.
+
+### `TradingOrder`
+
+```ts
+interface TradingOrder {
+  id: string;
+  type: TradingOrderType;
+  side: TradingOrderSide;
+  price: number;
+  size: number;
+  parentId?: string;
+  bracketRole?: 'tp' | 'sl';
+  color?: string;
+  lineStyle?: TradingLineStyle;
+  lineWidth?: number;
+  readOnly?: boolean;
+  draggable?: boolean;
+  variant?: TradingLineVariant;
+}
+```
+
+An order record pushed to `chart.trading.setOrders`. `bracketRole` tags the line as a take-profit or stop-loss leg of a bracket order. Dragging emits `'trading:order_modify'`; clicking the cancel box emits `'trading:order_cancel'`.
+
+### `TradingTrade`
+
+```ts
+interface TradingTrade {
+  id: string;
+  side: TradingOrderSide;
+  price: number;
+  size: number;
+  /** Execution time in milliseconds. */
+  timestamp: number;
+  variant?: TradeMarkerVariant;
+  color?: string;
+  label?: string;
+}
+```
+
+A fill record pushed to `chart.trading.setTrades`. Note that `timestamp` is milliseconds, not UTC seconds.
+
+### `TradingSyncPayload`
+
+```ts
+interface TradingSyncPayload {
+  positions?: TradingPosition[];
+  orders?: TradingOrder[];
+  trades?: TradingTrade[];
+}
+```
+
+Batch payload for `chart.trading.syncState(payload)`. Omit a field to leave that collection unchanged.
+
+### `TradingColors`
+
+```ts
+interface TradingColors {
+  long: string;
+  short: string;
+  order: string;
+  tp: string;
+  sl: string;
+  buy: string;
+  sell: string;
+}
+```
+
+Color palette used by the trading layer for all rendered lines and markers. Read the current palette via `chart.trading.getSettings()`.
+
+### `TradingSettings`
+
+```ts
+interface TradingSettings {
+  longColor?: string;
+  shortColor?: string;
+  orderColor?: string;
+  tpColor?: string;
+  slColor?: string;
+  buyColor?: string;
+  sellColor?: string;
+}
+```
+
+Partial color overrides passed to `chart.trading.setSettings(settings)`.
+
+### `TradingHost`
+
+```ts
+interface TradingHost {
+  addPrimitive(p: IPrimitive): void;
+  removePrimitive(p: IPrimitive): void;
+  subscribeClick(cb: (externalId: string) => void): void;
+  subscribeDrag(
+    onDrag: (externalId: string, price: number) => void,
+    onDragEnd?: (externalId: string, price: number) => void,
+  ): void;
+  emit?(event: string, payload: unknown): void;
+}
+```
+
+The minimal surface `TradingController` requires from the chart. The `Chart` class implements this. Useful when building test doubles or alternative host environments.
+
+---
+
+## Keyboard Shortcuts
+
+### `ShortcutScope`
+
+```ts
+type ShortcutScope = 'hover' | 'global';
+```
+
+`'hover'` fires shortcuts while the pointer is over the chart or the chart is focused. `'global'` fires regardless of focus.
+
+### `ShortcutPreset`
+
+```ts
+type ShortcutPreset = 'default' | 'alt';
+```
+
+Built-in binding presets. `'alt'` remaps a few defaults to Alt-modified combos for hosts that reserve bare arrow keys for their own navigation.
+
+### `KeymapEntry`
+
+```ts
+interface KeymapEntry {
+  command: string;
+  label: string;
+  combos: string[];
+}
+```
+
+One entry in the active keymap (built-in or custom). `combos` are normalised physical-key combo strings (e.g. `'Mod+ArrowLeft'`).
+
+### `CustomShortcut`
+
+```ts
+interface CustomShortcut {
+  command: string;
+  label?: string;
+  combos: string | string[];
+  onTrigger: () => void;
+}
+```
+
+A user-defined shortcut registered via `ShortcutManager.addCustom(shortcut)` or via `ShortcutManagerOptions.customShortcuts`.
+
+### `ShortcutManagerOptions`
+
+```ts
+interface ShortcutManagerOptions {
+  preset?: ShortcutPreset;
+  /** Rebind (string | string[]) or unbind (null) a command. */
+  overrides?: Record<string, string | string[] | null>;
+  disabledCommands?: string[];
+  customShortcuts?: CustomShortcut[];
+  scope?: ShortcutScope;
+  persist?: boolean;
+  storageKey?: string;
+  /** Force platform detection (Mod = Cmd on mac, Ctrl elsewhere). Auto-detected when omitted. */
+  isMac?: boolean;
+}
+```
+
+Options for `new ShortcutManager(options)` or `ChartOptions.shortcuts`. `persist` saves rebinds and preset selection to `localStorage` under `storageKey`.
+
+### `ShortcutTriggerEvent`
+
+```ts
+interface ShortcutTriggerEvent {
+  command: string;
+  combo: string;
+  isCustom: boolean;
+}
+```
+
+Emitted by `ShortcutManager.on(cb)` whenever a command fires (built-in or custom).
+
+### `ShortcutListItem`
+
+```ts
+interface ShortcutListItem {
+  command: string;
+  label: string;
+  combos: string[];
+  isCustom: boolean;
+  isDisabled: boolean;
+}
+```
+
+One entry returned by `ShortcutManager.list()`. Useful for rendering a keyboard shortcut reference panel in a settings UI.
+
+## `ChartWatermarkOptions` (2.1.9)
+
+```ts
+interface ChartWatermarkOptions extends Partial<TextWatermarkOptions> {
+  visible?: boolean
+}
+```
+
+`ChartOptions.watermark` and `chart.setWatermarkOptions` accept this shape or a
+boolean. Visibility defaults to false. Empty or omitted custom text uses the current
+symbol and interval from `chart.getDataContext()`. `chart.watermarkOptions()` returns
+the preferences, preserving the distinction between automatic and custom text.
+
+`ChartOptions.branding` independently accepts `boolean | LogoWatermarkOptions`, default
+true, with `chart.setBranding` and `chart.brandingOptions` for runtime updates and reads.
+See [Branding and Watermarks](/docs/branding-and-watermarks) for examples and migration.
