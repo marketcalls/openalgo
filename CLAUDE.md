@@ -47,6 +47,7 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 - **`broker-integration`** — adding or modifying a broker plugin
 - **`chart-indicator`** — building a custom indicator for the `/trading` chart. These are plain JavaScript descriptors on `openalgo-charts`, unrelated to the Python `openalgo.ta` indicators used from strategies and scanners.
 - **`openscript`**: writing a study or strategy in OpenScript, the language compiled by `openalgo-script` and run from `strategies/openscript/`. A third unrelated thing called an indicator: not the JavaScript chart descriptors above, and not `openalgo.ta`.
+- **`grokbot-setup`** — understanding and running OpenAlgo inside Grok Bot on its own Linux box (start from its `references/openalgo-knowledge.md`): uv install, `.env` and broker credentials, headless start, manual or automated daily broker login (Indian brokers only), weekly upgrade, and the static IP limit for Live orders
 
 ## Security and Deployment Model
 
