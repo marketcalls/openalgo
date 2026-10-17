@@ -729,7 +729,9 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                           ? leg.strike != null
                             ? `${leg.strike}`
                             : '—'
-                          : `ATM (${leg.atm_offset ?? 'ATM'})`
+                          : leg.strike_mode === 'premium'
+                            ? `${leg.premium_comparison ?? 'closest'} ₹${leg.premium ?? '—'}${leg.premium_strike_filter === 'liquid' ? ' · liquid multiples' : ''}`
+                            : `ATM (${leg.atm_offset ?? 'ATM'})`
                     return (
                       <tr key={leg.id} className="border-t">
                         <td className="px-2 py-1.5 font-mono">{leg.id}</td>
