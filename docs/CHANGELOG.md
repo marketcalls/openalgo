@@ -18,6 +18,8 @@ fix, live in [docs/releases](releases/).
   another edit; `/trading` already refreshes it after both successful and failed edits.
 - Upgrade the MCP SDK to 1.30.0 across every Python installation path to fix
   GHSA-84m7-p3x7-pcfv, which concerns retained stateful Streamable HTTP sessions.
+- Broker thread-pool regression tests inspect their own executors, so unrelated
+  scheduled jobs cannot cause a false thread-leak failure in the Linux CI suite.
 
 ### Changed
 
