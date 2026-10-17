@@ -2,29 +2,16 @@
 
 # RiGo ALGO
 
-RiGo ALGO is a rebranded fork of [OpenAlgo](https://github.com/marketcalls/openalgo) by Marketcalls, distributed under the same [AGPL-3.0 licence](License.md). The original OpenAlgo documentation follows below.
+RiGo ALGO is a rebranded fork of [OpenAlgo](https://github.com/marketcalls/openalgo) by Marketcalls, distributed under the same [AGPL-3.0 licence](License.md).
 
----
 
-# OpenAlgo - Open Source Algorithmic Trading Platform
+## What is RiGo ALGO?
 
-<div align="center">
+RiGo ALGO is a free, open source, self-hosted **trading platform** — not just a broker bridge. Built on Python Flask + React 19, it gives traders a full-stack environment to **design, host, and execute strategies** across **30+ Indian brokers** through a single unified API. Whether you write Python, prefer drag-and-drop, or trade options exclusively, RiGo ALGO gives you a first-class workflow without tying you to any single broker or vendor.
 
-[![PyPI Downloads](https://static.pepy.tech/badge/openalgo)](https://pepy.tech/projects/openalgo)
-[![PyPI Downloads](https://static.pepy.tech/badge/openalgo/month)](https://pepy.tech/projects/openalgo)
-[![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/openalgoHQ)](https://twitter.com/openalgoHQ)
-[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCw7eVneIEyiTApy4RtxrJsQ)](https://www.youtube.com/@openalgo)
-[![Discord](https://img.shields.io/discord/1219847221055455263)](https://discord.com/invite/UPh7QPsNhP)
+RiGo ALGO is no longer just "an API layer in front of your broker." Today it is **four products in one self-hosted instance** — sharing one broker session, one WebSocket feed, and one database — covering the complete journey from idea → backtest → live trade.
 
-</div>
-
-## What is OpenAlgo?
-
-OpenAlgo is a free, open source, self-hosted **trading platform** — not just a broker bridge. Built on Python Flask + React 19, it gives traders a full-stack environment to **design, host, and execute strategies** across **30+ Indian brokers** through a single unified API. Whether you write Python, prefer drag-and-drop, or trade options exclusively, OpenAlgo gives you a first-class workflow without tying you to any single broker or vendor.
-
-OpenAlgo is no longer just "an API layer in front of your broker." Today it is **four products in one self-hosted instance** — sharing one broker session, one WebSocket feed, and one database — covering the complete journey from idea → backtest → live trade.
-
-## Four Ways to Trade with OpenAlgo
+## Four Ways to Trade with RiGo ALGO
 
 | Surface | Route | Who it's for |
 | --- | --- | --- |
@@ -35,16 +22,12 @@ OpenAlgo is no longer just "an API layer in front of your broker." Today it is *
 
 Every surface above runs on the same Sandbox engine (₹1 Crore sandbox capital, exchange-aligned auto square-off) so you can sandbox-trade *any* of these flows before going live. Real-time dashboards, PnL tracker, latency monitor, Telegram alerts, and the AI / MCP server work uniformly across all four.
 
-## Video Tutorial
-
-[![What is OpenAlgo](https://img.youtube.com/vi/S5myMo9WUdQ/0.jpg)](https://www.youtube.com/watch?v=S5myMo9WUdQ)
-
 ## Quick Links
 
-- **Documentation**: [docs.openalgo.in](https://docs.openalgo.in)
+- **Documentation**: [docs.openalgo.in](https://docs.openalgo.in) (upstream OpenAlgo docs, apply to RiGo ALGO)
 - **Installation Guide**: [Getting Started](https://docs.openalgo.in/installation-guidelines/getting-started)
 - **Upgrade Guide**: [Upgrade Instructions](https://docs.openalgo.in/installation-guidelines/getting-started/upgrade)
-- **Why OpenAlgo**: [Why Build with OpenAlgo](https://docs.openalgo.in/why-to-build-with-openalgo)
+- **Why RiGo ALGO**: [Why Build with RiGo ALGO](https://docs.openalgo.in/why-to-build-with-openalgo)
 
 
 ## Python Compatibility
@@ -158,7 +141,7 @@ Order approval workflow for manual control:
 [Action Center Documentation](https://docs.openalgo.in/new-features/action-center)
 
 ### Python Strategy Host (`/python`)
-Host and run your Python strategies directly inside OpenAlgo — no separate VM, no cron, no Docker:
+Host and run your Python strategies directly inside RiGo ALGO — no separate VM, no cron, no Docker:
 - Built-in code editor powered by **CodeMirror** with Python syntax highlighting and themes
 - Run multiple strategies in parallel with **full process isolation**
 - Automated **IST-based scheduling** with start/stop times and per-day-of-week control
@@ -178,7 +161,7 @@ Connect AI assistants for natural language trading:
 - Compatible with Claude Desktop, Cursor, Windsurf, ChatGPT
 - Execute trades using natural language commands
 - Full trading capabilities: orders, positions, market data
-- Local and secure integration with your OpenAlgo instance
+- Local and secure integration with your RiGo ALGO instance
 
 ### Telegram Bot Integration
 Real-time notifications and command execution:
@@ -282,9 +265,9 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 - **SQLite** - 4 separate databases (main, logs, latency, sandbox)
 - **DuckDB** - Historical market data (Historify)
 
-## Official SDKs
+## SDKs
 
-OpenAlgo provides officially supported client libraries for application development and system-level integrations:
+RiGo ALGO is compatible with the OpenAlgo client libraries:
 
 | Language / Platform | Repository |
 |---------------------|------------|
@@ -297,11 +280,11 @@ OpenAlgo provides officially supported client libraries for application developm
 
 ## OpenAlgo FOSS Ecosystem
 
-OpenAlgo is part of a larger open-source trading ecosystem:
+RiGo ALGO builds on the open-source OpenAlgo ecosystem:
 
-- **OpenAlgo Core**: This repository (Python Flask + React)
+- **RiGo ALGO Core**: This repository (Python Flask + React)
 - **Historify**: Stock market data management platform
-- **Official SDKs**: Python, Node.js, Java, Rust, .NET, Go (see above)
+- **SDKs**: Python, Node.js, Java, Rust, .NET, Go (see above)
 - **Excel Add-in**: Direct Excel integration
 - **MCP Server**: AI agents integration
 - **Chrome Plugin**: Browser-based tools
@@ -320,12 +303,12 @@ OpenAlgo is part of a larger open-source trading ecosystem:
 
 ### Quick Start with UV
 
-OpenAlgo uses the modern `uv` package manager for faster, more reliable installations:
+RiGo ALGO uses the modern `uv` package manager for faster, more reliable installations:
 
 ```bash
 # Clone the repository
-git clone https://github.com/marketcalls/openalgo.git
-cd openalgo
+git clone https://github.com/rissh84-droid/rigoalgo.git
+cd rigoalgo
 
 # Install UV package manager
 pip install uv
@@ -384,18 +367,15 @@ We welcome contributions! To contribute:
 
 ## Community & Support
 
-- **Discord**: [Join our community](https://www.openalgo.in/discord)
-- **Twitter/X**: [@openalgoHQ](https://twitter.com/openalgoHQ)
-- **YouTube**: [@openalgo](https://www.youtube.com/@openalgo)
-- **GitHub Issues**: [Report bugs or request features](https://github.com/marketcalls/openalgo/issues)
+- **GitHub Issues**: [Report bugs or request features](https://github.com/rissh84-droid/rigoalgo/issues)
 
 ## License
 
-OpenAlgo is released under the **AGPL V3.0 License**. See [LICENSE](LICENSE) for details.
+RiGo ALGO is released under the **AGPL V3.0 License**. See [License.md](License.md) for details. RiGo ALGO is a fork of [OpenAlgo](https://github.com/marketcalls/openalgo), and the original copyright and licence notices are kept.
 
 ## Credits & Acknowledgments
 
-OpenAlgo is built upon the shoulders of giants. We extend our gratitude to all the open-source projects that make this platform possible.
+RiGo ALGO is built upon the shoulders of giants. We extend our gratitude to all the open-source projects that make this platform possible.
 
 ### Core Framework
 - **[Flask](https://flask.palletsprojects.com)** - BSD License - Python web microframework
@@ -444,10 +424,6 @@ OpenAlgo is built upon the shoulders of giants. We extend our gratitude to all t
 - **[next-themes](https://github.com/pacocoursey/next-themes)** - MIT License - Theme switching
 - **[react-resizable-panels](https://github.com/bvaughn/react-resizable-panels)** - MIT License - Resizable panel layouts
 - **[html2canvas-pro](https://html2canvas.hertzen.com)** - MIT License - Screenshot generation
-
-## Repo Activity
-
-![Alt](https://repobeats.axiom.co/api/embed/0b6b18194a3089cb47ab8ae588caabb14aa9972b.svg "Repobeats analytics image")
 
 ## Disclaimer
 
