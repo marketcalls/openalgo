@@ -72,12 +72,22 @@ class TestOptionAndFuturesSymbols:
         assert qf.get_freeze_qty_for_option(symbol, exchange) == expected
 
     def test_a_symbol_that_does_not_parse_is_zero_not_one(self):
-        """360ONE starts with a digit, so the underlying regex finds nothing.
-
-        That fell through to the same `return 1`, which is why an NFO stock
-        was blocked on an exchange whose table is otherwise fully populated.
-        """
+        """An unparseable symbol used to fall through to `return 1`, which
+        blocked e.g. 360ONE on an exchange whose table was fully populated."""
+        assert qf.get_freeze_qty_for_option("12345", "NFO") == 0
+        # 360ONE now parses; with no row configured it is unknown (0), not 1.
         assert qf.get_freeze_qty_for_option("360ONE29SEP26FUT", "NFO") == 0
+
+    def test_a_digit_leading_underlying_resolves(self):
+        qf._freeze_qty_cache["NFO:360ONE"] = 20000
+        assert qf.get_freeze_qty_for_option("360ONE29SEP26FUT", "NFO") == 20000
+        assert qf.get_freeze_qty_for_option("360ONE28OCT261100CE", "NFO") == 20000
+
+    def test_stock_names_with_symbols_resolve_through_the_expiry(self):
+        qf._freeze_qty_cache["NFO:M&M"] = 9800
+        qf._freeze_qty_cache["NFO:BAJAJ-AUTO"] = 3000
+        assert qf.get_freeze_qty_for_option("M&M28OCT263300CE", "NFO") == 9800
+        assert qf.get_freeze_qty_for_option("BAJAJ-AUTO28OCT269000PE", "NFO") == 3000
 
     def test_longest_prefix_still_wins(self):
         """NIFTYNXT50 must not resolve to NIFTY's 1800."""
