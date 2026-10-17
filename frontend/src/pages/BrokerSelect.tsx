@@ -226,7 +226,7 @@ export default function BrokerSelect() {
           <Card className="w-full max-w-md shadow-xl order-1 lg:order-2">
             <CardHeader className="text-center">
               <div className="flex justify-center mb-4">
-                <img src="/logo.png" alt="OpenAlgo" className="h-20 w-20" />
+                <img src="/logo.png" alt="RiGo ALGO" className="h-20 w-20" />
               </div>
               <CardTitle className="text-2xl">Connect Your Trading Account</CardTitle>
               <CardDescription>
@@ -299,7 +299,7 @@ export default function BrokerSelect() {
               Connect Your <span className="text-primary">Broker</span>
             </h1>
             <p className="text-lg lg:text-xl mb-8 text-muted-foreground">
-              Link your trading account to start executing trades through OpenAlgo's algorithmic
+              Link your trading account to start executing trades through RiGo ALGO's algorithmic
               trading platform.
             </p>
 

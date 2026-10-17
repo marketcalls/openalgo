@@ -252,7 +252,7 @@ export default function CustomStraddle() {
     // Watermark
     const watermark = document.createElement('div')
     watermark.style.cssText = `position:absolute;z-index:2;font-family:Arial,sans-serif;font-size:48px;font-weight:bold;user-select:none;pointer-events:none;color:${colors.watermark}`
-    watermark.textContent = 'OpenAlgo'
+    watermark.textContent = 'RiGo ALGO'
     container.appendChild(watermark)
     watermarkRef.current = watermark
     setTimeout(() => {

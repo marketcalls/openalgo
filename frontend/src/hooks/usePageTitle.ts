@@ -96,7 +96,7 @@ function getPageTitle(pathname: string): string {
     }
   }
 
-  return 'OpenAlgo'
+  return 'RiGo ALGO'
 }
 
 export function usePageTitle() {
@@ -104,6 +104,6 @@ export function usePageTitle() {
 
   useEffect(() => {
     const title = getPageTitle(pathname)
-    document.title = title === 'OpenAlgo' ? 'OpenAlgo' : `${title} | OpenAlgo`
+    document.title = title === 'RiGo ALGO' ? 'RiGo ALGO' : `${title} | RiGo ALGO`
   }, [pathname])
 }
