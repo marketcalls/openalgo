@@ -729,6 +729,8 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                           ? leg.strike != null
                             ? `${leg.strike}`
                             : '—'
+                          : leg.strike_mode === 'atm_percent'
+                            ? `ATM ${Number(leg.atm_percent ?? 0) >= 0 ? '+' : ''}${leg.atm_percent ?? '—'}%`
                           : `ATM (${leg.atm_offset ?? 'ATM'})`
                     return (
                       <tr key={leg.id} className="border-t">
