@@ -340,6 +340,36 @@ def check_session_validity(f):
     return decorated_function
 
 
+def check_user_session(f):
+    """Decorator for endpoints that need a logged-in user but no broker.
+
+    A fresh password login sets only ``session["user"]`` — ``logged_in`` and
+    ``login_time`` appear only after broker auth completes. Such users must
+    still reach broker setup/management endpoints (credentials, profile data,
+    permissions, capabilities), otherwise a misconfigured broker locks them
+    out of the very screens that fix it. Always returns JSON (these are
+    API-only routes), so a missing session never surfaces as an HTML redirect.
+    """
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user" not in session:
+            from flask import jsonify
+
+            logger.info("User session required - returning 401 for AJAX request")
+            return jsonify(
+                {
+                    "status": "error",
+                    "error": "session_expired",
+                    "message": "Your session has expired. Please log in again.",
+                }
+            ), 401
+        logger.debug("User session validated successfully")
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
 def invalidate_session_if_invalid(f):
     """Decorator to invalidate session if invalid without redirecting"""
 

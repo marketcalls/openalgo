@@ -1,12 +1,14 @@
-import { Navigate, Outlet } from 'react-router'
+import { Navigate, Outlet, useLocation } from 'react-router'
 import { SocketProvider } from '@/components/socket/SocketProvider'
 import { useAuthStore } from '@/stores/authStore'
+import { isBrokerAuthExempt } from '@/utils/routeGuards'
 import { Footer } from './Footer'
 import { MobileBottomNav } from './MobileBottomNav'
 import { Navbar } from './Navbar'
 
 export function Layout() {
   const { isAuthenticated, user } = useAuthStore()
+  const location = useLocation()
 
   // AuthSync has already synced Flask session with Zustand store
   // So we just need to check the Zustand store state
@@ -14,8 +16,10 @@ export function Layout() {
     return <Navigate to="/login" replace />
   }
 
-  // If logged in but no broker selected, redirect to broker selection
-  if (!user?.broker) {
+  // If logged in but no broker selected, redirect to broker selection.
+  // Pages that repair the broker setup itself (/profile) stay reachable,
+  // otherwise a bad broker config locks the user out of the fix.
+  if (!user?.broker && !isBrokerAuthExempt(location.pathname)) {
     return <Navigate to="/broker" replace />
   }
 

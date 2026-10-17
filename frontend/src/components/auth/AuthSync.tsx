@@ -51,12 +51,15 @@ export function AuthSync({ children }: AuthSyncProps) {
               setActiveSessionCount(data.active_sessions)
             }
           } else if (data.status === 'success' && data.authenticated && !data.logged_in) {
-            // User is logged in but hasn't connected broker yet
+            // User is logged in but hasn't connected a broker yet. They are
+            // still an authenticated user (with broker: null) so that pages
+            // which repair the broker setup (/profile) stay reachable. The
+            // layout guards still send every other brokerless page to /broker.
             setUser({
               username: data.user,
               broker: null,
-              isLoggedIn: false,
-              loginTime: null,
+              isLoggedIn: true,
+              loginTime: new Date().toISOString(),
             })
             clearCapabilities()
           } else {
