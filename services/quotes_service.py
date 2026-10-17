@@ -95,6 +95,23 @@ def import_broker_module(broker_name: str) -> Any | None:
         return None
 
 
+def get_single_request_multiquote_limit(broker_name: str | None) -> int:
+    """Return how many instruments the broker quotes in one upstream request.
+
+    A broker data module opts in by defining SINGLE_REQUEST_MULTIQUOTE_LIMIT.
+    Every other broker returns 1, because its multiquote method may fan out
+    into one request per symbol.
+    """
+    if not isinstance(broker_name, str) or not broker_name.strip():
+        return 1
+
+    broker_module = import_broker_module(broker_name.strip().lower())
+    limit = getattr(broker_module, "SINGLE_REQUEST_MULTIQUOTE_LIMIT", 1)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        return 1
+    return limit
+
+
 def get_quotes_with_auth(
     auth_token: str, feed_token: str | None, broker: str, symbol: str, exchange: str
 ) -> tuple[bool, dict[str, Any], int]:

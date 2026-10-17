@@ -425,6 +425,7 @@ export interface OptionSymbolNodeData {
   expiryDate: string // Format: 30DEC25 - can use {{variable}}
   offset: string // ATM, ITM1-10, OTM1-10 - can use {{variable}}
   optionType: 'CE' | 'PE'
+  includeQuotes?: boolean
   outputVariable?: string
 }
 
