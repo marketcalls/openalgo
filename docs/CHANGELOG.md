@@ -8,6 +8,23 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Upgrade `/trading` and Historify charts to openalgo-charts 2.6.6. Indicator
+  legend controls stay in place as readings change, and Historify opens the
+  selected indicator's settings from its legend. Saved chart formats are unchanged.
+- Chart order modifications preserve acknowledged fields and serialize edits to
+  the same order. After an uncertain result, a fresh order book is required before
+  another edit; `/trading` already refreshes it after both successful and failed edits.
+- Upgrade the MCP SDK to 1.30.0 across every Python installation path to fix
+  GHSA-84m7-p3x7-pcfv, which concerns retained stateful Streamable HTTP sessions.
+
+### Changed
+
+- Historify inherits the packaged widget's searchable, grouped mobile drawing
+  chooser and shared drawing favorites.
+- Refresh the chart-indicator skill's API index and release guidance for 2.6.6.
+
 ## [2.0.2.8] - 2026-10-15
 
 ### Freeze Limits and Full-Screen Terminal Release

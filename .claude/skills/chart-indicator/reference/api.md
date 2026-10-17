@@ -174,6 +174,8 @@ are identified separately so a custom module can use the right surface.
 
 | | |
 | --- | --- |
+| **2.6.6** | No descriptor or export changes: 112 built-ins and 433 indexed names. Legend actions retain their positions when readings change; the packaged widget opens the selected instance's settings. |
+| **2.6.5** | No descriptor or export changes. Packaged-widget improvements: running studies before the catalog and searchable, grouped mobile drawing tools with shared favorites. Trade-feed order modification handling changes do not affect indicator calculations. |
 | **1.8.3** | Eleven studies, taking the registry from 91 to 102: `t3`, `hull-suite`, `consolidation-breakout`, `smma`, `net-volume`, `linreg-slope`, `ma-channel`, `chaikin-volatility`, `standard-deviation`, `standard-error`, `standard-error-bands`. Each is exported as a descriptor constant and reusable through `getIndicator`. The same release corrected nine built-ins and moved ten defaults, so a study measured against a built-in before 1.8.3 needs its expectations re-derived rather than assumed. |
 | **1.8.4** | `calc` is flushed once per animation frame rather than per tick, so it must be a pure function of `(bars, settings)`. `calcTail` now only pays for deep history, not for a fast feed. |
 | **1.8.9** | Precision follows the pane an indicator is handed. An overlay plot prints at the instrument's tick, a study pane at two decimals or finer. Nothing to declare in the descriptor. |
@@ -218,7 +220,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 433 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.6.4 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.6.6 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (14)

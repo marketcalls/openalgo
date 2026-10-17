@@ -73,7 +73,7 @@ dependencies = [
   "MarkupSafe==2.1.5",
   "marshmallow==3.26.2",
   "matplotlib-inline==0.2.2",
-  "mcp==1.28.1",
+  "mcp==1.30.0",
   "mdurl==0.1.2",
   "msgpack==1.2.2",
   "narwhals==2.25.0",
