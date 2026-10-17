@@ -93,6 +93,7 @@ interface IntervalBoxProps {
   initial: string
   /** The broker's intervals, the only ones accepted. */
   available: readonly string[]
+  canSelectInterval?: (code: string) => boolean
   onApply(code: string): void
   onClose(): void
 }
@@ -103,7 +104,13 @@ interface IntervalBoxProps {
  * Drawn over the chart, never beside it, so it costs the plot nothing: it is
  * there for the two seconds it takes to type `15` and press Enter.
  */
-export function QuickIntervalBox({ initial, available, onApply, onClose }: IntervalBoxProps) {
+export function QuickIntervalBox({
+  initial,
+  available,
+  canSelectInterval,
+  onApply,
+  onClose,
+}: IntervalBoxProps) {
   const id = useId()
   const [text, setText] = useState(initial)
   const [error, setError] = useState('')
@@ -145,7 +152,7 @@ export function QuickIntervalBox({ initial, available, onApply, onClose }: Inter
           }
           if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
           e.preventDefault()
-          const result = parseQuickInterval(text, available)
+          const result = parseQuickInterval(text, available, canSelectInterval)
           if (result.code === undefined) setError(result.error)
           else onApply(result.code)
         }}

@@ -138,18 +138,36 @@ have a meaningful position level and omit OI.
 
 ## Studies on Another Timeframe
 
+The interval menu groups seconds, minutes, hours and calendar periods. Choose
+**Add custom interval**, select the unit and enter a whole-number count. Use the
+star to save a shortcut and the remove button to delete a custom choice. Favorites
+are shared across chart panes and Historify; choosing an interval changes only
+the selected pane. Removing the active interval from the list keeps its chart open.
+
+Custom intervals use compatible broker history: seven minutes uses one-minute
+candles, two hours can use hourly candles, and weeks, months and quarters use
+daily candles. Unsupported choices are disabled. A broker without seconds history
+cannot supply historical seconds charts from minute candles. Exchange sessions
+and calendar boundaries determine aggregation; the display timezone only relabels
+the axis.
+
 Twenty-nine built-in studies have a **Timeframe** row in their settings: the
 moving averages (SMA, EMA, WMA, VWMA, HMA, DEMA, TEMA, ALMA, SMMA, T3, LSMA,
 KAMA, McGinley Dynamic, Zero Lag EMA, VIDYA), the bands and channels
 (Bollinger, Keltner, Donchian, Envelope), Supertrend, Parabolic SAR, ATR, RSI,
 MACD, Stochastic, Stochastic RSI, Williams %R, CCI and ADX. It offers **Chart
-interval** and the intervals your broker serves. Chart interval, the default,
-draws the study exactly as before. Pick a longer interval, such as 15m on a 5m
-chart, and the study is computed on the chart's bars folded into that interval:
-each value appears once its period has closed and does not change afterwards,
-and the legend names the interval (`EMA 9 close 15m`). Sub-day periods start at
-the session open, so 15-minute periods on NSE start at 09:15. An interval no
-longer than the chart's is the chart's own.
+interval**, available native intervals and supported custom choices. Chart interval,
+the default, draws the study exactly as before. Pick Daily and set EMA length to
+200 on a five-minute chart: the study fetches its own daily history, including its
+warmup, independently of the shorter chart window. Historify uses downloaded daily
+history for the same setting.
+
+Only confirmed values appear. During the session, a daily study uses completed
+daily observations. The legend names the requested interval. Missing history or a
+failed request produces a study status message rather than a made-up line.
+Recursive calculations depend on the fetched seed history, so compare equal input
+history when comparing readings. Independent history is unavailable in replay
+unless the data source supplies historical value versions.
 
 A setting the chart cannot use, such as a timeframe on a Renko or Heikin Ashi
 chart's own bars, keeps the study on the chart without drawing it, and a message

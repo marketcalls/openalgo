@@ -30,7 +30,7 @@ export interface ChartGridProps {
 export function ChartGrid({ preset, renderPane, className }: ChartGridProps) {
   return (
     <div
-      className={cn('grid min-h-0 flex-1 gap-1 p-1', className)}
+      className={cn('grid min-h-0 min-w-0 flex-1 gap-1 p-1', className)}
       style={{
         gridTemplateColumns: preset.cols,
         gridTemplateRows: preset.rows,
@@ -41,7 +41,11 @@ export function ChartGrid({ preset, renderPane, className }: ChartGridProps) {
         // Keyed by the cell name and its position, so switching preset gives a
         // pane that has genuinely moved a new identity and remounts its chart
         // rather than resizing a stale one.
-        <div key={`${preset.id}-${cell}`} style={{ gridArea: cell }} className="flex min-h-0">
+        <div
+          key={`${preset.id}-${cell}`}
+          style={{ gridArea: cell }}
+          className="flex min-h-0 min-w-0"
+        >
           {renderPane(cell, index)}
         </div>
       ))}

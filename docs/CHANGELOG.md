@@ -6,26 +6,77 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
-## [Unreleased]
+## [2.0.2.9] - 2026-10-17
 
-### Fixed
+### Custom Intervals and Independent Indicator History Release
 
-- Upgrade `/trading` and Historify charts to openalgo-charts 2.6.6. Indicator
-  legend controls stay in place as readings change, and Historify opens the
-  selected indicator's settings from its legend. Saved chart formats are unchanged.
-- Chart order modifications preserve acknowledged fields and serialize edits to
-  the same order. After an uncertain result, a fresh order book is required before
-  another edit; `/trading` already refreshes it after both successful and failed edits.
-- Upgrade the MCP SDK to 1.30.0 across every Python installation path to fix
-  GHSA-84m7-p3x7-pcfv, which concerns retained stateful Streamable HTTP sessions.
-- Broker thread-pool regression tests inspect their own executors, so unrelated
-  scheduled jobs cannot cause a false thread-leak failure in the Linux CI suite.
+20 commits since 2.0.2.8, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.2.9-released.md](releases/version-2.0.2.9-released.md).
+This release adds no database migration.
 
-### Changed
+### Highlights
 
-- Historify inherits the packaged widget's searchable, grouped mobile drawing
-  chooser and shared drawing favorites.
-- Refresh the chart-indicator skill's API index and release guidance for 2.6.6.
+- `/trading` and Historify use openalgo-charts 2.6.7. Add and remove custom
+  intervals, collapse interval groups and save favorites shared between charts.
+  Each pane keeps its own selected interval. Unsupported choices are disabled.
+- Derive compatible intervals from available native data: 7m from 1m, aligned
+  2h from hourly candles, and weeks, months and quarters from daily history.
+  A source cannot create finer candles than it records.
+- Display daily EMA 200 on a five-minute chart using separately requested
+  daily warmup and confirmed observations. Historify uses stored daily data
+  and preserves gaps when coverage cannot establish a completed period.
+- Start, stop and open logs from the strategy editor. Crypto scheduling and
+  weekend sandbox P&L snapshots support continuous operation.
+- Open charts from orders, trades and positions. Derivative badges apply only
+  to derivative symbols. Navigation uses text tabs and overflow under More.
+
+### Reliability and accessibility
+
+- Legend controls stay in place as readings change. Historify opens the
+  selected indicator's settings from its legend and retains the searchable
+  mobile drawing chooser with shared drawing favorites.
+- Historify chart grids stay within the viewport when interval favorites make
+  the toolbar wider. Toolbar controls remain reachable by scrolling.
+- Chart order modifications preserve acknowledged fields and serialize edits.
+  An uncertain result requires a fresh order book before another edit.
+- Failed contract refreshes preserve existing symbols; a running download
+  cannot be replaced by stale saved data. Broker prices respect instrument
+  precision, and market-price protection rejects non-finite prices.
+- An additional broker plugin is available. The multi-instance installer
+  adds gthread opt-in, memory profiles and port/snapshot fixes.
+- The page loader announces status reliably. Broker executor tests inspect
+  their own pools, avoiding interference from scheduled jobs.
+- Deployment guidance covers isolated Linux setup, broker login, upgrades and
+  Live-order network requirements (`b53f85bc6`, #2240).
+
+### Dependencies
+
+- `openalgo-charts` moves from 2.6.4 at the previous platform release to 2.6.7,
+  including the previously integrated 2.6.6 fixes. The chart-indicator skill,
+  generated API references and user guides are updated.
+- MCP SDK 1.30.0 fixes GHSA-84m7-p3x7-pcfv across all Python installation
+  paths. The pinned `openalgo` Python SDK remains 2.0.5.
+- No new runtime dependency is introduced by the chart integration.
+
+### Contributors
+
+- **@marketcalls** - chart integration and releases, navigation (#2223),
+  strategy and crypto fixes, security update, CI reliability and deployment
+  guidance (#2240).
+- **@Kalaiviswa** - resilient contract refreshes and instrument precision
+  (#2235).
+- **@varshathT (Varshath Terli)** - additional broker integration (#2193).
+- **@Ayush7614 (Felix-Ayush)** - finite market-price protection validation
+  (#2052).
+- **@samadarsh (Adarsh)** - prevent stale contract loading during downloads
+  (#2133).
+- **@dhvanilshah2007 (Dhvanil Shah)** - derivative symbol badges (#2171).
+- **@rajatdangra (Rajat Maheshwari)** - strategy editor run controls and log
+  links (#2199).
+- **@aravindgandavadi (Aravind Gandavadi)** - multi-instance deployment options
+  and fixes (#2220).
+- **@anmoldwivedi89 (Anmol Dwivedi)** - accessible page loading status (#1869).
 
 ## [2.0.2.8] - 2026-10-15
 

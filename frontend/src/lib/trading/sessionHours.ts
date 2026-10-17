@@ -15,6 +15,7 @@
  */
 import {
   attachSessionShading,
+  type BarsRequest,
   type Chart,
   SessionCalendar,
   type SessionCalendarSpec,
@@ -112,7 +113,7 @@ export function calendarSpec(
     }
   }
   return {
-    timezone: ZONE,
+    timezone: allDay ? 'UTC' : ZONE,
     sessions: [allDay ? window : `${window}:23456`],
     exceptions,
     ...(PRE_OPEN_MINUTES[code] ? { preMarketMinutes: PRE_OPEN_MINUTES[code] } : {}),
@@ -126,6 +127,9 @@ interface Book {
   failedAt: number | null
   pending: Promise<void> | null
   calendars: Map<string, SessionCalendar | null>
+  years: Map<number, HolidayRow[]>
+  yearPending: Map<number, Promise<void>>
+  revision: number
 }
 
 let book: Book | null = null
@@ -164,7 +168,10 @@ async function load(target: Book, apiKey: string): Promise<void> {
       ),
     ])
     target.timings = timings as TimingRow[]
-    target.holidays = (years as HolidayRow[][]).flat()
+    yearsAround(target.day).forEach((year, i) => target.years.set(year, years[i] as HolidayRow[]))
+    target.holidays = [...target.years.values()].flat()
+    target.calendars.clear()
+    target.revision++
     target.failedAt = null
   } catch {
     // No calendar is the chart as it always was; the next build tries again later.
@@ -185,6 +192,9 @@ function currentBook(apiKey: string, now = Date.now()): Book {
       failedAt: null,
       pending: null,
       calendars: new Map(),
+      years: new Map(),
+      yearPending: new Map(),
+      revision: 0,
     }
   const ready = book.timings !== null
   const cooling = book.failedAt !== null && now - book.failedAt < RETRY_AFTER_MS
@@ -237,4 +247,65 @@ export function applySessionHours(chart: Chart, exchange: string, apiKey: string
 /** Forget today's calendar. For tests. */
 export function resetSessionHours(): void {
   book = null
+}
+
+function requestYears(request: BarsRequest): number[] {
+  const from = request.from ?? Date.now() / 1000
+  const to = request.to ?? from
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return []
+  const first = new Date(from * 1000 + IST_OFFSET_MS).getUTCFullYear()
+  const last = new Date(to * 1000 + IST_OFFSET_MS).getUTCFullYear()
+  // A bounded calendar book, independent of how many instruments a page opens.
+  if (first < 1970 || last > new Date().getUTCFullYear() + 2 || last - first > 64) return []
+  return Array.from({ length: last - first + 1 }, (_, i) => first + i)
+}
+
+/** Load real holiday/special-session metadata before resampling old observations. */
+export async function prepareSessionHours(apiKey: string, request: BarsRequest): Promise<void> {
+  const target = currentBook(apiKey)
+  await target.pending
+  if (!target.timings) return
+  const needed = requestYears(request)
+  for (const year of needed) {
+    if (target.years.has(year)) continue
+    let pending = target.yearPending.get(year)
+    if (!pending) {
+      pending = (async () => {
+        try {
+          const rows = await getJson('/api/v1/market/holidays', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apikey: apiKey, year }),
+          })
+          target.years.set(year, rows as HolidayRow[])
+          target.holidays = [...target.years.values()].flat()
+          target.calendars.clear()
+          target.revision++
+        } finally {
+          target.yearPending.delete(year)
+        }
+      })()
+      target.yearPending.set(year, pending)
+    }
+    // Native history remains usable during a calendar outage. A missing year
+    // returns no calendar below, so derived history cannot invent its sessions.
+    try {
+      await pending
+    } catch {
+      return
+    }
+    if (request.signal?.aborted) return
+  }
+}
+
+/** Synchronous metadata lookup; no calendar is promised for an unloaded year. */
+export function sessionCalendar(request: BarsRequest): SessionCalendar | null {
+  if (!book || book.day !== istClock(Date.now()).date) return null
+  const years = requestYears(request)
+  if (!years.length || years.some((year) => !book!.years.has(year))) return null
+  return calendarOf(book, request.exchange)
+}
+
+export function sessionCalendarRevision(): string {
+  return book ? `${book.day}:${book.revision}` : 'unavailable'
 }

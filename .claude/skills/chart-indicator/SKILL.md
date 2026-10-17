@@ -59,6 +59,16 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.6.7: independent confirmed study history.** `/trading` and Historify
+  attach `createTimeframeProvider`, so built-in higher-timeframe studies fetch
+  their own warmup, including daily EMA 200 on a five-minute chart. Custom
+  requested descriptors can declare `historyBars`; consume snapshot availability
+  rather than assuming the last source candle is closed. A live-only provider
+  is not a historical replay snapshot. Hosts derive custom intervals through
+  `withTimeframes` using real source capabilities and exchange sessions. Shared
+  favorites are UI preferences, not proof that a broker supplies an interval.
+  Existing descriptors and legacy providers remain supported.
+
 - **2.6.6: nothing for a descriptor to change.** Legend actions now sit
   before changing readings, so crosshair movement and live ticks keep the
   same click targets. The packaged widget opens the selected study's settings;

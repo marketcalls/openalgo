@@ -39,6 +39,8 @@ import {
 } from '@/lib/trading/chartTypes'
 import { MOD_KEY } from '@/lib/trading/drawingKeys'
 import { ChromeIcon, chromeStroke, lineStroke24 } from '@/lib/trading/glyphs'
+import { chartTimeframePreferences } from '@/lib/trading/timeframePreferences'
+import { TimeframeMenu } from './TimeframeMenu'
 
 /**
  * The snapshot glyph: a rounded body, a softened hump and an open lens ring, on
@@ -1134,50 +1136,18 @@ export function ChartPane({
           </Tip>
 
           <ToolbarDivider />
-          {/* Timeframe */}
-          <DropdownMenu>
-            <Tip
-              tip={{
-                title: 'Interval',
-                chord: 'Type a number',
-                sub: '5 then Enter is 5 minutes; 1h, D and W work too',
-              }}
-            >
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(TB_BTN, 'min-w-9 gap-1 font-semibold text-foreground')}
-                  aria-label={`Interval ${interval}`}
-                >
-                  {interval || '-'}
-                  <MenuChevron />
-                </button>
-              </DropdownMenuTrigger>
-            </Tip>
-            <DropdownMenuContent container={menuHost} align="start" className="w-64">
-              {intervalGroups.map((g) => (
-                <div key={g.label} className="px-1 pb-1">
-                  <div className="px-1 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                    {g.label}
-                  </div>
-                  <div className="grid grid-cols-4 gap-1">
-                    {g.items.map((iv) => (
-                      <DropdownMenuItem
-                        key={iv}
-                        onSelect={() => changeInterval(iv)}
-                        className={cn(
-                          'justify-center rounded text-xs',
-                          iv === interval && 'bg-primary/15 font-semibold text-primary'
-                        )}
-                      >
-                        {iv}
-                      </DropdownMenuItem>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Shared choices, with selection owned by this pane. */}
+          <TimeframeMenu
+            current={interval}
+            groups={intervalGroups}
+            preferences={chartTimeframePreferences()}
+            canSelectInterval={(code) =>
+              terminalRef.current?.supportsInterval?.(code) ??
+              intervalGroups.some((group) => group.items.includes(code))
+            }
+            onSelect={changeInterval}
+            container={menuHost}
+          />
 
           <ToolbarDivider />
           {/* Chart type */}
@@ -1586,8 +1556,11 @@ export function ChartPane({
           <QuickIntervalBox
             initial={intervalBox}
             available={intervalGroups.flatMap((group) => group.items)}
+            canSelectInterval={(code) => terminalRef.current?.supportsInterval?.(code) ?? false}
             onApply={(code) => {
               setIntervalBox(null)
+              if (!intervalGroups.some((group) => group.items.includes(code)))
+                chartTimeframePreferences().addCustom(code)
               if (code !== interval) changeInterval(code)
             }}
             onClose={() => setIntervalBox(null)}

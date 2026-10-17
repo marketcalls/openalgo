@@ -16,19 +16,12 @@
  * Case matters, and it is the trap in the whole scheme: lowercase `m` is
  * minutes, uppercase `M` is months.
  *
- * Two shapes parse but return nothing, so they must never be emitted:
- *
- * - `1D`, `2D`, `3D`. They type as "daily", which is neither the intraday
- *   branch nor the daily-aggregated branch, so the query falls through to a
- *   stored-table read for a literal interval of "1D", a row that does not
- *   exist. `D` is the only daily token. It is not "1D" spelled short.
- * - `MO` for months. `M` is the token; `MO` fails the regex outright. The page
- *   this replaces emitted `MO`, which is why its custom monthly option has
- *   never drawn a single candle.
+ * Daily multiples are aggregated from D storage. Month tokens remain uppercase
+ * so a saved minute choice cannot turn into a month.
  */
 
 /** The unit letters the store understands, with minutes and months distinct. */
-export type IntervalUnit = 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y'
+export type IntervalUnit = 'm' | 'h' | 'D' | 'W' | 'M' | 'Q' | 'Y'
 
 /** Which stored interval a token is served or aggregated from. */
 export type SourceInterval = '1m' | 'D'
@@ -40,10 +33,11 @@ export interface ParsedInterval {
   source: SourceInterval
 }
 
-/** The units the custom builder offers. `D` is deliberately absent: see above. */
+/** Units the stored-data custom builder offers. */
 export const CUSTOM_UNITS: ReadonlyArray<{ value: IntervalUnit; label: string }> = [
   { value: 'm', label: 'min' },
   { value: 'h', label: 'hr' },
+  { value: 'D', label: 'Day' },
   { value: 'W', label: 'Week' },
   { value: 'M', label: 'Month' },
   { value: 'Q', label: 'Qtr' },
@@ -92,11 +86,7 @@ export function parseInterval(token: string): ParsedInterval | null {
 
   const value = Number(match[1])
   const unit = match[2] as IntervalUnit | 'D'
-  if (!Number.isFinite(value) || value <= 0) return null
-
-  // `<n>D` parses on the server and then reads a stored row that is never
-  // written. Treat it as unsupported here rather than shipping a silent blank.
-  if (unit === 'D') return null
+  if (!Number.isInteger(value) || value <= 0 || value > 100_000) return null
 
   if (unit === 'm' || unit === 'h') return { unit, value, source: '1m' }
   return { unit, value, source: 'D' }

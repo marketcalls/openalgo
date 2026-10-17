@@ -26,7 +26,7 @@ import {
   Shapes,
   Undo2,
 } from 'lucide-react'
-import type { DataFeed } from 'openalgo-charts'
+import type { DataFeed, IndicatorBarsProviderAccess } from 'openalgo-charts'
 import { registeredIndicators } from 'openalgo-charts'
 import type { Widget } from 'openalgo-charts/widget'
 import { captureName } from 'openalgo-charts/widget'
@@ -39,6 +39,7 @@ import {
   type CatalogEntry,
   IndicatorPickerDialog,
 } from '@/components/trading/IndicatorPickerDialog'
+import { TimeframeMenu } from '@/components/trading/TimeframeMenu'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -56,14 +57,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { CatalogSymbol } from '@/lib/historify/catalog'
 import {
   availableIntervals,
-  CUSTOM_UNITS,
-  composeInterval,
-  type IntervalUnit,
   isIntervalAvailable,
   parseInterval,
   unavailableReason,
@@ -74,6 +71,7 @@ import {
   chartTypeIcon,
   widgetChartType,
 } from '@/lib/trading/chartTypes'
+import { chartTimeframePreferences } from '@/lib/trading/timeframePreferences'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
@@ -87,6 +85,8 @@ export interface PaneState {
 export interface HistorifyChartPaneProps {
   paneId: string
   feed: DataFeed
+  provider?: IndicatorBarsProviderAccess
+  canSelectInterval?: (code: string, symbol: string, exchange: string) => boolean
   symbols: CatalogSymbol[]
   state: PaneState
   onChange: (next: Partial<PaneState>) => void
@@ -111,6 +111,8 @@ export interface HistorifyChartPaneProps {
 export function HistorifyChartPane({
   paneId,
   feed,
+  provider,
+  canSelectInterval,
   symbols,
   state,
   onChange,
@@ -124,10 +126,7 @@ export function HistorifyChartPane({
   const widgetRef = useRef<Widget | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [intervalOpen, setIntervalOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [customValue, setCustomValue] = useState('25')
-  const [customUnit, setCustomUnit] = useState<IntervalUnit>('m')
   const [emptyNotice, setEmptyNotice] = useState<string | null>(null)
   const [indicatorsOpen, setIndicatorsOpen] = useState(false)
   const [menuAt, setMenuAt] = useState<ChartMenuAnchor | null>(null)
@@ -288,22 +287,12 @@ export function HistorifyChartPane({
   }
 
   const pickInterval = (token: string) => {
-    setIntervalOpen(false)
     const reason = unavailableReason(token, stored)
     if (reason) {
       showToast.error(reason, 'historify')
       return
     }
     onChange({ interval: token })
-  }
-
-  const applyCustomInterval = () => {
-    const token = composeInterval(customValue, customUnit)
-    if (!token) {
-      showToast.error('Enter a whole number of periods, for example 25 minutes.', 'historify')
-      return
-    }
-    pickInterval(token)
   }
 
   /**
@@ -358,11 +347,11 @@ export function HistorifyChartPane({
         setMenuAt({ x: event.clientX, y: event.clientY })
       }}
       className={cn(
-        'relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card',
+        'relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card',
         focused ? 'border-primary/60' : 'border-border'
       )}
     >
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
+      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b px-2 [scrollbar-width:thin] [&>*]:shrink-0">
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
           <PopoverTrigger asChild>
             <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 font-semibold">
@@ -422,62 +411,17 @@ export function HistorifyChartPane({
           </PopoverContent>
         </Popover>
 
-        <Popover open={intervalOpen} onOpenChange={setIntervalOpen}>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" size="sm" className="h-7 px-2 font-medium text-xs">
-              {state.interval}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent container={menuHost} align="start" className="w-64 p-2">
-            {intervals.length === 0 ? (
-              <p className="p-1 text-muted-foreground text-xs">
-                This symbol has no downloaded data yet. Download it from Historify first.
-              </p>
-            ) : (
-              <div className="grid grid-cols-5 gap-1">
-                {intervals.map((token) => (
-                  <Button
-                    key={token}
-                    variant={token === state.interval ? 'default' : 'ghost'}
-                    size="sm"
-                    className="h-7 px-0 text-xs"
-                    onClick={() => pickInterval(token)}
-                  >
-                    {token}
-                  </Button>
-                ))}
-              </div>
-            )}
-            <div className="mt-2 border-t pt-2">
-              <p className="mb-1 text-[11px] text-muted-foreground">Custom interval</p>
-              <div className="flex items-center gap-1">
-                <Input
-                  type="number"
-                  min="1"
-                  max="999"
-                  value={customValue}
-                  onChange={(e) => setCustomValue(e.target.value)}
-                  className="h-7 w-16 text-center"
-                />
-                <select
-                  value={customUnit}
-                  onChange={(e) => setCustomUnit(e.target.value as IntervalUnit)}
-                  className="h-7 rounded-md border bg-background px-2 text-xs"
-                  aria-label="Custom interval unit"
-                >
-                  {CUSTOM_UNITS.map((unit) => (
-                    <option key={unit.value} value={unit.value}>
-                      {unit.label}
-                    </option>
-                  ))}
-                </select>
-                <Button size="sm" className="h-7 px-2 text-xs" onClick={applyCustomInterval}>
-                  Apply
-                </Button>
-              </div>
-            </div>
-          </PopoverContent>
-        </Popover>
+        <TimeframeMenu
+          current={state.interval}
+          groups={[{ label: 'Stored intervals', items: intervals }]}
+          preferences={chartTimeframePreferences()}
+          container={menuHost}
+          canSelectInterval={(code) =>
+            canSelectInterval?.(code, state.symbol, state.exchange) ??
+            isIntervalAvailable(code, stored)
+          }
+          onSelect={pickInterval}
+        />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -625,6 +569,7 @@ export function HistorifyChartPane({
           persistKey={persistKey}
           topbar={false}
           onReady={(instance) => {
+            if (instance && provider) instance.chart.setBarsProvider(provider)
             widgetRef.current = instance
             setWidget(instance)
           }}

@@ -87,9 +87,9 @@ describe('calendarSpec', () => {
     })
   })
 
-  it('reads crypto as round the clock with no holidays', () => {
+  it('reads crypto as UTC round the clock with no holidays', () => {
     expect(calendarSpec('CRYPTO', TIMINGS, HOLIDAYS)).toEqual({
-      timezone: 'Asia/Kolkata',
+      timezone: 'UTC',
       sessions: ['0000-0000'],
       exceptions: {},
     })
@@ -216,5 +216,55 @@ describe('applySessionHours', () => {
     ;(a as { isDestroyed: boolean }).isDestroyed = true
     await settle()
     expect(a.setSessionCalendar).not.toHaveBeenCalled()
+  })
+})
+
+describe('historical calendar ranges', () => {
+  it('loads older years once, applies old holidays and changes the provider revision', async () => {
+    const { prepareSessionHours, sessionCalendar, sessionCalendarRevision } = await import(
+      './sessionHours'
+    )
+    resetSessionHours()
+    const years: number[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        let data: unknown = TIMINGS
+        if (url.includes('holidays')) {
+          const year = JSON.parse(String(init.body)).year
+          years.push(year)
+          data = [
+            {
+              date: `${year}-10-02`,
+              holiday_type: 'TRADING_HOLIDAY',
+              closed_exchanges: ['NSE'],
+              open_exchanges: [],
+            },
+          ]
+        }
+        return { ok: true, status: 200, json: async () => ({ status: 'success', data }) }
+      })
+    )
+    const request = {
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      interval: 'D',
+      from: secs(ist('2023-10-01', 0, 0)),
+      to: secs(ist('2024-02-01', 0, 0)),
+    }
+    const before = sessionCalendarRevision()
+    expect(sessionCalendar(request)).toBeNull()
+    await prepareSessionHours('key', request)
+    const after = sessionCalendarRevision()
+    expect(after).not.toBe(before)
+    expect(sessionCalendar(request)?.phaseAt(secs(ist('2023-10-02', 12, 0)))).toBe('holiday')
+    expect(years).toContain(2023)
+    expect(years).toContain(2024)
+    const count = years.length
+    await prepareSessionHours('key', request)
+    expect(years).toHaveLength(count)
+    expect(sessionCalendarRevision()).toBe(after)
+    resetSessionHours()
+    vi.unstubAllGlobals()
   })
 })
