@@ -159,7 +159,7 @@ export default function PnLTracker() {
     watermark.style.fontWeight = 'bold'
     watermark.style.userSelect = 'none'
     watermark.style.pointerEvents = 'none'
-    watermark.textContent = 'OpenAlgo'
+    watermark.textContent = 'RiGo ALGO'
     container.appendChild(watermark)
     watermarkRef.current = watermark
 

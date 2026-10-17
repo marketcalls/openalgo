@@ -640,7 +640,7 @@ export default function Playground() {
           <div className="flex items-center gap-2 px-2">
             <img
               src="/images/android-chrome-192x192.png"
-              alt="OpenAlgo"
+              alt="RiGo ALGO"
               className="w-6 h-6"
             />
             <span className="font-semibold text-sm">openalgo</span>
@@ -1242,7 +1242,7 @@ export default function Playground() {
             <div className="flex-1 flex flex-col items-center justify-center text-center bg-background">
               <img
                 src="/images/android-chrome-192x192.png"
-                alt="OpenAlgo"
+                alt="RiGo ALGO"
                 className="w-16 h-16 mb-4"
               />
               <h2 className="text-lg font-semibold text-foreground/80 mb-2">

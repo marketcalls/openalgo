@@ -358,7 +358,7 @@ export default function ActionCenterPage() {
       {/* Info Alert */}
       <Alert>
         <Info className="h-4 w-4" />
-        <AlertTitle>OpenAlgo Action Center</AlertTitle>
+        <AlertTitle>RiGo ALGO Action Center</AlertTitle>
         <AlertDescription>
           Centralized hub for managing semi-automated trading orders. When Semi-Auto mode is enabled
           in API Key settings, all incoming orders are queued here for manual approval before broker

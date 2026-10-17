@@ -1,3 +1,9 @@
+# RiGo ALGO
+
+RiGo ALGO is a rebranded fork of [OpenAlgo](https://github.com/marketcalls/openalgo) by Marketcalls, distributed under the same [AGPL-3.0 licence](License.md). The original OpenAlgo documentation follows below.
+
+---
+
 # OpenAlgo - Open Source Algorithmic Trading Platform
 
 <div align="center">
