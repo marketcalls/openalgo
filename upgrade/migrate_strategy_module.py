@@ -84,6 +84,16 @@ ADDED_COLUMNS = (
         "stop_requested_reason",
         "VARCHAR(30)",
     ),
+    (
+        "sm_strategy",
+        "move_sl_to_cost",
+        "BOOLEAN NOT NULL DEFAULT 0",
+    ),
+    (
+        "sm_strategy_checkpoint",
+        "sl_cost_side",
+        "VARCHAR(2)",
+    ),
 )
 
 
