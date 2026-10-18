@@ -301,6 +301,62 @@ def add_item(user_id: str, watchlist_id: int, symbol: str, exchange: str) -> dic
         return None
 
 
+def add_items(user_id: str, watchlist_id: int, items: list[dict]) -> dict | None:
+    """Append many instruments in one transaction, in the order given.
+
+    The bulk counterpart of ``add_item``, for a pasted list. One commit rather
+    than one per row, so a forty-symbol paste is one write, not forty.
+
+    Returns None when the list is missing. Otherwise a dict of three lists of
+    ``{"symbol", "exchange"}``: ``added``, ``existing`` (already in the list,
+    or repeated in the input) and ``over_limit`` (refused because the list
+    reached ``MAX_ITEMS_PER_LIST``). Every input row lands in exactly one of
+    them, so the caller can tell the user what happened to each.
+    """
+    try:
+        watchlist = db_session.query(Watchlist).filter_by(id=watchlist_id, user_id=user_id).first()
+        if not watchlist:
+            return None
+
+        present = {(item.symbol, item.exchange) for item in watchlist.items}
+        count = len(watchlist.items)
+        next_position = max((item.position for item in watchlist.items), default=-1) + 1
+        result = {"added": [], "existing": [], "over_limit": []}
+
+        for entry in items:
+            symbol = (entry.get("symbol") or "").strip().upper()
+            exchange = (entry.get("exchange") or "").strip().upper()
+            if not symbol or not exchange:
+                continue
+            row = {"symbol": symbol, "exchange": exchange}
+            if (symbol, exchange) in present:
+                result["existing"].append(row)
+                continue
+            if count >= MAX_ITEMS_PER_LIST:
+                result["over_limit"].append(row)
+                continue
+            db_session.add(
+                WatchlistItem(
+                    watchlist_id=watchlist.id,
+                    symbol=symbol,
+                    exchange=exchange,
+                    position=next_position,
+                )
+            )
+            present.add((symbol, exchange))
+            count += 1
+            next_position += 1
+            result["added"].append(row)
+
+        if result["added"]:
+            db_session.commit()
+        return result
+    except Exception:
+        logger.exception("Could not add %d items to watchlist %s", len(items), watchlist_id)
+        db_session.rollback()
+        return None
+
+
 def remove_item(user_id: str, watchlist_id: int, item_id: int) -> bool:
     """Remove one instrument from a list."""
     try:
