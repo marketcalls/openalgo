@@ -63,6 +63,32 @@ def test_session_expired_is_a_warning_carrying_the_emsg(log, mapper, book):
 
 
 @pytest.mark.parametrize("mapper, book", MAPPERS)
+@pytest.mark.parametrize(
+    "emsg",
+    ["no data", "No Data", " no data ", 'Error Occurred : 5 "no data"'],
+    ids=["plain", "case", "padded", "error_occurred_5"],
+)
+def test_every_empty_book_form_is_debug_only(log, mapper, book, emsg):
+    assert not mapper({"stat": "Not_Ok", "emsg": emsg})
+    log.warning.assert_not_called()
+    log.debug.assert_called_once()
+
+
+@pytest.mark.parametrize("mapper, book", MAPPERS)
+@pytest.mark.parametrize(
+    "emsg",
+    ["no database connection", "Error: no data feed configured", "no datapoint", ""],
+    ids=["no_database", "no_data_inside_error", "no_datapoint", "blank"],
+)
+def test_a_failure_that_only_contains_no_data_is_still_a_warning(log, mapper, book, emsg):
+    # Review on #2249: a substring test classed these as an empty book.
+    assert not mapper({"stat": "Not_Ok", "emsg": emsg})
+    log.debug.assert_not_called()
+    log.warning.assert_called_once()
+    assert book in log.warning.call_args.args[0]
+
+
+@pytest.mark.parametrize("mapper, book", MAPPERS)
 def test_none_response_is_a_warning(log, mapper, book):
     assert not mapper(None)
     log.warning.assert_called_once()
