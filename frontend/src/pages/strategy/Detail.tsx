@@ -729,7 +729,9 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                           ? leg.strike != null
                             ? `${leg.strike}`
                             : '—'
-                          : `ATM (${leg.atm_offset ?? 'ATM'})`
+                          : leg.strike_mode === 'straddle_width'
+                            ? `ATM ${Number(leg.straddle_width ?? 0) >= 0 ? '+' : ''}${leg.straddle_width ?? '—'} × straddle`
+                            : `ATM (${leg.atm_offset ?? 'ATM'})`
                     return (
                       <tr key={leg.id} className="border-t">
                         <td className="px-2 py-1.5 font-mono">{leg.id}</td>
