@@ -37,6 +37,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/straddlepnl': 'Straddle P&L',
   '/volsurface': 'Vol Surface',
   '/gex': 'GEX Dashboard',
+  '/strikeprofile': 'Strike Profile',
   '/ivsmile': 'IV Smile',
   '/oiprofile': 'OI Profile',
   '/websocket/test': 'WebSocket Test',

@@ -345,6 +345,12 @@ def react_gex():
     return serve_react_app()
 
 
+# Strike Profile - GEX and DEX per strike across expiries
+@react_bp.route("/strikeprofile", strict_slashes=False)
+def react_strikeprofile():
+    return serve_react_app()
+
+
 # IV Smile - Implied Volatility smile curve
 @react_bp.route("/ivsmile")
 def react_ivsmile():
