@@ -1,0 +1,27 @@
+{
+    "permissions": {
+        "deny": [
+            "Read(**/.env)",
+            "Read(**/secrets/**)"
+        ],
+        "ask": [
+            "Read(**/.sample.env)",
+            "Read(**/.env.sample)",
+        ],
+    },
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "R=\"$(git rev-parse --show-toplevel 2>/dev/null)\" || exit 0; H=\"$R/.claude/hooks/block-secret-reads.sh\"; [ -x \"$H\" ] && exec \"$H\" || exit 0",
+                        "timeout": 10,
+                        "statusMessage": "Checking command against deny-list..."
+                    }
+                ]
+            }
+        ]
+    }
+}
