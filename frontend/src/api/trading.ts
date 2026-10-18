@@ -1,3 +1,4 @@
+import type { CurveData } from '@/lib/pnlCurve'
 import type {
   ApiResponse,
   GttOrder,
@@ -8,6 +9,7 @@ import type {
   PlaceOrderRequest,
   PortfolioStats,
   Position,
+  Segment,
   Trade,
 } from '@/types/trading'
 import { apiClient, webClient } from './client'
@@ -27,6 +29,70 @@ export interface QuotesData {
 export interface DepthLevel {
   price: number
   quantity: number
+}
+
+/**
+ * Response shape of GET /pnl/history (services/pnl_history_service.py::get_pnl_history).
+ */
+export interface PnlHistoryDailyRow {
+  date: string
+  realized_pnl: number
+  trade_count: number
+}
+
+export interface PnlHistoryClosedTrade {
+  symbol: string
+  exchange: string
+  product: string | null
+  entry_action: string
+  quantity: number
+  entry_price: number
+  entry_timestamp: string
+  exit_price: number
+  exit_timestamp: string
+  realized_pnl: number
+  // Strategy tag of the entry fill; null when untagged.
+  strategy: string | null
+}
+
+export interface PnlHistoryOpenPosition {
+  symbol: string
+  exchange: string
+  product: string | null
+  action: string
+  quantity: number
+  average_price: number
+  // holdings (equity) or positions (everything else)
+  source: 'holdings' | 'positions'
+  strategy: string | null
+  // Live price and P&L on the open quantity; null when the position has no
+  // live quote.
+  ltp: number | null
+  unrealized_pnl: number | null
+}
+
+export interface PnlHistoryData {
+  start_date: string
+  end_date: string
+  total_realized_pnl: number
+  trade_count: number
+  daily: PnlHistoryDailyRow[]
+  closed_trades: PnlHistoryClosedTrade[]
+  open_positions: PnlHistoryOpenPosition[]
+  total_unrealized_pnl: number | null
+}
+
+/** One leg of the strategy book (database/strategy_book_db.py), from GET /pnl/strategy-legs. */
+export interface StrategyLeg {
+  strategy: string
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number
+  average_price: number
+  realized_pnl: number
+  today_realized_pnl: number
+  updated_at: string | null
 }
 
 export interface DepthData {
@@ -177,6 +243,147 @@ export const tradingApi = {
     const response = await apiClient.post<ApiResponse<Trade[]>>('/tradebook', {
       apikey: apiKey,
     })
+    return response.data
+  },
+
+  /**
+   * Backfill the consolidated multi-day P&L ledger from an exported broker
+   * tradebook CSV.
+   *
+   * A FormData body, not JSON. apiClient sets a default `Content-Type:
+   * application/json` header on the axios instance - that default headers
+   * object is already populated before axios's FormData detection runs, so
+   * it is NOT auto-cleared the way it would be with no default header at
+   * all. Confirmed live: without the override below, Flask never saw a
+   * multipart body at all (request.form came back empty), so the `apikey`
+   * schema check failed first with "Missing data for required field" -
+   * nothing to do with the CSV itself. Setting Content-Type to `undefined`
+   * on this one call clears the instance default so the browser can set
+   * its own multipart boundary.
+   */
+  importPnlHistoryCsv: async (
+    apiKey: string,
+    file: File
+  ): Promise<
+    ApiResponse<{ imported: number; skipped_duplicate: number; skipped_invalid: number }>
+  > => {
+    const formData = new FormData()
+    formData.append('apikey', apiKey)
+    formData.append('file', file)
+    const response = await apiClient.post<
+      ApiResponse<{ imported: number; skipped_duplicate: number; skipped_invalid: number }>
+    >('/pnl/import', formData, {
+      headers: { 'Content-Type': undefined },
+    })
+    return response.data
+  },
+
+  /**
+   * Realized P&L for a date range, from the consolidated multi-day P&L
+   * ledger .
+   * FIFO-matched fresh on every call - nothing is precomputed server-side.
+   */
+  getPnlHistory: async (
+    apiKey: string,
+    startDate: string,
+    endDate: string,
+    options?: { symbol?: string; segment?: Segment; strategy?: string }
+  ): Promise<ApiResponse<PnlHistoryData>> => {
+    const response = await apiClient.get<ApiResponse<PnlHistoryData>>('/pnl/history', {
+      params: {
+        apikey: apiKey,
+        start_date: startDate,
+        end_date: endDate,
+        // undefined keys are dropped by axios's param serializer, not sent
+        // as empty strings - important here since the schema's segment
+        // field validates against a fixed OneOf and would reject "".
+        symbol: options?.symbol || undefined,
+        segment: options?.segment || undefined,
+        strategy: options?.strategy || undefined,
+      },
+    })
+    return response.data
+  },
+
+  /**
+   * Daily realized and unrealized P&L per strategy for equity. basis "range_start" values lots carried into the
+   * range from the close before it; "actual_cost" uses the fill price.
+   */
+  getPnlCurve: async (
+    apiKey: string,
+    startDate: string,
+    endDate: string,
+    basis: 'range_start' | 'actual_cost' = 'range_start',
+    symbolContains?: string
+  ): Promise<ApiResponse<CurveData & { segment: string }>> => {
+    const response = await apiClient.get<ApiResponse<CurveData & { segment: string }>>(
+      '/pnl/curve',
+      {
+        params: {
+          apikey: apiKey,
+          start_date: startDate,
+          end_date: endDate,
+          basis,
+          symbol_contains: symbolContains || undefined,
+        },
+      }
+    )
+    return response.data
+  },
+
+  /**
+   * Raw fills for a date range from the consolidated multi-day P&L ledger
+   *  - no FIFO matching,
+   * just the ledger rows. Backs TradeBook.tsx's historical view; the live
+   * "today" view keeps using getTrades() above, since today's trades
+   * aren't in the ledger yet (the daily capture job runs after close).
+   */
+  getPnlTrades: async (
+    apiKey: string,
+    startDate: string,
+    endDate: string,
+    options?: { symbol?: string; segment?: Segment; strategy?: string }
+  ): Promise<ApiResponse<Trade[]>> => {
+    const response = await apiClient.get<ApiResponse<Trade[]>>('/pnl/trades', {
+      params: {
+        apikey: apiKey,
+        start_date: startDate,
+        end_date: endDate,
+        symbol: options?.symbol || undefined,
+        segment: options?.segment || undefined,
+        strategy: options?.strategy || undefined,
+      },
+    })
+    return response.data
+  },
+
+  /**
+   * Every currently tracked strategy leg for this account, from the strategy
+   * book (database/strategy_book_db.py). Not date-ranged.
+   */
+  getStrategyLegs: async (
+    apiKey: string,
+    strategy?: string
+  ): Promise<ApiResponse<StrategyLeg[]>> => {
+    const response = await apiClient.get<ApiResponse<StrategyLeg[]>>('/pnl/strategy-legs', {
+      params: { apikey: apiKey, strategy: strategy || undefined },
+    })
+    return response.data
+  },
+
+  /**
+   * Tag one historical fill with a strategy, for CSV-imported history and fills
+   * with no order id to join against the strategy book. `tradeId` is the row's
+   * Trade.id, present on rows returned by getPnlTrades above.
+   */
+  setTradeStrategy: async (
+    apiKey: string,
+    tradeId: number,
+    strategy: string
+  ): Promise<ApiResponse<{ id: number; strategy: string; updated_ids?: number[] }>> => {
+    const response = await apiClient.patch<
+      ApiResponse<{ id: number; strategy: string; updated_ids?: number[] }>
+    >(`/pnl/trades/${tradeId}/strategy`, { apikey: apiKey, strategy })
     return response.data
   },
 

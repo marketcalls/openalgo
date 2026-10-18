@@ -39,6 +39,8 @@ logger = get_logger(__name__)
 #: init-phase creation and the runtime job store cannot drift apart.
 FLOW_JOBSTORE_TABLE = "flow_apscheduler_jobs"
 HISTORIFY_JOBSTORE_TABLE = "historify_apscheduler_jobs"
+#: Created by the P&L capture scheduler itself, and only when it is enabled.
+PNL_JOBSTORE_TABLE = "pnl_apscheduler_jobs"
 
 #: A lost write-lock race is transient, so it is retried rather than surfaced.
 #: Each attempt already waits out the 15s busy_timeout, making the total worst

@@ -1,16 +1,21 @@
 import {
   ArrowDown,
   ArrowUp,
+  Check,
+  ChevronDown,
+  ChevronRight,
   Download,
   Loader2,
   RefreshCw,
   Settings2,
   TrendingDown,
   TrendingUp,
+  Upload,
+  X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
-import { ChartSymbolLink } from '@/components/trading/ChartSymbolLink'
+import { CalendarHeatmap, type CalendarHeatmapDay } from '@/components/reports/CalendarHeatmap'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,7 +28,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -34,10 +48,11 @@ import {
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { groupTradesByOrder, ungrouped } from '@/lib/tradeGroups'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
-import type { Trade } from '@/types/trading'
+import type { Segment, Trade } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 
 interface FilterState {
@@ -51,6 +66,43 @@ type SortKey = 'timestamp' | 'symbol' | 'action'
 interface SortConfig {
   key: SortKey
   direction: 'asc' | 'desc'
+}
+
+// Historical view: mirrors
+// database/pnl_db.py's derive_segment()/_EXCHANGE_SEGMENT_MAP exactly.
+// Kept in sync by hand since the frontend has no import path into that
+// Python module; if that mapping changes, update this one too. Live-today
+// Trade objects have no `segment` field at all (the broker's own tradebook
+// API doesn't have this concept), so this is the fallback used for those -
+// historical rows from GET /api/v1/pnl/trades carry a real stored
+// `segment` already and this is never called for them (see
+// segmentOf below).
+const EXCHANGE_SEGMENT_MAP: Record<string, Segment> = {
+  NSE: 'equity',
+  BSE: 'equity',
+  NFO: 'fno',
+  BFO: 'fno',
+  CDS: 'currency',
+  BCD: 'currency',
+  MCX: 'commodity',
+  NCDEX: 'commodity',
+  NCO: 'commodity',
+}
+
+function segmentOf(trade: Trade): Segment | undefined {
+  return (trade.segment as Segment | undefined) ?? EXCHANGE_SEGMENT_MAP[trade.exchange]
+}
+
+// Local calendar date (en-CA formats YYYY-MM-DD). toISOString() would be the
+// UTC date, which is still yesterday before 05:30 IST.
+function todayStr(): string {
+  return new Date().toLocaleDateString('en-CA')
+}
+
+function sevenDaysAgoStr(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 7)
+  return d.toLocaleDateString('en-CA')
 }
 
 /**
@@ -81,22 +133,55 @@ function parseTimestamp(timestamp: string): number {
   return date.getTime() || 0
 }
 
-function formatTime(timestamp: string): string {
+// Full date+time, always - a time-only display on the live (today-only)
+// view read as "the date is missing" rather than "this is always today,"
+// so both live and historical rows show date+time unconditionally now
+// (previously live used a time-only formatTime() and historical showed
+// the raw ISO string with no formatting at all). Routes through
+// parseTimestamp for the same defensive multi-broker fallback the old
+// formatTime had, though rows are always clean ISO in practice (live:
+// broker/{zerodha,kotak}/mapping/order_data.py normalizes at the source;
+// historical: database/pnl_db.py's parse_trade_timestamp normalizes at
+// write time).
+function formatDateTime(timestamp: string): string {
   if (!timestamp) return '-'
 
   const timeValue = parseTimestamp(timestamp)
-  if (timeValue === 0) {
-    // Last resort: extract HH:MM:SS if embedded in the string
-    const timeMatch = timestamp.match(/(\d{2}:\d{2}:\d{2})/)
-    return timeMatch ? timeMatch[1] : timestamp
-  }
+  if (timeValue === 0) return timestamp
 
   const date = new Date(timeValue)
-  return date.toLocaleTimeString('en-IN', {
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
   })
+}
+
+// YYYY-MM-DD bucket key for a trade timestamp, for the heat map below. Most
+// timestamps are already ISO-prefixed (historical rows from the ledger);
+// non-ISO broker formats fall back through parseTimestamp then read the
+// calendar date in the browser's local timezone, matching how Time is
+// already displayed via toLocaleTimeString('en-IN', ...) elsewhere on this
+// page - not a new timezone assumption, just the existing one applied here
+// too.
+function dateKeyOf(timestamp: string): string {
+  const isoMatch = timestamp.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (isoMatch) return isoMatch[1]
+  const ms = parseTimestamp(timestamp)
+  if (!ms) return ''
+  return new Date(ms).toLocaleDateString('en-CA')
+}
+
+// Blue-by-trade-count, matching Zerodha Console's own Tradebook heat map:
+// lighter shades for fewer trades, darker for more.
+function tradeCountHeatColor(value: number, maxAbs: number): string {
+  if (value <= 0) return 'rgba(148, 163, 184, 0.12)'
+  const intensity = Math.min(value / maxAbs, 1)
+  const alpha = 0.2 + intensity * 0.7
+  return `rgba(59, 130, 246, ${alpha})`
 }
 
 export default function TradeBook() {
@@ -116,6 +201,48 @@ export default function TradeBook() {
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  // P&L history CSV import
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importFiles, setImportFiles] = useState<File[]>([])
+  const [isImporting, setIsImporting] = useState(false)
+  // Which file of the batch is currently uploading - null when idle, so the
+  // dialog can show "Importing 2 of 3: <name>" during a multi-file run.
+  const [importProgress, setImportProgress] = useState<{ index: number; total: number } | null>(
+    null
+  )
+
+  // Historical view. Default date range
+  // is the last 7 days, matching the Zerodha Console reference this filter
+  // row is modeled on - end date defaults to today, so isHistorical is true
+  // by default and fetchTrades starts on the ledger-backed
+  // GET /api/v1/pnl/trades. Narrowing the range to today only switches back
+  // to the existing live broker call, since today's trades aren't captured
+  // into the ledger until the 16:00 IST daily job runs.
+  const [segment, setSegment] = useState<'all' | Segment>('all')
+  const [symbolFilter, setSymbolFilter] = useState('')
+  // Strategy is only ever present on historical (GET /pnl/trades) rows -
+  // live-today rows have no way to carry it (see the Trade type's own
+  // comment), so filtering to one strategy naturally excludes every live
+  // row, same as Segment's own exchange-derived fallback simply not
+  // applying to strategy (there's no way to derive a strategy from
+  // exchange). Options come from the account's own strategy book
+  // (database/strategy_book_db.py).
+  // Multi-select: empty array means every strategy.
+  const [strategyFilters, setStrategyFilters] = useState<string[]>([])
+  const [strategyOptions, setStrategyOptions] = useState<string[]>([])
+  // Manual strategy tag - which historical
+  // row, if any, currently has its inline editor open.
+  const [editingTradeId, setEditingTradeId] = useState<number | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+  const [isSavingTag, setIsSavingTag] = useState(false)
+  // Fold the fills of one order into a single row. Off by
+  // default so the table matches the broker's own tradebook until asked.
+  const [groupByOrder, setGroupByOrder] = useState(false)
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
+  const [startDate, setStartDate] = useState(sevenDaysAgoStr())
+  const [endDate, setEndDate] = useState(todayStr())
+  const isHistorical = startDate !== todayStr() || endDate !== todayStr()
+
   // Sort state - Default: most recent first
   const [sortConfig, setSortConfig] = useState<SortConfig>({
     key: 'timestamp',
@@ -129,6 +256,14 @@ export default function TradeBook() {
       if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
       if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
       if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
+      if (segment !== 'all' && segmentOf(trade) !== segment) return false
+      if (
+        strategyFilters.length > 0 &&
+        !(trade.strategy && strategyFilters.includes(trade.strategy))
+      )
+        return false
+      if (symbolFilter && !trade.symbol.toUpperCase().includes(symbolFilter.trim().toUpperCase()))
+        return false
       return true
     })
 
@@ -148,7 +283,42 @@ export default function TradeBook() {
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1
       return 0
     })
-  }, [trades, filters, sortConfig])
+  }, [trades, filters, segment, strategyFilters, symbolFilter, sortConfig])
+
+  const displayGroups = useMemo(
+    () =>
+      groupByOrder
+        ? groupTradesByOrder(sortedAndFilteredTrades)
+        : ungrouped(sortedAndFilteredTrades),
+    [groupByOrder, sortedAndFilteredTrades]
+  )
+
+  const toggleOrderExpanded = (key: string) => {
+    setExpandedOrders((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // Heat map data, grouping the already-filtered trades by day. Scoped to
+  // whatever Segment/Symbol/date range is currently applied, same as
+  // Zerodha Console's own Tradebook heat map being scoped to its own
+  // segment + duration picker.
+  const tradeHeatmapDays: CalendarHeatmapDay[] = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const trade of sortedAndFilteredTrades) {
+      const key = dateKeyOf(trade.timestamp)
+      if (!key) continue
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return Array.from(counts.entries()).map(([date, count]) => ({
+      date,
+      value: count,
+      tooltip: `${date}: ${count} trade${count === 1 ? '' : 's'}`,
+    }))
+  }, [sortedAndFilteredTrades])
 
   const requestSort = (key: SortKey) => {
     setSortConfig((prev) => ({
@@ -158,7 +328,11 @@ export default function TradeBook() {
   }
 
   const hasActiveFilters =
-    filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
+    filters.action.length > 0 ||
+    filters.exchange.length > 0 ||
+    filters.product.length > 0 ||
+    symbolFilter.trim() !== '' ||
+    strategyFilters.length > 0
 
   const toggleFilter = (type: keyof FilterState, value: string) => {
     setFilters((prev) => {
@@ -173,6 +347,8 @@ export default function TradeBook() {
 
   const clearFilters = () => {
     setFilters({ action: [], exchange: [], product: [] })
+    setSymbolFilter('')
+    setStrategyFilters([])
   }
 
   const fetchTrades = useCallback(
@@ -185,7 +361,13 @@ export default function TradeBook() {
       if (showRefresh) setIsRefreshing(true)
 
       try {
-        const response = await tradingApi.getTrades(apiKey)
+        // A date range other than "today" switches to the ledger-backed
+        // historical endpoint - see the isHistorical comment above. Segment/
+        // Symbol/Strategy stay client-side filters applied uniformly to either
+        // source in sortedAndFilteredTrades, rather than branching here too.
+        const response = isHistorical
+          ? await tradingApi.getPnlTrades(apiKey, startDate, endDate)
+          : await tradingApi.getTrades(apiKey)
         if (response.status === 'success' && response.data) {
           setTrades(response.data)
           setError(null)
@@ -199,12 +381,36 @@ export default function TradeBook() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, isHistorical, startDate, endDate]
   )
 
+  // Runs once on mount (and again if apiKey only becomes available after
+  // mount) - deliberately not depending on fetchTrades itself, which also
+  // changes identity on every Segment/Symbol/date edit. Re-fetching on
+  // every such edit would fire a request per keystroke/date-picker
+  // interaction; the explicit Fetch button below is the trigger for that
+  // instead, matching PnlHistory.tsx's pattern.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - see comment above
   useEffect(() => {
     fetchTrades()
-  }, [fetchTrades])
+  }, [apiKey])
+
+  // Populates the Strategy filter's options - same pattern as
+  // PnlHistory.tsx, fetched once rather than derived from whatever trades
+  // happen to be loaded right now.
+  useEffect(() => {
+    if (!apiKey) return
+    tradingApi
+      .getStrategyLegs(apiKey)
+      .then((response) => {
+        if (response.status === 'success' && response.data) {
+          setStrategyOptions(Array.from(new Set(response.data.map((leg) => leg.strategy))).sort())
+        }
+      })
+      .catch(() => {
+        // Best-effort - see the identical comment in PnlHistory.tsx.
+      })
+  }, [apiKey])
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchTrades, {
@@ -235,6 +441,7 @@ export default function TradeBook() {
         'Price',
         'Trade Value',
         'Order ID',
+        'Trade ID',
         'Time',
       ]
       const rows = sortedAndFilteredTrades.map((t) => [
@@ -246,6 +453,7 @@ export default function TradeBook() {
         sanitizeCSV(t.average_price),
         sanitizeCSV(t.trade_value),
         sanitizeCSV(t.orderid),
+        sanitizeCSV(t.tradeid || ''),
         sanitizeCSV(t.timestamp),
       ])
 
@@ -264,10 +472,115 @@ export default function TradeBook() {
     }
   }
 
-  const stats = {
-    total: sortedAndFilteredTrades.length,
-    buyTrades: sortedAndFilteredTrades.filter((t) => t.action === 'BUY').length,
-    sellTrades: sortedAndFilteredTrades.filter((t) => t.action === 'SELL').length,
+  // P&L history CSV import. Distinct
+  // from exportToCSV above: this uploads a broker-exported tradebook CSV
+  // rather than downloading the currently-filtered view.
+  //
+  // Files are sent one request per file, sequentially - not batched into a
+  // single request - because the backend commits an entire CSV as one
+  // transaction (services/pnl_history_service.py::import_trades_csv): one
+  // bad row anywhere in a combined upload would roll back every file, not
+  // just the offending one. A broker typically exports equity and F&O as
+  // two separate CSVs (see the tradebook page's own filter row), so this
+  // also lets both go in as one action without either one's failure
+  // silently discarding the other's rows.
+  const importPnlHistory = async () => {
+    if (!apiKey) {
+      showToast.error('API key not available', 'system')
+      return
+    }
+    if (importFiles.length === 0) {
+      showToast.warning('Please select at least one CSV file', 'system')
+      return
+    }
+
+    setIsImporting(true)
+    let totalImported = 0
+    let totalDuplicate = 0
+    let totalInvalid = 0
+    const failedFiles: string[] = []
+
+    try {
+      for (let i = 0; i < importFiles.length; i++) {
+        const file = importFiles[i]
+        setImportProgress({ index: i + 1, total: importFiles.length })
+        try {
+          const response = await tradingApi.importPnlHistoryCsv(apiKey, file)
+          if (response.status === 'success' && response.data) {
+            totalImported += response.data.imported
+            totalDuplicate += response.data.skipped_duplicate
+            totalInvalid += response.data.skipped_invalid
+          } else {
+            failedFiles.push(file.name)
+          }
+        } catch {
+          // Isolated per file - one file's failure (a 500 from a bad row,
+          // a network blip) must not abort the rest of the batch.
+          failedFiles.push(file.name)
+        }
+      }
+
+      if (totalImported || totalDuplicate || totalInvalid) {
+        showToast.success(
+          `Imported ${totalImported} trade(s)` +
+            (totalDuplicate ? `, ${totalDuplicate} already had them` : '') +
+            (totalInvalid ? `, ${totalInvalid} row(s) could not be read` : ''),
+          'clipboard'
+        )
+      }
+      if (failedFiles.length > 0) {
+        showToast.error(`Failed to import: ${failedFiles.join(', ')}`, 'system')
+      }
+
+      if (failedFiles.length === 0) {
+        setImportDialogOpen(false)
+        setImportFiles([])
+      } else {
+        // Leave the successfully-imported files out, keep the failed ones
+        // selected so the user can retry just those without reselecting.
+        setImportFiles((prev) => prev.filter((f) => failedFiles.includes(f.name)))
+      }
+    } finally {
+      setIsImporting(false)
+      setImportProgress(null)
+    }
+  }
+
+  // Manual strategy-tag fallback for one historical row - for CSV-imported history and anything placed
+  // with no orderid to automatically join against the strategy book.
+  // Updates local state in place rather than a full refetch, since the
+  // PATCH already returns the saved value.
+  const saveTradeStrategy = async (trade: Trade) => {
+    if (!apiKey || trade.id === undefined) return
+    const value = editingValue.trim()
+    if (!value) {
+      showToast.warning('Strategy cannot be empty', 'system')
+      return
+    }
+
+    setIsSavingTag(true)
+    try {
+      const response = await tradingApi.setTradeStrategy(apiKey, trade.id, value)
+      if (response.status === 'success' && response.data) {
+        // The tag is set on every fill of the order, so mirror that here.
+        const updated = new Set(response.data.updated_ids ?? [trade.id])
+        setTrades((prev) =>
+          prev.map((t) =>
+            t.id !== undefined && updated.has(t.id)
+              ? { ...t, strategy: response.data?.strategy }
+              : t
+          )
+        )
+        setEditingTradeId(null)
+        showToast.success(`Tagged as ${response.data.strategy}`, 'clipboard')
+      } else {
+        showToast.error(response.message || 'Failed to save strategy tag', 'system')
+      }
+    } catch {
+      showToast.error('Failed to save strategy tag', 'system')
+    } finally {
+      setIsSavingTag(false)
+    }
   }
 
   const FilterChip = ({
@@ -298,10 +611,233 @@ export default function TradeBook() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Trade Book</h1>
-          <p className="text-muted-foreground">View your executed trades</p>
+          <p className="text-muted-foreground">
+            {isHistorical
+              ? 'Historical trades from the consolidated P&L ledger'
+              : "View today's executed trades"}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Settings Button */}
+          {/* P&L history CSV import */}
+          <Dialog
+            open={importDialogOpen}
+            onOpenChange={(open) => {
+              setImportDialogOpen(open)
+              if (!open) setImportFiles([])
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" aria-label="Import P&L history from CSV">
+                <Upload className="h-4 w-4 mr-2" />
+                Upload
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Import P&L History</DialogTitle>
+                <DialogDescription>
+                  Upload exported tradebook CSVs (e.g. separate equity and F&O exports) to backfill
+                  historical P&L for dates before automated capture started. Trades already recorded
+                  are skipped automatically.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="py-2 space-y-3">
+                <div>
+                  <Label htmlFor="pnl-import-file">Tradebook CSV(s)</Label>
+                  <Input
+                    id="pnl-import-file"
+                    type="file"
+                    accept=".csv"
+                    multiple
+                    className="mt-2"
+                    disabled={isImporting}
+                    onChange={(e) => setImportFiles(Array.from(e.target.files ?? []))}
+                  />
+                </div>
+                {importFiles.length > 0 && (
+                  <ul className="space-y-1 max-h-32 overflow-y-auto">
+                    {importFiles.map((file, index) => (
+                      <li
+                        key={`${file.name}-${index}`}
+                        className="flex items-center justify-between text-sm text-muted-foreground bg-muted/50 rounded px-2 py-1"
+                      >
+                        <span className="truncate">{file.name}</span>
+                        {!isImporting && (
+                          <button
+                            type="button"
+                            aria-label={`Remove ${file.name}`}
+                            onClick={() =>
+                              setImportFiles((prev) => prev.filter((_, i) => i !== index))
+                            }
+                            className="ml-2 shrink-0 hover:text-foreground"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {importProgress && (
+                  <p className="text-sm text-muted-foreground">
+                    Importing file {importProgress.index} of {importProgress.total}
+                    {importFiles[importProgress.index - 1]
+                      ? `: ${importFiles[importProgress.index - 1].name}`
+                      : ''}
+                  </p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setImportDialogOpen(false)}
+                  disabled={isImporting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={importPnlHistory}
+                  disabled={isImporting || importFiles.length === 0}
+                >
+                  {isImporting ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4 mr-2" />
+                  )}
+                  Upload{importFiles.length > 1 ? ` (${importFiles.length})` : ''}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {/* Segment / Date range. Same layout
+          as PnlHistory.tsx's fetch row. Symbol and Strategy live in the Filters
+          popup above the table, since they only narrow the rows already
+          fetched. Leaving the date range at today keeps this page on the
+          existing live broker view untouched - see isHistorical. */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-segment">Segment</Label>
+              <Select value={segment} onValueChange={(v) => setSegment(v as typeof segment)}>
+                <SelectTrigger id="tb-segment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="equity">Equity</SelectItem>
+                  <SelectItem value="fno">Futures & Options</SelectItem>
+                  <SelectItem value="currency">Currency</SelectItem>
+                  <SelectItem value="commodity">Commodity</SelectItem>
+                  <SelectItem value="mutual_fund">Mutual Funds</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-start-date">Start date</Label>
+              <Input
+                id="tb-start-date"
+                type="date"
+                value={startDate}
+                max={endDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="tb-end-date">End date</Label>
+              <Input
+                id="tb-end-date"
+                type="date"
+                value={endDate}
+                min={startDate}
+                max={todayStr()}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+            <Button
+              onClick={() => fetchTrades(true)}
+              disabled={isRefreshing}
+              aria-label="Fetch trades for the selected filters"
+            >
+              {isRefreshing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Fetch
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Heat Map, matching Zerodha Console's own Tradebook heat map - a
+          calendar grid colored blue by that day's trade count, shade
+          intensity scaled to volume. */}
+      {tradeHeatmapDays.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Heat Map</CardTitle>
+            <CardDescription>
+              Trades per day - darker means more trades. Hover a day for details.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto pb-2">
+              <CalendarHeatmap
+                days={tradeHeatmapDays}
+                startDate={startDate}
+                endDate={endDate}
+                colorFor={tradeCountHeatColor}
+              />
+            </div>
+            <div className="flex items-center gap-2 mt-4 text-xs text-muted-foreground">
+              <span>Fewer</span>
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }}
+              />
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.45)' }}
+              />
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.7)' }}
+              />
+              <span
+                className="w-4 h-4 rounded-sm"
+                style={{ backgroundColor: 'rgba(59, 130, 246, 0.9)' }}
+              />
+              <span>More</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Table toolbar: Filters and Export act on the fetched rows below only,
+          so they sit directly above the table, top right. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          {groupByOrder
+            ? `${displayGroups.length} order${displayGroups.length === 1 ? '' : 's'} (${sortedAndFilteredTrades.length} fills)`
+            : `${sortedAndFilteredTrades.length} trade${sortedAndFilteredTrades.length === 1 ? '' : 's'}`}
+        </p>
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="group-by-order"
+            className="flex items-center gap-2 text-sm font-normal cursor-pointer"
+          >
+            <Switch
+              id="group-by-order"
+              checked={groupByOrder}
+              onCheckedChange={setGroupByOrder}
+              aria-label="Group fills by order"
+            />
+            Group by order
+          </Label>
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
               <Button
@@ -320,7 +856,9 @@ export default function TradeBook() {
             <DialogContent className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Trade Filters</DialogTitle>
-                <DialogDescription>Filter trades by action, exchange, or product</DialogDescription>
+                <DialogDescription>
+                  Filter trades by action, exchange, product, symbol or strategy
+                </DialogDescription>
               </DialogHeader>
 
               <div className="space-y-6 py-4">
@@ -363,6 +901,59 @@ export default function TradeBook() {
                     </div>
                   </div>
                 )}
+
+                {/* Symbol */}
+                <div className="space-y-3">
+                  <Label
+                    htmlFor="tb-filter-symbol"
+                    className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                  >
+                    Symbol
+                  </Label>
+                  <Input
+                    id="tb-filter-symbol"
+                    placeholder="e.g. INFY"
+                    value={symbolFilter}
+                    onChange={(e) => setSymbolFilter(e.target.value)}
+                  />
+                </div>
+
+                {/* Strategy (multi-select; none selected means all) */}
+                <div className="space-y-3">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Strategy
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {strategyOptions.length === 0 && (
+                      <span className="text-sm text-muted-foreground">No strategies tracked</span>
+                    )}
+                    {strategyOptions.map((name) => {
+                      const selected = strategyFilters.includes(name)
+                      return (
+                        <Button
+                          key={name}
+                          type="button"
+                          size="sm"
+                          variant={selected ? 'default' : 'outline'}
+                          className={cn(
+                            'rounded-full',
+                            selected && 'bg-pink-500 hover:bg-pink-600'
+                          )}
+                          onClick={() =>
+                            setStrategyFilters((prev) =>
+                              selected ? prev.filter((n) => n !== name) : [...prev, name]
+                            )
+                          }
+                        >
+                          {name}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Live (today-only) rows carry no strategy.
+                  </p>
+                </div>
               </div>
 
               <DialogFooter>
@@ -374,16 +965,6 @@ export default function TradeBook() {
             </DialogContent>
           </Dialog>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchTrades(true)}
-            disabled={isRefreshing}
-            aria-label="Refresh tradebook"
-          >
-            <RefreshCw className={cn('h-4 w-4 mr-2', isRefreshing && 'animate-spin')} />
-            Refresh
-          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -418,6 +999,20 @@ export default function TradeBook() {
               {v}
             </Badge>
           ))}
+          {symbolFilter.trim() !== '' && (
+            <Badge variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+              {symbolFilter.trim().toUpperCase()}
+            </Badge>
+          )}
+          {strategyFilters.map((v) => (
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
+              {v}
+            </Badge>
+          ))}
           {!isCrypto &&
             filters.product.map((v) => (
               <Badge
@@ -440,34 +1035,6 @@ export default function TradeBook() {
         </div>
       )}
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Trades</CardDescription>
-            <CardTitle className="text-2xl">{stats.total}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Buy Trades</CardDescription>
-            <CardTitle className="text-2xl text-green-600 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              {stats.buyTrades}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Sell Trades</CardDescription>
-            <CardTitle className="text-2xl text-red-600 flex items-center gap-2">
-              <TrendingDown className="h-5 w-5" />
-              {stats.sellTrades}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
-
       {/* Trades Table */}
       <Card>
         <CardContent className="py-0">
@@ -486,6 +1053,8 @@ export default function TradeBook() {
                     Clear Filters
                   </Button>
                 </div>
+              ) : isHistorical ? (
+                'No trades in this date range'
               ) : (
                 'No trades today'
               )}
@@ -529,6 +1098,8 @@ export default function TradeBook() {
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Trade Value</TableHead>
                     <TableHead>Order ID</TableHead>
+                    <TableHead>Trade ID</TableHead>
+                    {isHistorical && <TableHead>Strategy</TableHead>}
                     <TableHead
                       onClick={() => requestSort('timestamp')}
                       className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -546,45 +1117,160 @@ export default function TradeBook() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedAndFilteredTrades.map((trade, index) => (
-                    <TableRow key={`${trade.orderid}-${index}`}>
-                      <TableCell className="font-medium">
-                        <ChartSymbolLink symbol={trade.symbol} exchange={trade.exchange} />
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{trade.exchange}</Badge>
-                      </TableCell>
-                      {!isCrypto && (
+                  {displayGroups.flatMap((group) => {
+                    const trade = group.trade
+                    const isGroup = group.fills.length > 1
+                    const isExpanded = isGroup && expandedOrders.has(group.key)
+                    const rows = [
+                      <TableRow key={group.key}>
+                        <TableCell className="font-medium">{trade.symbol}</TableCell>
                         <TableCell>
-                          <Badge variant="secondary">{trade.product}</Badge>
+                          <Badge variant="outline">{trade.exchange}</Badge>
                         </TableCell>
-                      )}
-                      <TableCell>
-                        <Badge
-                          variant={trade.action === 'BUY' ? 'default' : 'destructive'}
-                          className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
-                        >
-                          {trade.action === 'BUY' ? (
-                            <TrendingUp className="h-3 w-3" />
+                        {!isCrypto && (
+                          <TableCell>
+                            <Badge variant="secondary">{trade.product}</Badge>
+                          </TableCell>
+                        )}
+                        <TableCell>
+                          <Badge
+                            variant={trade.action === 'BUY' ? 'default' : 'destructive'}
+                            className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
+                          >
+                            {trade.action === 'BUY' ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            {trade.action}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(trade.average_price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(trade.trade_value)}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {isGroup ? (
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 hover:underline"
+                              onClick={() => toggleOrderExpanded(group.key)}
+                              aria-label={isExpanded ? 'Hide fills' : 'Show fills'}
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-3 w-3" />
+                              ) : (
+                                <ChevronRight className="h-3 w-3" />
+                              )}
+                              {group.fills.length} fills
+                            </button>
                           ) : (
-                            <TrendingDown className="h-3 w-3" />
+                            trade.tradeid || '-'
                           )}
-                          {trade.action}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">{trade.quantity}</TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatCurrency(trade.average_price)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatCurrency(trade.trade_value)}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{trade.orderid}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatTime(trade.timestamp)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                        {isHistorical && (
+                          <TableCell>
+                            {editingTradeId === trade.id ? (
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  autoFocus
+                                  value={editingValue}
+                                  onChange={(e) => setEditingValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') saveTradeStrategy(trade)
+                                    if (e.key === 'Escape') setEditingTradeId(null)
+                                  }}
+                                  className="h-7 w-32 text-xs"
+                                  placeholder="Strategy name"
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0"
+                                  disabled={isSavingTag}
+                                  onClick={() => saveTradeStrategy(trade)}
+                                  aria-label="Save strategy tag"
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() => setEditingTradeId(null)}
+                                  aria-label="Cancel"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-xs text-left hover:underline"
+                                onClick={() => {
+                                  setEditingTradeId(trade.id ?? null)
+                                  setEditingValue(trade.strategy || '')
+                                }}
+                                aria-label={
+                                  trade.strategy ? `Edit strategy tag` : 'Add strategy tag'
+                                }
+                              >
+                                {trade.strategy ? (
+                                  <>
+                                    {trade.strategy}
+                                    {group.partiallyTagged && (
+                                      <span className="text-muted-foreground"> (some fills)</span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-muted-foreground">+ Tag</span>
+                                )}
+                              </button>
+                            )}
+                          </TableCell>
+                        )}
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDateTime(trade.timestamp)}
+                        </TableCell>
+                      </TableRow>,
+                    ]
+                    if (isExpanded) {
+                      group.fills.forEach((fill, fillIndex) => {
+                        rows.push(
+                          <TableRow
+                            key={`${group.key}-fill-${fill.tradeid ?? fill.id ?? fillIndex}`}
+                            className="bg-muted/30 text-muted-foreground"
+                          >
+                            <TableCell colSpan={isCrypto ? 3 : 4} className="text-xs pl-8">
+                              fill {fillIndex + 1}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {fill.quantity}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {formatCurrency(fill.average_price)}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs">
+                              {formatCurrency(fill.trade_value)}
+                            </TableCell>
+                            <TableCell />
+                            <TableCell className="font-mono text-xs">
+                              {fill.tradeid || '-'}
+                            </TableCell>
+                            {isHistorical && <TableCell />}
+                            <TableCell className="text-xs">
+                              {formatDateTime(fill.timestamp)}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    }
+                    return rows
+                  })}
                 </TableBody>
               </Table>
             </div>
