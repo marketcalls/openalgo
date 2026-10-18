@@ -74,6 +74,7 @@ jobs:
             test/test_fyers_index_hsm_mapping.py \
             test/test_qty_freeze_unknown_default.py \
             test/test_migrate_qty_freeze_oct_2026.py \
+            test/test_smart_order_no_action.py \
             -v --timeout=60
 
   # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
