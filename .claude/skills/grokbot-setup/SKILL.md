@@ -1,6 +1,6 @@
 ---
 name: grokbot-setup
-description: Understand, set up and run OpenAlgo inside Grok Bot, the desktop assistant that has its own Linux computer (the box). Use for any OpenAlgo question (start with references/openalgo-knowledge.md), and when a user wants OpenAlgo running on the box - cloning and installing with uv, writing .env with their broker credentials, starting the app headless, creating the OpenAlgo account, connecting the broker manually or through an automated daily TOTP login, scheduling the weekly upgrade, or explaining what works on the box versus what needs a static IP.
+description: Understand, set up and run OpenAlgo inside Grok Bot, the desktop assistant that has its own Linux computer (the box). Use for any OpenAlgo question (start with references/openalgo-knowledge.md), and when a user wants OpenAlgo running on the box - cloning and installing with uv, writing .env with their broker credentials, starting the app headless, creating the OpenAlgo account, connecting the broker manually or through an automated daily TOTP login, scheduling the weekly upgrade, falling back to Historify when the history API fails, or explaining what works on the box versus what needs a static IP.
 ---
 
 # Running OpenAlgo inside Grok Bot
@@ -9,7 +9,7 @@ Grok Bot works on the box: one persistent Linux machine shared by all of the
 user's bots, with `/workspace` as scratch space, a browser driven through a
 browser subagent, scheduled **routines**, and secure in-chat forms for secrets and
 one-time codes. Everything below was proven end to end on the box with Zerodha
-(Python 3.13, OpenAlgo 2.0.2.8, `.env` version 1.0.7).
+(Python 3.13, OpenAlgo 2.0.2.9, `.env` version 1.0.7).
 
 ## How to use this skill
 
@@ -26,9 +26,10 @@ reference, doc or skill the table below names for the task.
 | Install or reinstall OpenAlgo on the box, start or restart it | Sections 2-4 below, [references/install-and-run.md](references/install-and-run.md) |
 | Know which credentials a broker needs, or which login it uses | [references/brokers.md](references/brokers.md), then the broker's page on docs.openalgo.in (`.md` suffix) |
 | Connect the broker now (manual login, TOTP via secure form) | Section 5, [references/login-routines.md](references/login-routines.md) "Manual mode" |
-| Set up the daily 8:00 AM IST auto-login (Indian brokers) | [references/login-routines.md](references/login-routines.md) "Automated mode" and its routine template |
+| Set up the daily 7:00 AM IST auto-login (Indian brokers) | [references/login-routines.md](references/login-routines.md) "Automated mode" and its routine template |
 | Upgrade OpenAlgo, or set up the Sunday 6:00 AM IST upgrade | [references/weekly-upgrade.md](references/weekly-upgrade.md) |
 | Pull quotes, history, option chains; place Sandbox orders from Python | Knowledge sections 6, 7, 9, 10; `docs/prompt/openalgo python sdk.md`; `docs/api/<group>/<endpoint>.md` |
+| Daily bars when the history API fails | Knowledge section 3 "Historify as a fallback" |
 | Stream live ticks or order updates | Knowledge section 8; `docs/prompt/websockets-format.md` |
 | Compute indicators in Python (`openalgo.ta`) | Knowledge section 11; `/workspace/reference/openalgo-indicators.md`; `docs/prompt/indicators/` |
 | Write a study or strategy for the `/trading` chart in OpenScript | Skill `openscript`; https://openalgo.in/script/llms.txt |
@@ -63,9 +64,13 @@ reference, doc or skill the table below names for the task.
    from the box.
 8. **Trader language.** Say Live and Sandbox, never "paper" or "armed"; no
    emojis; give the cause and the next step, not status codes.
-9. **One instance.** The box is shared by the user's bots: check for an
-   existing checkout and a running app (ports 5000, 8765) before installing or
-   starting another.
+9. **One instance, one port each.** The box is shared by the user's bots:
+   check for an existing checkout and a running app (ports 5000, 8765, 5555)
+   before installing or starting another. OpenAlgo holds those ports, so any
+   other app on the box gets a different port (check `ss -ltn` first).
+10. **Login only in the daily routine; restart only the app.** Never connect
+    the broker after an upgrade, a restart or a code change; the next daily
+    routine does it. Restart the OpenAlgo process, never the box itself.
 
 ## 1. What the user must supply
 
@@ -91,9 +96,16 @@ Full commands and the reasons behind them: [references/install-and-run.md](refer
 ```bash
 mkdir -p /workspace/repos && cd /workspace/repos
 git clone https://github.com/marketcalls/openalgo.git && cd openalgo
-uv sync --locked                       # requires-python >=3.12; 3.13 used on the box
+uv python pin 3.13                     # writes .python-version (git-ignored)
+uv sync --locked                       # requires-python >=3.12
 cp .sample.env .env && chmod 600 .env
 ```
+
+Pin before the first sync. The repo ships no `.python-version`, so an unpinned
+uv picks the newest Python on the box (3.15 at the time of writing), where some
+dependencies have no wheel yet and must build from source; the box has a C
+compiler but no C++ compiler, so those builds fail. The same applies to any
+other uv project on the box (`uv init --python 3.13`).
 
 Then, **before the first start and before any account exists**:
 
@@ -139,13 +151,14 @@ See [references/install-and-run.md](references/install-and-run.md).
 
 **Indian brokers** expire their sessions daily at about 3:00 AM IST
 (`SESSION_EXPIRY_TIME = '03:00'`), so they must be connected once every day and
-the 8:00 AM IST routine below applies to them only. **Crypto brokers** (Delta
+the 7:00 AM IST routine below applies to them only. **Crypto brokers** (Delta
 Exchange) run 24/7: set `DISABLE_SESSION_EXPIRY = 'true'` and
 `CRYPTO_MASTER_CONTRACT_CUTOFF_TIME = '00:00'` as the Delta Exchange docs say,
-connect once, and do not create a daily login routine. Reconnect a crypto broker
-only after a restart or if the dashboard shows it disconnected. The "Market" and
-"Daily login needed" columns in [references/brokers.md](references/brokers.md)
-say which case a broker is. Two modes:
+connect once, and do not create a daily login routine. If the dashboard later
+shows a crypto broker disconnected, tell the user and reconnect when they ask.
+The "Market" and "Daily login needed" columns in
+[references/brokers.md](references/brokers.md) say which case a broker is. Two
+modes:
 
 **Manual (any broker).** Whenever the user asks, open OpenAlgo in the box browser,
 log in, go to `/broker`, click Connect, and stop at the broker's own login. Either
@@ -155,10 +168,13 @@ and submit immediately, and click the submit button yourself if the page does no
 auto-submit.
 
 **Automated daily login (Indian TOTP brokers).** Store the TOTP secret on the box,
-generate codes with `pyotp`, and create a routine at 8:00 AM IST every day that:
-ensures the app is running, logs in to OpenAlgo, connects the broker, fills the
-TOTP, verifies the dashboard, and reports one line. Full script, browser steps and
-the routine prompt: [references/login-routines.md](references/login-routines.md).
+generate codes with `pyotp`, and create a routine at 7:00 AM IST every day,
+weekends included, that: ensures the app is running, logs in to OpenAlgo,
+connects the broker, fills the TOTP, verifies the dashboard, and reports one
+line. If the user has other bots that use OpenAlgo data, the routine can also
+tell them it is ready as a data source, or that the login failed. Full script,
+browser steps and the routine prompt:
+[references/login-routines.md](references/login-routines.md).
 
 The Zerodha flow proven on the box: OpenAlgo login, `/broker`, select Zerodha,
 **Connect Account**, Kite user ID and password, **External TOTP** field, then the
@@ -176,9 +192,10 @@ secret alone, and needs no daily routine at all.
 
 - Collect through secure in-chat forms or secret requests. Never repeat a secret,
   password, TOTP secret or API key back in chat, logs, commit messages or reports.
-- Store broker login secrets in `/workspace/secrets/<broker>.env`, directory
-  `chmod 700`, files `chmod 600`. OpenAlgo's own `.env` stays in the repo root,
-  `chmod 600`, and is git-ignored.
+- Store broker login secrets, including the TOTP secret, in
+  `/workspace/secrets/<broker>.env`, directory `chmod 700`, files `chmod 600`,
+  so only the box account the bot runs as can read them. OpenAlgo's own `.env`
+  stays in the repo root, `chmod 600`, and is git-ignored.
 - The box is shared by every bot of this user. `chmod 600` keeps other OS users
   out, not other bots of the same user; tell the user that plainly.
 - If the user pastes a secret into chat anyway, use it, then suggest rotating it
@@ -192,10 +209,12 @@ A routine every Sunday at 6:00 AM IST: re-read `CLAUDE.md` and `upgrade/README.m
 for changed procedure, stop the app, back up `.env` and all six stores in `db/`,
 `git pull --ff-only`, `uv sync --locked`, `cd upgrade && uv run migrate_all.py`,
 merge new `.sample.env` keys into `.env` without touching existing values,
-restart, re-login the broker, verify, and report. On any failure roll back to the
-previous commit and backup and report the exact error. Do not use
-`install/update.sh` on the box: it expects sudo and a server layout. Steps and
-routine prompt: [references/weekly-upgrade.md](references/weekly-upgrade.md).
+restart the app (never the box), update the `openalgo` SDK and `openalgo-charts`,
+verify, and report. Do not log in to the broker: the 7:00 AM daily routine does
+that. On any failure roll back to the previous commit and backup and report the
+exact error. Do not use `install/update.sh` on the box: it expects sudo and a
+server layout. Steps and routine prompt:
+[references/weekly-upgrade.md](references/weekly-upgrade.md).
 
 ## 8. Limits of the box
 
@@ -227,7 +246,7 @@ Run all of these before telling the user setup is done:
 - [ ] `/dashboard` shows the broker connected and the master contract loaded
 - [ ] `POST /api/v1/ping` with the API key returns `pong` and the broker name
 - [ ] A read-only SDK call works, for example a RELIANCE NSE quote
-- [ ] Indian broker: daily login routine (if chosen) created for 8:00 AM IST, tested once by logging out and running it. Crypto broker: no daily routine, `DISABLE_SESSION_EXPIRY = 'true'` set
+- [ ] Indian broker: daily login routine (if chosen) created for 7:00 AM IST every day, tested once by logging out and running it. Crypto broker: no daily routine, `DISABLE_SESSION_EXPIRY = 'true'` set
 - [ ] Weekly upgrade routine created for Sunday 6:00 AM IST
 - [ ] The user has been told about the static IP limit for Live orders
 
@@ -240,3 +259,6 @@ Run all of these before telling the user setup is done:
 | "Invalid credentials" with the right password | `API_KEY_PEPPER` or `FERNET_SALT` changed after account creation | Restore them from the `.env` backup; see `upgrade/README.md` |
 | Funds cards read 0.00 on a weekend | Not confirmed; seen on a Saturday right after a good login | Recheck on a trading day before treating it as a fault |
 | Broker rejects a Live order (expected, not tested) | No static IP on the box | Use Sandbox here, Live from a static IP VPS |
+| `uv sync` or `uv add` fails building a package from source | uv picked a very new Python with no wheel for it, and the box has no C++ compiler | `uv python pin 3.13` (or `uv init --python 3.13`), then sync again |
+| `history` fails in a burst (broker error text, or `Expecting value`) | Broker history API unavailable for a while | Read daily bars from Historify instead (knowledge section 3) and say which source was used |
+| A second app will not start, or OpenAlgo stops answering | Port clash with 5000, 8765 or 5555 | Give the other app its own port |

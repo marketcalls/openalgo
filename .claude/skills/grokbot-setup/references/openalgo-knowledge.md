@@ -4,8 +4,9 @@ The one file to read first for any OpenAlgo question. It is a map with the key
 facts, not a replacement for the sources: when a detail matters (a parameter,
 a response field, a limit), open the cited doc and use that.
 
-Sources, read Oct 17, 2026: the repo (`README.md`, `CLAUDE.md`, `docs/`,
-`.sample.env`, `.claude/skills/`), docs.openalgo.in, openalgo.in,
+Sources, read Oct 17, 2026 and rechecked Oct 19, 2026 against OpenAlgo
+2.0.2.9: the repo (`README.md`, `CLAUDE.md`, `docs/`, `.sample.env`,
+`.claude/skills/`), docs.openalgo.in, openalgo.in,
 openalgo.in/charts, openalgo.in/script, and the installed `openalgo` SDK 2.0.5 in
 `/workspace/pyenv`. Grok Bot's working notes in `/workspace/reference/`
 (`openalgo-overview.md`, `openalgo-api.md`, `openalgo-symbols.md`,
@@ -91,12 +92,22 @@ installed package disagree, test against the package (section 18).
 | Request chain | TrafficLogger -> SecurityMiddleware -> CSP -> Flask (CSRF, session) -> API key auth -> service -> broker |
 | Production server | gunicorn, one worker, eventlet by default; gthread opt-in via `OPENALGO_WORKER_CLASS='gthread'` (64 threads) |
 | Dev server | `uv run app.py` (Flask-SocketIO, plain threading); on the box run it under `script` for a TTY |
-| Session expiry | Indian brokers about 3:00 AM IST (`SESSION_EXPIRY_TIME='03:00'`); crypto uses `DISABLE_SESSION_EXPIRY='true'` |
+| Session expiry | Indian brokers about 3:00 AM IST (`SESSION_EXPIRY_TIME='03:00'`), so only they need the daily login (7:00 AM IST routine on the box); crypto uses `DISABLE_SESSION_EXPIRY='true'` and needs none |
 | Secrets | `APP_KEY` (sessions, CSRF), `API_KEY_PEPPER` (password and API key hashing, Fernet KDF input), `FERNET_SALT` (Fernet KDF salt); pepper and salt never change after the account exists |
 | Security stack | Argon2 passwords, Fernet plus PBKDF2 token encryption, TOTP 2FA, rate limits, manual IP ban (security page, route `/logs/security`), CSP/CORS/CSRF, ORM only |
 | Rate limits (`.sample.env`) | `API_RATE_LIMIT` 100/s, `ORDER_RATE_LIMIT` 10/s, `SMART_ORDER_RATE_LIMIT` 10/s, `WEBHOOK_RATE_LIMIT` 100/min, `STRATEGY_RATE_LIMIT` 200/min, login 5/min and 25/hour |
 | Logs | console; `LOG_TO_FILE` writes to `log/`; errors in `log/errors.jsonl` |
 | Health | `GET /auth/app-info` (name, version); `POST /api/v1/ping` (needs API key and a live broker session) |
+
+**Historify as a fallback.** When the broker history API fails (often in a
+burst, with the broker's error text or `Expecting value`), daily bars can come
+from Historify instead: SDK or REST `history(..., source="db")`, or read
+`db/historify.duckdb` directly. The app opens that file read-write during
+downloads and scheduled jobs, so for a direct read copy it (with any `.wal`
+beside it) to `/tmp` first and open the copy read-only. Table `market_data`
+(`symbol, exchange, interval, timestamp, open, high, low, close, volume, oi`;
+daily `interval` is `D`, `timestamp` is epoch seconds). It holds only what the
+watchlist downloaded, so check the last date and say which source was used.
 
 Tech stack (README): Flask 3, SQLAlchemy 2, Flask-SocketIO, ZeroMQ,
 Argon2-CFFI, cryptography, Agno and LiteLLM (agent); React 19, TypeScript,
@@ -111,7 +122,7 @@ Lightweight Charts and Plotly. Diagram: `docs/architecture-diagram.png`.
 | Python Strategy Host | `/python` | In-browser editor; IST start and stop schedules; each script an isolated subprocess with live logs |
 | Flow | `/flow` | No-code node graph (xyflow): market data -> indicators -> conditions -> orders; webhook triggers; JSON import and export (section 14). Node count: 61 on docs.openalgo.in, 53 on openalgo.in |
 | Strategy Module and RMS | `/strategy` | Multi-leg options strategies with risk rules from `services/risk/`; kinds `batch` (all legs together) and `signal` (one leg per alert); created only in the browser wizard; driven over `/api/v1/strategy/*` or a webhook token |
-| Options and Portfolio tools | `/tools` | 18 tools (registry `frontend/src/lib/tools.ts`): Option Chain, Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Straddle, Arbitrage, Strategy Builder, Portfolio and SIP Backtesters, Portfolio Analyzer and more. README says 12 |
+| Options and Portfolio tools | `/tools` | 19 tools (registry `frontend/src/lib/tools.ts`): Option Chain, Greeks, OI Tracker, Max Pain, Vol Surface, GEX, Strike Profile, IV Smile, Straddle, Arbitrage, Strategy Builder, Portfolio and SIP Backtesters, Portfolio Analyzer and more. README says 12 |
 | Charting Terminal | `/trading` | Built on `openalgo-charts`; line-based chart trading, order dock; up to 7 saved layouts, grids up to 4x2; Scripts, Backtest and Strategies panels for OpenScript; custom JS indicators load at runtime |
 | Scalping Terminal | `/scalping` | Keyboard-driven index options scalping; NRML/MIS only, never CNC; server-side stop, target, trail |
 | AI Agent | `/agent` | Chat over market data, charts, payoffs and `ta` indicators; every order waits for explicit approval; LiteLLM providers, ChatGPT subscription OAuth, or Ollama |
@@ -387,8 +398,8 @@ Use the `openscript` skill to write, validate and install scripts.
 
 ## 13. openalgo-charts and chart indicators
 
-- npm `openalgo-charts` (2.6.6 installed on the box): HTML5 canvas library,
-  zero runtime dependencies, Apache-2.0, IST default timezone. 112 indicators,
+- npm `openalgo-charts` (2.6.7, pinned in `frontend/package.json`): HTML5
+  canvas library, zero runtime dependencies, Apache-2.0, IST default timezone. 112 indicators,
   87 drawing tools, 13 chart types (candles, Heikin Ashi, Renko, Range, Point
   and Figure, Kagi, Line Break, ...), footprint, volume profile, TPO, bar
   replay, trading on chart (order tickets, position lines, depth ladder).
@@ -478,7 +489,9 @@ Use the `openscript` skill to write, validate and install scripts.
 - Production must stay correct under eventlet; no asyncio in request code.
 - Conventional Commits; a changelog entry ships with every publish.
 - Upgrades: `git pull`, `uv sync`, `cd upgrade && uv run migrate_all.py`; keep
-  `.env` (never copy `.sample.env` over it); compare `ENV_CONFIG_VERSION`.
+  `.env` (never copy `.sample.env` over it); compare `ENV_CONFIG_VERSION`. On
+  the box: restart only the app, and leave the broker login to the daily
+  routine.
 
 ## 18. Known conflicts between docs and code
 
@@ -496,7 +509,7 @@ Use the `openscript` skill to write, validate and install scripts.
 | `API_RATE_LIMIT` default | `docs/api/README.md`: 50 per second | `.sample.env`: 100 per second | Read the user's `.env` |
 | NCO symbols | DDMMMYY rule | examples `ALUMINI26MAYFUT` have no day | Confirm with `search`/`symbol` |
 | Crypto perpetual suffix | some comments `BTCUSD.P` | served form `BTCUSDFUT` | Use `...FUT` |
-| `/tools` count | README 12 | CLAUDE.md, docs site 18 | 18 (registry) |
+| `/tools` count | README 12 | CLAUDE.md and registry 19 | 19 (registry) |
 | Flow node count | docs.openalgo.in 61 | openalgo.in 53 | Use the type list in section 14 |
 | Broker count | README 35 + Delta | docs 34 + Dhan sandbox + Delta; `VALID_BROKERS` 37 codes | Use [brokers.md](brokers.md) |
 | Login type labels | `BrokerSelect.tsx` marks Groww, AliceBlue, Zebu, Shoonya as `totp` | backend flow differs | Follow [brokers.md](brokers.md) |

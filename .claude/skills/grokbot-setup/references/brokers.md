@@ -27,7 +27,7 @@ Where the docs are silent the table says **not documented**; do not guess.
   - *OTP form*: OpenAlgo triggers an SMS or email OTP and shows a form for it.
 - **Daily login needed**: Indian sessions expire at about 3:00 AM IST, so every
   Indian broker needs a connect each day. Crypto does not (see Delta Exchange).
-- **TOTP automation** (for the 8:00 AM routine):
+- **TOTP automation** (for the 7:00 AM routine):
   - *Yes*: the daily inputs are static values plus a TOTP the bot can generate
     from the TOTP secret with pyotp.
   - *Not needed*: Connect alone works; the routine only clicks Connect.

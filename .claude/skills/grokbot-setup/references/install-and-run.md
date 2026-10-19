@@ -30,11 +30,15 @@ ss -ltnp | grep -E ':5000|:8765'
 mkdir -p /workspace/repos && cd /workspace/repos
 git clone https://github.com/marketcalls/openalgo.git
 cd openalgo
+uv python pin 3.13
 uv sync --locked
 ```
 
-- `pyproject.toml` declares `requires-python = ">=3.12"`; the repo pins `3.13` in
-  `.python-version`, and uv fetches it if the box lacks it.
+- `pyproject.toml` declares `requires-python = ">=3.12"`. The repo ships no
+  `.python-version` (it is git-ignored), so pin one before the first sync:
+  `uv python pin 3.13`. Unpinned, uv picks the newest Python on the box (3.15
+  when this was written), where some packages have no wheel yet; building them
+  needs a C++ compiler, and the box has none.
 - Use uv only (`CLAUDE.md`). No `pip install`, no bare `python`.
 - `frontend/dist/` is committed on `main`, so no Node.js build is needed.
 
@@ -72,7 +76,7 @@ Rules from `.sample.env` and `upgrade/README.md`:
   account exists. `upgrade/rotate_pepper.py` is the only supported rotation, and
   it is an explicit operator action, never part of a routine.
 - `APP_KEY` signs session cookies and CSRF tokens. Rotating it only logs out
-  sessions; restart the app and log in again afterwards.
+  sessions; restart the app and log in to OpenAlgo again afterwards.
 - Never copy `.sample.env` over an existing `.env`; that discards the pepper and
   salt for good.
 
@@ -122,7 +126,13 @@ Stop:
 pkill -f "script -qfec uv run app.py"; pkill -f "openalgo/.venv/bin/python app.py"
 ```
 
-Restart = stop, wait until port 5000 is free, start again.
+Restart = stop, wait until port 5000 is free, start again. Restart the app,
+never the box, and do not log in to the broker afterwards: the daily login
+routine does that ([login-routines.md](login-routines.md)).
+
+**Other apps on the box.** OpenAlgo holds 5000 (web), 8765 (WebSocket) and 5555
+(ZeroMQ). Start any other web app on a different port and check it is free
+first (`ss -ltn`); an app with its own backend needs a second free port too.
 
 ## 4. Create the account
 

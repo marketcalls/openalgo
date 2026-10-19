@@ -7,7 +7,8 @@ The supported updater, `install/update.sh`, stops a systemd service, uses `sudo`
 may install a browser package, and stashes local changes. The box has none of
 that layout, so the routine follows the same seven phases by hand. Sunday 6:00 AM
 IST is outside market hours, and the daily login routine (Indian brokers) runs at
-8:00 AM afterwards.
+7:00 AM afterwards. The upgrade restarts only the OpenAlgo process, never the box,
+and never logs in to the broker: the daily routine does that.
 
 ## Steps
 
@@ -53,12 +54,12 @@ TS=$(date +%Y%m%d_%H%M%S)
    added, not their values.
 8. **Restart.** `nohup setsid script -qfec "uv run app.py" app.log >/dev/null 2>&1 &`,
    wait for `/auth/app-info`, check ports 5000 and 8765.
-9. **Re-login.** Indian broker: run the daily login steps
-   ([login-routines.md](login-routines.md)). Crypto broker: click Connect once.
-10. **Verify** (from the upgrade procedure doc): new version in
-    `/auth/app-info`, dashboard shows the broker and master contract ready,
-    `POST /api/v1/ping` returns pong, a read-only quote works, no new entries in
-    `log/errors.jsonl` if it exists, and the UI loads without stale-chunk errors.
+9. **No broker login.** Leave the broker disconnected; the 7:00 AM daily
+   routine connects it ([login-routines.md](login-routines.md)).
+10. **Verify** (from the upgrade procedure doc, without a broker session): new
+    version in `/auth/app-info`, ports 5000 and 8765 listening, migrations exited
+    0, no new entries in `log/errors.jsonl`, and the UI loads without
+    stale-chunk errors. The ping and quote checks run after the daily login.
 11. **Companion packages.** `cd /workspace/pyenv && uv lock --upgrade-package
     openalgo && uv sync`, and `cd /workspace/openalgo-charts-npm && npm update
     openalgo-charts`. Report old and new versions.
@@ -78,8 +79,8 @@ nohup setsid script -qfec "uv run app.py" app.log >/dev/null 2>&1 &
 Restore all stores together, never one selectively (the upgrade doc warns that a
 migration can change related state across stores). The reset is safe here only
 because step 1 refused to run on a dirty tree or another branch; if that check
-was skipped, stop and ask instead. Then log in again and report the exact error
-from the failed step.
+was skipped, stop and ask instead. Do not log in; report the exact error from
+the failed step and that the rollback completed.
 
 ## Routine prompt template
 
@@ -91,13 +92,13 @@ after first re-reading CLAUDE.md, upgrade/README.md and
 docs/design/30-upgrade-procedure/README.md for any change to the procedure.
 Stop and report without changing anything if the tree is dirty or not on main.
 Back up .env and all six db stores before pulling. Never change APP_KEY,
-API_KEY_PEPPER, FERNET_SALT or broker credentials. On any failure after the
-backup, roll back to the previous commit and backup, restart, and log in again.
-After restart, reconnect the broker (daily login steps for an Indian broker,
-a single Connect for a crypto broker).
+API_KEY_PEPPER, FERNET_SALT or broker credentials. Restart only the app, never
+the box. On any failure after the backup, roll back to the previous commit and
+backup and restart the app. Never log in to the broker; the 7:00 AM daily
+routine does that.
 
 Report to the user in a few lines: old and new OpenAlgo version, number of new
 commits, new .env keys added (names only), migrations result, SDK and
-openalgo-charts versions, broker connected yes/no. On failure: the step, the exact
+openalgo-charts versions. On failure: the step, the exact
 error, and confirmation that the rollback completed.
 ```
