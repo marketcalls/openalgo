@@ -6,7 +6,7 @@ Indian broker sessions expire daily at about 3:00 AM IST (`CLAUDE.md`;
 
 | Market | Daily login | What to do |
 | --- | --- | --- |
-| Indian broker | Required | Manual connect each day, or the 8:00 AM IST routine below |
+| Indian broker | Required | Manual connect each day, or the 7:00 AM IST routine below |
 | Crypto broker (Delta Exchange) | Not required | Set `DISABLE_SESSION_EXPIRY = 'true'` and `CRYPTO_MASTER_CONTRACT_CUTOFF_TIME = '00:00'`, connect once, no routine |
 
 The per-broker answer is in the "Market" and "Daily login needed" columns of
@@ -50,8 +50,9 @@ OpenAlgo triggers the OTP on Connect and the user must read it from their phone.
 - OpenAlgo username and password
 - Broker login fields the broker asks for every day (see brokers.md "Daily inputs")
 - The **TOTP secret**: the base32 setup key shown when the user enrolled TOTP at
-  the broker. Not a 6-digit code. If the user only scanned a QR code, ask them to
-  re-enrol and copy the key, or stay with manual mode.
+  the broker. Not a 6-digit code. It goes only into the secrets file below,
+  which only the box account the bot runs as can read. If the user only scanned
+  a QR code, ask them to re-enrol and copy the key, or stay with manual mode.
 
 ### Store on the box
 
@@ -131,11 +132,16 @@ in Live mode and the master contract loaded (about 1.1 lakh symbols).
 Test it once at setup: log out at `/auth/logout`, run the steps above with a
 generated code, confirm the dashboard.
 
-### Routine: daily login at 8:00 AM IST (Indian brokers only)
+### Routine: daily login at 7:00 AM IST (Indian brokers only)
 
-Create a routine that runs every day at 8:00 AM IST (the user may choose weekdays
-only). 8:00 AM is after the 3:00 AM expiry and before the 9:15 AM open. Do not
-create it when the broker's Market column says Crypto.
+Create a routine that runs every day at 7:00 AM IST, weekends included (the user
+may choose weekdays only). 7:00 AM is after the 3:00 AM expiry, after the Sunday
+6:00 AM upgrade, and before the 9:15 AM open. Do not create it when the broker's
+Market column says Crypto.
+
+This routine is the only place the broker login happens. Upgrades, restarts and
+code changes never log in; the broker stays disconnected until the next run, or
+until the user asks for a manual connect.
 
 Routine prompt template (fill the angle brackets, keep secrets out of it; they
 live in the secrets file):
@@ -161,6 +167,9 @@ Daily OpenAlgo login for <broker display name> (<broker code>), Indian broker.
    Analyze> mode, <time IST>." On failure send one line with the step that failed
    and the exact error text shown, and retry once with a fresh TOTP before giving up.
    Never include passwords, TOTP codes or API keys in the message.
+8. <Optional, only if the user asked: tell <other bot(s)> in one line that
+   OpenAlgo is ready as a data source at http://127.0.0.1:5000, or that today's
+   login failed and why. Send it as a priority message so it is not held.>
 ```
 
 If a pending task must run before a login (for example an `APP_KEY` rotation),
