@@ -194,7 +194,7 @@ TAB_SEGMENTS = {
 
 LEG_POSITIONS = ("B", "S")
 LEG_OPTION_TYPES = ("CE", "PE")
-LEG_STRIKE_MODES = ("atm", "strike")
+LEG_STRIKE_MODES = ("atm", "atm_percent", "strike")
 LEG_EXPIRIES = ("weekly", "next_week", "monthly", "next_month", "current", "next")
 
 #: A strike named relative to the money. Five steps either side is what the
@@ -202,6 +202,7 @@ LEG_EXPIRIES = ("weekly", "next_week", "monthly", "next_month", "current", "next
 ATM_OFFSETS = (
     ("ATM",) + tuple(f"ITM{n}" for n in range(1, 6)) + tuple(f"OTM{n}" for n in range(1, 6))
 )
+ATM_PERCENT_VALUES = tuple(value / 2 for value in range(-10, 11) if value != 0)
 
 LOCK_PROFIT_MODES = ("lock", "lock_and_trail")
 
@@ -223,6 +224,7 @@ LEG_FIELDS = (
     "option_type",
     "strike_mode",
     "atm_offset",
+    "atm_percent",
     "strike",
     "expiry",
     "sl_pts",
@@ -646,7 +648,7 @@ def _validate_leg(raw: Any, index: int) -> dict:
     # Fields that only mean something for an options leg. Accepting them on a
     # futures leg and then ignoring them is how a strategy ends up looking
     # correct in the editor and trading something else.
-    options_only = ("option_type", "strike_mode", "atm_offset", "strike")
+    options_only = ("option_type", "strike_mode", "atm_offset", "atm_percent", "strike")
     if segment == "options":
         clean["option_type"] = _choice(
             _required(leg, "option_type", label), LEG_OPTION_TYPES, f"{label}.option_type"
@@ -664,6 +666,16 @@ def _validate_leg(raw: Any, index: int) -> dict:
             clean["atm_offset"] = _choice(
                 leg.get("atm_offset") or "ATM", ATM_OFFSETS, f"{label}.atm_offset"
             )
+        elif strike_mode == "atm_percent":
+            if leg.get("atm_offset") is not None or leg.get("strike") is not None:
+                raise ValidationError(f"{label} contains fields not used by ATM percentage mode")
+            clean["atm_percent"] = _number(
+                _required(leg, "atm_percent", label), f"{label}.atm_percent"
+            )
+            if clean["atm_percent"] not in ATM_PERCENT_VALUES:
+                raise ValidationError(
+                    f"{label}.atm_percent must be a half-percent step from -5 to +5, excluding zero"
+                )
         else:
             if leg.get("atm_offset") is not None:
                 raise ValidationError(
