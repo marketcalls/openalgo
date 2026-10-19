@@ -81,10 +81,21 @@ def get_margin_data(auth_token):
         # stayed on cash (179542.8 both times), "Collateral" carried the
         # pledged-shares margin (0 -> 222565.5), and "Net" == CollateralValue +
         # Collateral - MarginUsed (179542.8 + 222565.5 - 0.2 = 402108.1, matching
-        # the Kotak app's "Available margin"). "RmsPayInAmt - RmsPayOutAmt" is
-        # only the current day's fund pay-in/pay-out delta -- 0 unless the account
-        # was funded that same day -- so it is not a cash source either.
-        cash = float(margin_data.get("CollateralValue", 0))
+        # the Kotak app's "Available margin").
+        #
+        # A same-day deposit or withdrawal is not in CollateralValue: it arrives
+        # as "RmsPayInAmt" / "RmsPayOutAmt" until it settles, and "Net" already
+        # counts it. An account funded with 300000 on top of 1040 cash reported
+        # CollateralValue 1040, RmsPayInAmt 300000 and Net 301040 (issue #2224).
+        # So the usable cash is CollateralValue + RmsPayInAmt - RmsPayOutAmt,
+        # and availablecash + collateral - utiliseddebits reconciles with Net on
+        # both accounts above. Both fields are 0 on a day with no fund movement,
+        # which leaves the earlier figure unchanged.
+        cash = (
+            float(margin_data.get("CollateralValue", 0))
+            + float(margin_data.get("RmsPayInAmt", 0))
+            - float(margin_data.get("RmsPayOutAmt", 0))
+        )
         collateral = float(margin_data.get("Collateral", 0))
 
         processed_margin_data = {
