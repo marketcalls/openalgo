@@ -19,6 +19,7 @@ from flask import Blueprint, jsonify, request, session
 from database.watchlist_db import (
     MAX_ITEMS_PER_LIST,
     add_item,
+    add_items,
     clear_watchlist,
     create_watchlist,
     delete_watchlist,
@@ -27,6 +28,7 @@ from database.watchlist_db import (
     rename_watchlist,
     reorder_items,
 )
+from services.watchlist_service import parse_symbol_list, resolve_symbols
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -148,6 +150,34 @@ def add_symbol(watchlist_id: int):
             }
         ), 409
     return jsonify({"status": "success", "data": item}), 201
+
+
+@watchlist_bp.route("/watchlist/api/lists/<int:watchlist_id>/items/bulk", methods=["POST"])
+@check_session_validity
+def add_symbols(watchlist_id: int):
+    """Add every symbol in a pasted list.
+
+    ``text`` is the paste as the user made it. Names are resolved against the
+    broker's master contract (services/watchlist_service.py), and the answer
+    says what happened to each one, because a paste of forty names that
+    silently loses three is a list the user trusts and should not.
+    """
+    payload = request.get_json(silent=True) or {}
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return jsonify({"status": "error", "message": "Paste at least one symbol"}), 400
+
+    tokens = parse_symbol_list(text)
+    if not tokens:
+        return jsonify({"status": "error", "message": "Paste at least one symbol"}), 400
+
+    found, not_found = resolve_symbols(tokens)
+    outcome = add_items(_user(), watchlist_id, found)
+    if outcome is None:
+        return jsonify({"status": "error", "message": "List not found"}), 404
+
+    outcome["not_found"] = not_found
+    return jsonify({"status": "success", "data": outcome})
 
 
 @watchlist_bp.route(
