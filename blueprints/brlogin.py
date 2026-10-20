@@ -762,6 +762,12 @@ def _broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "smifs":
+        code = "smifs"
+        logger.debug("SMIFS God Quant broker - authentication initiated")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "groww":
         code = "groww"
         logger.debug("Groww broker - authentication initiated")
