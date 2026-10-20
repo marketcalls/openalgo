@@ -44,11 +44,8 @@ class MockAPI:
             "/api/v1/quotes": env_values.get("API_RATE_LIMIT", "50 per second"),
             "/api/v1/depth": env_values.get("API_RATE_LIMIT", "50 per second"),
             "/api/v1/history": env_values.get("API_RATE_LIMIT", "50 per second"),
-            "/strategy/webhook/test": env_values.get("WEBHOOK_RATE_LIMIT", "100 per minute"),
             "/chartink/webhook/test": env_values.get("WEBHOOK_RATE_LIMIT", "100 per minute"),
-            "/strategy/new": env_values.get("STRATEGY_RATE_LIMIT", "200 per minute"),
-            "/strategy/delete": env_values.get("STRATEGY_RATE_LIMIT", "200 per minute"),
-            "/strategy/configure": env_values.get("STRATEGY_RATE_LIMIT", "200 per minute"),
+            "/chartink/new": env_values.get("STRATEGY_RATE_LIMIT", "200 per minute"),
         }
 
     def parse_rate_limit(self, limit_str):
@@ -213,9 +210,8 @@ def main():
         ("/api/v1/cancelorder", 10, "Order Cancellation API"),
         ("/api/v1/placesmartorder", 2, "Smart Order API"),
         ("/api/v1/quotes", 50, "Quotes API (General)"),
-        ("/strategy/webhook/test", 100, "Strategy Webhook API"),
         ("/chartink/webhook/test", 100, "ChartInk Webhook API"),
-        ("/strategy/new", 200, "Strategy Creation API"),
+        ("/chartink/new", 200, "ChartInk Strategy Creation API"),
     ]
 
     for endpoint, limit, description in tests:
@@ -239,7 +235,7 @@ def main():
         print("- Smart Order API: 2 requests/second")
         print("- General APIs: 50 requests/second")
         print("- Webhook APIs: 100 requests/minute")
-        print("- Strategy APIs: 200 requests/minute")
+        print("- ChartInk Strategy APIs: 200 requests/minute")
     else:
         print("Some tests FAILED!")
     print("=" * 60)

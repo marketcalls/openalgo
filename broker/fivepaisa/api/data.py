@@ -652,10 +652,19 @@ class BrokerData:
     def map_interval(self, interval: str) -> str | None:
         """Map an OpenAlgo interval to the 5Paisa Historical Candles path segment.
 
-        Values are the Interval codes from the docs
+        Keys are OpenAlgo's public interval aliases; values are the Interval
+        codes 5Paisa's URL expects
         (broker-api-docs/fivepaisa-api-docs/09-market-data-rest.md): 1m, 5m,
         10m, 15m, 30m, **60m**, 1d. The hourly code is "60m" — sending "1h"
         (as this did) is not a code 5Paisa accepts, so hourly history failed.
+
+        Note the keys deliberately stay in step with `timeframe_map`, which
+        services/intervals_service.py publishes as this broker's supported set:
+        accepting an alias that is never advertised (or vice versa) leaves
+        clients guessing. "1h" is OpenAlgo's public name for hourly across the
+        brokers here, and intervals_service buckets by suffix — so also
+        accepting "60m" would have meant advertising the same timeframe twice,
+        once under minutes and once under hours.
 
         Returns None for anything unsupported so get_history raises instead of
         silently serving daily candles for, say, a 2m request.
@@ -667,7 +676,6 @@ class BrokerData:
             "15m": "15m",
             "30m": "30m",
             "1h": "60m",
-            "60m": "60m",
             # Handle all daily timeframe variants
             "1d": "1d",
             "D": "1d",
@@ -825,6 +833,13 @@ class BrokerData:
                             # are stamped in IST wall-clock (e.g. 2026-06-17T09:15:00),
                             # so keep it naive here and localize per-branch below.
                             dt = datetime.strptime(candle[0], "%Y-%m-%dT%H:%M:%S")
+
+                            # 5Paisa answers a range with no sessions in it (e.g.
+                            # a future-dated one) with the latest candle instead
+                            # of an empty list, so keep only candles that fall
+                            # inside the requested chunk.
+                            if not (current_start.date() <= dt.date() <= current_end.date()):
+                                continue
 
                             open_price = float(candle[1])
                             high_price = float(candle[2])

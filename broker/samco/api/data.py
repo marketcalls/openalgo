@@ -2,11 +2,12 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
+from urllib.parse import quote as url_quote
 
 import httpx
 import pandas as pd
 
-from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -87,7 +88,36 @@ def get_api_response(endpoint, auth, method="GET", payload=None, max_retries=3):
                     raise Exception("Rate limit exceeded. Please reduce request frequency.")
 
             if response.status_code >= 500:
-                logger.error(f"Server error ({response.status_code}). Endpoint: {endpoint}")
+                # Samco's candle endpoints intermittently 500 on requests that
+                # succeed when repeated seconds later (verified live 2026-08-10;
+                # genuine rate limiting comes back as 429, handled above). Retry
+                # on the same bounded backoff rather than surfacing a transient
+                # blip to the user as a hard failure.
+                if attempt < max_retries:
+                    delay = 2**attempt
+                    logger.warning(
+                        f"Samco server error ({response.status_code}), retrying in {delay}s... "
+                        f"(attempt {attempt + 1}/{max_retries}) Endpoint: {endpoint}"
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # Samco stamps every response with a msgId and asks that it be
+                # quoted when reporting an API problem, so surface it here -
+                # a sustained 5xx is a broker-side outage no retry can fix.
+                msg_id = server_time = ""
+                try:
+                    body = response.json()
+                    msg_id = body.get("msgId", "")
+                    server_time = body.get("serverTime", "")
+                except Exception:
+                    pass
+                logger.error(
+                    f"Server error ({response.status_code}) after {max_retries} retries. "
+                    f"Endpoint: {endpoint} | Samco msgId={msg_id or 'n/a'} "
+                    f"serverTime={server_time or 'n/a'} - quote this to apisupport@samco.in "
+                    f"if it persists"
+                )
                 raise Exception(
                     f"Samco server error ({response.status_code}). Please try again later."
                 )
@@ -121,19 +151,68 @@ class BrokerData:
             "D": "DAY",
         }
 
-    def _get_index_name(self, symbol: str) -> str:
-        """Map OpenAlgo index symbols to Samco index names"""
-        index_map = {
-            "NIFTY": "Nifty 50",
-            "BANKNIFTY": "Nifty Bank",
-            "NIFTY 50": "Nifty 50",
-            "NIFTY BANK": "Nifty Bank",
-            "SENSEX": "SENSEX",
-            "BANKEX": "BANKEX",
-            "FINNIFTY": "Nifty Fin Service",
-            "MIDCPNIFTY": "NIFTY MID SELECT",
-        }
-        return index_map.get(symbol.upper(), symbol)
+    # Fallback only. The master contract seeds every supported index with its
+    # Samco index name as brsymbol, so the DB lookup below is the real source.
+    _INDEX_NAME_FALLBACK = {
+        "NIFTY": "NIFTY 50",
+        "BANKNIFTY": "NIFTY BANK",
+        "FINNIFTY": "NIFTY FIN SERVICE",
+        "MIDCPNIFTY": "NIFTY MID SELECT",
+        "NIFTYNXT50": "NIFTY NEXT 50",
+        "INDIAVIX": "INDIA VIX",
+        "SENSEX": "SENSEX",
+        "BANKEX": "BANKEX",
+    }
+
+    def _api_exchange(self, symbol: str, exchange: str) -> str:
+        """
+        Resolve the exchange code to send to Samco's quote/depth endpoints.
+
+        Samco's ScripMaster files MCX derivatives under the exchange code MFO, and
+        /quote/getQuote, /marketDepth and /quote/multiQuote all accept MFO as a
+        distinct value. The master contract folds MFO into MCX for the OpenAlgo
+        exchange but preserves the original on brexchange, so read it back here.
+
+        Note this is deliberately not applied to the candle endpoints - their
+        documented exchange values are BSE/NSE/NFO/MCX/CDS only, no MFO.
+        """
+        try:
+            brexchange = get_brexchange(symbol, exchange)
+            if brexchange:
+                return brexchange
+        except Exception as e:
+            logger.warning(f"brexchange lookup failed for {symbol} on {exchange}: {e}")
+        return exchange
+
+    def _get_index_name(self, symbol: str, exchange: str = "NSE_INDEX") -> str:
+        """
+        Resolve an OpenAlgo index symbol to the exact indexName Samco expects.
+
+        Samco's index endpoints (/quote/indexQuote, /intraday/indexCandleData,
+        /history/indexCandleData) key off a fixed list of index names such as
+        "NIFTY 50", "NIFTY FIN SERVICE" or "INDIA VIX". Those names are stored as
+        brsymbol when the master contract is built, so resolve from there first -
+        that covers all 68 supported indices rather than a handful.
+        """
+        try:
+            br_symbol = get_br_symbol(symbol, exchange)
+            if br_symbol:
+                return br_symbol
+        except Exception as e:
+            logger.warning(f"Index name lookup failed for {symbol} on {exchange}: {e}")
+
+        upper = symbol.upper()
+        if upper in self._INDEX_NAME_FALLBACK:
+            logger.warning(
+                f"Index {symbol} not found in master contract for {exchange}; "
+                f"using fallback name {self._INDEX_NAME_FALLBACK[upper]}"
+            )
+            return self._INDEX_NAME_FALLBACK[upper]
+
+        logger.warning(
+            f"No Samco index name known for {symbol} on {exchange}; passing symbol through"
+        )
+        return symbol
 
     def get_index_listing_id(self, symbol: str, exchange: str) -> str:
         """
@@ -148,10 +227,10 @@ class BrokerData:
             str: The listingId for streaming (e.g., '-23' for NIFTY)
         """
         try:
-            index_name = self._get_index_name(symbol)
+            index_name = self._get_index_name(symbol, exchange)
 
             response = get_api_response(
-                f"/quote/indexQuote?indexName={index_name}", self.auth_token, "GET"
+                f"/quote/indexQuote?indexName={url_quote(index_name)}", self.auth_token, "GET"
             )
 
             if response.get("status") != "Success":
@@ -190,11 +269,12 @@ class BrokerData:
 
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
+            api_exchange = self._api_exchange(symbol, exchange)
 
             # Build query parameters
-            params = f"symbolName={br_symbol}"
-            if exchange and exchange != "NSE":
-                params += f"&exchange={exchange}"
+            params = f"symbolName={url_quote(str(br_symbol))}"
+            if api_exchange and api_exchange != "NSE":
+                params += f"&exchange={api_exchange}"
 
             response = get_api_response(f"/quote/getQuote?{params}", self.auth_token, "GET")
 
@@ -239,10 +319,10 @@ class BrokerData:
         """
         try:
             # Map to Samco index name
-            index_name = self._get_index_name(symbol)
+            index_name = self._get_index_name(symbol, exchange)
 
             response = get_api_response(
-                f"/quote/indexQuote?indexName={index_name}", self.auth_token, "GET"
+                f"/quote/indexQuote?indexName={url_quote(index_name)}", self.auth_token, "GET"
             )
 
             if response.get("status") != "Success":
@@ -308,8 +388,9 @@ class BrokerData:
             # Build payload for market depth API
             payload = {"symbolName": br_symbol}
             # Add exchange if not NSE (NSE is default)
-            if exchange and exchange != "NSE":
-                payload["exchange"] = exchange
+            api_exchange = self._api_exchange(symbol, exchange)
+            if api_exchange and api_exchange != "NSE":
+                payload["exchange"] = api_exchange
 
             response = get_api_response("/marketDepth", self.auth_token, "POST", payload)
 
@@ -464,7 +545,7 @@ class BrokerData:
         """
         # Group symbols by exchange
         exchange_symbols = {}  # {exchange: [br_symbol1, br_symbol2, ...]}
-        symbol_map = {}  # {exchange:br_symbol -> {symbol, exchange}}
+        requested = []  # one entry per symbol, in request order
         skipped_symbols = []
 
         for item in symbols:
@@ -487,19 +568,26 @@ class BrokerData:
                     )
                     continue
 
-                # Map exchange for API (MFO is separate in Samco)
-                api_exchange = exchange
+                # Map exchange for API (MCX derivatives go under the MFO key)
+                api_exchange = self._api_exchange(symbol, exchange)
 
                 if api_exchange not in exchange_symbols:
                     exchange_symbols[api_exchange] = []
                 exchange_symbols[api_exchange].append(br_symbol)
 
-                # Store mapping for response parsing
-                symbol_map[f"{api_exchange}:{br_symbol}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "br_symbol": br_symbol,
-                }
+                # Store mapping for response parsing. token is the primary join
+                # key - the master contract already stores it in Samco's own
+                # "<scripCode>_<segment>" form (e.g. "41015_NFO"), which is
+                # exactly the `symbol` field every multiQuote entry carries back.
+                requested.append(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "br_symbol": br_symbol,
+                        "api_exchange": api_exchange,
+                        "token": get_token(symbol, exchange),
+                    }
+                )
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
@@ -534,32 +622,44 @@ class BrokerData:
         results = []
         multi_quotes = response.get("multiQuotes", [])
 
-        # Create a lookup by exchange:tradingSymbol for quick access
-        quotes_by_symbol = {}
+        # Index the response every way it can be joined back to a request.
+        #
+        # Samco does NOT echo the trading symbol it was asked for: request
+        # "NIFTY11AUG2624600CE" and the entry comes back as tradingSymbol
+        # "NIFTY2681124600CE" (its own compact <YY><M><DD> form). Nor does it
+        # echo the exchange key for MCX derivatives - those are sent under MFO
+        # and returned as MCX. The one field that always round-trips is
+        # `symbol` ("<scripCode>_<segment>"), which is what SymToken.token holds.
+        by_token = {}
+        by_name = {}
         for quote in multi_quotes:
+            listing_id = quote.get("symbol")
+            if listing_id:
+                by_token[str(listing_id)] = quote
+
             exchange = quote.get("exchange")
-            trading_symbol = quote.get("tradingSymbol")
-            symbol_name = quote.get("symbolName")
-            if exchange and trading_symbol:
-                quotes_by_symbol[f"{exchange}:{trading_symbol}"] = quote
+            if exchange:
+                trading_symbol = quote.get("tradingSymbol")
+                symbol_name = quote.get("symbolName")
+                if trading_symbol:
+                    by_name[f"{exchange}:{trading_symbol}"] = quote
                 # Also map by symbolName for equity
                 if symbol_name:
-                    quotes_by_symbol[f"{exchange}:{symbol_name}"] = quote
+                    by_name.setdefault(f"{exchange}:{symbol_name}", quote)
 
-        # Build results from symbol_map
-        for key, original in symbol_map.items():
-            quote = quotes_by_symbol.get(key)
+        unmatched = []
+        for original in requested:
+            token = original.get("token")
+            quote = by_token.get(str(token)) if token else None
 
-            # Try alternate key formats
+            # Fall back to name keys for anything without a usable token
             if not quote:
-                # Try with just the broker symbol
-                for qkey, qval in quotes_by_symbol.items():
-                    if original["br_symbol"] in qkey:
-                        quote = qval
-                        break
+                quote = by_name.get(f"{original['api_exchange']}:{original['br_symbol']}") or (
+                    by_name.get(f"{original['exchange']}:{original['br_symbol']}")
+                )
 
             if not quote:
-                logger.warning(f"No quote data found for {original['symbol']} ({key})")
+                unmatched.append(original["symbol"])
                 results.append(
                     {
                         "symbol": original["symbol"],
@@ -576,6 +676,8 @@ class BrokerData:
                 "data": {
                     "bid": safe_float(quote.get("bidPrice")),
                     "ask": safe_float(quote.get("askPrice")),
+                    "bid_qty": safe_int(quote.get("bidSize")),
+                    "ask_qty": safe_int(quote.get("askSize")),
                     "open": safe_float(quote.get("open")),
                     "high": safe_float(quote.get("high")),
                     "low": safe_float(quote.get("low")),
@@ -586,6 +688,12 @@ class BrokerData:
                 },
             }
             results.append(result_item)
+
+        if unmatched:
+            logger.warning(
+                f"No quote data matched for {len(unmatched)} of {len(requested)} symbols: "
+                f"{unmatched[:5]}{'...' if len(unmatched) > 5 else ''}"
+            )
 
         # Include skipped symbols in results
         return skipped_symbols + results
@@ -710,18 +818,20 @@ class BrokerData:
             to_date_str = to_date.strftime("%Y-%m-%d")
 
             if is_index:
-                # Use index historical endpoint
-                index_name = self._get_index_name(symbol)
-                params = f"indexName={index_name}&fromDate={from_date_str}&toDate={to_date_str}"
+                # Use index historical endpoint. Samco's candle payload keys do
+                # not always match the docs (see _get_intraday_data_range), so
+                # accept the documented key and the generic one.
+                index_name = self._get_index_name(symbol, exchange)
+                params = f"indexName={url_quote(index_name)}&fromDate={from_date_str}&toDate={to_date_str}"
                 endpoint = f"/history/indexCandleData?{params}"
-                data_key = "indexCandleData"
+                data_keys = ("indexCandleData", "historicalCandleData")
             else:
                 # Use regular historical endpoint
-                params = f"symbolName={br_symbol}&fromDate={from_date_str}&toDate={to_date_str}"
+                params = f"symbolName={url_quote(br_symbol)}&fromDate={from_date_str}&toDate={to_date_str}"
                 if exchange and exchange != "NSE":
                     params += f"&exchange={exchange}"
                 endpoint = f"/history/candleData?{params}"
-                data_key = "historicalCandleData"
+                data_keys = ("historicalCandleData",)
 
             logger.debug(f"Debug - Historical API endpoint: {endpoint}")
 
@@ -736,7 +846,7 @@ class BrokerData:
                 )
 
             # Extract candle data
-            candles = response.get(data_key, [])
+            candles = next((response[k] for k in data_keys if response.get(k)), [])
             if not candles:
                 logger.debug("Debug - No historical data received")
                 return pd.DataFrame(
@@ -812,8 +922,6 @@ class BrokerData:
             pd.DataFrame: Intraday data
         """
         try:
-            from urllib.parse import quote
-
             # Set time components for the date range
             from_datetime = from_date.replace(hour=0, minute=0, second=0, microsecond=0)
             to_datetime = to_date.replace(hour=23, minute=59, second=59, microsecond=0)
@@ -822,8 +930,8 @@ class BrokerData:
             to_date_str = to_datetime.strftime("%Y-%m-%d %H:%M:%S")
 
             # URL encode the date strings (spaces become %20)
-            from_date_encoded = quote(from_date_str)
-            to_date_encoded = quote(to_date_str)
+            from_date_encoded = url_quote(from_date_str)
+            to_date_encoded = url_quote(to_date_str)
 
             # Map interval (default is 1 minute if not specified)
             interval_param = ""
@@ -842,18 +950,22 @@ class BrokerData:
                     interval_param = f"&interval={interval_val}"
 
             if is_index:
-                # Use index intraday endpoint
-                index_name = self._get_index_name(symbol)
-                params = f"indexName={quote(index_name)}&fromDate={from_date_encoded}&toDate={to_date_encoded}{interval_param}"
+                # Use index intraday endpoint.
+                # /intraday/indexCandleData actually returns its candles under
+                # "intradayCandleData", NOT the "indexIntraDayCandleData" the docs
+                # specify (verified live 2026-08-10) - reading only the documented
+                # key silently produced an empty frame. Accept either.
+                index_name = self._get_index_name(symbol, exchange)
+                params = f"indexName={url_quote(index_name)}&fromDate={from_date_encoded}&toDate={to_date_encoded}{interval_param}"
                 endpoint = f"/intraday/indexCandleData?{params}"
-                data_key = "indexIntraDayCandleData"
+                data_keys = ("indexIntraDayCandleData", "intradayCandleData")
             else:
                 # Use regular intraday endpoint
-                params = f"symbolName={quote(br_symbol)}&fromDate={from_date_encoded}&toDate={to_date_encoded}{interval_param}"
+                params = f"symbolName={url_quote(br_symbol)}&fromDate={from_date_encoded}&toDate={to_date_encoded}{interval_param}"
                 if exchange and exchange != "NSE":
                     params += f"&exchange={exchange}"
                 endpoint = f"/intraday/candleData?{params}"
-                data_key = "intradayCandleData"
+                data_keys = ("intradayCandleData",)
 
             logger.debug(f"Debug - Intraday API endpoint: {endpoint}")
 
@@ -868,7 +980,7 @@ class BrokerData:
                 )
 
             # Extract candle data
-            candles = response.get(data_key, [])
+            candles = next((response[k] for k in data_keys if response.get(k)), [])
             if not candles:
                 logger.debug("Debug - No intraday data received")
                 return pd.DataFrame(

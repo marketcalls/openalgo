@@ -1,5 +1,4 @@
 import json
-import logging
 import threading
 import time
 from collections.abc import Callable
@@ -9,6 +8,7 @@ import requests
 import socketio
 
 from broker.wisdom.baseurl import BASE_URL, INTERACTIVE_URL, MARKET_DATA_URL
+from utils.logging import get_logger
 
 
 class WisdomWebSocketClient:
@@ -76,7 +76,7 @@ class WisdomWebSocketClient:
         self.on_message = None
 
         # Logger
-        self.logger = logging.getLogger("wisdom_websocket")
+        self.logger = get_logger("wisdom_websocket")
 
         # Subscriptions tracking
         self.subscriptions = {}

@@ -67,18 +67,18 @@ docker run -d \
 
 The Dockerfile uses **multi-stage builds** for optimization:
 
-1. **Python Builder Stage** (`python:3.12-bullseye`)
+1. **Python Builder Stage** (`python:3.12-trixie`)
    - Installs `uv` package manager
    - Creates virtual environment
    - Installs all Python dependencies from `pyproject.toml`
    - Installs Gunicorn with eventlet support
 
-2. **Frontend Builder Stage** (`node:22-bullseye-slim`)
+2. **Frontend Builder Stage** (`node:22-trixie-slim`)
    - Installs npm dependencies
    - Builds React frontend (`npm run build`)
    - Outputs to `frontend/dist/`
 
-3. **Production Stage** (`python:3.12-slim-bullseye`)
+3. **Production Stage** (`python:3.12-slim-trixie`)
    - Minimal base image
    - **Installs runtime libraries for numba/scipy:**
      - `libopenblas0` - BLAS/LAPACK for linear algebra
@@ -103,11 +103,17 @@ None required - all configuration is in `.env` file.
 
 ### Image Size
 
-- **Base image** (`python:3.12-slim-bullseye`): ~145 MB
-- **Python dependencies**: ~650 MB
-- **Runtime libraries**: ~15 MB
-- **Frontend dist**: ~5 MB
-- **Total final image**: ~815 MB
+Measured on arm64 with `docker history`, uncompressed:
+
+- **Runtime layer** (chromium, fonts, BLAS, tzdata): ~750 MB
+- **Python virtualenv**: ~1.1 GB
+- **Application source**: ~50 MB
+- **Frontend dist**: ~10 MB
+- **Total final image**: ~2.7 GB
+
+Chromium dominates the runtime layer; it is present for Kaleido's static
+image export (the Telegram bot's /chart). The figures above supersede an
+earlier ~815 MB estimate that predated that dependency.
 
 ## Configuration Requirements
 

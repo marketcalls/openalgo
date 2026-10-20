@@ -1,10 +1,16 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.flattrade.api.rate_limit import (
+    DATA_LIMITER,
+    ORDER_LIMITER,
+    clamp_from_response,
+    rate_limit_retry_delay,
+)
 from broker.flattrade.mapping.order_data import normalize_order_status
 from broker.flattrade.mapping.transform_data import (
     map_product_type,
@@ -14,13 +20,23 @@ from broker.flattrade.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, BusyResponse, busy_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
+    # OrderBook/TradeBook/PositionBook/Holdings are non-order endpoints, but
+    # they are polled continuously by the UI and by the order-update poller, so
+    # they have to be counted against the same window data.py uses. Leaving them
+    # unpaced is what let ordinary dashboard polling trip the account's ceiling
+    # (issue #1806).
+    DATA_LIMITER.acquire()
+
     AUTH_TOKEN = auth
 
     full_api_key = os.getenv("BROKER_API_KEY")
@@ -43,9 +59,18 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.request(method, url, content=payload, headers=headers)
-    data = response.text
+    parsed = json.loads(response.text)
 
-    return json.loads(data)
+    # Pacing alone is not enough: an account provisioned below the configured
+    # cap only reveals its real ceiling in the rejection text, so learn from it
+    # and retry. Without this the limiter keeps re-offering the rejected rate
+    # and every later poll fails the same way (issue #1806).
+    delay = rate_limit_retry_delay(parsed, DATA_LIMITER, retry_count, endpoint)
+    if delay is not None:
+        time.sleep(delay)
+        return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+
+    return parsed
 
 
 def get_order_book(auth):
@@ -75,46 +100,50 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="flattrade smart orders")
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """The PositionBook is a list whenever it holds a row.
+
+    An empty book comes back as {"stat": "Not_Ok", "emsg": "no data"}, which
+    read_position_book recognises as empty. Any other Not_Ok is a failed read.
+    """
+    return isinstance(positions_data, list)
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book("flattrade", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 
@@ -159,13 +188,25 @@ def place_order_api(data, auth):
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"{payload}")
+    logger.debug(f"{newdata}")
     # Get the shared httpx client
     client = get_httpx_client()
 
+    # Order endpoints have their own, four-times-tighter ceiling
+    # (10/sec, 40/min) — paced separately from the data window.
+    # Under the gthread worker an order whose turn is too far away is refused,
+    # not sent late; nothing reached the broker, so saying so is exact.
+    try:
+        ORDER_LIMITER.acquire()
+    except BrokerBusyError as busy:
+        return busy_response(str(busy))
     url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
     res = client.post(url, content=payload, headers=headers)
     response_data = res.json()
+    # Clamp on a rate-limit rejection, but never auto-retry an order: this
+    # cannot tell "rejected for rate" from "accepted, response lost", and a
+    # duplicate order is far worse than a failed one. Surface it instead.
+    clamp_from_response(response_data, ORDER_LIMITER)
 
     # Add status attribute for backward compatibility
     res.status = res.status_code
@@ -177,6 +218,7 @@ def place_order_api(data, auth):
     return res, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 
@@ -190,13 +232,20 @@ def place_smartorder_api(data, auth):
     # Per-symbol lock: serialize smart orders per symbol
     symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-    with symbol_lock:
+    with symbol_lock as acquired:
+        if not acquired:
+            return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
 
-        # Get current open position for the symbol
-        current_position = int(
-            get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
-        )
+        # Get current open position for the symbol. A position read the rate
+        # limiter refused (gthread only) fails the smart order: sizing it
+        # against a book that was never fetched could repeat or reverse a fill.
+        try:
+            current_position = int(
+                get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+            )
+        except BrokerBusyError as busy:
+            return busy_response(str(busy))
 
         logger.debug(f"position_size : {position_size}")
         logger.debug(f"Open Position : {current_position}")
@@ -278,6 +327,8 @@ def close_all_positions(current_api_key, auth):
     if positions_response is None or positions_response[0]["stat"] == "Not_Ok":
         return {"message": "No Open Positions Found"}, 200
 
+    refused = 0
+    attempted = 0
     if positions_response:
         # Loop through each position to close
         for position in positions_response:
@@ -309,12 +360,29 @@ def close_all_positions(current_api_key, auth):
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
+            attempted += 1
+            if isinstance(res, BusyResponse):
+                refused += 1
 
             # logger.debug(f"{res}")
             # logger.debug(f"{response}")
             # logger.debug(f"{orderid}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
+
+    if refused:
+        # Only under the gthread worker, where the order window refuses a
+        # square-off whose turn is too far away instead of sending it late.
+        # Reporting success here would leave those positions unwatched.
+        return {
+            "status": "error",
+            "message": (
+                f"{refused} of {attempted} open positions were not squared off, because "
+                "Flattrade allows only a limited number of orders per minute and "
+                "their turn was too far away. Check your positions and square off "
+                "the rest again."
+            ),
+        }, 429
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -333,9 +401,16 @@ def cancel_order(orderid, auth):
     # Get the shared httpx client and send the request
     client = get_httpx_client()
 
+    # Order endpoints have their own, four-times-tighter ceiling
+    # (10/sec, 40/min) — paced separately from the data window.
+    try:
+        ORDER_LIMITER.acquire()
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     url = "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"
     res = client.post(url, content=payload, headers=headers)
     data = res.json()
+    clamp_from_response(data, ORDER_LIMITER)  # clamp only, never retry an order
     logger.debug(f"{data}")
 
     # Check if the request was successful
@@ -365,15 +440,21 @@ def modify_order(data, auth):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"Modify Order Payload: {payload}")
     logger.debug(f"Modify Order Data: {transformed_data}")
 
     # Get the shared httpx client
     client = get_httpx_client()
 
+    # Order endpoints have their own, four-times-tighter ceiling
+    # (10/sec, 40/min) — paced separately from the data window.
+    try:
+        ORDER_LIMITER.acquire()
+    except BrokerBusyError as busy:
+        return {"status": "error", "message": str(busy)}, 429
     url = "https://piconnect.flattrade.in/PiConnectAPI/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()
+    clamp_from_response(response, ORDER_LIMITER)  # clamp only, never retry an order
 
     logger.debug(f"Modify Order Response: {response}")
     logger.debug(f"Modify Order Status Code: {res.status_code}")

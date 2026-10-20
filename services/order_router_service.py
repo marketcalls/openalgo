@@ -4,7 +4,7 @@ from typing import Any
 
 from database.action_center_db import create_pending_order
 from database.auth_db import get_order_mode, verify_api_key
-from extensions import socketio
+from extensions import emit_from_any_thread
 from utils.logging import get_logger
 
 # Initialize logger
@@ -116,9 +116,11 @@ def queue_order(
 
             # The database row is authoritative. A notification failure must
             # not turn a committed queue operation into a false 500 response.
+            # Emitted on this thread, not on a new one per event: the Socket.IO
+            # server serialises emits itself, and emit_from_any_thread hands
+            # the emit to the hub when a real OS thread calls under eventlet.
             try:
-                socketio.start_background_task(
-                    socketio.emit,
+                emit_from_any_thread(
                     "pending_order_created",
                     {
                         "pending_order_id": pending_order_id,

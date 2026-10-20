@@ -6,11 +6,23 @@ import type {
   PythonStrategy,
   PythonStrategyContent,
   ScheduleConfig,
+  StrategyExchangeList,
 } from '@/types/python-strategy'
 import type { ApiResponse } from '@/types/trading'
 import { webClient } from './client'
 
 export const pythonStrategyApi = {
+  /**
+   * Get the exchange options for the strategy selector.
+   *
+   * Session windows come from the market calendar DB, never from a constant
+   * in the frontend, so an exchange timing change reaches the UI on its own.
+   */
+  getExchanges: async (): Promise<StrategyExchangeList> => {
+    const response = await webClient.get<Partial<StrategyExchangeList>>('/python/api/exchanges')
+    return { exchanges: response.data.exchanges || [], default: response.data.default || '' }
+  },
+
   /**
    * Get all Python strategies
    */
@@ -47,7 +59,8 @@ export const pythonStrategyApi = {
     file: File,
     schedule: {
       start_time: string
-      stop_time: string
+      /** Null runs a crypto strategy 24/7. */
+      stop_time: string | null
       days: string[]
       exchange?: string
     }
@@ -58,7 +71,9 @@ export const pythonStrategyApi = {
     formData.append('exchange', schedule.exchange || 'NSE')
     // Add schedule fields
     formData.append('schedule_start', schedule.start_time)
-    formData.append('schedule_stop', schedule.stop_time)
+    // Left out for a 24/7 crypto strategy: FormData would send null as the
+    // text "null".
+    if (schedule.stop_time) formData.append('schedule_stop', schedule.stop_time)
     formData.append('schedule_days', JSON.stringify(schedule.days))
 
     const response = await webClient.post<ApiResponse<{ strategy_id: string }>>(

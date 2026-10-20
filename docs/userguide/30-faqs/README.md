@@ -12,7 +12,7 @@ Yes. OpenAlgo is released under the AGPL v3.0 license. Broker API access, market
 
 ### Which brokers are supported?
 
-The current repository contains 34 plugin directories: 33 securities integrations and Delta Exchange for crypto derivatives. See [Broker Connection](../06-broker-connection/README.md) for the authoritative plugin identifiers. Supported exchanges and features vary by plugin.
+The current repository contains 36 plugin directories: 35 securities integrations and Delta Exchange for crypto derivatives. See [Broker Connection](../06-broker-connection/README.md) for the authoritative plugin identifiers. Supported exchanges and features vary by plugin.
 
 ### Can I use live trading?
 

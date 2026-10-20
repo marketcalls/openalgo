@@ -1,4 +1,3 @@
-import logging
 import os
 import sys
 import threading
@@ -12,6 +11,7 @@ from database.auth_db import (
     get_feed_token,
     get_feed_token_dbquery,
 )
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -34,7 +34,7 @@ class MarketDataCache:
         self._cache = {}
         self._initialized_scrips = set()
         self._lock = threading.Lock()
-        self.logger = logging.getLogger("market_cache")
+        self.logger = get_logger("market_cache")
 
     def get(self, scrip: str) -> dict[str, Any]:
         """Get cached data for a scrip"""
@@ -133,7 +133,7 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("definedge_websocket")
+        self.logger = get_logger("definedge_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "definedge"

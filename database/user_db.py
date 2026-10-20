@@ -5,7 +5,6 @@ import os
 import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from cachetools import TTLCache
 from sqlalchemy import Boolean, Column, Integer, String, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
@@ -13,6 +12,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -55,7 +55,7 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # Define a cache for the usernames with a max size and a 30-second TTL
-username_cache = TTLCache(maxsize=1024, ttl=30)
+username_cache = LockedTTLCache(maxsize=1024, ttl=30)
 
 
 class User(Base):
@@ -195,23 +195,38 @@ def add_user(username, email, password, is_admin=False):
         return None  # Return None instead of False
 
 
-def authenticate_user(username, password):
-    """Authenticate user with Argon2 hashed password"""
-    cache_key = f"user-{username}"
-    if cache_key in username_cache:
-        user = username_cache[cache_key]
-        # Ensure that user is an instance of User
-        if isinstance(user, User) and user.check_password(password):
-            return True
-        else:
-            del username_cache[cache_key]  # Remove invalid cache entry
-            return False
-    else:
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            username_cache[cache_key] = user  # Cache the User object
-            return True
+def _password_matches(password_hash, password) -> bool:
+    """Verify ``password`` against a stored Argon2 hash, as check_password does."""
+    try:
+        ph.verify(password_hash, password + PASSWORD_PEPPER)
+        return True
+    except VerifyMismatchError:
         return False
+
+
+def authenticate_user(username, password):
+    """Authenticate user with Argon2 hashed password.
+
+    A successful login caches the user's password hash for a few seconds, not
+    the ``User`` row. A cached row belongs to the scoped session of the thread
+    that loaded it; once that session is removed at request teardown, reading
+    its ``password_hash`` from another request can raise DetachedInstanceError
+    or refresh through a session that is not its own.
+    """
+    cache_key = f"user-{username}"
+    cached_hash = username_cache.get(cache_key, MISSING)
+    if cached_hash is not MISSING:
+        if isinstance(cached_hash, str) and _password_matches(cached_hash, password):
+            return True
+        username_cache.pop(cache_key, None)  # Remove invalid cache entry
+        return False
+
+    generation = username_cache.generation
+    user = User.query.filter_by(username=username).first()
+    if user and user.check_password(password):
+        username_cache.fill(cache_key, user.password_hash, generation)
+        return True
+    return False
 
 
 def find_user_by_email(email):

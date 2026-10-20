@@ -56,8 +56,8 @@ def on_order_update(event):
         # when the websocket subsystem is disabled.
         from websocket_proxy.connection_manager import SharedZmqPublisher
 
-        publisher = SharedZmqPublisher()
-        if not publisher._connected:
+        publisher = SharedZmqPublisher.instance()
+        if not publisher.connected:
             # Cold path — should be rare (services/order_update_service warms
             # the publisher at boot). A fresh ZMQ PUB drops messages sent
             # before the PUB<->SUB handshake completes (slow-joiner), so give

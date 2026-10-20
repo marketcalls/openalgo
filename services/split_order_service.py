@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, OrderFailedEvent, SplitCompletedEvent
+from utils.broker_backpressure import BrokerBusyError
 from utils.constants import (
     REQUIRED_ORDER_FIELDS,
     VALID_ACTIONS,
@@ -130,6 +131,17 @@ def place_single_order(
                 "message": message,
             }
 
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Split order {order_num} not sent, broker busy: {e}")
+        return {
+            "order_num": order_num,
+            "quantity": int(order_data["quantity"]),
+            "status": "error",
+            "message": str(e),
+        }
     except Exception as e:
         logger.exception(f"Error placing order {order_num}: {e}")
         return {

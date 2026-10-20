@@ -3,12 +3,73 @@
 import json
 from typing import Any
 
-from database.action_center_db import get_pending_order_by_id, update_broker_status
+from database.action_center_db import (
+    NO_ACTION,
+    SUBMITTING,
+    claim_pending_order_for_execution,
+    get_pending_order_by_id,
+    return_approved_order_to_pending,
+    update_broker_status,
+)
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from utils.broker_backpressure import BrokerBusyError, RefusalRecorder
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+#: HTTP status for an approved order that another request is already sending.
+ALREADY_SUBMITTING_STATUS = 409
+
+#: What the operator reads when an approval loses the execution claim.
+ALREADY_SUBMITTING_MESSAGE = (
+    "This order is already being sent to your broker. Check the order book "
+    "before approving it again."
+)
+
+#: Set on the response of an approval whose order was never sent and is back in
+#: the pending list, so the route can say so and refresh the page.
+RETURNED_TO_PENDING = "returned_to_pending"
+
+#: What the operator reads when the approval could not be recorded as sending.
+CLAIM_FAILED_MESSAGE = (
+    "The order was not sent to your broker, because OpenAlgo could not record it "
+    "as being sent. It is back in the pending list: approve it again in a moment."
+)
+
+#: The same, when it could not even be put back in the pending list.
+CLAIM_FAILED_STUCK_MESSAGE = (
+    "The order was not sent to your broker, because OpenAlgo could not record it "
+    "as being sent. Place it again from your trading platform."
+)
+
+#: What the operator reads when the broker pacer refused the order (gthread only).
+REFUSED_BACK_TO_PENDING_MESSAGE = (
+    "The order was not sent: OpenAlgo is pacing requests to stay within your "
+    "broker's rate limit, and its turn was too far away. It is back in the "
+    "pending list, so approve it again in a few seconds."
+)
+
+#: Order types that send at most one order, so a refusal means nothing was sent.
+_SINGLE_ORDER_TYPES = frozenset({"placeorder", "smartorder", "optionsorder", "placegttorder"})
+
+
+def _refused_single_order(pending_order_id: int, api_type: str) -> tuple[bool, dict, int] | None:
+    """Offer a single order the pacer refused back for approval.
+
+    Only for an order type that sends one order, whose refusal therefore proves
+    nothing reached the broker. Returns the response to give, or None when the
+    order could not be put back (the caller then records it as rejected).
+    """
+    if api_type not in _SINGLE_ORDER_TYPES:
+        return None
+    if not return_approved_order_to_pending(pending_order_id, SUBMITTING):
+        return None
+    return (
+        False,
+        {"status": "error", "message": REFUSED_BACK_TO_PENDING_MESSAGE, RETURNED_TO_PENDING: True},
+        429,
+    )
 
 
 def _flatten_execution_results(results: Any) -> list[dict[str, Any]]:
@@ -50,6 +111,7 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
         - Response data (dict)
         - HTTP status code (int)
     """
+    claimed = False
     try:
         # Get the pending order
         pending_order = get_pending_order_by_id(pending_order_id)
@@ -70,6 +132,39 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                 },
                 400,
             )
+
+        # Claim before anything can reach the broker. An approved order is
+        # sent at most once: two approvals racing (a double click, Approve on
+        # one device and Approve All on another) could both pass the status
+        # check above and both place the order. The claim is one conditional
+        # UPDATE that moves broker_status from empty to "submitting", so only
+        # one caller gets True. Every path after it writes a final status, and
+        # an order left in "submitting" (a crash mid-send) is never resent
+        # automatically: the operator checks the broker's order book.
+        claim = claim_pending_order_for_execution(pending_order_id)
+        if claim is None:
+            # The database could not answer, so nothing was claimed and nothing
+            # was sent. Saying "already being sent" here would be wrong: put the
+            # approval back so the order can be approved again.
+            if return_approved_order_to_pending(pending_order_id, None):
+                return (
+                    False,
+                    {"status": "error", "message": CLAIM_FAILED_MESSAGE, RETURNED_TO_PENDING: True},
+                    500,
+                )
+            return False, {"status": "error", "message": CLAIM_FAILED_STUCK_MESSAGE}, 500
+
+        if not claim:
+            logger.warning(
+                f"Pending order {pending_order_id} is already being executed; not sending it again"
+            )
+            return (
+                False,
+                {"status": "error", "message": ALREADY_SUBMITTING_MESSAGE},
+                ALREADY_SUBMITTING_STATUS,
+            )
+
+        claimed = True
 
         # Parse order data
         order_data = json.loads(pending_order.order_data)
@@ -106,6 +201,9 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
         logger.debug(f"Order data keys: {list(order_data.keys())}")
         logger.debug(f"Has apikey in order_data: {'apikey' in order_data}")
 
+        # Knows whether a refusal (gthread only) happened while the order was
+        # being placed, which proves a single order never reached the broker.
+        refusals = RefusalRecorder().start()
         try:
             # Pass api_key, auth_token, and broker to:
             # 1. Include apikey in order_data for validation and broker functions
@@ -184,6 +282,14 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
 
             # Update pending order with broker response
             if not success:
+                if status_code == 429 and refusals.refused:
+                    offered_back = _refused_single_order(pending_order_id, api_type)
+                    if offered_back is not None:
+                        logger.warning(
+                            f"Pending order {pending_order_id} refused before it was sent; "
+                            "back in the pending list"
+                        )
+                        return offered_back
                 update_broker_status(pending_order_id, None, "rejected")
                 logger.warning(f"Order rejected by broker: pending_order_id={pending_order_id}")
 
@@ -271,13 +377,39 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                         f"Order executed successfully: pending_order_id={pending_order_id}, broker_order_id={broker_order_id}"
                     )
 
+            else:
+                # A success that carries no order id: a smart order whose
+                # position already matched sends nothing. The claim must still
+                # be replaced by a final status, or the row reads as a send
+                # that never finished.
+                final = NO_ACTION if api_type == "smartorder" else "open"
+                update_broker_status(pending_order_id, None, final)
+
             return success, response_data, status_code
+
+        except BrokerBusyError as e:
+            # Refused before it was sent: the broker's request queue was too
+            # long to wait in (only under the gthread worker).
+            logger.warning(f"Pending order {pending_order_id} not sent, broker busy: {e}")
+            offered_back = _refused_single_order(pending_order_id, api_type)
+            if offered_back is not None:
+                return offered_back
+            update_broker_status(pending_order_id, None, "rejected")
+            return False, {"status": "error", "message": str(e)}, 429
 
         except Exception as e:
             logger.exception(f"Error executing order via service: {e}")
             update_broker_status(pending_order_id, None, "rejected")
             return False, {"status": "error", "message": f"Order execution failed: {str(e)}"}, 500
 
+        finally:
+            refusals.stop()
+
     except Exception as e:
         logger.exception(f"Error in execute_approved_order: {e}")
+        if claimed:
+            # Failed after the claim and before any order was sent (reading
+            # the order or its credentials): the row must not be left reading
+            # as on its way to the broker.
+            update_broker_status(pending_order_id, None, "rejected")
         return False, {"status": "error", "message": f"Failed to execute order: {str(e)}"}, 500

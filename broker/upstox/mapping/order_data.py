@@ -6,6 +6,48 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Upstox reports 17 order statuses (appendix/order-status), but OpenAlgo's order
+# book only understands open/complete/cancelled/rejected. Anything unmapped used
+# to reach the UI raw, where it fell through to the "open" label while failing
+# the `order_status === 'open'` check, so a stop-loss sitting in "trigger pending"
+# rendered as open yet offered no Modify/Cancel and never counted as an open order.
+_COMPLETE_STATUSES = {"COMPLETE"}
+_REJECTED_STATUSES = {"REJECTED"}
+_CANCELLED_STATUSES = {"CANCELLED", "CANCELED", "CANCELLED AFTER MARKET ORDER"}
+# Still live at the exchange, i.e. modifiable/cancellable. "trigger pending" is
+# where an SL/SL-M order waits for its trigger; the "not cancelled"/"not modified"
+# pair mean the request failed and the original order is still working.
+_OPEN_STATUSES = {
+    "OPEN",
+    "OPEN PENDING",
+    "TRIGGER PENDING",
+    "VALIDATION PENDING",
+    "MODIFY PENDING",
+    "MODIFY VALIDATION PENDING",
+    "CANCEL PENDING",
+    "MODIFIED",
+    "NOT MODIFIED",
+    "NOT CANCELLED",
+    "PUT ORDER REQ RECEIVED",
+    "AFTER MARKET ORDER REQ RECEIVED",
+    "MODIFY AFTER MARKET ORDER REQ RECEIVED",
+}
+
+
+def normalize_order_status(raw_status):
+    """Map an Upstox status to an OpenAlgo status (open/complete/cancelled/rejected)."""
+    status = str(raw_status or "").strip().upper().replace("_", " ")
+    if status in _COMPLETE_STATUSES:
+        return "complete"
+    if status in _OPEN_STATUSES:
+        return "open"
+    if status in _REJECTED_STATUSES:
+        return "rejected"
+    if status in _CANCELLED_STATUSES:
+        return "cancelled"
+    return status.lower()
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -80,11 +122,12 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            if order["status"] == "complete":
+            status = normalize_order_status(order.get("status"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif order["status"] == "open":
+            elif status == "open":
                 total_open_orders += 1
-            elif order["status"] == "rejected":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -121,7 +164,7 @@ def transform_order_data(orders):
             "pricetype": order.get("order_type", ""),
             "product": order.get("product", ""),
             "orderid": order.get("order_id", ""),
-            "order_status": order.get("status", ""),
+            "order_status": normalize_order_status(order.get("status")),
             "timestamp": order.get("order_timestamp", ""),
         }
 

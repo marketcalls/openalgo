@@ -9,6 +9,7 @@ Complete Docker deployment and troubleshooting documentation for OpenAlgo.
 ### Getting Started
 
 - **[docker.md](docker.md)** - Basic Docker deployment guide
+- **[Optional gthread worker](../gthread/README.md#installing-with-gthread)** - Select gthread, configure the 45-second shutdown grace, verify it, and switch back to eventlet
 - **[DOCKER_BUILD_GUIDE.md](DOCKER_BUILD_GUIDE.md)** - Complete build and deployment guide (12 KB)
   - Build process details
   - Configuration requirements

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { io, type Socket } from 'socket.io-client'
+import { useEffect, useRef, useState } from 'react'
+import type { Socket } from 'socket.io-client'
 import { useSocketContext } from '@/components/socket/SocketProvider'
 
 /**
@@ -29,8 +29,9 @@ export interface UseOrderEventRefreshOptions {
 /**
  * Centralized hook for Socket.IO order event listeners.
  *
- * Automatically sets up Socket.IO connection and listens for specified events,
- * calling the refresh function with an optional delay when events occur.
+ * Listens for the specified events on the app-wide Socket.IO connection that
+ * SocketProvider owns, calling the refresh function with an optional delay when
+ * events occur. It opens no connection of its own.
  *
  * @example
  * ```tsx
@@ -101,7 +102,14 @@ export function useOrderEventRefresh(
 }
 
 /**
- * Hook to get direct access to Socket.IO connection for custom event handling.
+ * Hook to get direct access to the app-wide Socket.IO connection for custom
+ * event handling.
+ *
+ * It hands back the ONE connection SocketProvider owns and never opens its own:
+ * every connection is a long-poll the server keeps waiting, which under the
+ * gthread worker holds one of its request threads for as long as the tab is
+ * open. Register handlers on it and remove them on cleanup, but never
+ * disconnect it: the rest of the page is listening on the same connection.
  *
  * @example
  * ```tsx
@@ -118,28 +126,25 @@ export function useSocketConnection(enabled = true): {
   socket: Socket | null
   isConnected: boolean
 } {
-  const socketRef = useRef<Socket | null>(null)
+  const { socket: shared } = useSocketContext()
+  const socket = enabled ? shared : null
+  const [isConnected, setIsConnected] = useState(() => socket?.connected ?? false)
 
   useEffect(() => {
-    if (!enabled) return
-
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
-    })
-
-    return () => {
-      socketRef.current?.disconnect()
-      socketRef.current = null
+    if (!socket) {
+      setIsConnected(false)
+      return
     }
-  }, [enabled])
+    setIsConnected(socket.connected)
+    const onConnect = () => setIsConnected(true)
+    const onDisconnect = () => setIsConnected(false)
+    socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    return () => {
+      socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
+    }
+  }, [socket])
 
-  return {
-    socket: socketRef.current,
-    isConnected: socketRef.current?.connected ?? false,
-  }
+  return { socket, isConnected }
 }

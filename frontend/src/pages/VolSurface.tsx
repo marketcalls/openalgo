@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import Plot from '@/lib/Plot3D'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -142,9 +143,9 @@ export default function VolSurface() {
           // Auto-select first 4 expiries
           setSelectedExpiries(response.expiries.slice(0, 4))
         }
-      } catch {
+      } catch (error) {
         if (cancelled) return
-        showToast.error('Failed to fetch expiry dates')
+        showToast.error(serverSentence(error, 'Failed to fetch expiry dates'))
       }
     }
     fetchExpiries()
@@ -182,9 +183,9 @@ export default function VolSurface() {
       } else {
         showToast.error(res.message || 'Failed to load vol surface')
       }
-    } catch {
+    } catch (error) {
       if (requestIdRef.current !== requestId) return
-      showToast.error('Failed to fetch vol surface data')
+      showToast.error(serverSentence(error, 'Failed to fetch vol surface data'))
     } finally {
       if (requestIdRef.current === requestId) setIsLoading(false)
     }

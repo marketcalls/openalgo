@@ -6,18 +6,21 @@ Uses database lookup for brsymbol mapping
 
 import json
 import logging
-from typing import Dict, List, Optional, Tuple
 
 import requests
+
+from utils.logging import get_logger
 
 # Import database functions
 try:
     from database.token_db import get_br_symbol
+    from database.token_db_enhanced import get_symbol_info
 
     DATABASE_AVAILABLE = True
 except ImportError:
     DATABASE_AVAILABLE = False
     get_br_symbol = None
+    get_symbol_info = None
     logging.warning("Database not available - falling back to manual conversion")
 
 
@@ -38,22 +41,14 @@ class FyersTokenConverter:
         "1020": "nse_com",  # NSE Commodity
     }
 
-    # Known index mappings (from official library)
-    INDEX_MAPPINGS = {
-        "NSE:NIFTY50-INDEX": "Nifty 50",
-        "NSE:NIFTYBANK-INDEX": "Nifty Bank",
-        "NSE:FINNIFTY-INDEX": "Nifty Fin Service",
-        "NSE:INDIAVIX-INDEX": "India VIX",
-        "NSE:NIFTY100-INDEX": "Nifty 100",
-        "NSE:NIFTYNEXT50-INDEX": "Nifty Next 50",
-        "NSE:NIFTYMIDCAP50-INDEX": "Nifty Midcap 50",
-        "NSE:NIFTYSMLCAP50-INDEX": "NIFTY SMLCAP 50",
-        "BSE:SENSEX-INDEX": "SENSEX",
-        "BSE:BANKEX-INDEX": "BANKEX",
-        "BSE:BSE500-INDEX": "BSE500",
-        "BSE:BSE100-INDEX": "BSE100",
-        "BSE:BSE200-INDEX": "BSE200",
-    }
+    # An index scrip token carries a name ("if|nse_cm|Nifty IT"), not a number.
+    # The feed answers to the index's display name, which is what the official
+    # SDK sends, and today also to the ticker stem ("NIFTYIT"); the latter is
+    # undocumented. The master contract download stores the display name Fyers
+    # publishes in symtoken.name for index rows (see
+    # broker/fyers/database/master_contract_db.fetch_index_hsm_names) and the
+    # stem where none is published, so the name comes from the same lookup as
+    # the broker symbol and no table lives in the streaming code.
 
     def __init__(self, access_token: str):
         """
@@ -62,13 +57,15 @@ class FyersTokenConverter:
         Args:
             access_token: Fyers access token (can be in format "appid:token")
         """
-        self.logger = logging.getLogger("fyers_token_converter")
+        self.logger = get_logger("fyers_token_converter")
 
         # Store full access token for API calls
         self.access_token = access_token
 
         self.symbols_token_api = "https://api-t1.fyers.in/data/symbol-token"
         self.database_available = DATABASE_AVAILABLE
+        # brsymbol -> HSM index name, filled from symtoken.name as symbols are resolved
+        self._index_names: dict[str, str] = {}
 
     def get_brsymbols_from_database(
         self, symbol_exchange_pairs: list[tuple[str, str]]
@@ -99,6 +96,10 @@ class FyersTokenConverter:
                 if brsymbol:
                     brsymbol_map[(symbol, exchange)] = brsymbol
                     # self.logger.info(f"Found brsymbol: {symbol}@{exchange} -> {brsymbol}")
+                    if exchange.endswith("_INDEX") and get_symbol_info is not None:
+                        info = get_symbol_info(symbol, exchange)
+                        if info is not None and getattr(info, "name", None):
+                            self._index_names[brsymbol] = info.name
                 else:
                     self.logger.error(f"No brsymbol found in database for {symbol}@{exchange}")
 
@@ -290,8 +291,8 @@ class FyersTokenConverter:
             if is_index:
                 # For indices, always use index feed (if) regardless of data_type
                 # Depth requests for indices will be converted to quote data and then synthetic depth
-                if symbol in self.INDEX_MAPPINGS:
-                    token_name = self.INDEX_MAPPINGS[symbol]
+                if symbol in self._index_names:
+                    token_name = self._index_names[symbol]
                 else:
                     # Extract index name from symbol
                     token_name = symbol.split(":")[1].replace("-INDEX", "")
@@ -357,8 +358,8 @@ class FyersTokenConverter:
                 if symbol.endswith("-INDEX"):
                     # For indices, always use index feed (if) regardless of data_type
                     prefix = "if"
-                    if symbol in self.INDEX_MAPPINGS:
-                        token = self.INDEX_MAPPINGS[symbol]
+                    if symbol in self._index_names:
+                        token = self._index_names[symbol]
                     else:
                         token = symbol_name.replace("-INDEX", "")
 

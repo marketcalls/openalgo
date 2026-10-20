@@ -42,6 +42,85 @@ check_status() {
     fi
 }
 
+# >>> Telegram /chart browser (kept identical in install.sh, install-multi.sh and update.sh)
+# Telegram /chart draws its images with Kaleido, which starts a headless Chrome or
+# Chromium as the OpenAlgo service account. A snap browser cannot start as that
+# account: snap needs a writable home, and a service account's home (/var/www) is not
+# one ("cannot create snap home dir"), so every render fails with "The browser seemed
+# to close immediately after starting". Ubuntu's chromium and chromium-browser packages
+# only install that snap, so they are never used here.
+
+# Prints the browser Kaleido will start and succeeds when it is one the service account
+# can run. Kaleido looks for Google Chrome first, then takes the first Chromium on PATH,
+# so the first name found below is the one it uses.
+chart_browser_path() {
+    local name path real
+    for name in chrome google-chrome google-chrome-stable chromium chromium-browser; do
+        path="$(command -v "$name" 2>/dev/null)" || continue
+        real="$(readlink -f "$path")"
+        # A snap command is /snap/bin/<name>, a link to /usr/bin/snap; Ubuntu's
+        # chromium-browser is a small script that starts the snap.
+        case "$path" in /snap/*) return 1 ;; esac
+        [ "$(basename "$real")" = "snap" ] && return 1
+        if [ "$(head -c 2 "$real" 2>/dev/null)" = "#!" ] && grep -qs "/snap/" "$real"; then
+            return 1
+        fi
+        echo "$real"
+        return 0
+    done
+    return 1
+}
+
+# Installs a browser for Telegram /chart when there is none the service account can run.
+# With apt: Google Chrome's .deb on amd64 (it adds Google's apt source, so Chrome
+# updates with the system), else Debian's own chromium package, never Ubuntu's snap.
+# With dnf or yum: the distribution's chromium, else Google Chrome's rpm on x86_64.
+# With pacman: chromium. Never fatal: OpenAlgo runs without it, only /chart cannot draw.
+ensure_chart_browser() {
+    local found tmp candidate
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart browser: $found" "$GREEN"
+        return 0
+    fi
+    log_message "\nInstalling a browser for Telegram /chart rendering..." "$BLUE"
+    if command -v apt-get >/dev/null 2>&1; then
+        if [ "$(dpkg --print-architecture 2>/dev/null)" = "amd64" ]; then
+            tmp="$(mktemp -d)"
+            if curl -fsSL -o "$tmp/google-chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; then
+                sudo apt-get install -y "$tmp/google-chrome.deb" fonts-liberation || true
+            fi
+            rm -rf "$tmp"
+        fi
+        if ! chart_browser_path >/dev/null; then
+            # On Ubuntu the only candidate is the snap stub, whose version names the snap.
+            candidate="$(apt-cache policy chromium 2>/dev/null | awk '/Candidate:/ {print $2}')"
+            if [ -n "$candidate" ] && [ "$candidate" != "(none)" ] && [[ "$candidate" != *snap* ]]; then
+                sudo apt-get install -y chromium fonts-liberation || true
+            fi
+        fi
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        local pm=dnf
+        command -v dnf >/dev/null 2>&1 || pm=yum
+        sudo "$pm" install -y chromium liberation-fonts || true
+        if ! chart_browser_path >/dev/null && [ "$(uname -m)" = "x86_64" ]; then
+            sudo "$pm" install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm liberation-fonts || true
+        fi
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm --needed chromium ttf-liberation || true
+    fi
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart will use $found" "$GREEN"
+        if command -v snap >/dev/null 2>&1 && snap list chromium >/dev/null 2>&1; then
+            log_message "The chromium snap is not used by OpenAlgo. If nothing else needs it: sudo snap remove chromium" "$YELLOW"
+        fi
+    else
+        log_message "No browser the OpenAlgo service can start was installed, so Telegram /chart will not draw charts" "$YELLOW"
+        log_message "Install Google Chrome (amd64) or your distribution's chromium package; on arm64 Ubuntu, Chromium exists only as a snap, which cannot run as a service" "$YELLOW"
+    fi
+    return 0
+}
+# <<< Telegram /chart browser
+
 # Function to generate random hex string
 generate_hex() {
     python3 -c "import secrets; print(secrets.token_hex(32))"
@@ -50,7 +129,7 @@ generate_hex() {
 # Function to validate broker name
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
     if [[ ",$valid_brokers," == *",$broker,"* ]]; then
         return 0
@@ -153,7 +232,7 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     # Get broker
     while true; do
-        log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
+        log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
         read -p "Enter broker name for instance $i: " broker
         if validate_broker "$broker"; then
             BROKERS+=("$broker")
@@ -225,19 +304,7 @@ sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git 
     libopenblas0 libgomp1 libgfortran5
 check_status "Failed to install packages"
 
-# Install Chromium for Kaleido/Plotly static chart rendering (Telegram /chart command).
-# Kaleido 1.x ships no bundled browser; it drives a system Chromium via choreographer.
-# Debian has 'chromium' in main; Ubuntu 19.10+ renamed it to 'chromium-browser' (snap transitional).
-# Non-fatal — if nothing sticks we warn; the rest of openalgo still installs fine.
-log_message "\nInstalling Chromium for Telegram /chart rendering..." "$BLUE"
-if sudo apt-get install -y chromium fonts-liberation 2>/dev/null; then
-    log_message "Installed chromium (Debian package)" "$GREEN"
-elif sudo apt-get install -y chromium-browser fonts-liberation 2>/dev/null; then
-    log_message "Installed chromium-browser (Ubuntu transitional/snap)" "$GREEN"
-else
-    log_message "Chromium install failed - Telegram /chart will not render charts" "$YELLOW"
-    log_message "You can install it manually later: sudo snap install chromium" "$YELLOW"
-fi
+ensure_chart_browser
 
 # Install uv
 log_message "\nInstalling uv package manager..." "$BLUE"
@@ -287,7 +354,15 @@ for ((i=1; i<=INSTANCES; i++)); do
     # Clone or update repository
     if [ ! -d "$INSTANCE_DIR" ]; then
         log_message "Cloning repository to $INSTANCE_DIR" "$BLUE"
-        sudo git clone "$REPO_URL" "$INSTANCE_DIR"
+        # --filter=blob:none makes this a partial clone: the server sends every
+        # commit and tree but no file contents, so it pulls ~20 MB instead of
+        # ~280 MB. Blobs outside the current checkout are fetched on demand, so
+        # the full history stays usable -- all 4,824 commits, 62 tags, every
+        # branch -- which keeps `git reset --hard HEAD~n`, tag checkouts and
+        # branch switching working. Nearly all of that 280 MB is superseded
+        # frontend/dist bundles that a server never reads. A host without filter
+        # support just full-clones, so this is never worse than no flag at all.
+        sudo git clone --filter=blob:none "$REPO_URL" "$INSTANCE_DIR"
         check_status "Failed to clone repository"
     else
         log_message "Directory exists, skipping clone" "$YELLOW"
@@ -432,6 +507,13 @@ server {
     server_name $DOMAIN;
     root /var/www/html;
 
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
+
     location / {
         try_files \$uri \$uri/ =404;
     }
@@ -462,6 +544,13 @@ server {
     listen [::]:80;
     server_name $DOMAIN;
 
+    # OPENALGO_WEBHOOK_LOG_GUARD: suppress URL-secret routes before redirect logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
+
     # WebSocket redirect exceptions
     location = /ws {
         return 301 https://\$host\$request_uri;
@@ -481,6 +570,13 @@ server {
     listen [::]:443 ssl;
 
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
 
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
@@ -561,8 +657,12 @@ server {
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
 
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        # Plain HTTP only: /ws, /ws/ and /socket.io/ have their own blocks.
+        # Forcing "Connection: upgrade" here sent every ordinary request
+        # upstream with a bogus upgrade header and an empty Upgrade:, which
+        # breaks HTTP/1.1 keep-alive to gunicorn and shows up as intermittent
+        # truncated asset responses and 5xx (GitHub issue #1807).
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;

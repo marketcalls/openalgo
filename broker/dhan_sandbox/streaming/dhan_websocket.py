@@ -5,10 +5,8 @@ Based on Dhan V2 API documentation with proper binary packet parsing.
 
 import asyncio
 import json
-import logging
 import os
 import struct
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -17,8 +15,10 @@ from typing import Any, Dict, List, Optional, Union
 
 import websockets
 
+from utils.logging import get_logger
+
 # Set up logging
-logger = logging.getLogger("dhan_websocket")
+logger = get_logger("dhan_websocket")
 
 # Issue #1344 (CRITICAL) — when running under gunicorn+eventlet (production
 # install path), eventlet monkey-patches threading.Thread into green threads.
@@ -28,12 +28,13 @@ logger = logging.getLogger("dhan_websocket")
 # OS thread, bypassing the monkey-patch. The bug is invisible in dev (Flask
 # dev server uses standard threading) and only surfaces on production
 # gunicorn+eventlet deployments.
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
 
-    _original_threading = eventlet.patcher.original("threading")
-else:
-    _original_threading = threading
+_original_threading = _runtime.original("threading")
 
 
 class DhanWebSocket:
@@ -70,6 +71,18 @@ class DhanWebSocket:
     REQUEST_CODE_QUOTE = TYPE_QUOTE  # 17 - Quote/marketdata
     REQUEST_CODE_FULL = TYPE_DEPTH  # 21 - Full market data (5-level depth)
     REQUEST_CODE_DEPTH_20 = 23  # 23 - 20-level market depth
+
+    # Unsubscribe codes. These previously sent RequestCode 0, which is not a
+    # valid feed request code - Dhan's table has no 0 - so every unsubscribe
+    # was a malformed request the broker ignored, leaving the subscription
+    # live server-side. Verified on the live feed that 16 does stop a ticker
+    # subscription. UNSUBSCRIBE_DEPTH_20 is 24 per Dhan's live annexure; the
+    # vendored copy in broker-api-docs says 25 and it could not be settled on
+    # the wire outside NSE hours, so re-check it against a live depth feed.
+    UNSUBSCRIBE_CODE_TICKER = 16
+    UNSUBSCRIBE_CODE_QUOTE = 18
+    UNSUBSCRIBE_CODE_FULL = 22
+    UNSUBSCRIBE_CODE_DEPTH_20 = 24
 
     # Heartbeat interval in seconds. Aligned to ping_interval=30 (used in
     # _connect) so we have a single liveness signal cadence rather than two
@@ -2230,9 +2243,21 @@ class DhanWebSocket:
 
             # First unsubscribe from main WebSocket
             if self.connected and self.ws:
+                # The unsubscribe code has to match the mode the token was
+                # subscribed in, so read it back from the tracking dict.
+                with self.lock:
+                    tracked = self.instruments.get(token)
+                mode = tracked.get("mode") if tracked else None
+                unsubscribe_code = {
+                    self.MODE_LTP: self.UNSUBSCRIBE_CODE_TICKER,
+                    self.MODE_QUOTE: self.UNSUBSCRIBE_CODE_QUOTE,
+                    self.MODE_FULL: self.UNSUBSCRIBE_CODE_FULL,
+                    self.MODE_DEPTH_20: self.UNSUBSCRIBE_CODE_DEPTH_20,
+                }.get(mode, self.UNSUBSCRIBE_CODE_FULL)
+
                 # Create unsubscription packet
                 packet = {
-                    "RequestCode": 0,  # 0 = Unsubscribe
+                    "RequestCode": unsubscribe_code,
                     "InstrumentCount": 1,
                     "InstrumentList": [
                         {
@@ -2251,7 +2276,10 @@ class DhanWebSocket:
                         if token in self.instruments:
                             del self.instruments[token]
 
-                    logger.info(f"Unsubscribed token {token} from main WebSocket")
+                    logger.info(
+                        f"Unsubscribed token {token} from main WebSocket "
+                        f"(mode {mode}, RequestCode {unsubscribe_code})"
+                    )
                 except Exception as e:
                     logger.error(f"Error unsubscribing token {token} from main WebSocket: {e}")
                     success_main = False
@@ -2291,7 +2319,7 @@ class DhanWebSocket:
 
             # Create unsubscription packet
             packet = {
-                "RequestCode": 0,  # 0 = Unsubscribe
+                "RequestCode": self.UNSUBSCRIBE_CODE_DEPTH_20,
                 "InstrumentCount": 1,
                 "InstrumentList": [
                     {

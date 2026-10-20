@@ -48,6 +48,7 @@ def transform_data(data, token=None, uid="", auth_token=None):
         "prctyp": order_type,
         "ret": "DAY",
         "ordersource": "API",
+        "remarks": "openalgo",
     }
 
     # Log without sensitive fields (uid/actid carry the client id)

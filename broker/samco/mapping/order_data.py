@@ -5,6 +5,39 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Samco uses these placeholders for "no value" in string fields.
+_PLACEHOLDERS = {"", "NA", "N/A", "--", "-", "None", "null"}
+
+
+def _clean_text(value):
+    """Return a display string, collapsing Samco's NA / -- placeholders to ''."""
+    text = str(value or "").strip()
+    return "" if text in _PLACEHOLDERS else text
+
+
+def _to_int(value, default=0):
+    """Parse a Samco quantity, which arrives as a string and may carry commas."""
+    if value is None or value == "":
+        return default
+    try:
+        if isinstance(value, str):
+            value = value.replace(",", "")
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def _to_float(value, default=0.0):
+    """Parse a Samco price, which arrives as a string and may carry commas."""
+    if value is None or value == "":
+        return default
+    try:
+        if isinstance(value, str):
+            value = value.replace(",", "")
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
 
 def map_order_status(status):
     """
@@ -48,11 +81,13 @@ def map_order_data(order_data):
         or "orderBookDetails" not in order_data
         or order_data["orderBookDetails"] is None
     ):
-        logger.info("No data available.")
+        logger.debug("No data available.")
         return []
 
     order_data = order_data["orderBookDetails"]
-    logger.info(f"{order_data}")
+    # debug, not info: the order-update poller calls this every
+    # ORDER_POLL_INTERVAL seconds, so dumping the whole book floods the log.
+    logger.debug(f"{order_data}")
 
     if order_data:
         for order in order_data:
@@ -158,6 +193,17 @@ def transform_order_data(orders):
         elif ordertype == "SL-M":
             ordertype = "SL-M"
 
+        # Fill state. The order-update poller diffs on (order_status,
+        # filled_quantity), so omitting these would hide partial fills entirely.
+        # Samco reports pending qty as unfilledQuantity in the order book and
+        # pendingQuantity in the order-status response; accept either.
+        filled_qty = _to_int(order.get("filledQuantity"))
+        pending_qty = _to_int(
+            order.get("unfilledQuantity")
+            if order.get("unfilledQuantity") is not None
+            else order.get("pendingQuantity")
+        )
+
         transformed_order = {
             "symbol": order.get("tradingSymbol", ""),
             "exchange": order.get("exchange", ""),
@@ -170,6 +216,14 @@ def transform_order_data(orders):
             "orderid": order.get("orderNumber", ""),
             "order_status": map_order_status(order.get("orderStatus", "")),
             "timestamp": order.get("orderTime", ""),
+            "filled_quantity": filled_qty,
+            "pending_quantity": pending_qty,
+            # Parse each candidate before choosing: averagePrice is often the
+            # placeholder "--"/"0.00" on a filled order, and a truthy placeholder
+            # would shadow a usable fillPrice if the fallback ran on raw values.
+            "average_price": _to_float(order.get("averagePrice"))
+            or _to_float(order.get("fillPrice")),
+            "rejection_reason": _clean_text(order.get("rejectionReason")),
         }
 
         transformed_orders.append(transformed_order)
@@ -193,7 +247,7 @@ def map_trade_data(trade_data):
         or "tradeBookDetails" not in trade_data
         or trade_data["tradeBookDetails"] is None
     ):
-        logger.info("No trade data available.")
+        logger.debug("No trade data available.")
         return []
 
     trade_data = trade_data["tradeBookDetails"]
@@ -254,7 +308,7 @@ def map_position_data(position_data):
         or "positionDetails" not in position_data
         or position_data["positionDetails"] is None
     ):
-        logger.info("No position data available.")
+        logger.debug("No position data available.")
         return []
 
     positions = position_data["positionDetails"]
@@ -339,7 +393,7 @@ def map_portfolio_data(portfolio_data):
     Processes and modifies portfolio/holdings data from Samco.
     """
     if not portfolio_data or portfolio_data.get("status") != "Success":
-        logger.info("No portfolio data available.")
+        logger.debug("No portfolio data available.")
         return {}
 
     holdings = portfolio_data.get("holdingDetails", [])

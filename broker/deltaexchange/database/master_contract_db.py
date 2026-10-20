@@ -8,6 +8,7 @@ from sqlalchemy import Column, Float, Index, Integer, Sequence, String, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from broker.deltaexchange.api.rate_limiter import PUBLIC, consume
 from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
@@ -318,6 +319,9 @@ def fetch_delta_products():
             params["after"] = after_cursor
 
         try:
+            # Weight 3 per page against the public (IP) quota; a full master
+            # contract download is several pages.
+            consume("/v2/products", method="GET", bucket=PUBLIC)
             response = get_httpx_client().get(
                 url,
                 params=params,
@@ -381,7 +385,7 @@ def process_delta_products(products):
         token          ← id                    (int → str)
         brsymbol       ← symbol                (Delta-native, e.g. "C-BTC-80000-280225")
         symbol         ← canonical             (OpenAlgo format, e.g. "BTC28FEB2580000CE")
-        name           ← description
+        name           ← underlying_asset.symbol  (underlying root, e.g. "BTC")
         exchange       ← "CRYPTO"              (OpenAlgo exchange abstraction)
         brexchange     ← "DELTAIN"             (broker identifier — Delta Exchange India)
         expiry         ← settlement_time       (None → "" for perpetuals;
@@ -466,12 +470,22 @@ def process_delta_products(products):
         # Build OpenAlgo canonical symbol (exchange = CRYPTO, broker-agnostic format)
         canonical_symbol = _to_canonical_symbol(symbol_str, instrument_type, expiry)
 
+        # `name` must be the underlying root (BTC, ETH, SOL) — not a human
+        # description. database/symbol.py resolves option-chain expiries with
+        # `SymToken.name.ilike(underlying)`, an exact match, so storing
+        # "BTC call option expiring on 12-8-2026" here leaves the expiry
+        # dropdown empty with no error anywhere. Delta returns the root in
+        # underlying_asset.symbol for every contract type.
+        underlying_name = (p.get("underlying_asset") or {}).get("symbol") or ""
+        if not underlying_name:
+            underlying_name = p.get("description", symbol_str)
+
         rows.append(
             {
                 "token": str(p["id"]),
                 "symbol": canonical_symbol,   # OpenAlgo canonical (e.g. BTC28FEB2580000CE)
                 "brsymbol": symbol_str,        # Delta-native (e.g. C-BTC-80000-280225)
-                "name": p.get("description", symbol_str),
+                "name": underlying_name,       # Underlying root (e.g. BTC)
                 "exchange": "CRYPTO",          # OpenAlgo exchange abstraction
                 "brexchange": "DELTAIN",       # Broker identifier (Delta Exchange India)
                 "expiry": expiry,

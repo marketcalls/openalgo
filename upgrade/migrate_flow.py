@@ -23,7 +23,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Add parent directory to path for imports
 sys.path.insert(0, PROJECT_ROOT)
-
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 
@@ -90,6 +93,7 @@ def create_flow_workflows_table(engine):
             webhook_secret VARCHAR(64),
             webhook_enabled BOOLEAN DEFAULT 0,
             webhook_auth_type VARCHAR(20) DEFAULT 'payload',
+            api_key VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -109,6 +113,7 @@ def create_flow_workflows_table(engine):
             webhook_secret VARCHAR(64),
             webhook_enabled BOOLEAN DEFAULT FALSE,
             webhook_auth_type VARCHAR(20) DEFAULT 'payload',
+            api_key VARCHAR(255),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
@@ -119,6 +124,84 @@ def create_flow_workflows_table(engine):
         conn.commit()
 
     print("  [OK] flow_workflows table created")
+    return True
+
+
+def column_exists(engine, table_name, column_name):
+    """Whether a column is present on an existing table."""
+    if not table_exists(engine, table_name):
+        return False
+    return column_name in {col["name"] for col in inspect(engine).get_columns(table_name)}
+
+
+def add_api_key_column(engine):
+    """Add flow_workflows.api_key to an installation that predates it.
+
+    create_flow_workflows_table() returns early when the table exists, so an
+    installation created before this column shipped could never gain it here.
+    The only thing adding it was a startup ALTER in database/flow_db.py whose
+    failures were swallowed at debug level -- so on a deployment where that
+    ALTER could not run, --status still reported "All changes applied" against a
+    schema with no api_key, and every workflow activation then failed silently.
+
+    Idempotent: safe to re-run, and it never touches existing rows.
+    """
+    if not table_exists(engine, "flow_workflows"):
+        return True
+    if column_exists(engine, "flow_workflows", "api_key"):
+        print("  [SKIP] flow_workflows.api_key already present")
+        return True
+
+    print("  [ALTER] Adding flow_workflows.api_key...")
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)"))
+        conn.commit()
+
+    print("  [OK] flow_workflows.api_key added")
+    return True
+
+
+def backfill_execution_started_at(engine):
+    """Give historical executions a start time.
+
+    create_execution never stamped started_at -- only
+    update_execution_status("running") did, and nothing passed that status --
+    so every row written before that fix has NULL. The history query ordered on
+    that column, and an all-NULL sort collapsed to insertion order ascending,
+    which listed the oldest runs first and made the dashboard's "last run" show
+    the workflow's first ever run.
+
+    completed_at is the best evidence available for when a finished run
+    happened. A row with neither timestamp is left alone; ordering is by id now,
+    so a null start time no longer misplaces it.
+
+    Idempotent: only rows that are still NULL are touched.
+    """
+    if not table_exists(engine, "flow_workflow_executions"):
+        return True
+
+    with engine.connect() as conn:
+        pending = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM flow_workflow_executions "
+                "WHERE started_at IS NULL AND completed_at IS NOT NULL"
+            )
+        ).scalar()
+
+        if not pending:
+            print("  [SKIP] execution start times already populated")
+            return True
+
+        print(f"  [BACKFILL] Setting started_at on {pending} execution(s)...")
+        conn.execute(
+            text(
+                "UPDATE flow_workflow_executions SET started_at = completed_at "
+                "WHERE started_at IS NULL AND completed_at IS NOT NULL"
+            )
+        )
+        conn.commit()
+
+    print("  [OK] execution start times backfilled")
     return True
 
 
@@ -264,6 +347,23 @@ def status(engine):
         print(f"  {table:<26} {'present' if present else 'MISSING'}")
         applied = applied and present
 
+    if table_exists(engine, "flow_workflows"):
+        present = column_exists(engine, "flow_workflows", "api_key")
+        print(f"  {'flow_workflows.api_key':<26} {'present' if present else 'MISSING'}")
+        applied = applied and present
+
+    if table_exists(engine, "flow_workflow_executions"):
+        with engine.connect() as conn:
+            pending = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM flow_workflow_executions "
+                    "WHERE started_at IS NULL AND completed_at IS NOT NULL"
+                )
+            ).scalar()
+        label = "execution started_at"
+        print(f"  {label:<26} {'present' if not pending else f'{pending} MISSING'}")
+        applied = applied and not pending
+
     if table_exists(engine, FLOW_JOBSTORE_TABLE):
         index_name = f"ix_{FLOW_JOBSTORE_TABLE}_next_run_time"
         names = {idx["name"] for idx in inspect(engine).get_indexes(FLOW_JOBSTORE_TABLE)}
@@ -306,7 +406,9 @@ def main():
         print()
         print("Creating tables...")
         create_flow_workflows_table(engine)
+        add_api_key_column(engine)
         create_flow_workflow_executions_table(engine)
+        backfill_execution_started_at(engine)
         create_apscheduler_jobstore_table(engine, FLOW_JOBSTORE_TABLE)
 
         print()

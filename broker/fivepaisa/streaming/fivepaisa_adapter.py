@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 import sys
@@ -12,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from broker.fivepaisa.streaming.fivepaisa_websocket import FivePaisaWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -47,7 +47,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("fivepaisa_websocket")
+        self.logger = get_logger("fivepaisa_websocket")
         self.ws_client = None
         self.user_id = None
         self.client_code = None
@@ -269,6 +269,14 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._stop_event.set()
         with self.lock:
             self.pending_subscriptions.clear()
+            # Held prices belong to the session that is ending. Keeping them
+            # would both hold memory for an adapter nobody is using and let a
+            # price from before the daily token rollover be merged into a tick
+            # after it. Deliberately NOT cleared on an ordinary reconnect: the
+            # snapshot exists to carry LastRate onto depth frames that lack it
+            # (see _methods_for_mode), and dropping it there would reopen the
+            # 0.00 window it was added to close.
+            self.last_snapshot.clear()
 
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
@@ -439,8 +447,14 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 3:
             correlation_id = f"{correlation_id}_{depth_level}"
 
-        # Store subscription for reconnection
+        # Store subscription for reconnection, and work out what actually needs
+        # sending: a method another subscription on this token already holds is
+        # live on the server, so re-sending it is pure redundant traffic (a
+        # quote subscription upgraded to depth would otherwise re-subscribe
+        # MarketFeedV3). Computed BEFORE inserting, so the new subscription does
+        # not mask itself, and mirrored by _methods_still_needed() on the way out.
         with self.lock:
+            already_live = self._methods_still_needed(token)
             self.subscriptions[correlation_id] = {
                 "symbol": symbol,
                 "exchange": exchange,
@@ -452,16 +466,17 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "methods": methods,
                 "scrip_data": scrip_data,
             }
+        to_send = [m for m in methods if m not in already_live]
 
         # Queue for batched sending when connected. When not connected, _on_open
         # re-queues every stored subscription on (re)connect, so we skip here to
         # avoid double-enqueuing the same scrip.
-        if self.connected and self.ws_client:
+        if self.connected and self.ws_client and to_send:
             self.logger.debug(
                 f"Queueing subscription for {symbol} ({exchange}/{brexchange}) - "
-                f"Token: {token}, Methods: {methods}, Exch: {exch_code}, Type: {exch_type}"
+                f"Token: {token}, Methods: {to_send}, Exch: {exch_code}, Type: {exch_type}"
             )
-            self._enqueue_subscriptions([(m, scrip_data[0]) for m in methods])
+            self._enqueue_subscriptions([(m, scrip_data[0]) for m in to_send])
 
         # Return success
         return self._create_success_response(
@@ -563,6 +578,23 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             still_needed = self._methods_still_needed(token)
             to_unsubscribe = [m for m in methods if m not in still_needed]
 
+            # Release this token's held-last-value snapshot. Nothing used to
+            # remove these, so the dict grew for the life of the worker - one
+            # entry per (token, mode) that ever ticked, in a process that never
+            # restarts. The staleness matters as much as the size: _apply_snapshot
+            # merges a remembered non-zero value over any field the current tick
+            # reports as 0, so an entry left behind by an unsubscribe can surface
+            # hours later on a re-subscribe as a price that never traded.
+            #
+            # Keyed by (token, mode), and another mode on the same scrip keeps
+            # its own entry - so check for a remaining subscription on this exact
+            # pair rather than on the token alone.
+            if not any(
+                str(sub["token"]) == str(token) and sub["mode"] == mode
+                for sub in self.subscriptions.values()
+            ):
+                self.last_snapshot.pop(f"{token}_{mode}", None)
+
             if self.pending_subscriptions:
                 targets = {(m, tuple(sorted(scrip_data[0].items()))) for m in to_unsubscribe}
                 self.pending_subscriptions = deque(
@@ -597,11 +629,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Depth subscriptions carry two methods (see _methods_for_mode), so
             # resubscribe every one of them or LTP goes back to 0 after a
             # reconnect. Older stored entries only have "method".
-            items = [
-                (m, sub["scrip_data"][0])
-                for sub in self.subscriptions.values()
-                for m in (sub.get("methods") or [sub["method"]])
-            ]
+            #
+            # Deduped on (method, token): several subscriptions can share a
+            # scrip - a quote and a depth stream on the same token both need
+            # MarketFeedV3 - and the server only needs told once.
+            items = []
+            seen = set()
+            for sub in self.subscriptions.values():
+                for m in sub.get("methods") or [sub["method"]]:
+                    key = (m, str(sub["token"]))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append((m, sub["scrip_data"][0]))
         if items:
             self.logger.info(f"Resubscribing {len(items)} subscription(s) in batches")
             self._enqueue_subscriptions(items)

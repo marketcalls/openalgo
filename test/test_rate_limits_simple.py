@@ -177,7 +177,6 @@ def test_file_modifications():
         ("restx_api/modify_order.py", "ORDER_RATE_LIMIT"),
         ("restx_api/cancel_order.py", "ORDER_RATE_LIMIT"),
         ("restx_api/place_smart_order.py", "SMART_ORDER_RATE_LIMIT"),
-        ("blueprints/strategy.py", ["WEBHOOK_RATE_LIMIT", "STRATEGY_RATE_LIMIT"]),
         ("blueprints/chartink.py", ["WEBHOOK_RATE_LIMIT", "STRATEGY_RATE_LIMIT"]),
         (
             "utils/env_check.py",

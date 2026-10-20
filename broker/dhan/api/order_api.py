@@ -18,6 +18,8 @@ from database.auth_db import get_auth_token, get_user_id, verify_api_key
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -37,6 +39,8 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     url = get_url(endpoint)
 
+    logger.debug(f"{method} {endpoint} request payload: {payload if payload else '<none>'}")
+
     try:
         if method == "GET":
             response = client.get(url, headers=headers)
@@ -50,6 +54,11 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
         # Parse the response JSON
         response_data = json.loads(response.text)
+
+        # Covers the orderbook, tradebook, positions and holdings readers,
+        # which all funnel through here and previously logged nothing at all
+        # on the success path.
+        logger.debug(f"{method} {endpoint} response ({response.status_code}): {response_data}")
 
         # Check for API errors in the response
         if isinstance(response_data, dict):
@@ -98,51 +107,60 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="dhan smart orders")
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """Dhan returns the position book as a bare list, [] when it is empty.
+
+    Every failure is a dict: errorType from Dhan or from get_api_response's own
+    exception handler, or status "failed"/"error".
+    """
+    return isinstance(positions_data, list)
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book("dhan", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    # securityId is the authoritative match: tradingSymbol is identical across
+    # NSE series, so matching on it alone could read a warrant's position for
+    # an equity order (#1930). Keep the symbol as a fallback for when the
+    # master contract has no token for the symbol.
+    security_id = get_token(tradingsymbol, exchange)
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
     net_qty = "0"
@@ -162,10 +180,15 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     if positions_data and isinstance(positions_data, list):
         for position in positions_data:
             if (
-                position.get("tradingSymbol") == tradingsymbol
-                and position.get("exchangeSegment") == map_exchange_type(exchange)
-                and position.get("productType") == product
+                position.get("exchangeSegment") != map_exchange_type(exchange)
+                or position.get("productType") != product
             ):
+                continue
+            if security_id is not None:
+                matched = str(position.get("securityId", "")) == str(security_id)
+            else:
+                matched = position.get("tradingSymbol") == tradingsymbol
+            if matched:
                 net_qty = position.get("netQty", "0")
                 break  # Assuming you need the first match
 
@@ -206,7 +229,12 @@ def place_order_api(data, auth):
     payload = json.dumps(newdata)
 
     logger.debug(f"Placing order with client_id: {client_id}")
-    logger.debug(f"Placing order with headers: {headers}")
+    # Never log the raw headers - they carry the broker access-token, and
+    # LOG_LEVEL=DEBUG would write it to log/*.log in plain text.
+    logger.debug(
+        "Placing order with headers: "
+        f"{ {k: ('[REDACTED]' if k == 'access-token' else v) for k, v in headers.items()} }"
+    )
     logger.debug(f"Placing order with payload: {payload}")
 
     # Get the shared httpx client with connection pooling
@@ -238,6 +266,7 @@ def place_order_api(data, auth):
     return res, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
@@ -251,7 +280,9 @@ def place_smartorder_api(data, auth):
     # Per-symbol lock: serialize smart orders per symbol
     symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-    with symbol_lock:
+    with symbol_lock as acquired:
+        if not acquired:
+            return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
 
         # Get current open position for the symbol

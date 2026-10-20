@@ -89,6 +89,34 @@ curl -X POST http://127.0.0.1:5000/api/v1/positionbook \
 | average_price | string | Average entry price |
 | ltp | string | Last traded price |
 | pnl | string | Profit/Loss |
+| average_price_basis | string | Present only when `average_price` and `pnl` are **not** measured from what the position cost. See below. |
+
+## When the Entry Price Is Not Available
+
+`average_price` is the price the position was entered at, and `pnl` is measured
+from it. A broker that cannot supply that for a given position sets
+`average_price_basis` on the row to say what the numbers mean instead. The key
+is **absent** on every position whose average really is an entry price, so a
+caller that does not care can ignore it, and one that does can test a single
+field:
+
+```python
+for position in positionbook["data"]:
+    if position.get("average_price_basis"):
+        # average_price and pnl are not measured from entry - see the value
+        ...
+```
+
+| Value | Meaning |
+|-------|---------|
+| `carry_forward_valuation` | The position was carried over from a previous day, and the broker reports the overnight leg re-valued at the previous day's settlement price rather than at what it cost. `average_price` is that settlement price and `pnl` is the move since it, i.e. the day's profit and loss, not the position's. |
+
+Only **Kotak Neo** sets this today, and only on a position carried forward from
+a previous day. The Kotak Neo Trade API does not return the entry price of an
+overnight F&O position on any endpoint: the positions payload carries the
+carried quantity and its re-valued amount and no other price, and the order,
+trade and order-history endpoints are all current-day. A position opened and
+still held within the same day is unaffected, and so is every other broker.
 
 ## Understanding Position Quantity
 

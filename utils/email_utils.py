@@ -12,9 +12,46 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from database.settings_db import get_smtp_settings
+from utils import runtime
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Seconds an SMTP connection may wait on the mail server under the gthread
+#: worker. Password reset and the test email run on a request thread, and with
+#: no timeout (the socket default) a mail server that accepts the connection
+#: and never answers held that thread, one of a fixed pool, for good. Under
+#: eventlet and on the development server the default is kept, as before.
+SMTP_TIMEOUT_SECONDS = 20.0
+
+#: What a send that timed out under that bound is told.
+MAIL_SERVER_UNREACHABLE_MESSAGE = (
+    "Could not reach the mail server. Check the SMTP host and port in settings."
+)
+
+
+def _smtp_timeout_kwargs() -> dict:
+    """The ``timeout`` for an SMTP constructor: bounded only under gthread."""
+    return {"timeout": SMTP_TIMEOUT_SECONDS} if runtime.gthread_active() else {}
+
+
+def _timed_out(exc: BaseException) -> bool:
+    """True for a send that ran into the gthread SMTP bound."""
+    return isinstance(exc, TimeoutError) and runtime.gthread_active()
+
+
+def _close_quietly(server) -> None:
+    """Close an SMTP connection on the way out, whatever state it is in.
+
+    ``quit()`` closes it on success; on a failure nothing did, and the socket
+    stayed open until garbage collection in a worker that never restarts.
+    """
+    if server is None:
+        return
+    try:
+        server.close()
+    except Exception:
+        logger.debug("Closing the SMTP connection failed", exc_info=True)
 
 
 class EmailSendError(Exception):
@@ -336,6 +373,7 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
     Returns:
         dict: Result dictionary with success status and message
     """
+    server = None
     try:
         if not smtp_settings:
             smtp_settings = get_smtp_settings()
@@ -371,14 +409,16 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
         if smtp_port == 465:
             # Port 465 uses SSL from the start (SMTPS)
             logger.info(f"Using SMTP_SSL for port {smtp_port}")
-            server = smtplib.SMTP_SSL(smtp_settings["smtp_server"], smtp_port, context=context)
+            server = smtplib.SMTP_SSL(
+                smtp_settings["smtp_server"], smtp_port, context=context, **_smtp_timeout_kwargs()
+            )
             # Send EHLO after SSL connection
             helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
             server.ehlo(helo_hostname)
         else:
             # Port 587 or others use SMTP with STARTTLS
             logger.info(f"Using SMTP with STARTTLS for port {smtp_port}")
-            server = smtplib.SMTP(smtp_settings["smtp_server"], smtp_port)
+            server = smtplib.SMTP(smtp_settings["smtp_server"], smtp_port, **_smtp_timeout_kwargs())
 
             # Send initial EHLO
             helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
@@ -428,9 +468,14 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
 
         return {"success": False, "message": error_msg}
     except Exception as e:
+        if _timed_out(e):
+            logger.error(f"Email sending timed out after {SMTP_TIMEOUT_SECONDS}s: {e}")
+            return {"success": False, "message": MAIL_SERVER_UNREACHABLE_MESSAGE}
         error_msg = f"Failed to send email: {str(e)}"
         logger.exception(f"Email sending failed: {e}")
         return {"success": False, "message": error_msg}
+    finally:
+        _close_quietly(server)
 
 
 def validate_smtp_settings(smtp_settings):
@@ -443,6 +488,7 @@ def validate_smtp_settings(smtp_settings):
     Returns:
         dict: Validation result
     """
+    server = None
     try:
         required_fields = [
             "smtp_server",
@@ -471,13 +517,15 @@ def validate_smtp_settings(smtp_settings):
         # Choose connection method based on port
         if smtp_port == 465:
             # Port 465 uses SSL from the start (SMTPS)
-            server = smtplib.SMTP_SSL(smtp_settings["smtp_server"], smtp_port, context=context)
+            server = smtplib.SMTP_SSL(
+                smtp_settings["smtp_server"], smtp_port, context=context, **_smtp_timeout_kwargs()
+            )
             # Send EHLO after SSL connection
             helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
             server.ehlo(helo_hostname)
         else:
             # Port 587 or others use SMTP with STARTTLS
-            server = smtplib.SMTP(smtp_settings["smtp_server"], smtp_port)
+            server = smtplib.SMTP(smtp_settings["smtp_server"], smtp_port, **_smtp_timeout_kwargs())
 
             # Send initial EHLO
             helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
@@ -495,4 +543,8 @@ def validate_smtp_settings(smtp_settings):
         return {"success": True, "message": "SMTP connection successful"}
 
     except Exception as e:
+        if _timed_out(e):
+            return {"success": False, "message": MAIL_SERVER_UNREACHABLE_MESSAGE}
         return {"success": False, "message": f"SMTP validation failed: {str(e)}"}
+    finally:
+        _close_quietly(server)

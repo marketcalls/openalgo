@@ -2,7 +2,7 @@
 
 ## Introduction
 
-**OpenAlgo** is a free, open-source algorithmic trading platform that bridges your trading ideas with execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 34 broker plugins: 33 securities integrations and Delta Exchange for crypto derivatives. Strategies can connect through TradingView, Amibroker, Python scripts, Excel, and AI agents.
+**OpenAlgo** is a free, open-source algorithmic trading platform that bridges your trading ideas with execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 36 broker plugins: 35 securities integrations and Delta Exchange for crypto derivatives. Strategies can connect through TradingView, Amibroker, Python scripts, Excel, and AI agents.
 
 **Website**: [https://openalgo.in](https://openalgo.in)
 **GitHub**: [https://github.com/marketcalls/openalgo](https://github.com/marketcalls/openalgo)
@@ -72,7 +72,7 @@ All in under 1 second!
 | Feature | Description |
 |---------|-------------|
 | **Smart Order Placement** | Execute trades with position sizing, split orders, and bracket orders |
-| **Multi-Broker Support** | Connect through 34 broker plugins using a unified API |
+| **Multi-Broker Support** | Connect through 36 broker plugins using a unified API |
 | **Multi-Exchange Trading** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Real-Time Streaming** | WebSocket-based live quotes, depth, and order updates |
 | **Auto Square-Off** | Time-based and one-click position square-off |
@@ -156,9 +156,9 @@ All in under 1 second!
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Supported Brokers (34 plugins)
+## Supported Brokers (36 plugins)
 
-The repository contains 34 broker plugin directories: 33 securities integrations and one Delta Exchange crypto-derivatives integration. The runtime broker selector is generated from these installed plugins, so it remains the authoritative list for a deployed version.
+The repository contains 36 broker plugin directories: 35 securities integrations and one Delta Exchange crypto-derivatives integration. The runtime broker selector is generated from these installed plugins, so it remains the authoritative list for a deployed version.
 
 **Benefit**: Switch brokers without changing your strategy code - OpenAlgo's unified API handles the translation.
 
@@ -294,7 +294,7 @@ Ready to begin? Here's your path:
 | Aspect | OpenAlgo |
 |--------|----------|
 | **Cost** | Free and open source (AGPL v3.0) |
-| **Brokers** | 34 plugins: 33 securities integrations and Delta Exchange crypto |
+| **Brokers** | 36 plugins: 35 securities integrations and Delta Exchange crypto |
 | **Exchanges** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Signal Sources** | TradingView, Amibroker, ChartInk, Python, AI |
 | **Strategy Building** | Flow (Visual), Python Hosting, External Webhooks |

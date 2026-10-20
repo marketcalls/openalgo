@@ -4,7 +4,6 @@ Handles market data streaming from Zebu broker
 """
 
 import json
-import logging
 import os
 import sys
 import threading
@@ -14,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports FIRST
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -25,7 +25,7 @@ import utils.config  # This loads .env file at module level
 # Ensure ZMQ_PORT is set (fallback if not in .env)
 if not os.getenv("ZMQ_PORT"):
     os.environ["ZMQ_PORT"] = "5555"
-    temp_logger = logging.getLogger("zebu_init")
+    temp_logger = get_logger("zebu_init")
     temp_logger.info("ZMQ_PORT not found in environment, setting to 5555")
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
@@ -68,7 +68,7 @@ class MarketDataCache:
         self._cache = {}
         self._initialized_scrips = set()
         self._lock = threading.Lock()
-        self.logger = logging.getLogger("market_cache")
+        self.logger = get_logger("market_cache")
 
     def get(self, scrip: str) -> dict[str, Any]:
         """Get cached data for a scrip"""
@@ -293,7 +293,7 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("zebu_websocket")
+        self.logger = get_logger("zebu_websocket")
 
         # Log the actual ZMQ port being used
         actual_zmq_port = os.getenv("ZMQ_PORT", "5555")

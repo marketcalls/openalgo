@@ -7,7 +7,7 @@ When analyzer mode is enabled, all trading operations are routed to the sandbox
 sandbox trading environment instead of the live broker.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from database.auth_db import verify_api_key
 from database.settings_db import get_analyze_mode
@@ -16,7 +16,9 @@ from sandbox.holdings_manager import HoldingsManager
 
 # Import sandbox managers
 from sandbox.order_manager import OrderManager
+from sandbox.position_locks import position_busy_response, position_lock
 from sandbox.position_manager import PositionManager
+from utils.keyed_locks import LockBusy
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +40,9 @@ def get_user_id_from_apikey(api_key: str) -> str | None:
 
 
 def sandbox_place_order(
-    order_data: dict[str, Any], api_key: str, original_data: dict[str, Any],
+    order_data: dict[str, Any],
+    api_key: str,
+    original_data: dict[str, Any],
     prefetched_quote: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
@@ -426,75 +430,29 @@ def sandbox_place_smart_order(
         product = order_data.get("product") or order_data.get("product_type", "MIS")
         target_quantity = int(order_data.get("position_size", 0))
         original_quantity = int(order_data.get("quantity", 0))
-        original_action = order_data.get("action")
 
-        # Get current position
-        success, positions_response, status_code = position_manager.get_open_positions()
-        if not success:
-            return False, positions_response, status_code
-
-        positions = positions_response.get("data", [])
-        current_quantity = 0
-
-        for pos in positions:
-            if (
-                pos.get("symbol") == symbol
-                and pos.get("exchange") == exchange
-                and pos.get("product") == product
-            ):
-                current_quantity = pos.get("quantity", 0)
-                break
-
-        # Special case: position_size=0 with quantity!=0 means fresh trade
-        if target_quantity == 0 and current_quantity == 0 and original_quantity != 0:
-            # Use the original action and quantity for fresh trade
-            action = original_action
-            quantity = original_quantity
-        elif target_quantity == current_quantity:
-            # Position already matches
-            if original_quantity == 0:
-                message = "No OpenPosition Found. Not placing Exit order."
-            else:
-                message = "Positions Already Matched. No Action needed."
-            return True, {"status": "success", "message": message, "mode": "analyze"}, 200
-        elif target_quantity == 0 and current_quantity > 0:
-            # Close long position
-            action = "SELL"
-            quantity = abs(current_quantity)
-        elif target_quantity == 0 and current_quantity < 0:
-            # Close short position
-            action = "BUY"
-            quantity = abs(current_quantity)
-        elif current_quantity == 0:
-            # Open new position
-            action = "BUY" if target_quantity > 0 else "SELL"
-            quantity = abs(target_quantity)
-        else:
-            # Adjust existing position
-            quantity_diff = target_quantity - current_quantity
-            if quantity_diff > 0:
-                action = "BUY"
-                quantity = abs(quantity_diff)
-            else:
-                action = "SELL"
-                quantity = abs(quantity_diff)
-
-        # Place the order to reach target position
-        sandbox_order_data = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "action": action,
-            "quantity": quantity,
-            "price": order_data.get("price", 0),
-            "trigger_price": order_data.get("trigger_price", 0),
-            "price_type": order_data.get("price_type", "MARKET"),
-            "product": product,
-            "strategy": order_data.get("strategy", ""),
-        }
-
-        success, response, status_code = order_manager.place_order(sandbox_order_data)
-
-        return success, response, status_code
+        # The position is read and the order placed under the position's lock:
+        # two smart orders deciding from the same read (two exit alerts for
+        # position size 0, say) would otherwise both sell the whole position
+        # and leave it reversed.
+        try:
+            with position_lock(user_id, exchange, symbol, product):
+                return _place_smart_order_locked(
+                    position_manager,
+                    order_manager,
+                    order_data,
+                    symbol,
+                    exchange,
+                    product,
+                    target_quantity,
+                    original_quantity,
+                )
+        except LockBusy:
+            logger.warning(
+                f"Sandbox smart order for {symbol} refused: another order on the same "
+                "position is still being processed"
+            )
+            return position_busy_response(symbol)
 
     except Exception as e:
         logger.exception(f"Error in sandbox_place_smart_order: {e}")
@@ -507,6 +465,88 @@ def sandbox_place_smart_order(
             },
             500,
         )
+
+
+def _place_smart_order_locked(
+    position_manager,
+    order_manager,
+    order_data,
+    symbol,
+    exchange,
+    product,
+    target_quantity,
+    original_quantity,
+):
+    """The body of sandbox_place_smart_order, run holding the position's lock."""
+    original_action = order_data.get("action")
+
+    # Get current position
+    success, positions_response, status_code = position_manager.get_open_positions()
+    if not success:
+        return False, positions_response, status_code
+
+    positions = positions_response.get("data", [])
+    current_quantity = 0
+
+    for pos in positions:
+        if (
+            pos.get("symbol") == symbol
+            and pos.get("exchange") == exchange
+            and pos.get("product") == product
+        ):
+            current_quantity = pos.get("quantity", 0)
+            break
+
+    # Special case: position_size=0 with quantity!=0 means fresh trade
+    if target_quantity == 0 and current_quantity == 0 and original_quantity != 0:
+        # Use the original action and quantity for fresh trade
+        action = original_action
+        quantity = original_quantity
+    elif target_quantity == current_quantity:
+        # Position already matches
+        if original_quantity == 0:
+            message = "No OpenPosition Found. Not placing Exit order."
+        else:
+            message = "Positions Already Matched. No Action needed."
+        return True, {"status": "success", "message": message, "mode": "analyze"}, 200
+    elif target_quantity == 0 and current_quantity > 0:
+        # Close long position
+        action = "SELL"
+        quantity = abs(current_quantity)
+    elif target_quantity == 0 and current_quantity < 0:
+        # Close short position
+        action = "BUY"
+        quantity = abs(current_quantity)
+    elif current_quantity == 0:
+        # Open new position
+        action = "BUY" if target_quantity > 0 else "SELL"
+        quantity = abs(target_quantity)
+    else:
+        # Adjust existing position
+        quantity_diff = target_quantity - current_quantity
+        if quantity_diff > 0:
+            action = "BUY"
+            quantity = abs(quantity_diff)
+        else:
+            action = "SELL"
+            quantity = abs(quantity_diff)
+
+    # Place the order to reach target position
+    sandbox_order_data = {
+        "symbol": symbol,
+        "exchange": exchange,
+        "action": action,
+        "quantity": quantity,
+        "price": order_data.get("price", 0),
+        "trigger_price": order_data.get("trigger_price", 0),
+        "price_type": order_data.get("price_type", "MARKET"),
+        "product": product,
+        "strategy": order_data.get("strategy", ""),
+    }
+
+    success, response, status_code = order_manager.place_order(sandbox_order_data)
+
+    return success, response, status_code
 
 
 def sandbox_cancel_all_orders(

@@ -9,6 +9,7 @@ import re
 
 from flask import Blueprint, jsonify, request
 
+from utils.env_check import update_env_values
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -21,56 +22,6 @@ def get_env_path():
     """Get the absolute path to the .env file."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.normpath(os.path.join(base_dir, "..", ".env"))
-
-
-def read_env_file():
-    """Read and parse the .env file into a dictionary of lines."""
-    env_path = get_env_path()
-    if not os.path.exists(env_path):
-        return None, "Environment file not found"
-
-    try:
-        # Use UTF-8 encoding for cross-platform compatibility
-        with open(env_path, encoding="utf-8") as f:
-            return f.read(), None
-    except Exception as e:
-        logger.exception(f"Error reading .env file: {e}")
-        return None, str(e)
-
-
-def update_env_value(content: str, key: str, value: str) -> str:
-    """Update a specific key's value in the .env content.
-
-    Uses single quotes for values. This is compatible with python-dotenv
-    and most .env parsers across platforms.
-    """
-    # Pattern to match the key with various formats
-    # Handles: KEY = 'value', KEY = "value", KEY = value, KEY='value', etc.
-    pattern = rf"^({re.escape(key)}\s*=\s*).*$"
-
-    # Always wrap in single quotes for consistency
-    # Single quotes in .env files don't require escaping in most parsers
-    # If value contains single quotes, use double quotes instead
-    if "'" in value:
-        # Use double quotes, escape any existing double quotes and backslashes
-        escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
-        new_value = f'"{escaped_value}"'
-    else:
-        # Use single quotes (no escaping needed)
-        new_value = f"'{value}'"
-
-    replacement = rf"\g<1>{new_value}"
-
-    # Try to replace existing key
-    new_content, count = re.subn(pattern, replacement, content, flags=re.MULTILINE)
-
-    if count == 0:
-        # Key doesn't exist, append it
-        if not new_content.endswith("\n"):
-            new_content += "\n"
-        new_content += f"{key} = {new_value}\n"
-
-    return new_content
 
 
 def get_env_value(key: str) -> str:
@@ -220,9 +171,7 @@ def update_credentials():
             # Validate broker name
             broker_name = get_broker_from_redirect_url(redirect_url)
             valid_brokers_str = get_env_value("VALID_BROKERS")
-            valid_brokers = set(
-                b.strip().lower() for b in valid_brokers_str.split(",") if b.strip()
-            )
+            valid_brokers = {b.strip().lower() for b in valid_brokers_str.split(",") if b.strip()}
 
             if broker_name and broker_name not in valid_brokers:
                 return jsonify(
@@ -260,46 +209,41 @@ def update_credentials():
                         }
                     ), 400
 
-        # Read current .env content
-        content, error = read_env_file()
-        if error:
+        env_path = get_env_path()
+        if not os.path.exists(env_path):
             return jsonify(
-                {"status": "error", "message": f"Failed to read .env file: {error}"}
+                {
+                    "status": "error",
+                    "message": "Failed to read .env file: Environment file not found",
+                }
             ), 500
 
-        # Track what was updated
-        updated_fields = []
+        # Collect the new values (only if provided - empty string means keep
+        # existing). Nothing is written until every value has been validated,
+        # and then all of them go to .env in one locked read-modify-write.
+        updates = {}
 
-        # Update values (only if provided - empty string means keep existing)
         if broker_api_key:
-            content = update_env_value(content, "BROKER_API_KEY", broker_api_key)
-            updated_fields.append("BROKER_API_KEY")
+            updates["BROKER_API_KEY"] = broker_api_key
 
         if broker_api_secret:
-            content = update_env_value(content, "BROKER_API_SECRET", broker_api_secret)
-            updated_fields.append("BROKER_API_SECRET")
+            updates["BROKER_API_SECRET"] = broker_api_secret
 
         if broker_api_key_market:
-            content = update_env_value(content, "BROKER_API_KEY_MARKET", broker_api_key_market)
-            updated_fields.append("BROKER_API_KEY_MARKET")
+            updates["BROKER_API_KEY_MARKET"] = broker_api_key_market
 
         if broker_api_secret_market:
-            content = update_env_value(
-                content, "BROKER_API_SECRET_MARKET", broker_api_secret_market
-            )
-            updated_fields.append("BROKER_API_SECRET_MARKET")
+            updates["BROKER_API_SECRET_MARKET"] = broker_api_secret_market
 
         if redirect_url:
-            content = update_env_value(content, "REDIRECT_URL", redirect_url)
-            updated_fields.append("REDIRECT_URL")
+            updates["REDIRECT_URL"] = redirect_url
 
         # Check for ngrok_allow by key presence, not value truthiness
         # This allows setting it to FALSE (disabling ngrok)
         if has_ngrok_key:
             ngrok_allow_str = str(ngrok_allow).strip().upper()
             ngrok_value = "TRUE" if ngrok_allow_str == "TRUE" else "FALSE"
-            content = update_env_value(content, "NGROK_ALLOW", ngrok_value)
-            updated_fields.append("NGROK_ALLOW")
+            updates["NGROK_ALLOW"] = ngrok_value
 
         if host_server:
             # Validate host_server URL format
@@ -310,8 +254,7 @@ def update_credentials():
                         "message": "Invalid HOST_SERVER format. Must start with http:// or https://",
                     }
                 ), 400
-            content = update_env_value(content, "HOST_SERVER", host_server)
-            updated_fields.append("HOST_SERVER")
+            updates["HOST_SERVER"] = host_server
 
         if websocket_url:
             # Validate websocket_url format
@@ -322,18 +265,31 @@ def update_credentials():
                         "message": "Invalid WEBSOCKET_URL format. Must start with ws:// or wss://",
                     }
                 ), 400
-            content = update_env_value(content, "WEBSOCKET_URL", websocket_url)
-            updated_fields.append("WEBSOCKET_URL")
+            updates["WEBSOCKET_URL"] = websocket_url
 
-        if not updated_fields:
+        if not updates:
             return jsonify({"status": "error", "message": "No credentials provided to update"}), 400
 
-        # Write updated content back to .env
-        env_path = get_env_path()
+        updated_fields = list(updates)
+
+        # A line break inside a value would start a new line in .env, which
+        # corrupts it or smuggles in another setting, so it is refused here.
+        for key, value in updates.items():
+            if "\n" in value or "\r" in value:
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": f"The value for {key} contains a line break. "
+                        "Paste it again as a single line.",
+                    }
+                ), 400
+
+        # Write every value in one read-modify-write under the lock all .env
+        # writers share, through an atomic replace. Two saves at once used to
+        # read the same file and the second write dropped the first one's
+        # values, and a save interrupted mid-write left .env truncated.
         try:
-            # Use UTF-8 encoding for cross-platform compatibility
-            with open(env_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            update_env_values(env_path, updates)
             logger.info(f"Updated broker credentials: {', '.join(updated_fields)}")
         except Exception as e:
             logger.exception(f"Error writing .env file: {e}")

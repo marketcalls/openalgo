@@ -41,7 +41,7 @@ Authenticate first, then send:
 ## Order Update Message
 
 Every field uses OpenAlgo's common order constants: `symbol` in OpenAlgo
-format (e.g. `NIFTY28JUL26FUT`, mapped from the broker's own symbology),
+format (e.g. `NIFTY25AUG26FUT`, mapped from the broker's own symbology),
 `action` `BUY`/`SELL`, `pricetype` `MARKET`/`LIMIT`/`SL`/`SL-M`, `product`
 `CNC`/`NRML`/`MIS`, and lowercase `order_status`
 (`open`/`trigger pending`/`complete`/`rejected`/`cancelled`, plus broker extras such as
@@ -55,7 +55,7 @@ sandbox events.
   "mode": "analyze",
   "broker": "sandbox",
   "orderid": "26071590395364",
-  "symbol": "NIFTY28JUL26FUT",
+  "symbol": "NIFTY25AUG26FUT",
   "exchange": "NFO",
   "action": "BUY",
   "quantity": 65,

@@ -8,13 +8,36 @@ and keep alive with heartbeat (``h``).
 """
 
 import json
-import logging
+import socket
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
 import websocket
+from websocket import ABNF
+
+from utils.logging import get_logger
+
+
+def close_frame_status(error: object) -> int | None:
+    """Status code if ``error`` is really a CLOSE frame, else ``None``.
+
+    websocket-client >= 1.9 hands a *received close frame* to ``on_error`` as
+    though it were an exception (``_app.py``: ``if op_code ==
+    ABNF.OPCODE_CLOSE: return closed(frame)``), then tears down without
+    passing the frame to ``on_close`` -- which is why a clean hangup is logged
+    as an error and the close callback then reports ``None - None``. A polite
+    server-side close is not a fault, so callers use this to tell the two
+    apart and recover the code the frame actually carried.
+    """
+    if getattr(error, "opcode", None) != ABNF.OPCODE_CLOSE:
+        return None
+    data = getattr(error, "data", b"") or b""
+    if len(data) < 2:
+        return 0  # close with no payload
+    return int.from_bytes(data[:2], "big")
 
 
 class TradeSmartWebSocket:
@@ -32,9 +55,29 @@ class TradeSmartWebSocket:
     PING_TIMEOUT = 10
     HEARTBEAT_JOIN_TIMEOUT = 3
 
+    # Market-data silence watchdog (issue #2075, same defect as Flattrade,
+    # Shoonya and Zebu). A Noren session that keeps answering heartbeats while
+    # delivering no ticks is indistinguishable from a healthy one on
+    # _last_message_time alone, because every inbound frame stamps it -
+    # heartbeat acks included. Tick flow therefore gets its own clock, and the
+    # watchdog only arms once data has been arriving over time: frames in
+    # DATA_ARM_BUCKETS distinct buckets of DATA_ARM_BUCKET seconds, all within
+    # DATA_ARM_WINDOW. See _update_last_data_time for why spread matters and a
+    # frame count does not.
+    DATA_SILENCE_TIMEOUT = 180
+    DATA_ARM_BUCKET = 30
+    DATA_ARM_BUCKETS = 3
+    DATA_ARM_WINDOW = 300
+
     # Message types
     MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
+    # The doc's heartbeat ack is "hk"; "h" is kept because some Noren
+    # deployments echo the request type back instead. Only "h" was matched
+    # before, so an "hk" ack fell through to the market-data path - harmless
+    # while nothing read it, but it would have counted as a tick and defeated
+    # the silence watchdog below.
+    MSG_TYPE_HEARTBEAT_ACK = "hk"
     MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
@@ -71,7 +114,25 @@ class TradeSmartWebSocket:
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
 
-        self.logger = logging.getLogger("tradesmart_websocket")
+        # Market-data liveness, kept apart from _last_message_time above so a
+        # socket that only answers heartbeats cannot pass for a live feed.
+        # Per connection: _reset_data_liveness() clears all three on open.
+        self._last_data_message_time = None
+        self._data_watchdog_armed = False
+        self._data_bucket_starts = deque(maxlen=self.DATA_ARM_BUCKETS)
+        # Signals every internal wait to return at once on shutdown. A bare
+        # time.sleep(HEARTBEAT_INTERVAL) cannot be interrupted, so stop() used
+        # to block for HEARTBEAT_JOIN_TIMEOUT and then warn -- see
+        # shoonya_websocket.py, which solved this the same way.
+        self._shutdown_event = threading.Event()
+
+        # Set when the broker answers the connect task with anything but OK, so
+        # the adapter can stop reconnecting instead of hammering the broker
+        # with a token that will not come back (shoonya_websocket.py parity).
+        self.auth_failed = False
+        self.auth_failure_reason: str | None = None
+
+        self.logger = get_logger("tradesmart_websocket")
 
     def connect(self) -> bool:
         """Establish the WebSocket connection and authenticate."""
@@ -88,6 +149,9 @@ class TradeSmartWebSocket:
 
     def _initialize_connection(self) -> None:
         self.running = True
+        self._shutdown_event.clear()
+        self.auth_failed = False
+        self.auth_failure_reason = None
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
             on_open=self._on_open,
@@ -104,7 +168,8 @@ class TradeSmartWebSocket:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True
-            time.sleep(0.1)
+            if self._shutdown_event.wait(0.1):
+                break
         self.logger.error("Connection timeout")
         self.stop()
         return False
@@ -124,6 +189,7 @@ class TradeSmartWebSocket:
     def stop(self) -> None:
         """Stop the connection and release resources (never join a daemon hard)."""
         self.logger.info("Stopping WebSocket connection")
+        self._shutdown_event.set()
         self.running = False
         self.connected = False
         self._close_websocket()
@@ -131,13 +197,33 @@ class TradeSmartWebSocket:
         self._stop_heartbeat()
 
     def _close_websocket(self) -> None:
-        if self.ws:
+        ws, self.ws = self.ws, None
+        if ws is None:
+            return
+
+        # Force the reader thread out of recv() before closing politely.
+        #
+        # run_forever() leaves the socket fully blocking: websocket-client sets
+        # ``self.sock.settimeout(getdefaulttimeout())`` (_app.py) and that
+        # default is None unless something installed a global one, so the
+        # thread parks in recv() with no deadline. Closing the socket from
+        # another thread does not reliably wake a pending recv on Windows --
+        # only shutdown() does. Without this, stop() waited out
+        # THREAD_JOIN_TIMEOUT, logged "WebSocket thread did not terminate
+        # within timeout" and walked away, leaving the thread parked in a
+        # worker that never restarts.
+        raw = getattr(getattr(ws, "sock", None), "sock", None)
+        if raw is not None:
             try:
-                self.ws.close()
-            except Exception as e:
-                self.logger.error(f"Error closing WebSocket: {e}")
-            finally:
-                self.ws = None
+                raw.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                # Already shut down, or the handshake never completed.
+                pass
+
+        try:
+            ws.close()
+        except Exception as e:
+            self.logger.error(f"Error closing WebSocket: {e}")
 
     def _wait_for_thread_completion(self) -> None:
         if self.ws_thread and self.ws_thread.is_alive():
@@ -150,6 +236,7 @@ class TradeSmartWebSocket:
     def _on_open(self, ws) -> None:
         self.connected = True
         self._update_last_message_time()
+        self._reset_data_liveness()
         self.logger.info("WebSocket opened, sending authentication")
         if self._send_authentication():
             self._start_heartbeat()
@@ -175,6 +262,10 @@ class TradeSmartWebSocket:
         self._update_last_message_time()
         if self._handle_internal_message(message):
             return
+        # Everything that is not an auth ack or a heartbeat ack is a market
+        # data frame (tk/tf/dk/df), so this is the point where the feed - as
+        # opposed to the socket - proves it is alive. Issue #2075.
+        self._update_last_data_time()
         self._call_external_callback(self.on_message, ws, message)
 
     def _handle_internal_message(self, message: str) -> bool:
@@ -183,7 +274,7 @@ class TradeSmartWebSocket:
             msg_type = data.get("t")
             if msg_type == self.MSG_TYPE_AUTH_ACK:
                 return self._handle_auth_response(data)
-            elif msg_type == self.MSG_TYPE_HEARTBEAT:
+            elif msg_type in (self.MSG_TYPE_HEARTBEAT_ACK, self.MSG_TYPE_HEARTBEAT):
                 self.logger.debug("Received heartbeat response")
                 return True
         except (json.JSONDecodeError, KeyError):
@@ -194,11 +285,19 @@ class TradeSmartWebSocket:
         if data.get("s") == self.AUTH_SUCCESS:
             self.logger.info("Authentication successful")
         else:
+            self.auth_failed = True
+            self.auth_failure_reason = str(data)
             self.logger.error(f"Authentication failed: {data}")
         return True
 
     def _on_error(self, ws, error) -> None:
-        self.logger.error(f"WebSocket error: {error}")
+        close_code = close_frame_status(error)
+        if close_code is not None:
+            # Not a fault: the server hung up politely and websocket-client
+            # routed the close frame here. See close_frame_status().
+            self.logger.info(f"WebSocket closed by server (code {close_code})")
+        else:
+            self.logger.error(f"WebSocket error: {error}")
         self._call_external_callback(self.on_error, ws, error)
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
@@ -214,6 +313,55 @@ class TradeSmartWebSocket:
             except Exception as e:
                 self.logger.error(f"Error in external callback: {e}")
 
+    def _update_last_data_time(self) -> None:
+        """Record a market-data frame and arm the data-silence watchdog.
+
+        Arming asks that data arrived *spread over time*, not that a lot of it
+        arrived. Noren answers every subscribe with a snapshot frame, so a
+        session opened overnight receives one frame per subscribed scrip
+        within a second of connecting - fifty symbols is fifty frames. Any
+        rule counting frames would arm on that burst and then recycle the
+        socket every DATA_SILENCE_TIMEOUT until the market opened.
+
+        Bucketing is what separates the two. A burst lands in one bucket (two
+        if it straddles a boundary), while a live feed keeps producing frames
+        bucket after bucket. Requiring DATA_ARM_BUCKETS distinct buckets means
+        at least a couple of DATA_ARM_BUCKET-second spans of real flow before
+        the watchdog can fire, and DATA_ARM_WINDOW stops stray after-hours
+        ticks hours apart from accumulating into a false arm.
+
+        Arming lasts only for this connection, so a market that closes while
+        the watchdog is armed costs one recycle and the replacement then sits
+        quiet.
+        """
+        now = time.time()
+        newly_armed = False
+
+        with self._heartbeat_lock:
+            self._last_data_message_time = now
+
+            if not self._data_watchdog_armed:
+                bucket_start = now - (now % self.DATA_ARM_BUCKET)
+                if not self._data_bucket_starts or self._data_bucket_starts[-1] != bucket_start:
+                    self._data_bucket_starts.append(bucket_start)
+
+                if (
+                    len(self._data_bucket_starts) == self._data_bucket_starts.maxlen
+                    and now - self._data_bucket_starts[0] <= self.DATA_ARM_WINDOW
+                ):
+                    self._data_watchdog_armed = True
+                    newly_armed = True
+
+        if newly_armed:
+            self.logger.info("Market data is flowing; watching for tick silence from here on")
+
+    def _reset_data_liveness(self) -> None:
+        """Clear the per-connection market-data liveness state."""
+        with self._heartbeat_lock:
+            self._last_data_message_time = None
+            self._data_watchdog_armed = False
+            self._data_bucket_starts.clear()
+
     def _update_last_message_time(self) -> None:
         with self._heartbeat_lock:
             self._last_message_time = time.time()
@@ -225,17 +373,26 @@ class TradeSmartWebSocket:
         self._heartbeat_thread.start()
 
     def _stop_heartbeat(self) -> None:
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
-            if self._heartbeat_thread.is_alive():
+        with self._heartbeat_lock:
+            thread = self._heartbeat_thread
+        # Never join the heartbeat thread from inside itself, and never null a
+        # thread a concurrent _start_heartbeat has just replaced.
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            self._shutdown_event.set()
+            thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
-                return
-        self._heartbeat_thread = None
+        with self._heartbeat_lock:
+            if self._heartbeat_thread is thread:
+                self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         while self.running and self.connected:
             try:
-                time.sleep(self.HEARTBEAT_INTERVAL)
+                # Interruptible: returns immediately once stop() signals,
+                # instead of sitting out the rest of a 30s sleep.
+                if self._shutdown_event.wait(self.HEARTBEAT_INTERVAL):
+                    break
                 if self.running and self.connected:
                     if not self._send_heartbeat():
                         break
@@ -246,10 +403,13 @@ class TradeSmartWebSocket:
                 break
 
     def _send_heartbeat(self) -> bool:
-        if not self.ws:
+        # Snapshot: _close_websocket() nulls self.ws from another thread, so
+        # checking the attribute and then sending through it is a race.
+        ws = self.ws
+        if not ws:
             return False
         try:
-            self.ws.send(json.dumps({"t": self.MSG_TYPE_HEARTBEAT}))
+            ws.send(json.dumps({"t": self.MSG_TYPE_HEARTBEAT}))
             self.logger.debug("Sent heartbeat")
             return True
         except Exception as e:
@@ -257,13 +417,48 @@ class TradeSmartWebSocket:
             return False
 
     def _check_connection_health(self) -> bool:
+        """Recycle the socket when the session has stopped being useful.
+
+        Two independent timeouts, because a Noren session fails in two ways:
+
+        * HEARTBEAT_TIMEOUT catches a socket that has gone quiet altogether.
+        * DATA_SILENCE_TIMEOUT catches one that still answers heartbeats while
+          delivering no market data. That case used to be invisible here - the
+          heartbeat ack itself refreshed _last_message_time - so the feed could
+          stay dead for the rest of the session with the app still reporting a
+          healthy connection, and nothing downstream that runs on ticks (stop
+          losses, sandbox order triggers, Flow conditions) would fire. Checked
+          only once the watchdog is armed; see _update_last_data_time.
+          Issue #2075.
+
+        Returns:
+            bool: True if connection is healthy, False if it was recycled
+        """
+        now = time.time()
+        reason = None
+
         with self._heartbeat_lock:
-            if self._last_message_time:
-                if time.time() - self._last_message_time > self.HEARTBEAT_TIMEOUT:
-                    self.logger.error("Connection timeout - no messages received")
-                    self._close_websocket()
-                    return False
-        return True
+            if self._last_message_time and now - self._last_message_time > self.HEARTBEAT_TIMEOUT:
+                reason = "no messages received"
+            elif (
+                self._data_watchdog_armed
+                and self._last_data_message_time
+                and now - self._last_data_message_time > self.DATA_SILENCE_TIMEOUT
+            ):
+                silent_for = now - self._last_data_message_time
+                reason = (
+                    f"no market data for {silent_for:.0f}s while the session kept "
+                    "answering heartbeats"
+                )
+
+        if reason is None:
+            return True
+
+        # Closed outside the lock: the reader thread runs _on_close, which can
+        # route back through _stop_heartbeat on this very thread.
+        self.logger.error(f"Connection timeout - {reason}")
+        self._close_websocket()
+        return False
 
     def subscribe_touchline(self, scrip_list: str) -> bool:
         return self._send_subscription_message(
@@ -285,7 +480,9 @@ class TradeSmartWebSocket:
             self.MSG_TYPE_DEPTH_UNSUB, scrip_list, "depth unsubscription"
         )
 
-    def _send_subscription_message(self, msg_type: str, scrip_list: str, operation_name: str) -> bool:
+    def _send_subscription_message(
+        self, msg_type: str, scrip_list: str, operation_name: str
+    ) -> bool:
         return self._send_message({"t": msg_type, "k": scrip_list}, operation_name)
 
     def _send_message(self, message_dict: dict[str, Any], operation_name: str) -> bool:

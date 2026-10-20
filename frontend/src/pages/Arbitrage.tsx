@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/table'
 import { useMarketDataContextOptional } from '@/contexts/MarketDataContext'
 import { MarketDataManager, type SymbolData } from '@/lib/MarketDataManager'
+import { serverSentence } from '@/lib/serverSentence'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
@@ -405,7 +406,7 @@ export default function Arbitrage() {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to place spread order'
-      showToast.error(message)
+      showToast.error(serverSentence(err, message))
     } finally {
       setSubmitting(false)
     }

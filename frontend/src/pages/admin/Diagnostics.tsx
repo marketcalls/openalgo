@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   FileText,
   Gauge,
   HardDrive,
+  Layers,
   Network,
   RefreshCw,
   Server,
@@ -37,8 +39,10 @@ import type {
   ErrorGroup,
   ErrorsStats,
   SystemInfo,
+  SystemRuntime,
 } from '@/types/admin'
 import { showToast } from '@/utils/toast'
+import { formatUptime, webServerNotes, webServerRows } from './webServerSummary'
 
 const LEVEL_OPTIONS = ['', 'ERROR', 'CRITICAL', 'WARNING', 'INFO']
 
@@ -85,6 +89,37 @@ function Section({
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
+  )
+}
+
+/** The web server rows, led by any note the server wrote for the operator. */
+function WebServerDetails({ runtime }: { runtime: SystemRuntime }) {
+  const notes = webServerNotes(runtime)
+  const rows = webServerRows(runtime)
+  return (
+    <div className="space-y-3">
+      {notes.length > 0 ? (
+        <div
+          role="note"
+          aria-label="Web server notes"
+          className="rounded-md border border-amber-500/60 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <ul className="space-y-1.5">
+              {notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+      <div>
+        {rows.map((row) => (
+          <KV key={row.label} label={row.label} value={row.value} />
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -268,18 +303,20 @@ export default function Diagnostics() {
           <div>
             <KV label="Python" value={info?.runtime.python_version} />
             <KV label="Implementation" value={info?.runtime.python_implementation} />
-            <KV label="Eventlet active" value={info?.runtime.eventlet_active} />
-            <KV label="WSGI" value={info?.runtime.wsgi_hint} />
-            <KV
-              label="Process uptime"
-              value={
-                info?.runtime.process_uptime_seconds
-                  ? `${Math.floor(info.runtime.process_uptime_seconds / 60)} min`
-                  : null
-              }
-            />
+            <KV label="Process uptime" value={formatUptime(info?.runtime.process_uptime_seconds)} />
           </div>
         </Section>
+
+        {/* Web server */}
+        {info?.runtime ? (
+          <Section
+            icon={Layers}
+            title="Web server"
+            description="How OpenAlgo serves requests and market data on this server."
+          >
+            <WebServerDetails runtime={info.runtime} />
+          </Section>
+        ) : null}
 
         {/* Hardware */}
         <Section icon={HardDrive} title="Hardware">

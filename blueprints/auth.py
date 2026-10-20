@@ -18,7 +18,7 @@ from flask import (
 )
 from flask_wtf.csrf import generate_csrf
 
-from database.auth_db import auth_cache, feed_token_cache, upsert_auth
+from database.auth_db import invalidate_user_auth_cache, upsert_auth
 from database.settings_db import get_smtp_settings, set_smtp_settings
 from database.user_db import (  # Import the function
     User,
@@ -320,6 +320,26 @@ def login():
 
         if authenticate_user(username, password):
             logger.info(f"[LOGIN] Password auth success for: {username}")
+            # Start every authenticated session from a clean slate.
+            #
+            # This runs after the password check but BEFORE any authenticated
+            # value is written: session["user"] is set immediately below, and
+            # "logged_in" is not set until broker auth completes in
+            # handle_auth_success(). So nothing authenticated is discarded here.
+            #
+            # This is state hygiene, not a session-fixation fix. Flask signs the
+            # whole session into the cookie (SecureCookieSessionInterface), so
+            # there is no server-side session id an attacker could pre-plant and
+            # later reuse. What it does prevent is leftovers from an abandoned
+            # earlier flow surviving into the authenticated session: a
+            # password-reset token, a stale broker key, or a half-finished TOTP
+            # park being layered under the new values instead of replaced.
+            #
+            # Safe for CSRF: POST /auth/login is exempt (no session exists yet)
+            # and the frontend re-fetches a token from /auth/csrf-token before
+            # each mutating request. session.permanent is set in
+            # handle_auth_success() once broker auth succeeds.
+            session.clear()
 
             # If the user has 2FA enabled for login, defer setting session["user"]
             # until TOTP is verified. This is the gate that prevents an attacker
@@ -1134,41 +1154,16 @@ def toggle_analyzer_mode_session():
         return jsonify({"status": "error", "message": "Broker not connected"}), 401
 
     try:
-        from database.settings_db import get_analyze_mode, set_analyze_mode
+        from services.analyzer_service import MODE_BUSY_MESSAGE, apply_analyze_mode
+        from utils.keyed_locks import LockBusy
 
-        # Get current mode and toggle it
-        current_mode = get_analyze_mode()
-        new_mode = not current_mode
-
-        # Set the new mode
-        set_analyze_mode(new_mode)
-
-        # Start/stop execution engine and squareoff scheduler based on mode
-        from sandbox.execution_thread import start_execution_engine, stop_execution_engine
-        from sandbox.squareoff_thread import start_squareoff_scheduler, stop_squareoff_scheduler
-
-        if new_mode:
-            # Analyzer mode ON - start both threads
-            start_execution_engine()
-            start_squareoff_scheduler()
-
-            # Run catch-up settlement for any missed settlements while app was stopped
-            from sandbox.position_manager import catchup_missed_settlements
-
-            try:
-                catchup_missed_settlements()
-                logger.info("Catch-up settlement check completed")
-            except Exception as e:
-                logger.exception(f"Error in catch-up settlement: {e}")
-
-            logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
-        else:
-            # Analyzer mode OFF - stop both threads
-            stop_execution_engine()
-            stop_squareoff_scheduler()
-            logger.info(
-                "Analyzer mode disabled - Execution engine and square-off scheduler stopped"
-            )
+        # Toggle the current mode and start or stop the execution engine and
+        # square-off scheduler to match, as one step: the current mode is read
+        # under the same lock, so two clicks cannot both toggle from one value.
+        try:
+            new_mode = apply_analyze_mode(toggle=True)
+        except LockBusy:
+            return jsonify({"status": "error", "message": MODE_BUSY_MESSAGE}), 409
 
         return jsonify(
             {
@@ -1308,15 +1303,13 @@ def logout():
     session.clear()
 
     if was_logged_in and username:
-        # Clear cache entries before database update to prevent stale data access
-        cache_key_auth = f"auth-{username}"
-        cache_key_feed = f"feed-{username}"
-        if cache_key_auth in auth_cache:
-            del auth_cache[cache_key_auth]
-            logger.info(f"Cleared auth cache for user: {username}")
-        if cache_key_feed in feed_token_cache:
-            del feed_token_cache[cache_key_feed]
-            logger.info(f"Cleared feed token cache for user: {username}")
+        # Clear cache entries before database update to prevent stale data
+        # access. Never a membership test then a delete: another thread can
+        # drop the entry between the two, and the KeyError used to escape
+        # here, after the browser session was cleared but before the broker
+        # token below was revoked. invalidate_user_auth_cache never raises.
+        invalidate_user_auth_cache(username)
+        logger.info(f"Cleared cached broker session for user: {username}")
 
         # Clear symbol cache on logout
         try:

@@ -1,6 +1,7 @@
 # Zerodha GTT payload transforms (OpenAlgo ⇄ Kite).
 # Kite Connect GTT API reference: https://kite.trade/docs/connect/v3/gtt/
 
+from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity, to_kite_quantity
 from database.token_db import get_br_symbol, get_oa_symbol
 
 
@@ -10,7 +11,9 @@ def _build_order(data, price, tradingsymbol, exchange):
         "exchange": exchange,
         "tradingsymbol": tradingsymbol,
         "transaction_type": data["action"].upper(),
-        "quantity": int(data["quantity"]),
+        # A GTT becomes a real order when it fires, so it carries the same
+        # contract-count convention on MCX that place_order does.
+        "quantity": int(to_kite_quantity(data["quantity"], tradingsymbol, exchange)),
         "order_type": data.get("pricetype", "LIMIT"),
         "product": data["product"],
         "price": float(price),
@@ -81,7 +84,7 @@ def transform_modify_gtt(data):
     return transform_place_gtt(data)
 
 
-def map_gtt_book(gtt_data):
+def map_gtt_book(gtt_data, include_history=False):
     """Normalise Kite's GET /gtt/triggers response into an OpenAlgo-shaped list.
 
     Kite returns ``{"status": "success", "data": [{...}, ...]}``. Each GTT has
@@ -95,12 +98,12 @@ def map_gtt_book(gtt_data):
     data = gtt_data.get("data") or []
     normalised = []
 
-    # Active-only filter: drop triggered/disabled/expired/cancelled/rejected/
-    # deleted at the broker mapper so the orderbook UI shows only triggers
-    # that can still fire. Kite's GTT statuses: active, triggered, disabled,
-    # expired, cancelled, rejected, deleted.
+    # Active-only by default so the book lists triggers that can still fire.
+    # With include_history the rest come through too, carrying Kite's own
+    # status (triggered, disabled, expired, cancelled, rejected, deleted) so
+    # the tab can show what fired.
     for gtt in data:
-        if (gtt.get("status") or "").lower() != "active":
+        if not include_history and (gtt.get("status") or "").lower() != "active":
             continue
         condition = gtt.get("condition") or {}
         orders = gtt.get("orders") or []
@@ -113,7 +116,9 @@ def map_gtt_book(gtt_data):
             legs.append(
                 {
                     "action": order.get("transaction_type", ""),
-                    "quantity": order.get("quantity", 0),
+                    "quantity": from_kite_quantity(
+                        order.get("quantity", 0), br_symbol, exchange
+                    ),
                     "price": order.get("price", 0),
                     "pricetype": order.get("order_type", "LIMIT"),
                     "product": order.get("product", ""),

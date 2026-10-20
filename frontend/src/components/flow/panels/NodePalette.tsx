@@ -58,16 +58,27 @@ interface NodeItemProps {
   icon: React.ReactNode
   color: string
   onDragStart: (event: React.DragEvent, nodeType: string) => void
+  onAdd: (nodeType: string) => void
 }
 
-function NodeItem({ type, label, description, icon, color, onDragStart }: NodeItemProps) {
+function NodeItem({ type, label, description, icon, color, onDragStart, onAdd }: NodeItemProps) {
+  // Dragging was the only way to place a node: this was a plain div with no
+  // role, no tab stop and no activation handler of any kind - not even a click.
+  // A keyboard user could not add the first node to a graph at all, because the
+  // one alternative (the + button on an edge) only inserts between two nodes
+  // that are already connected.
   return (
-    <div
+    <button
+      type="button"
       draggable
+      aria-label={`Add ${label} node`}
       onDragStart={(e) => onDragStart(e, type)}
+      onClick={() => onAdd(type)}
       className={cn(
-        'group cursor-grab rounded-lg border border-border bg-card p-2.5 transition-all duration-200',
-        'hover:border-primary/50 hover:shadow-md active:cursor-grabbing'
+        'group w-full cursor-grab rounded-lg border border-border bg-card p-2.5 text-left',
+        'transition-all duration-200 hover:border-primary/50 hover:shadow-md',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'active:cursor-grabbing'
       )}
     >
       <div className="flex items-center gap-2.5">
@@ -79,15 +90,16 @@ function NodeItem({ type, label, description, icon, color, onDragStart }: NodeIt
           <div className="truncate text-[10px] text-muted-foreground">{description}</div>
         </div>
       </div>
-    </div>
+    </button>
   )
 }
 
 interface NodePaletteProps {
   onDragStart: (event: React.DragEvent, nodeType: string) => void
+  onAdd: (nodeType: string) => void
 }
 
-export function NodePalette({ onDragStart }: NodePaletteProps) {
+export function NodePalette({ onDragStart, onAdd }: NodePaletteProps) {
   const triggers = [
     {
       type: 'start',
@@ -567,7 +579,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {triggers.map((node) => (
-                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -576,7 +588,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {actions.map((node) => (
-                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -585,7 +597,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {data.map((node) => (
-                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -594,7 +606,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {streaming.map((node) => (
-                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -603,7 +615,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {conditions.map((node) => (
-                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>
@@ -612,7 +624,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             <ScrollArea className="h-full">
               <div className="space-y-1.5 p-2">
                 {utilities.map((node) => (
-                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
+                  <NodeItem key={node.type} {...node} onDragStart={onDragStart} onAdd={onAdd} />
                 ))}
               </div>
             </ScrollArea>

@@ -164,9 +164,7 @@ class KotakOrderUpdateAdapter(BaseOrderUpdateAdapter):
 
         ws.send(frame)
         encoding = "json" if self._use_json_handshake else "raw"
-        self.logger.info(
-            f"Sent Kotak realtime connect frame ({encoding}) for sid {self.session_sid}"
-        )
+        self.logger.info(f"Sent Kotak realtime connect frame ({encoding}) for user {self.user_id}")
         self._start_ack_watchdog(ws, encoding)
 
     def _start_ack_watchdog(self, ws, encoding: str) -> None:
@@ -301,7 +299,7 @@ def create_kotak_order_adapter(user_id: str) -> "KotakOrderUpdateAdapter | None"
         return None
 
     parts = auth_token.split(":::")
-    if len(parts) != 4:
+    if len(parts) < 4:
         logger.warning(
             f"Unexpected Kotak auth token format for user {user_id}; "
             "order-update adapter not started"

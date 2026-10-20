@@ -1,14 +1,17 @@
-"""TradeSmart's per-endpoint rate limiting.
+"""TradeSmart's shared per-user rate limiting.
 
-TradeSmart raised /GetQuotes to 100 requests per second while the other data
-endpoints stayed on the older 120-per-minute allowance. A single shared gate
-cannot serve both: paced for the minute budget it throttles quotes to under 1%
-of what the broker now allows, and paced for the second budget it lets history
-calls run 60x over their ceiling.
+TradeSmart bills every data call against ONE per-user budget with two rolling
+windows, 10/sec and 120/min. An earlier revision assumed /GetQuotes had been
+raised to 100/sec and was exempt from the per-minute allowance; live logs
+disproved both -- a single option-chain request tripped
+"Order Recieved 11 in a current second exceeds Limit 10 for user" and
+"Order Recieved 121 in a current minute exceeds Limit 120 for user", both on
+/GetQuotes. These tests pin the corrected model.
 """
 
 import threading
 import time
+from collections import deque
 
 import pytest
 
@@ -16,64 +19,74 @@ from broker.tradesmart.api import rate_limiter as rl
 
 
 @pytest.fixture(autouse=True)
-def _reset_gates():
-    """Each test starts with both clocks cold, and leaves them cold."""
-    rl._QUOTES_GATE._last_call = 0.0
-    rl._DEFAULT_GATE._last_call = 0.0
+def _reset_gate():
+    """Each test starts with a cold window, and leaves one behind."""
+    rl._reserved_call_times = deque()
     yield
-    rl._QUOTES_GATE._last_call = 0.0
-    rl._DEFAULT_GATE._last_call = 0.0
+    rl._reserved_call_times = deque()
 
 
-class TestRouting:
-    def test_quotes_get_the_per_second_budget(self):
-        assert rl.interval_for("/GetQuotes") == rl.QUOTES_MIN_INTERVAL
+class TestCeilings:
+    def test_per_second_pace_stays_under_the_broker_cap(self):
+        """Broker rejects the 11th call in a second; we stop short of that."""
+        assert rl.TRADESMART_MAX_PER_SECOND < 10
 
-    @pytest.mark.parametrize("endpoint", ["/TPSeries", "/EODChartData"])
-    def test_history_stays_on_the_per_minute_budget(self, endpoint):
-        assert rl.interval_for(endpoint) == rl.DEFAULT_MIN_INTERVAL
+    def test_per_minute_pace_stays_under_the_broker_cap(self):
+        """Broker rejects the 121st call in a minute; we stop short of that."""
+        assert rl.TRADESMART_MAX_PER_MINUTE < 120
 
-    @pytest.mark.parametrize("endpoint", [None, "/SomeEndpointAddedLater"])
-    def test_unclassified_endpoints_are_paced_conservatively(self, endpoint):
-        """An unknown endpoint must not be handed the per-second allowance."""
-        assert rl.interval_for(endpoint) == rl.DEFAULT_MIN_INTERVAL
+    def test_quotes_are_not_exempt_from_any_window(self):
+        """/GetQuotes bills against the same budget as history.
 
-    def test_quotes_budget_is_actually_faster(self):
-        assert rl.QUOTES_MIN_INTERVAL < rl.DEFAULT_MIN_INTERVAL
-
-    def test_quotes_pace_stays_under_the_documented_cap(self):
-        """~90/sec, with headroom under the broker's 100/sec."""
-        per_second = 1.0 / rl.QUOTES_MIN_INTERVAL
-        assert 80 <= per_second <= 100
-
-    def test_default_pace_stays_under_the_documented_cap(self):
-        per_minute = 60.0 / rl.DEFAULT_MIN_INTERVAL
-        assert per_minute <= 120
+        The per-minute rejections observed in production were all on
+        /GetQuotes, so routing quotes to a separate or per-second-only gate
+        would let the account blow the minute ceiling.
+        """
+        for _ in range(rl.TRADESMART_MAX_PER_MINUTE):
+            rl._reserve_slot()
+        # The budget is now spent for the minute -- a history call must wait,
+        # proving quotes consumed the same counter history draws from.
+        assert rl._reserve_slot() > 30.0
 
 
 class TestPacing:
-    def test_quotes_burst_is_fast(self):
-        """20 quote calls used to cost 11s at 0.55s each; now well under 1s."""
+    def test_a_burst_up_to_the_cap_goes_out_immediately(self):
+        """Burst-friendly: the gate does not space calls that fit the window."""
         started = time.monotonic()
-        for _ in range(20):
+        for _ in range(rl.TRADESMART_MAX_PER_SECOND):
             rl.apply_rate_limit("/GetQuotes")
-        elapsed = time.monotonic() - started
-        assert elapsed < 1.0, f"20 quote calls took {elapsed:.2f}s"
-
-    def test_history_is_still_throttled(self):
-        """Three history calls must still be spaced by the per-minute gate."""
-        started = time.monotonic()
-        for _ in range(3):
-            rl.apply_rate_limit("/TPSeries")
-        elapsed = time.monotonic() - started
-        assert elapsed >= 2 * rl.DEFAULT_MIN_INTERVAL * 0.9
-
-    def test_the_two_budgets_are_independent(self):
-        """A history call must not consume the quotes budget."""
-        rl.apply_rate_limit("/TPSeries")  # takes the slow gate
-        started = time.monotonic()
-        rl.apply_rate_limit("/GetQuotes")  # must not wait behind it
         assert time.monotonic() - started < 0.1
+
+    def test_the_call_after_the_cap_waits_a_full_second(self):
+        for _ in range(rl.TRADESMART_MAX_PER_SECOND):
+            rl._reserve_slot()
+        wait = rl._reserve_slot()
+        assert 0.9 <= wait <= 1.05, f"expected ~1s wait, got {wait:.3f}s"
+
+    def test_an_option_chain_batch_is_paced_not_rejected(self):
+        """82 quotes (a 41-strike chain) spread over ~10s instead of failing."""
+        waits = [rl._reserve_slot() for _ in range(82)]
+        expected = (82 - 1) // rl.TRADESMART_MAX_PER_SECOND
+        assert expected - 0.5 <= max(waits) <= expected + 0.5
+
+    def test_history_and_quotes_share_one_budget(self):
+        """No independent gates -- the broker counts per user, not per path."""
+        for _ in range(rl.TRADESMART_MAX_PER_SECOND):
+            rl.apply_rate_limit("/TPSeries")
+        assert rl._reserve_slot() > 0.9
+
+
+class TestWindowBookkeeping:
+    def test_entries_older_than_a_minute_stop_constraining(self):
+        """A stale window must not throttle a fresh burst."""
+        rl._reserved_call_times = deque([time.time() - 120.0] * rl.TRADESMART_MAX_PER_MINUTE)
+        assert rl._reserve_slot() == pytest.approx(0.0, abs=0.05)
+
+    def test_reservations_stay_ordered(self):
+        for _ in range(50):
+            rl._reserve_slot()
+        stamps = list(rl._reserved_call_times)
+        assert stamps == sorted(stamps)
 
 
 class TestConcurrency:
@@ -81,7 +94,7 @@ class TestConcurrency:
         """The slot is reserved under the lock, so waiters do not collide.
 
         If the timestamp were only written after sleeping, every thread would
-        measure against the same stale value and fire at once.
+        measure against the same stale window and fire at once.
         """
         stamps: list[float] = []
         stamps_lock = threading.Lock()
@@ -91,33 +104,29 @@ class TestConcurrency:
             with stamps_lock:
                 stamps.append(time.monotonic())
 
-        threads = [threading.Thread(target=call) for _ in range(12)]
+        n = rl.TRADESMART_MAX_PER_SECOND * 2
+        threads = [threading.Thread(target=call) for _ in range(n)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=10)
 
-        assert len(stamps) == 12
+        assert len(stamps) == n
         stamps.sort()
-        span = stamps[-1] - stamps[0]
-        # 12 calls at ~1/90s each occupy roughly 0.12s; allow generous slack for
-        # scheduler jitter, but they must not all land in the same instant.
-        assert span >= rl.QUOTES_MIN_INTERVAL * 11 * 0.5, (
-            f"12 concurrent quote calls spanned only {span:.4f}s - the gate is "
-            "not spacing them"
-        )
+        # The second half must land a second after the first, not alongside it.
+        assert stamps[-1] - stamps[0] >= 0.9
 
     def test_sleep_happens_outside_the_lock(self):
         """A waiter must not block others from computing their slot.
 
-        Holding the lock across sleep would serialise 12 threads into 12
+        Holding the lock across sleep would serialise the threads into
         sequential sleeps; with the sleep outside, total wall time stays close
-        to the span of the reserved slots.
+        to the span of the reserved slots rather than their sum.
         """
         started = time.monotonic()
         threads = [
             threading.Thread(target=rl.apply_rate_limit, args=("/GetQuotes",))
-            for _ in range(12)
+            for _ in range(rl.TRADESMART_MAX_PER_SECOND * 2)
         ]
         for t in threads:
             t.start()
@@ -127,12 +136,21 @@ class TestConcurrency:
 
 
 class TestRateLimitDetection:
-    def test_detects_the_noren_limit_message(self):
+    def test_detects_the_per_minute_message(self):
         assert rl.is_rate_limit_error(
             {
                 "stat": "Not_Ok",
-                "emsg": "Invalid Input :  Order Recieved 141 in a current minute "
+                "emsg": "Invalid Input :  Order Recieved 121 in a current minute "
                 "exceeds Limit 120 for user",
+            }
+        )
+
+    def test_detects_the_per_second_message(self):
+        assert rl.is_rate_limit_error(
+            {
+                "stat": "Not_Ok",
+                "emsg": "Invalid Input :  Order Recieved 11 in a current second "
+                "exceeds Limit 10 for user",
             }
         )
 

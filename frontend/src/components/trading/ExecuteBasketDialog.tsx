@@ -1,5 +1,5 @@
 import { CheckCircle2, Send, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { type BasketOrderItem, type BasketOrderResult, tradingApi } from '@/api/trading'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { StrategyLeg } from '@/lib/strategyMath'
+import { isLegExecutable, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
@@ -37,6 +37,7 @@ const PRODUCT_TYPES: ProductType[] = ['NRML', 'MIS']
 
 interface RowState {
   legId: string
+  contractKey: string
   include: boolean
   symbol: string
   action: 'BUY' | 'SELL'
@@ -46,7 +47,7 @@ interface RowState {
   lots: number
   /** Broker lot size (from the symbol / option-chain service). */
   lotSize: number
-  price: number
+  price: number | null
   tickSize: number
 }
 
@@ -58,30 +59,71 @@ export interface ExecuteBasketDialogProps {
   exchange: string
   /** Read-only strategy name — auto-framed by the parent. */
   strategyName: string
-  /**
-   * Per-leg tick size, keyed by the leg's OpenAlgo symbol. Sourced from
-   * the option-chain response (SymToken.tick_size in the DB). Missing
-   * symbols fall back to 0.05, which is the NSE F&O default.
-   */
-  tickSizeBySymbol?: Record<string, number>
   apiKey: string
 }
 
-/** Decimal places implied by a tick (0.05 → 2, 0.0001 → 4, 0.5 → 1, 1 → 0). */
-function tickDecimals(tick: number): number {
-  if (!Number.isFinite(tick) || tick <= 0) return 2
-  if (tick >= 1) return 0
-  const s = tick.toString()
-  const dot = s.indexOf('.')
-  return dot === -1 ? 0 : s.length - dot - 1
+function toScaledInteger(value: number): { coefficient: bigint; exponent: number } {
+  const [significand, exponentText] = value.toString().toLowerCase().split('e')
+  const decimalPoint = significand.indexOf('.')
+  const fractionDigits = decimalPoint === -1 ? 0 : significand.length - decimalPoint - 1
+  return {
+    coefficient: BigInt(significand.replace('.', '')),
+    exponent: (exponentText ? Number(exponentText) : 0) - fractionDigits,
+  }
 }
 
-/** Snap `value` to the nearest multiple of `tick` and strip binary drift. */
-function roundToTick(value: number, tick = 0.05): number {
-  if (!Number.isFinite(value) || value <= 0) return 0
-  if (!Number.isFinite(tick) || tick <= 0) return value
-  const decimals = tickDecimals(tick)
-  return Number((Math.round(value / tick) * tick).toFixed(decimals))
+function scaledIntegerToNumber(coefficient: bigint, exponent: number): number {
+  return Number(`${coefficient}e${exponent}`)
+}
+
+/** Snap `value` to the nearest multiple of `tick` with exact decimal half-up rounding. */
+function roundToTick(value: number, tick: number): number | null {
+  if (!Number.isFinite(value) || value <= 0) return null
+  if (!Number.isFinite(tick) || tick <= 0) return null
+  const valueParts = toScaledInteger(value)
+  const tickParts = toScaledInteger(tick)
+  let numerator = valueParts.coefficient
+  let denominator = tickParts.coefficient
+  if (valueParts.exponent > tickParts.exponent) {
+    numerator *= 10n ** BigInt(valueParts.exponent - tickParts.exponent)
+  } else if (tickParts.exponent > valueParts.exponent) {
+    denominator *= 10n ** BigInt(tickParts.exponent - valueParts.exponent)
+  }
+
+  let multiples = numerator / denominator
+  if ((numerator % denominator) * 2n >= denominator) multiples += 1n
+  const rounded = scaledIntegerToNumber(multiples * tickParts.coefficient, tickParts.exponent)
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : null
+}
+
+function contractKey(leg: StrategyLeg): string {
+  return [
+    leg.id,
+    leg.exchange ?? '',
+    leg.symbol,
+    leg.segment,
+    leg.expiry,
+    leg.strike ?? '',
+    leg.optionType ?? '',
+    leg.side,
+  ].join('|')
+}
+
+function rowFromLeg(leg: StrategyLeg): RowState {
+  if (!isLegExecutable(leg)) throw new Error('Rows require executable legs')
+  return {
+    legId: leg.id,
+    contractKey: contractKey(leg),
+    include: true,
+    symbol: leg.symbol,
+    action: leg.side,
+    segment: leg.segment,
+    optionType: leg.optionType,
+    lots: leg.lots,
+    lotSize: leg.lotSize,
+    price: roundToTick(leg.price, leg.tickSize),
+    tickSize: leg.tickSize,
+  }
 }
 
 export function ExecuteBasketDialog({
@@ -90,47 +132,60 @@ export function ExecuteBasketDialog({
   legs,
   exchange,
   strategyName,
-  tickSizeBySymbol,
   apiKey,
 }: ExecuteBasketDialogProps) {
-  const activeLegs = useMemo(() => legs.filter((l) => l.active), [legs])
+  const executableLegs = useMemo(() => legs.filter(isLegExecutable), [legs])
   const [rows, setRows] = useState<RowState[]>([])
   const [product, setProduct] = useState<ProductType>('NRML')
   const [pricetype, setPricetype] = useState<PriceType>('LIMIT')
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<BasketOrderResult[] | null>(null)
+  const wasOpenRef = useRef(false)
 
-  // Seed rows whenever dialog opens or legs change.
+  // Reset only for a fresh open. While open, market updates reconcile by the
+  // exact contract identity so edits and deselections are never silently lost.
   useEffect(() => {
-    if (!open) return
-    setResults(null)
-    setProduct('NRML')
-    setPricetype('LIMIT')
-    setRows(
-      activeLegs.map((leg) => {
-        const tick = tickSizeBySymbol?.[leg.symbol] ?? 0.05
+    if (!open) {
+      wasOpenRef.current = false
+      return
+    }
+    const isFreshOpen = !wasOpenRef.current
+    if (isFreshOpen) {
+      setResults(null)
+      setProduct('NRML')
+      setPricetype('LIMIT')
+    }
+    setRows((previous) => {
+      if (isFreshOpen) return executableLegs.map(rowFromLeg)
+      const previousByContract = new Map(previous.map((row) => [row.contractKey, row]))
+      return executableLegs.map((leg) => {
+        const key = contractKey(leg)
+        const existing = previousByContract.get(key)
+        if (!existing) return rowFromLeg(leg)
         return {
-          legId: leg.id,
-          include: true,
-          symbol: leg.symbol,
-          action: leg.side,
-          segment: leg.segment,
-          optionType: leg.optionType,
-          lots: Math.max(1, Math.floor(leg.lots || 1)),
-          lotSize: Math.max(1, Math.floor(leg.lotSize || 1)),
-          price: roundToTick(leg.price || 0, tick),
-          tickSize: tick,
+          ...existing,
+          // These are broker-owned metadata, not user choices.
+          lotSize: leg.lotSize,
+          tickSize: leg.tickSize,
         }
       })
-    )
-  }, [open, activeLegs, tickSizeBySymbol])
+    })
+    wasOpenRef.current = true
+  }, [open, executableLegs])
 
   const updateRow = (legId: string, patch: Partial<RowState>) =>
     setRows((prev) => prev.map((r) => (r.legId === legId ? { ...r, ...patch } : r)))
 
   const includedRows = rows.filter((r) => r.include)
+  const hasInvalidLimitPrice =
+    pricetype === 'LIMIT' &&
+    includedRows.some((r) => r.price === null || !Number.isFinite(r.price) || r.price <= 0)
   const canSubmit =
-    !submitting && includedRows.length > 0 && strategyName.trim().length > 0 && !!apiKey
+    !submitting &&
+    includedRows.length > 0 &&
+    strategyName.trim().length > 0 &&
+    !!apiKey &&
+    !hasInvalidLimitPrice
 
   const handleExecute = async () => {
     if (!canSubmit) return
@@ -139,24 +194,30 @@ export function ExecuteBasketDialog({
     // Contract quantity = lots × lotSize — the broker API expects contracts.
     // Final tick-snap here in case the user hit Execute before blurring
     // a manually-edited price input.
-    const orders: BasketOrderItem[] = includedRows.map((r) => ({
-      symbol: r.symbol,
-      exchange,
-      action: r.action,
-      quantity: Math.max(1, Math.floor(r.lots) * Math.max(1, r.lotSize)),
-      pricetype,
-      product,
-      price: pricetype === 'LIMIT' ? roundToTick(r.price, r.tickSize) : 0,
-      trigger_price: 0,
+    const normalizedRows = includedRows.map((row) => ({
+      row,
+      price: pricetype === 'LIMIT' ? roundToTick(row.price ?? 0, row.tickSize) : 0,
     }))
-
     if (pricetype === 'LIMIT') {
-      const bad = orders.find((o) => !o.price || (o.price ?? 0) <= 0)
+      const bad = normalizedRows.find(
+        ({ price }) => price === null || !Number.isFinite(price) || price <= 0
+      )
       if (bad) {
-        showToast.error(`${bad.symbol}: LIMIT needs a valid price`)
+        updateRow(bad.row.legId, { price: null })
+        showToast.error(`${bad.row.symbol}: LIMIT needs a valid price`)
         return
       }
     }
+    const orders: BasketOrderItem[] = normalizedRows.map(({ row, price }) => ({
+      symbol: row.symbol,
+      exchange,
+      action: row.action,
+      quantity: row.lots * row.lotSize,
+      pricetype,
+      product,
+      price: price ?? 0,
+      trigger_price: 0,
+    }))
 
     setSubmitting(true)
     try {
@@ -208,16 +269,20 @@ export function ExecuteBasketDialog({
         </DialogHeader>
 
         {/* Global controls — compact inline row */}
-        <div className="flex items-end gap-4 rounded-lg border bg-muted/20 p-3">
+        <div className="flex min-w-0 max-w-full items-end gap-4 rounded-lg border bg-muted/20 p-3">
           <div className="flex-1 space-y-1">
             <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Product Type
             </Label>
-            <div className="inline-flex h-9 w-full overflow-hidden rounded-md border bg-background">
+            <fieldset
+              aria-label="Product type"
+              className="inline-flex h-9 w-full min-w-0 overflow-hidden rounded-md border bg-background"
+            >
               {PRODUCT_TYPES.map((p, idx) => (
                 <button
                   key={p}
                   type="button"
+                  aria-pressed={product === p}
                   onClick={() => setProduct(p)}
                   disabled={submitting || !!results}
                   className={cn(
@@ -231,15 +296,19 @@ export function ExecuteBasketDialog({
                   {p}
                 </button>
               ))}
-            </div>
+            </fieldset>
           </div>
           <div className="flex-1 space-y-1">
             <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Price Type
             </Label>
-            <div className="inline-flex h-9 w-full overflow-hidden rounded-md border bg-background">
+            <fieldset
+              aria-label="Price type"
+              className="inline-flex h-9 w-full min-w-0 overflow-hidden rounded-md border bg-background"
+            >
               <button
                 type="button"
+                aria-pressed={pricetype === 'LIMIT'}
                 onClick={() => setPricetype('LIMIT')}
                 disabled={submitting || !!results}
                 className={cn(
@@ -253,6 +322,7 @@ export function ExecuteBasketDialog({
               </button>
               <button
                 type="button"
+                aria-pressed={pricetype === 'MARKET'}
                 onClick={() => setPricetype('MARKET')}
                 disabled={submitting || !!results}
                 className={cn(
@@ -264,7 +334,7 @@ export function ExecuteBasketDialog({
               >
                 MKT
               </button>
-            </div>
+            </fieldset>
           </div>
         </div>
 
@@ -288,6 +358,7 @@ export function ExecuteBasketDialog({
             ) : (
               rows.map((r, idx) => {
                 const result = results?.find((x) => x.symbol === r.symbol)
+                const priceErrorId = `basket-limit-price-error-${idx}`
                 return (
                   <div
                     key={r.legId}
@@ -302,6 +373,7 @@ export function ExecuteBasketDialog({
                     {/* Include */}
                     <div className="flex h-8 items-center justify-center">
                       <Checkbox
+                        aria-label={`Include ${r.symbol}`}
                         checked={r.include}
                         onCheckedChange={(v) => updateRow(r.legId, { include: v === true })}
                         disabled={submitting || !!results}
@@ -316,7 +388,7 @@ export function ExecuteBasketDialog({
                         <span
                           className={cn(
                             'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold text-white',
-                            r.action === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'
+                            r.action === 'BUY' ? 'bg-emerald-700' : 'bg-rose-700'
                           )}
                         >
                           {r.action === 'BUY' ? 'B' : 'S'}
@@ -325,14 +397,14 @@ export function ExecuteBasketDialog({
                           <span
                             className={cn(
                               'shrink-0 rounded px-1 py-0.5 text-[10px] font-bold text-white',
-                              r.optionType === 'CE' ? 'bg-emerald-600' : 'bg-rose-600'
+                              r.optionType === 'CE' ? 'bg-emerald-700' : 'bg-rose-700'
                             )}
                           >
                             {r.optionType}
                           </span>
                         )}
                         {r.segment === 'FUTURE' && (
-                          <span className="shrink-0 rounded bg-sky-600 px-1 py-0.5 text-[10px] font-bold text-white">
+                          <span className="shrink-0 rounded bg-sky-700 px-1 py-0.5 text-[10px] font-bold text-white">
                             FUT
                           </span>
                         )}
@@ -374,6 +446,7 @@ export function ExecuteBasketDialog({
                         is computed at payload build time. */}
                     <Input
                       type="number"
+                      aria-label={`Lots for ${r.symbol}`}
                       min={1}
                       step={1}
                       value={r.lots}
@@ -391,9 +464,12 @@ export function ExecuteBasketDialog({
                         drift like 185.85000000000002. */}
                     <Input
                       type="number"
+                      aria-label={`Limit price for ${r.symbol}`}
+                      aria-invalid={r.price === null}
+                      aria-describedby={r.price === null ? priceErrorId : undefined}
                       min={0}
                       step={r.tickSize}
-                      value={r.price}
+                      value={r.price ?? ''}
                       onChange={(e) => updateRow(r.legId, { price: Number(e.target.value) || 0 })}
                       onBlur={(e) => {
                         const snapped = roundToTick(Number(e.target.value) || 0, r.tickSize)
@@ -403,6 +479,15 @@ export function ExecuteBasketDialog({
                       placeholder={pricetype === 'MARKET' ? 'MKT' : '0.00'}
                       className="h-8 text-right font-mono text-xs"
                     />
+                    {r.price === null && (
+                      <span
+                        id={priceErrorId}
+                        role="alert"
+                        className="text-[10px] text-rose-700 dark:text-rose-400"
+                      >
+                        {r.symbol}: price is outside the supported tick range
+                      </span>
+                    )}
                   </div>
                 )
               })

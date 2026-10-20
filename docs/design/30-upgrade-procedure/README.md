@@ -60,13 +60,24 @@ Then restart the application service.
 
 ## Migration Runner
 
-Run the migration set directly only when diagnosing or completing an interrupted update:
+Run the complete migration set for an existing installation with the supported
+upgrade-directory command:
 
 ```bash
-uv run upgrade/migrate_all.py
+cd upgrade
+uv run migrate_all.py
+cd ..
 ```
 
-The runner continues past scripts that report warnings and summarizes failures. Inspect its complete output rather than treating the final line alone as proof that every migration applied.
+The master command applies changes and has no `--status` preview mode;
+unsupported options are rejected before migrations start. The runner preserves
+the historical warning handling of legacy best-effort scripts, but a required
+schema migration failure is counted as failed and makes the master command exit
+non-zero. Do not start the newer application code after a non-zero exit. Fix the
+reported cause and run the same command again; migrations are idempotent.
+The native Linux updater, Windows updater, Docker startup entrypoint, and the
+Linux/Windows `docker-run` migration helpers all propagate that non-zero result
+and stop before restarting or reporting successful completion.
 
 `upgrade/rotate_pepper.py` is deliberately excluded from automatic migration because rotating `API_KEY_PEPPER` has authentication and ciphertext consequences. It is an explicit operator action.
 
@@ -86,5 +97,7 @@ Swagger UI is disabled; `/api/docs` is not a verification endpoint. Use [`docs/a
 ## Rollback
 
 Stop the service, restore the exact pre-upgrade Git revision and the matching backup files, restore `.env`/keys if they changed, reinstall dependencies for that revision, and restart. Do not restore one database selectively when a migration changed related state across stores.
+
+If the service was switched to the web server launcher (the optional gthread web server, see [`docs/gthread`](../../gthread/README.md)), run `sudo bash install/switch-worker.sh --restore` **before** restoring an older revision. The switched service starts through `install/openalgo-gunicorn.sh`, which releases before the launcher do not contain, so after the rollback it would fail to start. `--restore` puts back the service file saved before the switch and sets `OPENALGO_WORKER_CLASS` in `.env` back to eventlet.
 
 Local changes stashed by the updater are not restored automatically. Review `git stash list` and apply them deliberately after the upgraded tree is stable.

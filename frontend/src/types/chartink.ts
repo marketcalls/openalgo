@@ -38,6 +38,16 @@ export interface AddChartinkSymbolRequest {
   product_type: 'MIS' | 'CNC'
 }
 
+// One row from the symbol search endpoint used by the symbol configuration UI
+export interface SymbolSearchResult {
+  symbol: string
+  brsymbol: string
+  name: string
+  exchange: string
+  token: string
+  lotsize: number
+}
+
 // Chartink only supports NSE and BSE
 export const CHARTINK_EXCHANGES = ['NSE', 'BSE'] as const
 export type ChartinkExchange = (typeof CHARTINK_EXCHANGES)[number]

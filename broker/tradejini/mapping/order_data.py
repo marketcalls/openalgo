@@ -1,10 +1,51 @@
 import json
 
-from broker.tradejini.mapping.transform_data import reverse_map_product_type
+from broker.tradejini.mapping.transform_data import (
+    reverse_map_order_type,
+    reverse_map_product_type,
+)
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# --- Symbol object readers -------------------------------------------------
+# The symbol object returned with symDetails=true is documented with the field
+# names 'id', 'symbol', 'tradSymbol' and 'exchange', while some responses use
+# the short forms 'sym', 'trdSym' and 'exch'. Read both so a rename on either
+# side cannot blank out the order book, trade book, positions or holdings.
+
+
+def _first(source, names, default=""):
+    """Return the first present, non-empty value among `names`."""
+    if not isinstance(source, dict):
+        return default
+    for name in names:
+        value = source.get(name)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def sym_id(sym):
+    """Symbol identifier, e.g. 'EQT_RELIANCE_EQ_NSE'."""
+    return _first(sym, ("id", "symId"))
+
+
+def sym_exchange(sym):
+    """Exchange of the instrument, e.g. 'NSE'."""
+    return _first(sym, ("exchange", "exch"))
+
+
+def sym_base_symbol(sym):
+    """Base symbol, e.g. 'RELIANCE'."""
+    return _first(sym, ("symbol", "sym"))
+
+
+def sym_trading_symbol(sym):
+    """Exchange trading symbol, e.g. 'RELIANCE-EQ'."""
+    return _first(sym, ("tradSymbol", "trdSym", "dispSymbol", "dispSym"))
 
 
 def map_order_data(order_data):
@@ -55,17 +96,19 @@ def map_order_data(order_data):
             }
             order["order_status"] = status_map.get(raw_status, raw_status)
             order["orderid"] = str(order_info.get("order_id", ""))
-            order["price"] = float(order_info.get("limit_price", 0))
-            order["pricetype"] = order_info.get("type", "").upper()
+            order["price"] = float(order_info.get("limit_price", 0) or 0)
+            # Tradejini price types are limit/market/stoplimit/stopmarket - map
+            # them to the OpenAlgo MARKET/LIMIT/SL/SL-M set.
+            order["pricetype"] = reverse_map_order_type(order_info.get("type", ""))
 
             # Map product type using reverse mapping function
             product = order_info.get("product", "").lower()
             order["product"] = reverse_map_product_type(product) or "MIS"
 
-            order["quantity"] = int(order_info.get("quantity", 0))
+            order["quantity"] = int(order_info.get("quantity", 0) or 0)
             order["symbol"] = order_info.get("tradingsymbol", "")
             order["timestamp"] = order_info.get("order_time", "")
-            order["trigger_price"] = float(order_info.get("trigPrice", 0))
+            order["trigger_price"] = float(order_info.get("trigger_price", 0) or 0)
 
             # print(f"[DEBUG] map_order_data - Updated order: {order}")
 
@@ -200,31 +243,21 @@ def map_trade_data(trade_data):
     if trades_data:
         for trade in trades_data:
             # Get symbol details from the sym object
-            symbol = trade.get("sym", {})
+            symbol = trade.get("sym", {}) or {}
 
-            # Map product types
-            product = trade.get("product", "").lower()
-            if product == "intraday":
-                product = "MIS"
-            elif product == "delivery":
-                product = "CNC"
-            elif product == "coverorder":
-                product = "CO"
-            elif product == "bracketorder":
-                product = "BO"
-            else:
-                product = "NRML"
+            # Map product types (delivery/intraday/normal/cover/bracket)
+            product = reverse_map_product_type(trade.get("product", "")) or "NRML"
 
             # Map side to action
             side = trade.get("side", "").lower()
             action = "BUY" if side == "buy" else "SELL"
 
             # Get exchange from sym object
-            exchange = symbol.get("exch", "").upper()
+            exchange = str(sym_exchange(symbol)).upper()
 
             # Create mapped trade
             mapped_trade = {
-                "symbol": symbol.get("trdSym", ""),
+                "symbol": sym_trading_symbol(symbol),
                 "exchange": exchange,
                 "product": product,
                 "action": action,
@@ -233,7 +266,7 @@ def map_trade_data(trade_data):
                 "trade_value": trade.get("fillValue", 0.0),
                 "orderid": trade.get("orderId", ""),
                 "timestamp": trade.get("time", ""),
-                "sym_id": symbol.get("id", ""),  # Store symbol ID for OpenAlgo lookup
+                "sym_id": sym_id(symbol) or trade.get("symId", ""),  # For OpenAlgo lookup
             }
 
             # Add optional fields if present
@@ -305,47 +338,29 @@ def transform_tradebook_data(trades):
 
         # Get Symbol details if it exists
         symbol = trade.get("sym", {})
-        sym_id = ""
 
-        if isinstance(symbol, dict):
-            sym_id = symbol.get("id", "")
-            exchange = symbol.get("exch", "")
-            trading_symbol = symbol.get("trdSym", "")
+        if isinstance(symbol, dict) and symbol:
+            symbol_id = sym_id(symbol)
+            exchange = sym_exchange(symbol)
+            trading_symbol = sym_trading_symbol(symbol)
         else:
             # Use data from trade directly if sym object doesn't exist
-            sym_id = trade.get("sym_id", "")
+            symbol_id = trade.get("sym_id", "")
             exchange = trade.get("exchange", "")
             trading_symbol = trade.get("symbol", "")
 
         # Get OpenAlgo symbol if possible
         try:
-            openalgo_symbol = get_oa_symbol(symbol=sym_id, exchange=exchange)
+            # get_oa_symbol(brsymbol, exchange) - pass positionally, the first
+            # parameter is the broker symbol id, not an OpenAlgo symbol.
+            openalgo_symbol = get_oa_symbol(symbol_id, exchange)
         except Exception as e:
             logger.warning(f"Symbol lookup failed: {str(e)}")
             openalgo_symbol = None
 
         # Map product type if needed
         if "product" in trade:
-            product = trade["product"]
-            if isinstance(product, str) and product.lower() in [
-                "intraday",
-                "delivery",
-                "coverorder",
-                "bracketorder",
-            ]:
-                product = trade.get("product", "").lower()
-                if product == "intraday":
-                    product = "MIS"
-                elif product == "delivery":
-                    product = "CNC"
-                elif product == "coverorder":
-                    product = "CO"
-                elif product == "bracketorder":
-                    product = "BO"
-                else:
-                    product = "NRML"
-            else:
-                product = str(product).upper()
+            product = reverse_map_product_type(trade["product"]) or str(trade["product"]).upper()
         else:
             product = "MIS"  # Default
 
@@ -366,7 +381,7 @@ def transform_tradebook_data(trades):
             "orderid": str(trade.get("orderId", trade.get("orderid", ""))),
             "product": product,
             "quantity": int(trade.get("fillQty", trade.get("quantity", 0))),
-            "symbol": trading_symbol,
+            "symbol": openalgo_symbol or trading_symbol,
             "timestamp": trade.get("time", trade.get("timestamp", "")),
             "trade_value": float(trade.get("fillValue", trade.get("trade_value", 0.0))),
         }
@@ -420,14 +435,13 @@ def map_position_data(position_data):
             if net_qty == 0:
                 continue
 
-            # Map product type
-            product_map = {"delivery": "CNC", "intraday": "MIS", "margin": "NRML"}
-            product = product_map.get(position.get("product", "").lower(), "MIS")
+            # Map product type (delivery/intraday/normal/cover/bracket)
+            product = reverse_map_product_type(position.get("product", "")) or "MIS"
 
-            sym = position.get("sym", {})
-            exchange_symbol = sym.get("sym", "")
-            tradingsymbol = sym.get("trdSym", "")
-            exchange = sym.get("exch", "")
+            sym = position.get("sym", {}) or {}
+            exchange_symbol = sym_base_symbol(sym)
+            tradingsymbol = sym_trading_symbol(sym)
+            exchange = sym_exchange(sym)
 
             # Get symbol ID from the position data
             symbol_id = position.get("symId", "")
@@ -441,7 +455,7 @@ def map_position_data(position_data):
             openalgo_symbol = None
             try:
                 # First try with the symbol ID from sym object
-                symid_from_object = sym.get("id", "") if sym else ""
+                symid_from_object = sym_id(sym)
                 if symid_from_object:
                     openalgo_symbol = get_oa_symbol(symid_from_object, exchange)
                     logger.info(
@@ -552,18 +566,28 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 
+def _holding_values(holding):
+    """
+    Derive (quantity, avg_price, ltp, realized_pnl) from one Tradejini holding.
+
+    The holdings response has no last-traded price, so the average buy price is
+    used as the valuation price unless the symbol object happens to carry one.
+    """
+    sym = holding.get("sym", {}) or {}
+    quantity = float(holding.get("qty", holding.get("saleableQty", 0)) or 0)
+    avg_price = float(holding.get("avgPrice", 0) or 0)
+    ltp = float(_first(sym, ("lastPrice", "ltp"), avg_price) or avg_price)
+    realized_pnl = float(holding.get("realizedPnl", 0) or 0)
+    return quantity, avg_price, ltp, realized_pnl
+
+
 def map_portfolio_data(portfolio_data):
     """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions and
-    ensures both holdings and totalholding parts are transmitted in a single response.
+    Normalises the holdings list returned by GET /api/oms/holdings.
 
-    Parameters:
-    - portfolio_data: A list of dictionaries, where each dictionary represents portfolio information.
-
-    Returns:
-    - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
+    get_holdings() already unwraps the envelope and returns the 'd.holdings'
+    array, so this only has to drop anything that is not a usable record.
     """
-    # Check if 'portfolio_data' is a list
     if not isinstance(portfolio_data, list):
         logger.warning("Portfolio data is not a list.")
         return []
@@ -573,38 +597,23 @@ def map_portfolio_data(portfolio_data):
         logger.debug("No portfolio data available (empty list)")
         return []
 
-    # Iterate over the portfolio_data list and process each entry
-    for portfolio in portfolio_data:
-        # Ensure 'stat' is 'Ok' before proceeding
-        if portfolio.get("stat") != "Ok":
-            logger.error(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
-            continue
-
-        # Process the 'exch_tsym' list inside each portfolio entry
-        for exch_tsym in portfolio.get("exch_tsym", []):
-            symbol = exch_tsym.get("tsym", "")
-            exchange = exch_tsym.get("exch", "")
-
-            # Replace 'get_oa_symbol' function with your actual symbol fetching logic
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-
-            if symbol_from_db:
-                exch_tsym["tsym"] = symbol_from_db
-            else:
-                logger.warning(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
-
-    return portfolio_data
+    return [holding for holding in portfolio_data if isinstance(holding, dict)]
 
 
 def calculate_portfolio_statistics(holdings_data):
-    totalholdingvalue = 0
-    totalinvvalue = 0
-    totalprofitandloss = 0
-    totalpnlpercentage = 0
+    """
+    Aggregate holdings into the totals OpenAlgo shows above the holdings table.
+    """
+    totalholdingvalue = 0.0
+    totalinvvalue = 0.0
+    totalprofitandloss = 0.0
+    totalpnlpercentage = 0.0
 
-    # Check if the data is valid
-    if not isinstance(holdings_data, list):
-        logger.error("Error: Holdings data is not a list.")
+    if not isinstance(holdings_data, list) or not holdings_data:
+        if not isinstance(holdings_data, list):
+            logger.error("Error: Holdings data is not a list.")
+        else:
+            logger.debug("No holdings to calculate statistics for (empty list)")
         return {
             "totalholdingvalue": totalholdingvalue,
             "totalinvvalue": totalinvvalue,
@@ -612,77 +621,31 @@ def calculate_portfolio_statistics(holdings_data):
             "totalpnlpercentage": totalpnlpercentage,
         }
 
-    # Handle empty list gracefully - it's not an error
-    if len(holdings_data) == 0:
-        logger.debug("No holdings to calculate statistics for (empty list)")
-        return {
-            "totalholdingvalue": totalholdingvalue,
-            "totalinvvalue": totalinvvalue,
-            "totalprofitandloss": totalprofitandloss,
-            "totalpnlpercentage": totalpnlpercentage,
-        }
-
-    # Iterate over the list of holdings
     for holding in holdings_data:
-        # Ensure 'stat' is 'Ok' before proceeding
-        if holding.get("stat") != "Ok":
-            logger.error(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
+        if not isinstance(holding, dict):
             continue
 
-        # Filter out the NSE entry and ignore BSE for the same symbol
-        nse_entry = next(
-            (exch for exch in holding.get("exch_tsym", []) if exch.get("exch") == "NSE"), None
-        )
-        if not nse_entry:
-            continue  # Skip if no NSE entry is found
+        try:
+            quantity, avg_price, ltp, realized_pnl = _holding_values(holding)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Skipping holding with unparseable values: {e}")
+            continue
 
-        # Process only the NSE entry
-        quantity = float(holding.get("holdqty", 0)) + max(
-            float(holding.get("npoadt1qty", 0)), float(holding.get("dpqty", 0))
-        )
-        upload_price = float(holding.get("upldprc", 0))
-        market_price = float(
-            nse_entry.get("upldprc", 0)
-        )  # Assuming 'pp' is the market price for NSE
+        inv_value = quantity * avg_price
+        holding_value = quantity * ltp
 
-        # Calculate investment value and holding value for NSE
-        inv_value = quantity * upload_price
-        holding_value = quantity * upload_price
-        profit_and_loss = holding_value - inv_value
-        pnl_percentage = (profit_and_loss / inv_value) * 100 if inv_value != 0 else 0
-
-        # Accumulate the totals
-        # totalholdingvalue += holding_value
         totalinvvalue += inv_value
-        totalprofitandloss += profit_and_loss
+        totalholdingvalue += holding_value
+        totalprofitandloss += (holding_value - inv_value) + realized_pnl
 
-        # Valuation formula from API
-        holdqty = float(holding.get("holdqty", 0))
-        btstqty = float(holding.get("btstqty", 0))
-        brkcolqty = float(holding.get("brkcolqty", 0))
-        unplgdqty = float(holding.get("unplgdqty", 0))
-        benqty = float(holding.get("benqty", 0))
-        npoadqty = float(holding.get("npoadt1qty", 0))
-        dpqty = float(holding.get("dpqty", 0))
-        usedqty = float(holding.get("usedqty", 0))
-
-        # Valuation formula from API
-        valuation = (
-            (btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty
-        ) * upload_price
-        logger.debug(f"test valuation: {str(npoadqty)}")
-        logger.debug(f"test valuation: {str(upload_price)}")
-        # Accumulate total valuation
-        totalholdingvalue += valuation
-
-    # Calculate overall P&L percentage
-    totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100 if totalinvvalue != 0 else 0
+    if totalinvvalue != 0:
+        totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100
 
     return {
-        "totalholdingvalue": totalholdingvalue,
-        "totalinvvalue": totalinvvalue,
-        "totalprofitandloss": totalprofitandloss,
-        "totalpnlpercentage": totalpnlpercentage,
+        "totalholdingvalue": round(totalholdingvalue, 2),
+        "totalinvvalue": round(totalinvvalue, 2),
+        "totalprofitandloss": round(totalprofitandloss, 2),
+        "totalpnlpercentage": round(totalpnlpercentage, 2),
     }
 
 
@@ -751,35 +714,40 @@ def transform_holdings_data(holdings_data):
                     continue
 
                 # Get symbol details from the sym object
-                sym = holding.get("sym", {})
+                sym = holding.get("sym", {}) or {}
 
                 # Skip if we don't have basic required data
-                # Check both tradSymbol and tradSymbol (different capitalizations)
-                trade_symbol = (
-                    sym.get("tradSymbol") or sym.get("tradSymbol") or sym.get("symbol", "")
-                )
+                trade_symbol = sym_trading_symbol(sym) or sym_base_symbol(sym)
+                exchange = sym_exchange(sym)
                 if not sym or not trade_symbol:
                     logger.warning(f"Missing symbol data in holding: {holding}")
                     continue
 
-                # Get quantity - use saleable quantity if available, otherwise use total quantity
-                quantity = float(holding.get("saleableQty", holding.get("qty", 0)))
-                avg_price = float(holding.get("avgPrice", 0))
-                ltp = float(
-                    sym.get("lastPrice", avg_price)
-                )  # Use last price if available, otherwise use avg price
+                # Resolve to the OpenAlgo symbol so holdings line up with the
+                # rest of the platform; fall back to the broker symbol.
+                try:
+                    openalgo_symbol = get_oa_symbol(
+                        sym_id(sym) or holding.get("symId", ""), exchange
+                    )
+                except Exception as e:
+                    logger.warning(f"Holdings symbol lookup failed: {str(e)}")
+                    openalgo_symbol = None
 
-                # Calculate P&L values
-                pnl = float(holding.get("realizedPnl", 0))
+                # 'qty' is the holding quantity ('saleableQty' excludes T1 stock);
+                # the response carries no LTP, so avgPrice is the fallback price.
+                quantity, avg_price, ltp, realized_pnl = _holding_values(holding)
                 pnl_percent = 0.0
 
                 # Calculate investment value and current value
                 investment_value = quantity * avg_price
                 current_value = quantity * ltp if ltp > 0 else investment_value
 
+                # Keep this in step with calculate_portfolio_statistics()
+                pnl = (current_value - investment_value) + realized_pnl
+
                 # Calculate P&L percentage
                 if investment_value > 0:
-                    pnl_percent = ((current_value - investment_value) / investment_value) * 100
+                    pnl_percent = (pnl / investment_value) * 100
 
                 # Map product type (CNC for delivery, MIS for intraday)
                 product = "CNC"  # Default to CNC (delivery)
@@ -788,12 +756,12 @@ def transform_holdings_data(holdings_data):
 
                 # Create the transformed holding
                 transformed_holding = {
-                    "exchange": sym.get("exchange", "NSE"),  # Default to NSE if not specified
+                    "exchange": exchange or "NSE",  # Default to NSE if not specified
                     "pnl": round(pnl, 2),
                     "pnlpercent": round(pnl_percent, 2),
                     "product": product,
                     "quantity": int(quantity),
-                    "symbol": trade_symbol.strip(),
+                    "symbol": (openalgo_symbol or trade_symbol).strip(),
                     # Additional fields that might be useful
                     "avgprice": round(avg_price, 2),
                     "ltp": round(ltp, 2),

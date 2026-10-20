@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Optional, Tuple
 
 import httpx
 
@@ -60,10 +59,12 @@ def authenticate_broker(
         totp_response.raise_for_status()
         totp_data = totp_response.json()
 
-        logger.debug(f"The Request Token response is :{totp_data}")
-
         request_token = totp_data.get("body", {}).get("RequestToken")
-        logger.debug(f"The Request Token is :{request_token}")
+        logger.debug(
+            "TOTP login response received; request_token_present=%s",
+            bool(request_token),
+        )
+        logger.debug("Request token received")
 
         if not request_token:
             error_message = totp_data.get("body", {}).get(
@@ -77,7 +78,7 @@ def authenticate_broker(
             "body": {"RequestToken": request_token, "EncryKey": api_secret, "UserId": user_id},
         }
 
-        logger.debug(f"The Access Token request is :{json.dumps(access_token_data)}")
+        logger.debug("Sending access token request")
 
         token_response = client.post(
             "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/GetAccessToken",
@@ -87,7 +88,10 @@ def authenticate_broker(
         token_response.raise_for_status()
         token_data = token_response.json()
 
-        logger.debug(f"The Access Token response is :{token_data}")
+        logger.debug(
+            "Access-token response received; access_token_present=%s",
+            bool(token_data.get("body", {}).get("AccessToken")),
+        )
 
         if "body" in token_data and "AccessToken" in token_data["body"]:
             return token_data["body"]["AccessToken"], None

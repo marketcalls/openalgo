@@ -8,6 +8,14 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _to_float(value, default=0.0):
+    """Coerce a Kite numeric field, tolerating nulls and strings."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_margin_data(auth_token):
     """Fetch margin data from Zerodha's API using the provided auth token."""
     api_key = os.getenv("BROKER_API_KEY")
@@ -110,11 +118,20 @@ def get_margin_data(auth_token):
                             ltp_map[key] = val.get("last_price", 0)
 
                     for p in open_positions:
-                        qty = p.get("quantity", 0)
-                        avg_price = p.get("average_price", 0)
+                        # Kite's own position multiplier, NOT the physical
+                        # contract size. The two diverge whenever a commodity is
+                        # quoted in a different unit from the one it trades in:
+                        # GOLDGUINEA is 8 grams quoted per 8 grams (multiplier 1),
+                        # GOLDM is 100 grams quoted per 10 grams (multiplier 10),
+                        # GOLD is 1 kg quoted per 10 grams (multiplier 100).
+                        # Scaling by contract size instead would report a rupee
+                        # move on GOLDGUINEA as 8 rupees and on GOLDM as 100.
+                        qty = _to_float(p.get("quantity", 0))
+                        multiplier = _to_float(p.get("multiplier", 1), default=1.0) or 1.0
+                        avg_price = _to_float(p.get("average_price", 0))
                         inst_key = f"{p['exchange']}:{p['tradingsymbol']}"
-                        live_ltp = ltp_map.get(inst_key, p.get("last_price", 0))
-                        total_unrealised += (live_ltp - avg_price) * qty
+                        live_ltp = _to_float(ltp_map.get(inst_key, p.get("last_price", 0)))
+                        total_unrealised += (live_ltp - avg_price) * qty * multiplier
         except Exception as e:
             logger.error(f"Error fetching positions for PnL: {e}")
 

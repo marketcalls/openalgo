@@ -12,6 +12,7 @@ import pandas as pd
 from broker.dhan.api.baseurl import get_url
 from broker.dhan.mapping.transform_data import map_exchange_type
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils.broker_backpressure import BrokerBusyError, check_queue_wait
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -27,9 +28,24 @@ _last_api_call_time = {"data": 0.0, "quote": 0.0}
 DHAN_DATA_INTERVAL = 0.2  # seconds between /v2/charts/* requests (5 req/s)
 DHAN_QUOTE_INTERVAL = 1.1  # seconds between /v2/marketfeed/* requests (1 req/s)
 
+# MCX index derivatives. Dhan classifies these as FUTIDX / OPTIDX, not the
+# FUTCOM / OPTFUT used by the commodity contracts, so the history API needs the
+# index instrument type for them.
+MCX_INDEX_UNDERLYINGS = ("MCXBULLDEX", "MCXMETLDEX", "MCXENRGDEX")
+
 
 def _apply_rate_limit(category="data"):
-    """Apply per-category rate limiting to avoid Dhan API error 805 (too many requests)"""
+    """Apply per-category rate limiting to avoid Dhan API error 805 (too many requests).
+
+    Each caller books the slot after the last one, so more quote calls than
+    one a second queue without limit. Under the gthread worker every queued
+    caller holds a request thread, so one whose slot is further away than
+    ``utils.broker_backpressure.max_queue_wait("data")`` is refused before it
+    books anything. Under eventlet and the dev server there is no bound.
+
+    Raises:
+        BrokerBusyError: Under gthread, when the slot is too far away.
+    """
     global _last_api_call_time
     interval = DHAN_DATA_INTERVAL if category == "data" else DHAN_QUOTE_INTERVAL
     sleep_time = 0
@@ -39,6 +55,8 @@ def _apply_rate_limit(category="data"):
         time_since_last_call = current_time - _last_api_call_time[category]
         if time_since_last_call < interval:
             sleep_time = interval - time_since_last_call
+        # Refused before the slot is reserved, so it delays nobody behind it.
+        check_queue_wait(sleep_time, "data")
         # Update timestamp immediately to reserve this slot
         _last_api_call_time[category] = current_time + sleep_time
 
@@ -230,6 +248,7 @@ class BrokerData:
             "NFO": "NSE_FNO",  # NSE F&O
             "BFO": "BSE_FNO",  # BSE F&O
             "MCX": "MCX_COMM",  # MCX Commodity
+            "NCO": "NSE_COMM",  # NSE Commodity
             "CDS": "NSE_CURRENCY",  # NSE Currency
             "BCD": "BSE_CURRENCY",  # BSE Currency
             "NSE_INDEX": "IDX_I",  # NSE Index
@@ -289,13 +308,20 @@ class BrokerData:
                 # For stock futures
                 return "FUTSTK"
 
-        # For commodity market (MCX)
-        elif exchange == "MCX":
-            # For commodity options on futures
+        # NSE commodity derivatives, listed by Dhan as OPTFUT like MCX.
+        elif exchange == "NCO":
             if symbol.endswith("CE") or symbol.endswith("PE"):
                 return "OPTFUT"
-            # For commodity futures
             return "FUTCOM"
+
+        # For commodity market (MCX)
+        elif exchange == "MCX":
+            is_index = symbol.startswith(MCX_INDEX_UNDERLYINGS)
+            # For commodity options on futures, or options on an MCX index
+            if symbol.endswith("CE") or symbol.endswith("PE"):
+                return "OPTIDX" if is_index else "OPTFUT"
+            # For commodity futures, or an MCX index future
+            return "FUTIDX" if is_index else "FUTCOM"
 
         # For currency market (CDS, BCD)
         elif exchange in ["CDS", "BCD"]:
@@ -528,6 +554,8 @@ class BrokerData:
                                     "oi": int(float(openinterest[i])) if openinterest[i] else 0,
                                 }
                             )
+                    except BrokerBusyError:
+                        raise
                     except Exception as e:
                         logger.error(f"Error fetching intraday data: {str(e)}")
                 else:
@@ -630,6 +658,8 @@ class BrokerData:
                                 chunk_candle_count = len(chunk_rows)
                                 last_error = None
                                 break
+                            except BrokerBusyError:
+                                raise
                             except Exception as e:
                                 last_error = e
                                 if attempt < CHUNK_MAX_RETRIES - 1:
@@ -721,6 +751,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching historical data: {str(e)}")
             raise Exception(f"Error fetching historical data: {str(e)}")
@@ -821,6 +853,8 @@ class BrokerData:
                     }
                 raise
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_quotes: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching quotes: {str(e)}")
@@ -867,6 +901,8 @@ class BrokerData:
                 # Single batch processing
                 return self._process_quotes_batch(symbols)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -972,6 +1008,8 @@ class BrokerData:
                     logger.warning(
                         f"Unexpected response format for segment '{seg}': {type(seg_data)}"
                     )
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"API Error: {str(e)}")
             raise Exception(f"API Error: {str(e)}")
@@ -1160,6 +1198,8 @@ class BrokerData:
                     }
                 raise
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching market depth: {str(e)}")

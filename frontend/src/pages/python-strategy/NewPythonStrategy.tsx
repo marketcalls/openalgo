@@ -1,5 +1,5 @@
 import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -8,8 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS, STRATEGY_EXCHANGES } from '@/types/python-strategy'
+import { useStrategyExchanges } from '@/hooks/useStrategyExchanges'
+import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS } from '@/types/python-strategy'
 import { showToast } from '@/utils/toast'
+import { ALL_DAY_START, ALL_DAYS, RunAllDaySwitch } from './RunAllDaySwitch'
 
 const EXAMPLE_STRATEGY = `"""
 Example OpenAlgo Strategy
@@ -65,28 +67,49 @@ export default function NewPythonStrategy() {
   const [startTime, setStartTime] = useState('09:00')
   const [stopTime, setStopTime] = useState('16:00')
   const [selectedDays, setSelectedDays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
+  // A crypto strategy runs around the clock unless the trader says otherwise.
+  const [runAllDay, setRunAllDay] = useState(true)
 
+  const { exchanges, defaultExchange, getWindow, isLoading } = useStrategyExchanges()
   const isCrypto = exchange === CRYPTO_EXCHANGE_VALUE
+  const allDay = isCrypto && runAllDay
 
-  // When exchange changes, apply sensible defaults (idempotent for explicit edits)
-  const handleExchangeChange = (value: string) => {
+  // When exchange changes, prefill the schedule with that exchange's session
+  // window from the market calendar DB. Never hardcode a window here: a stale
+  // constant would silently cut a strategy short (an NFO script stopped at
+  // 15:30 misses the last ten minutes of the F&O session, which runs to 15:40).
+  const applyExchange = (value: string) => {
     setExchange(value)
-    if (value === CRYPTO_EXCHANGE_VALUE) {
-      // CRYPTO: 24/7, all days
-      setStartTime('00:00')
-      setStopTime('23:59')
-      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
-    } else if (value === 'MCX') {
-      // MCX: full session including evening
-      setStartTime('09:00')
-      setStopTime('23:55')
-      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri'])
-    } else {
-      // NSE/BSE/NFO/BFO equity defaults
-      setStartTime('09:15')
-      setStopTime('15:30')
-      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri'])
+    const session = getWindow(value)
+    if (session) {
+      setStartTime(session.start)
+      setStopTime(session.stop)
     }
+    setSelectedDays(
+      value === CRYPTO_EXCHANGE_VALUE
+        ? ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+        : ['mon', 'tue', 'wed', 'thu', 'fri']
+    )
+  }
+
+  // The dropdown offers only what the broker trades, so start on the broker's
+  // own default: CRYPTO on a crypto broker, where NSE would pause the strategy
+  // on every NSE holiday. Once the trader picks one, their choice stands.
+  //
+  // A layout effect, so the move lands in the same commit as the list. With a
+  // plain effect there was one commit where the dropdown, having lost NSE as an
+  // option, already read CRYPTO while the form was still on NSE with no Run
+  // 24/7 switch; a test caught that moment in CI.
+  const exchangeChosen = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: applied once, when the list arrives
+  useLayoutEffect(() => {
+    if (isLoading || exchangeChosen.current) return
+    if (defaultExchange !== exchange) applyExchange(defaultExchange)
+  }, [isLoading, defaultExchange])
+
+  const handleExchangeChange = (value: string) => {
+    exchangeChosen.current = true
+    applyExchange(value)
   }
 
   const handleDayToggle = (day: string) => {
@@ -110,15 +133,21 @@ export default function NewPythonStrategy() {
       newErrors.file = 'File must be a Python file (.py)'
     }
 
-    // Schedule validation
-    if (!startTime) {
-      newErrors.startTime = 'Start time is required'
-    }
-    if (!stopTime) {
-      newErrors.stopTime = 'Stop time is required'
-    }
-    if (selectedDays.length === 0) {
-      newErrors.days = 'Select at least one day'
+    // Schedule validation. A 24/7 strategy has no times or days to check.
+    if (!allDay) {
+      if (!startTime) {
+        newErrors.startTime = 'Start time is required'
+      }
+      if (!stopTime) {
+        newErrors.stopTime = 'Stop time is required'
+      } else if (isCrypto && stopTime === startTime) {
+        // Crypto only: Indian exchange schedules are validated as before.
+        newErrors.stopTime =
+          'Stop time cannot be the same as the start time. To never stop, turn on Run 24/7.'
+      }
+      if (selectedDays.length === 0) {
+        newErrors.days = 'Select at least one day'
+      }
     }
 
     setErrors(newErrors)
@@ -160,9 +189,9 @@ export default function NewPythonStrategy() {
       setLoading(true)
       // Upload strategy with schedule (schedule is mandatory)
       const response = await pythonStrategyApi.uploadStrategy(name, file!, {
-        start_time: startTime,
-        stop_time: stopTime,
-        days: selectedDays,
+        start_time: allDay ? ALL_DAY_START : startTime,
+        stop_time: allDay ? null : stopTime,
+        days: allDay ? ALL_DAYS : selectedDays,
         exchange,
       })
 
@@ -281,7 +310,7 @@ export default function NewPythonStrategy() {
                 onChange={(e) => handleExchangeChange(e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                {STRATEGY_EXCHANGES.map((opt) => (
+                {exchanges.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
@@ -304,80 +333,88 @@ export default function NewPythonStrategy() {
               </div>
               <p className="text-sm text-muted-foreground">
                 {isCrypto
-                  ? 'CRYPTO runs 24/7. The schedule below limits when this script is allowed to run.'
+                  ? 'CRYPTO trades 24/7. Run the strategy around the clock, or limit it to set hours.'
                   : 'Configure when this strategy should run. All times are in IST.'}
               </p>
 
-              {/* Time Inputs */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="startTime">Start Time (IST)</Label>
-                  <Input
-                    id="startTime"
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className={errors.startTime ? 'border-red-500' : ''}
-                  />
-                  {errors.startTime && <p className="text-sm text-red-500">{errors.startTime}</p>}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="stopTime">Stop Time (IST)</Label>
-                  <Input
-                    id="stopTime"
-                    type="time"
-                    value={stopTime}
-                    onChange={(e) => setStopTime(e.target.value)}
-                    className={errors.stopTime ? 'border-red-500' : ''}
-                  />
-                  {errors.stopTime && <p className="text-sm text-red-500">{errors.stopTime}</p>}
-                </div>
-              </div>
+              {isCrypto && <RunAllDaySwitch checked={runAllDay} onCheckedChange={setRunAllDay} />}
 
-              {/* Day Selection */}
-              <div className="space-y-2">
-                <Label>Schedule Days</Label>
-                <div className="flex flex-wrap gap-2">
-                  {SCHEDULE_DAYS.map((day) => (
-                    <button
-                      type="button"
-                      key={day.value}
-                      className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer transition-colors ${
-                        selectedDays.includes(day.value)
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'hover:bg-muted'
-                      }`}
-                      onClick={() => handleDayToggle(day.value)}
-                    >
-                      <div
-                        className={`h-4 w-4 rounded border flex items-center justify-center ${
-                          selectedDays.includes(day.value)
-                            ? 'bg-primary-foreground border-primary-foreground'
-                            : 'border-current'
-                        }`}
-                      >
-                        {selectedDays.includes(day.value) && (
-                          <svg
-                            className="h-3 w-3 text-primary"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="3"
+              {/* Times and days: a 24/7 strategy has neither. */}
+              {!allDay && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="startTime">Start Time (IST)</Label>
+                      <Input
+                        id="startTime"
+                        type="time"
+                        value={startTime}
+                        onChange={(e) => setStartTime(e.target.value)}
+                        className={errors.startTime ? 'border-red-500' : ''}
+                      />
+                      {errors.startTime && (
+                        <p className="text-sm text-red-500">{errors.startTime}</p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="stopTime">Stop Time (IST)</Label>
+                      <Input
+                        id="stopTime"
+                        type="time"
+                        value={stopTime}
+                        onChange={(e) => setStopTime(e.target.value)}
+                        className={errors.stopTime ? 'border-red-500' : ''}
+                      />
+                      {errors.stopTime && <p className="text-sm text-red-500">{errors.stopTime}</p>}
+                    </div>
+                  </div>
+
+                  {/* Day Selection */}
+                  <div className="space-y-2">
+                    <Label>Schedule Days</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {SCHEDULE_DAYS.map((day) => (
+                        <button
+                          type="button"
+                          key={day.value}
+                          className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer transition-colors ${
+                            selectedDays.includes(day.value)
+                              ? 'bg-primary text-primary-foreground border-primary'
+                              : 'hover:bg-muted'
+                          }`}
+                          onClick={() => handleDayToggle(day.value)}
+                        >
+                          <div
+                            className={`h-4 w-4 rounded border flex items-center justify-center ${
+                              selectedDays.includes(day.value)
+                                ? 'bg-primary-foreground border-primary-foreground'
+                                : 'border-current'
+                            }`}
                           >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </div>
-                      <span className="text-sm">{day.label}</span>
-                    </button>
-                  ))}
-                </div>
-                {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
-                <p className="text-xs text-muted-foreground">
-                  Select the days when this strategy should run. Weekends can be enabled for special
-                  trading sessions.
-                </p>
-              </div>
+                            {selectedDays.includes(day.value) && (
+                              <svg
+                                className="h-3 w-3 text-primary"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="3"
+                              >
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            )}
+                          </div>
+                          <span className="text-sm">{day.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
+                    <p className="text-xs text-muted-foreground">
+                      Select the days when this strategy should run. Weekends can be enabled for
+                      special trading sessions.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Submit */}

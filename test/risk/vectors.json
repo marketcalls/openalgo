@@ -1,0 +1,585 @@
+{
+  "version": 1,
+  "description": "Golden vectors for the shared per-position risk core. One case is one tick against one position. This file is the contract that binds services/risk/position.py to its TypeScript copy in frontend/src/hooks/useTrailingSL.ts, so that the browser and the server cannot drift apart.",
+  "notes": [
+    "state uses the snake_case wire shape: the same keys database/scalping_db.py stores and blueprints/scalping.py accepts. A TypeScript consumer maps it with the existing fromBackend helper. Extended keys (trail_mode, trail_trigger) are optional and default to continuous trailing with a trigger of 1.0.",
+    "expected is a superset. A consumer asserts only the keys it implements, but every key it does implement must match. The browser copy implements current_sl, highest_price, lowest_price, breached and reason; it does not implement pnl, evaluated, stop_moved or trail_armed.",
+    "Numeric comparisons use an absolute tolerance of 1e-6. Several inputs are not exactly representable in binary floating point.",
+    "A case carrying a fixes key encodes a defect that the shipped implementations still have. Those cases FAIL against services/scalping_risk_monitor_service.evaluate_trail and against useTrailingSL.evaluateTrail as they stand today, and they are the reason those two must be ported to the shared core. Every case without a fixes key already passes on both.",
+    "Reason values are the shipped wire strings: sl, target, or null."
+  ],
+  "tolerance": 1e-6,
+  "cases": [
+    {
+      "name": "long_stop_holds_above_stop",
+      "description": "A long above its stop does nothing.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 95.0, "current_sl": 95.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 95.1,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 95.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -245.0
+      }
+    },
+    {
+      "name": "long_stop_exact_touch",
+      "description": "The boundary: a long breaches when price is exactly at the stop, not only below it.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 95.0, "current_sl": 95.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 95.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 95.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -250.0
+      }
+    },
+    {
+      "name": "long_stop_gapped_through",
+      "description": "A long that gaps below its stop still reports the stop it had, not the fill.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 95.0, "current_sl": 95.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 94.5,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 95.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -275.0
+      }
+    },
+    {
+      "name": "short_stop_exact_touch",
+      "description": "A short's stop sits above price and breaches on an exact touch.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 105.0, "current_sl": 105.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 105.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 105.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -375.0
+      }
+    },
+    {
+      "name": "short_stop_holds_below_stop",
+      "description": "A short below its stop does nothing.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 105.0, "current_sl": 105.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 104.9,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 105.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -367.5
+      }
+    },
+    {
+      "name": "long_target_exact_touch",
+      "description": "A long's target sits above price and breaches on an exact touch.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 120.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 120.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "target",
+        "current_sl": 90.0, "highest_price": 120.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 1000.0
+      }
+    },
+    {
+      "name": "long_target_holds_below",
+      "description": "One tick short of the target is not a target hit.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 120.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 119.5,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 119.5, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 975.0
+      }
+    },
+    {
+      "name": "short_target_exact_touch",
+      "description": "A short's target sits below price and breaches on an exact touch.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 200.0, "current_sl": 200.0, "target": 80.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 80.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "target",
+        "current_sl": 200.0, "highest_price": 100.0, "lowest_price": 80.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 1500.0
+      }
+    },
+    {
+      "name": "short_target_holds_above",
+      "description": "One tick short of a short's target is not a target hit.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 200.0, "current_sl": 200.0, "target": 80.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 80.5,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 200.0, "highest_price": 100.0, "lowest_price": 80.5,
+        "stop_moved": false, "trail_armed": false, "pnl": 1462.5
+      }
+    },
+    {
+      "name": "stop_wins_when_stop_and_target_both_hit",
+      "description": "An inverted configuration where one tick satisfies both. Within a tick the order of the two touches is unknowable, so the adverse one is assumed.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 120.0, "current_sl": 120.0, "target": 110.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 115.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 120.0, "highest_price": 115.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 750.0
+      }
+    },
+    {
+      "name": "long_trail_raises_stop",
+      "description": "Continuous trail: the stop keeps a fixed gap behind the highest price seen.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 110.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 107.0, "highest_price": 110.0, "lowest_price": 100.0,
+        "stop_moved": true, "trail_armed": true, "pnl": 500.0
+      }
+    },
+    {
+      "name": "long_trail_only_ratchets_up",
+      "description": "A pullback that stays above the stop must not loosen it.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 107.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 110.0, "lowest_price": 100.0
+      },
+      "ltp": 108.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 107.0, "highest_price": 110.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": true, "pnl": 400.0
+      }
+    },
+    {
+      "name": "long_trail_not_armed_below_trigger",
+      "description": "Under the default trigger of 1.0 the trail stays out of the way, so the configured stop is untouched.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 100.5,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 100.5, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 25.0
+      }
+    },
+    {
+      "name": "long_trailed_stop_then_breaches",
+      "description": "The pullback that finally reaches the trailed stop.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 107.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 110.0, "lowest_price": 100.0
+      },
+      "ltp": 106.9,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 107.0, "highest_price": 110.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": true, "pnl": 345.0
+      }
+    },
+    {
+      "name": "long_trail_creates_the_first_stop",
+      "description": "Trailing with no configured stop is legitimate: the trail sets the first one.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": null, "current_sl": null, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 110.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 107.0, "highest_price": 110.0, "lowest_price": 100.0,
+        "stop_moved": true, "trail_armed": true, "pnl": 500.0
+      }
+    },
+    {
+      "name": "short_trail_lowers_stop",
+      "description": "Mirror of the long case: a short's stop keeps a fixed gap above the lowest price seen.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 110.0, "current_sl": 110.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 90.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 93.0, "highest_price": 100.0, "lowest_price": 90.0,
+        "stop_moved": true, "trail_armed": true, "pnl": 750.0
+      }
+    },
+    {
+      "name": "short_trail_only_ratchets_down",
+      "description": "A bounce that stays below the stop must not loosen it.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 110.0, "current_sl": 93.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 90.0
+      },
+      "ltp": 92.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 93.0, "highest_price": 100.0, "lowest_price": 90.0,
+        "stop_moved": false, "trail_armed": true, "pnl": 600.0
+      }
+    },
+    {
+      "name": "short_trailed_stop_then_breaches",
+      "description": "The bounce that finally reaches a short's trailed stop.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 110.0, "current_sl": 93.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 90.0
+      },
+      "ltp": 93.1,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 93.0, "highest_price": 100.0, "lowest_price": 90.0,
+        "stop_moved": false, "trail_armed": true, "pnl": 517.5
+      }
+    },
+    {
+      "name": "side_is_case_insensitive",
+      "description": "A lowercase side must not silently be read as a long.",
+      "state": {
+        "side": "sell", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 105.0, "current_sl": 105.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 106.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 105.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -450.0
+      }
+    },
+    {
+      "name": "missing_current_sl_falls_back_to_initial_sl",
+      "description": "Before the first trail there is no current stop, so the configured one is in force.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 95.0, "current_sl": null, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 94.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 95.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -300.0
+      }
+    },
+    {
+      "name": "missing_extremes_seed_from_entry",
+      "description": "A state that has never been ticked seeds its extreme from entry, never from zero.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": null, "lowest_price": null
+      },
+      "ltp": 105.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 105.0, "lowest_price": null,
+        "stop_moved": false, "trail_armed": false, "pnl": 250.0
+      }
+    },
+    {
+      "name": "no_stop_and_no_target_never_breaches",
+      "description": "A position with neither level configured is watched, not exited, however far it runs.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": null, "current_sl": null, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 150.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": null, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -3750.0
+      }
+    },
+    {
+      "name": "zero_quantity_gives_zero_pnl",
+      "description": "An unsized position still evaluates its levels; it just marks to nothing.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 0,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 105.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 105.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 0.0
+      }
+    },
+    {
+      "name": "stepped_trail_advances_one_step_per_trigger",
+      "description": "Trigger 10, step 5, anchored to the configured stop: 25 points of favourable movement is two complete triggers, so the stop advances 10 from 90 to 100.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 5.0,
+        "trail_trigger": 10.0, "trail_mode": "stepped",
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 125.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 100.0, "highest_price": 125.0, "lowest_price": 100.0,
+        "stop_moved": true, "trail_armed": true, "pnl": 1250.0
+      }
+    },
+    {
+      "name": "stepped_trail_holds_below_the_first_trigger",
+      "description": "Nine points of a ten point trigger is not a step.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 5.0,
+        "trail_trigger": 10.0, "trail_mode": "stepped",
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 109.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 109.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 450.0
+      }
+    },
+    {
+      "name": "stepped_trail_short_mirrors_the_long",
+      "description": "Trigger 10, step 5 on a short: 25 points of favourable movement moves the stop down 10 from 110 to 100.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 110.0, "current_sl": 110.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 5.0,
+        "trail_trigger": 10.0, "trail_mode": "stepped",
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 75.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 100.0, "highest_price": 100.0, "lowest_price": 75.0,
+        "stop_moved": true, "trail_armed": true, "pnl": 1875.0
+      }
+    },
+    {
+      "name": "stepped_trail_never_passes_the_best_price_seen",
+      "description": "A step larger than its trigger overruns: five completed triggers times a step of ten would put the stop at 149, a price that never traded. It is clamped to the highest price actually seen, 105, and the pullback to 101.5 is then correctly a stop breach. validate_position rejects this configuration up front.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 99.0, "current_sl": 99.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 10.0,
+        "trail_trigger": 1.0, "trail_mode": "stepped",
+        "highest_price": 105.0, "lowest_price": 100.0
+      },
+      "ltp": 101.5,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 105.0, "highest_price": 105.0, "lowest_price": 100.0,
+        "stop_moved": true, "trail_armed": true, "pnl": 75.0
+      }
+    },
+    {
+      "name": "no_stop_configured_is_not_an_implicit_stop_at_entry",
+      "fixes": "A missing stop means no stop. The shipped implementations fall back to the entry price, so a position configured with a target and no stop is exited the first time price crosses back through entry and the exit is reported as a stop loss the user never set.",
+      "description": "Target only, no stop, price back below entry. Nothing should fire.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": null, "current_sl": null, "target": 120.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 99.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": null, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -50.0
+      }
+    },
+    {
+      "name": "zero_stop_on_a_short_is_absent_not_a_level",
+      "fixes": "Zero is not a price on any Indian exchange. The shipped implementations take a zero stop literally, and on a short that means every tick satisfies ltp >= 0 and the position is exited immediately.",
+      "description": "A short whose stop arrived as a numeric zero default must not breach.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 0.0, "current_sl": 0.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 105.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": null, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": -375.0
+      }
+    },
+    {
+      "name": "negative_target_is_absent",
+      "description": "A negative target is a missing value, not a level a long can reach.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": -5.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 200.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 200.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 5000.0
+      }
+    },
+    {
+      "name": "zero_last_price_is_ignored",
+      "fixes": "The shipped evaluator has no guard of its own; only the scalping monitor's tick handler filters a zero last price, so any other caller evaluates against it.",
+      "description": "A zero tick leaves the state exactly as it was.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 95.0, "current_sl": 95.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": 0.0,
+      "expected": {
+        "evaluated": false, "breached": false, "reason": null,
+        "current_sl": 95.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 0.0
+      }
+    },
+    {
+      "name": "negative_last_price_is_ignored",
+      "fixes": "Same guard as the zero tick.",
+      "description": "A negative tick leaves the state exactly as it was.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 95.0, "current_sl": 95.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": -5.0,
+      "expected": {
+        "evaluated": false, "breached": false, "reason": null,
+        "current_sl": 95.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 0.0
+      }
+    },
+    {
+      "name": "null_last_price_is_ignored",
+      "fixes": "Same guard as the zero tick.",
+      "description": "A tick with no price at all leaves the state exactly as it was.",
+      "state": {
+        "side": "SELL", "entry_price": 100.0, "quantity": 75,
+        "initial_sl": 105.0, "current_sl": 105.0, "target": 0.0,
+        "trailing_enabled": false, "trailing_step": 0.0,
+        "highest_price": 100.0, "lowest_price": 100.0
+      },
+      "ltp": null,
+      "expected": {
+        "evaluated": false, "breached": false, "reason": null,
+        "current_sl": 105.0, "highest_price": 100.0, "lowest_price": 100.0,
+        "stop_moved": false, "trail_armed": false, "pnl": 0.0
+      }
+    },
+    {
+      "name": "trail_arms_off_the_peak_not_the_current_price",
+      "fixes": "The shipped implementations gate the trail on the current price being at least the trigger in front of entry. After a restart, a state whose peak has already earned a trailed stop but whose price has retraced refuses to re-derive it, so the stop silently sits at its original level and the earned protection is lost.",
+      "description": "Restored state: the peak of 110 earned a stop at 107, but current_sl is the stale 90 the throttled writer never updated and price is back to 99. The trail must re-derive 107, which the price is already through.",
+      "state": {
+        "side": "BUY", "entry_price": 100.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": 110.0, "lowest_price": 100.0
+      },
+      "ltp": 99.0,
+      "expected": {
+        "evaluated": true, "breached": true, "reason": "sl",
+        "current_sl": 107.0, "highest_price": 110.0, "lowest_price": 100.0,
+        "stop_moved": true, "trail_armed": true, "pnl": -50.0
+      }
+    },
+    {
+      "name": "non_positive_entry_disables_trailing",
+      "fixes": "The shipped implementations read the entry price as `entry_price or 0.0`, so a missing entry becomes zero, every tick then looks like an enormous profit, the trail arms immediately and drags the stop to the last price less the step.",
+      "description": "With no usable entry the absolute stop still works, the trail does not, and there is no cost basis to mark against.",
+      "state": {
+        "side": "BUY", "entry_price": 0.0, "quantity": 50,
+        "initial_sl": 90.0, "current_sl": 90.0, "target": 0.0,
+        "trailing_enabled": true, "trailing_step": 3.0,
+        "highest_price": null, "lowest_price": null
+      },
+      "ltp": 110.0,
+      "expected": {
+        "evaluated": true, "breached": false, "reason": null,
+        "current_sl": 90.0, "highest_price": 110.0, "lowest_price": null,
+        "stop_moved": false, "trail_armed": false, "pnl": 0.0
+      }
+    }
+  ]
+}

@@ -760,9 +760,38 @@
    track/thumb that reads as a bright seam on a dark chart pane, and it is not
    worth remembering to opt in per element. `.scrollbar-thin` below still exists
    for places that want the narrower variant. */
+
+/* Scrollbar chrome, and why it is a literal colour rather than a token.
+   ---------------------------------------------------------------------------
+   This file carries two incompatible token systems: the base :root and .dark
+   define channels ("240 3.8% 46.1%") for hsl(var(--x)), while .analyzer and the
+   accent themes define complete oklch() colours. hsl(var(--muted-foreground))
+   is therefore invalid under half of them, and an invalid scrollbar-color
+   silently falls back to `auto`, which paints the browser's light default on a
+   dark panel. That is exactly what shipped.
+
+   color-scheme is the real fix and covers more than scrollbars: it tells the
+   engine to render every native control (scrollbars, selects, checkboxes, date
+   pickers) in the matching palette. The scrollbar-color below is a literal
+   slate that reads on either theme, so it cannot be invalidated by whichever
+   token system is in force. */
+:root,
+.sandbox {
+  color-scheme: light;
+}
+
+/* .analyzer is a dark palette (background oklch(0.16 ...)) applied INSTEAD of
+   .dark, not alongside it: the theme store removes 'dark' when it adds
+   'analyzer'. So it has to declare dark itself or every native control in
+   Analyze Mode renders light on a dark page. .sandbox is the light one. */
+.dark,
+.analyzer {
+  color-scheme: dark;
+}
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.45) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -775,14 +804,14 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.3);
+  background: rgb(113 122 143 / 0.38);
   border: 2px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.55);
+  background: rgb(113 122 143 / 0.62);
   background-clip: content-box;
 }
 
@@ -812,14 +841,284 @@
   height: 0;
 }
 
+/* The charting terminal's chrome: the toolbar band and both rails.
+   ---------------------------------------------------------------------------
+   The band is a step off the page background toward its text colour, so the
+   row reads as one surface laid over the chart in light, dark and analyzer
+   alike. A dark ground needs the larger step: three percent of white on
+   near-black is invisible. Mixed from the two tokens rather than named, so an
+   accent theme or the analyzer palette moves it with them.
+
+   The rail tokens below are the rail's whole palette, resolved per mode on the
+   root (where the mode classes live) so a flyout portalled to the body reads
+   them too. The accent is the app's primary: near-white in live dark,
+   near-black in live light, the violet in analyzer. */
+:root {
+  --oa-band: color-mix(in oklab, var(--background) 97.5%, var(--foreground));
+  --oa-rail-mut: var(--muted-foreground);
+  --oa-rail-tx: var(--foreground);
+  --oa-rail-faint: color-mix(in oklab, var(--muted-foreground) 50%, var(--background));
+  --oa-rail-elev: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --oa-rail-elev-2: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --oa-rail-on-bg: color-mix(in oklab, var(--primary) 10%, transparent);
+  --oa-rail-on-bd: transparent;
+  --oa-rail-acc: var(--primary);
+  --oa-rail-bd-soft: var(--border);
+  --oa-rail-danger: var(--destructive);
+}
+.dark,
+.analyzer {
+  --oa-band: color-mix(in oklab, var(--background) 95.5%, var(--foreground));
+  --oa-rail-faint: color-mix(in oklab, var(--muted-foreground) 55%, var(--background));
+  --oa-rail-elev: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --oa-rail-elev-2: color-mix(in oklab, var(--foreground) 14%, transparent);
+  --oa-rail-on-bg: color-mix(in oklab, var(--primary) 13%, transparent);
+}
+/* The violet is a hue, not a grey, so the selected tool can carry it at more
+   strength and with an edge, where the neutral modes keep a quiet fill. */
+.analyzer {
+  --oa-rail-on-bg: color-mix(in oklab, var(--primary) 20%, transparent);
+  --oa-rail-on-bd: color-mix(in oklab, var(--primary) 45%, transparent);
+}
+.oa-terminal-band {
+  background-color: var(--oa-band);
+}
+
+/* In the components layer, so a utility on the same element (a dock button
+   sized smaller) still wins. */
+@layer components {
+  .oa-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 42px;
+    flex-shrink: 0;
+    padding-top: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    background: var(--oa-band);
+  }
+  .oa-rail::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  .oa-rail__btn {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--oa-rail-mut);
+    cursor: pointer;
+    transition:
+      background-color 0.09s,
+      color 0.09s,
+      border-color 0.09s;
+  }
+  .oa-rail__btn:hover {
+    background: var(--oa-rail-elev);
+    color: var(--oa-rail-tx);
+  }
+  .oa-rail__btn:focus-visible {
+    outline: 2px solid var(--oa-rail-acc);
+    outline-offset: -2px;
+  }
+  .oa-rail__btn.is-on,
+  .oa-rail__btn[aria-pressed='true'],
+  .oa-rail__btn[aria-expanded='true'][aria-controls] {
+    background: var(--oa-rail-on-bg);
+    border-color: var(--oa-rail-on-bd);
+    color: var(--oa-rail-acc);
+  }
+  .oa-rail__btn:disabled,
+  .oa-rail__btn:disabled:hover {
+    background: transparent;
+    color: var(--oa-rail-faint);
+    cursor: default;
+  }
+  .oa-rail__btn--danger:not(:disabled):hover {
+    color: var(--oa-rail-danger);
+  }
+  .oa-rail__btn > svg,
+  .oa-rail__glyph > svg {
+    display: block;
+  }
+  .oa-rail__glyph {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    line-height: 0;
+  }
+  /* The held tool and the magnet's strength: a dot in the top right corner,
+     a ring for weak. */
+  .oa-rail__btn.is-held::after,
+  .oa-rail__btn[data-mode='weak']::after,
+  .oa-rail__btn[data-mode='strong']::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+  }
+  .oa-rail__btn.is-held::after,
+  .oa-rail__btn[data-mode='strong']::after {
+    background: var(--oa-rail-acc);
+  }
+  .oa-rail__btn[data-mode='weak']::after {
+    width: 4px;
+    height: 4px;
+    border: 1.5px solid var(--oa-rail-acc);
+  }
+  /* The caret that opens a group's list: a separate button laid over the
+     tool's bottom right corner, quiet until the tool is hovered or focused or
+     its list is open. */
+  .oa-rail__slot {
+    position: relative;
+    flex: none;
+  }
+  .oa-rail__chev {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    place-items: center;
+    width: 13px;
+    height: 13px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px 0 6px 0;
+    background: transparent;
+    color: var(--oa-rail-mut);
+    opacity: 0;
+    cursor: pointer;
+    transition:
+      opacity 0.1s,
+      background-color 0.1s;
+  }
+  .oa-rail__chev > svg {
+    width: 9px;
+    height: 9px;
+    stroke-width: 2.2;
+  }
+  .oa-rail__slot:hover .oa-rail__chev,
+  .oa-rail__slot:focus-within .oa-rail__chev,
+  .oa-rail__chev[data-state='open'],
+  .oa-rail__chev.is-shown {
+    opacity: 1;
+  }
+  /* No hover on a touch screen: the caret would be invisible yet still take the
+     tap on the button's corner, so it stays shown there. */
+  @media (hover: none) {
+    .oa-rail__chev {
+      opacity: 1;
+    }
+  }
+  .oa-rail__chev:hover {
+    background: var(--oa-rail-elev-2);
+    color: var(--oa-rail-tx);
+  }
+  .oa-rail__chev:focus-visible {
+    outline: 2px solid var(--oa-rail-acc);
+    outline-offset: -2px;
+    opacity: 1;
+  }
+  .oa-rail__sep {
+    flex: none;
+    width: 22px;
+    height: 1px;
+    margin: 4px 0;
+    background: var(--oa-rail-bd-soft);
+  }
+  /* The controls at the foot: held at the bottom, with tools that scroll
+     under them fading out rather than being cut through. */
+  .oa-rail__ctl {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 100%;
+    margin-top: auto;
+    padding: 4px 0 6px;
+    background: var(--oa-band);
+    border-top: 1px solid var(--oa-rail-bd-soft);
+  }
+  .oa-rail__ctl::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: 14px;
+    background: linear-gradient(to bottom, transparent, var(--oa-band));
+    pointer-events: none;
+  }
+  .oa-rail__ctl .oa-rail__sep {
+    margin: 3px 0;
+  }
+  /* Folded, the rail leaves this tab at the chart's bottom left. */
+  .oa-rail-tab {
+    position: absolute;
+    left: 0;
+    z-index: 21;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--oa-rail-bd-soft);
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+    background: var(--oa-band);
+    color: var(--oa-rail-mut);
+    cursor: pointer;
+    transition:
+      background-color 0.09s,
+      color 0.09s,
+      width 0.09s;
+  }
+  .oa-rail-tab:hover {
+    width: 20px;
+    background: color-mix(in oklab, var(--oa-band), var(--foreground) 8%);
+    color: var(--oa-rail-tx);
+  }
+  .oa-rail-tab:focus-visible {
+    outline: 2px solid var(--oa-rail-acc);
+    outline-offset: -2px;
+  }
+  .oa-rail-tab > svg {
+    width: 12px;
+    height: 12px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .oa-rail__btn,
+    .oa-rail__chev,
+    .oa-rail-tab {
+      transition: none;
+    }
+  }
+}
+
 /* Thin scrollbar utility class */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.38) transparent;
 }
 
 .scrollbar-thin:hover {
-  scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.62) transparent;
 }
 
 /* WebKit browsers (Chrome, Safari, Edge) */
@@ -845,4 +1144,78 @@
 
 .scrollbar-thin::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* OpenScript editor syntax colours.
+ *
+ * Their own small palette rather than the app's accent, because the accent is
+ * the operator's choice from six hues and a keyword painted in it would vanish
+ * under one theme and shout under another. Low chroma on purpose: inside a
+ * monospace block these read as syntax, and a code panel is not the place to
+ * compete with the chart beside it.
+ *
+ * One place, so retuning them is one edit rather than a sweep through a
+ * component. Every pair below clears WCAG AA against the panel's own surface in
+ * the mode it belongs to.
+ */
+:root {
+  --oscript-comment: oklch(0.55 0.02 260);
+  --oscript-string: oklch(0.52 0.11 155);
+  --oscript-number: oklch(0.55 0.11 65);
+  --oscript-color: oklch(0.52 0.12 20);
+  --oscript-keyword: oklch(0.5 0.13 285);
+  --oscript-call: oklch(0.5 0.12 235);
+  --oscript-builtin: oklch(0.48 0.09 200);
+  --oscript-punctuation: oklch(0.55 0.02 260);
+}
+
+.dark {
+  --oscript-comment: oklch(0.62 0.02 260);
+  --oscript-string: oklch(0.78 0.13 155);
+  --oscript-number: oklch(0.8 0.12 75);
+  --oscript-color: oklch(0.78 0.12 25);
+  --oscript-keyword: oklch(0.76 0.12 290);
+  --oscript-call: oklch(0.78 0.11 235);
+  --oscript-builtin: oklch(0.8 0.09 200);
+  --oscript-punctuation: oklch(0.62 0.02 260);
+}
+
+.oscript-comment {
+  color: var(--oscript-comment);
+  font-style: italic;
+}
+.oscript-string {
+  color: var(--oscript-string);
+}
+.oscript-number {
+  color: var(--oscript-number);
+}
+/* A hexadecimal colour literal. It is a literal like a number and not like a
+   name, which is what it used to be painted as: the token's kind is hexColor,
+   and a rule that asked whether a kind was made of letters answered yes to it. */
+.oscript-color {
+  color: var(--oscript-color);
+}
+.oscript-keyword {
+  color: var(--oscript-keyword);
+}
+/* A function the language provides: plot, ema, input. */
+.oscript-call {
+  color: var(--oscript-call);
+}
+/* A value the language provides: close, aqua, math. Kept apart from a call
+   because one is a thing you do and the other is a thing you read, and a
+   reader scanning for where the work happens wants to tell them apart. */
+.oscript-builtin {
+  color: var(--oscript-builtin);
+}
+.oscript-punctuation {
+  color: var(--oscript-punctuation);
+}
+.oscript-identifier,
+.oscript-plain {
+  /* Inherited rather than named: this file defines --foreground as an HSL
+     triplet in some scopes and an oklch value in others, so wrapping it would
+     be invalid under half of them. The editor already sets its own colour. */
+  color: inherit;
 }

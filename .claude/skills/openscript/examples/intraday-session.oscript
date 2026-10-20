@@ -1,0 +1,65 @@
+version 1
+
+// INTRADAY, FLAT BY THE CLOSE: enter only inside a window, square off on the
+// session's last bar. This is the shape most intraday strategies actually take,
+// and both halves of it are easy to get wrong.
+//
+// THE WINDOW IS NOT THE SESSION. `session.isIn("0925-1500")` is a window the
+// script states; the session is the instrument's own hours. They are different
+// on purpose: entries stop at 15:00 here so a position has half an hour to be
+// managed, while the square off rides on `session.isLastBar`, which is the
+// session's.
+//
+// The spec is `"HHMM-HHMM"` with an optional day list, days 1 for Monday
+// through 7 for Sunday: `"0925-1500:12345"` is weekdays only. A malformed spec
+// written as a literal is OS3008 at compile time rather than a surprise at
+// runtime. A window whose end is before its start crosses midnight, which is
+// what an overnight commodity session needs.
+//
+// SQUARING OFF ON `session.isLastBar` RATHER THAN ON A CLOCK. It is true on the
+// last bar of the SCHEDULED session even when trading stopped early, and it
+// does not wait for a new bar to appear, which would arrive after the close and
+// leave the position overnight. That is the difference between an intraday
+// strategy and an intraday strategy that occasionally is not one.
+//
+// THE SQUARE OFF IS UNCONDITIONAL AND COMES FIRST. `close()` on a flat position
+// sends nothing, so there is no need to test `pos.isFlat` before it, and every
+// test added there is another way to end the day holding something.
+//
+// AND IT TAKES NO TAG. `close(tag)` names the part of the position that tag
+// entered, so a tag no order was placed with is OS7016 at compile time. A
+// square off wants the whole leg, which is `close()` with nothing in it. The
+// check exists because the silent version of this mistake closes a part of a
+// position and reports success.
+
+fast = input(9, "Fast length", min = 1, max = 200)
+slow = input(21, "Slow length", min = 2, max = 400)
+window = input("0925-1500", "Entry window")
+lots = input(1, "Quantity", min = 1)
+
+strategy("Intraday crossover", overlay = true, qty = lots)
+
+fastLine = sma(close, fast)
+slowLine = sma(close, slow)
+
+plot(fastLine, "Fast", aqua, width = 2)
+plot(slowLine, "Slow", orange, width = 2)
+
+canEnter = session.isIn(window)
+
+// `crossUp` is true on the bar the crossing completes, not while one line is
+// merely above the other. Writing `fastLine > slowLine` here enters on every
+// bar of the move instead of on the one that starts it.
+goLong = crossUp(fastLine, slowLine) and canEnter
+goShort = crossDown(fastLine, slowLine) and canEnter
+
+// A VALUE, NOT A CALL. `session.isLastBar` is a `series bool`; writing
+// `session.isLastBar()` is OS2010, because a bool cannot be called.
+if session.isLastBar
+    close()
+
+if goLong and not pos.isLong
+    buy(qty = lots + abs(pos.size), tag = "Long")
+
+if goShort and not pos.isShort
+    sell(qty = lots + abs(pos.size), tag = "Short")

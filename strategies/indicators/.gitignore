@@ -1,0 +1,18 @@
+# Ignore all custom chart indicators added by the user
+*.js
+
+# But keep this .gitignore and the folder README
+!.gitignore
+!README.md
+
+# Open Range Breakout ships with OpenAlgo as a working reference indicator, so
+# a fresh install has one real example to read and modify. It is the ONLY .js
+# tracked here; anything else you write stays on your own machine.
+!open_range_breakout.js
+
+# Ignore backup and editor files
+*.bak
+*.backup
+*~
+
+# Keep the directory but ignore its contents beyond the exceptions above.

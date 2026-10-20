@@ -1,0 +1,1 @@
+import{r as e,t}from"./alertStore-FZgqUS0M.js";var n=(n,r,i,a)=>{let{shouldShowToast:o}=t.getState();o(i)&&e[n](r,a)},r={success:(e,t,r)=>{n(`success`,e,t,r)},error:(e,t,r)=>{n(`error`,e,t,r)},warning:(e,t,r)=>{n(`warning`,e,t,r)},info:(e,t,r)=>{n(`info`,e,t,r)},dismissAll:()=>{e.dismiss()},dynamic:(e,t,r,i)=>{n(e,t,r,i)},show:n};export{r as t};

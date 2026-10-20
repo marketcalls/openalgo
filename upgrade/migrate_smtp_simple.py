@@ -21,6 +21,10 @@ from pathlib import Path
 # Add project root to path
 project_root = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(project_root))
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 
 
 # Universal UTF-8 encoding setup

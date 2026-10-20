@@ -18,11 +18,45 @@ logger = get_logger(__name__)
 # long-lived thread.
 _latency_log_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="latency-log")
 
+#: Latency records of these types are kept forever; everything else is a data
+#: query and is purged after a week. Must stay in step with the set in
+#: ``database.latency_db.purge_old_data_logs``, which does the deleting -- a
+#: type here but missing there is purged despite being an order.
+#:
+#: A GTT is an order instruction, not a data query. It can also rest for a year
+#: before firing, so purging its placement latency after a week would discard
+#: the record long before the order it describes exists.
+KEEP_FOREVER_TYPES = frozenset(
+    {
+        "PLACE",
+        "SMART",
+        "MODIFY",
+        "CANCEL",
+        "CLOSE",
+        "CANCEL_ALL",
+        "BASKET",
+        "SPLIT",
+        "OPTIONS",
+        "OPTIONS_MULTI",
+        "GTT_PLACE",
+        "GTT_MODIFY",
+        "GTT_CANCEL",
+    }
+)
 
-def _log_latency_async(api_key, order_id, user_id, symbol, order_type, latencies, status, error):
-    """Resolve broker name and persist the latency record. Runs on the executor thread."""
+
+def _log_latency_async(
+    api_key, order_id, user_id, symbol, order_type, latencies, status, error, broker=None
+):
+    """Resolve broker name and persist the latency record. Runs on the executor thread.
+
+    ``broker`` is resolved by the caller when the request carried no API key --
+    session-authenticated UI routes (the scalping terminal, the Positions close
+    buttons) authenticate by cookie and send none, and the Flask session is not
+    readable from this thread.
+    """
     try:
-        broker_name = get_broker_name(api_key) if api_key else None
+        broker_name = broker or (get_broker_name(api_key) if api_key else None)
         OrderLatency.log_latency(
             order_id=order_id,
             user_id=user_id,
@@ -42,6 +76,48 @@ def _log_latency_async(api_key, order_id, user_id, symbol, order_type, latencies
         # session keeps its read transaction (and SQLite lock) open.
         latency_session.remove()
         auth_db_session.remove()
+
+
+def _response_payload(response):
+    """The JSON body of a view's return value, as a dict.
+
+    Flask views may return any of these, and all of them turn up here:
+
+      - ``make_response(jsonify(d), code)`` -> a Response          (RESTX)
+      - ``jsonify(d), code``                -> (Response, int)  (blueprints)
+      - ``d, code``                         -> (dict, int)
+      - ``send_file(...)``                  -> a Response with no JSON body
+
+    Only the first and third were understood before, so blueprint routes -- the
+    scalping terminal's order endpoints and the Positions close buttons -- had
+    their payload read as ``{}`` and every record logged an order id of "unknown".
+    A file download has a ``.json`` property that resolves to None rather than
+    raising, so it still falls through to ``{}``.
+    """
+    if isinstance(response, tuple):
+        response = response[0] if response else None
+
+    if isinstance(response, dict):
+        return response
+
+    payload = getattr(response, "json", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _session_broker():
+    """The logged-in broker, for requests that carry no API key.
+
+    Session-authenticated UI routes have no ``apikey`` in the body, so the record
+    would otherwise land with an empty broker and never group under the broker it
+    was actually sent to. Read here, on the request thread -- the executor thread
+    that writes the record has no session.
+    """
+    try:
+        from flask import session
+
+        return session.get("broker")
+    except Exception:  # outside a request context, or no session configured
+        return None
 
 
 class LatencyTracker:
@@ -150,12 +226,7 @@ def track_latency(api_type):
                 # Get response data. A file download (e.g. the portfolio
                 # tearsheet) has a `.json` property but isn't JSON, so it
                 # resolves to None rather than raising.
-                if hasattr(response, "json") and isinstance(response.json, dict):
-                    response_data = response.json
-                elif isinstance(response, tuple) and len(response) > 0 and isinstance(response[0], dict):
-                    response_data = response[0]
-                else:
-                    response_data = {}
+                response_data = _response_payload(response)
 
                 # End response processing stage
                 tracker.end_stage()
@@ -215,6 +286,7 @@ def track_latency(api_type):
                     },
                     "SUCCESS" if status_code < 400 else "FAILED",
                     response_data.get("message") if status_code >= 400 else None,
+                    _session_broker() if not request_data.get("apikey") else None,
                 )
 
                 return response
@@ -251,6 +323,9 @@ def track_latency(api_type):
                     },
                     "FAILED",
                     str(e),
+                    _session_broker()
+                    if not (has_request_data and request_data.get("apikey"))
+                    else None,
                 )
                 raise
 
@@ -329,26 +404,6 @@ def init_latency_monitoring(app):
         "chart": "CHART",
         "market/holidays": "MARKET_HOLIDAYS",
         "market/timings": "MARKET_TIMINGS",
-    }
-
-    # Order types that should be kept forever (not purged)
-    ORDER_TYPES = {
-        "PLACE",
-        "SMART",
-        "MODIFY",
-        "CANCEL",
-        "CLOSE",
-        "CANCEL_ALL",
-        "BASKET",
-        "SPLIT",
-        "OPTIONS",
-        "OPTIONS_MULTI",
-        # A GTT is an order instruction, not a data query. It can also rest for
-        # a year before firing, so purging its placement latency after a week
-        # would discard the record long before the order it describes exists.
-        "GTT_PLACE",
-        "GTT_MODIFY",
-        "GTT_CANCEL",
     }
 
     # Wrap all API endpoints with latency tracking

@@ -6,12 +6,27 @@ from database.apilog_db import async_log_order
 from database.apilog_db import executor as log_executor
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
-from extensions import socketio
+from extensions import emit_from_any_thread
 from services.tradebook_service import get_tradebook
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+
+def _emit_analyzer_update(payload: dict[str, Any]) -> None:
+    """Tell the browser about an analyzer-mode request. Never raises.
+
+    Emitted on the caller's thread rather than on a new one per event: the
+    Socket.IO server serialises emits itself (``extensions.SerializedSocketIO``),
+    and a thread per emit let two updates reach the browser out of order.
+    ``emit_from_any_thread`` hands the emit to the hub when a real OS thread
+    calls under eventlet (the agent's order tools reach this service).
+    """
+    try:
+        emit_from_any_thread("analyzer_update", payload)
+    except Exception:
+        logger.exception("Could not send the analyzer update to the browser")
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -36,10 +51,8 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, "orderstatus")
 
-    # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
-    )
+    # Emit socket event (non-blocking: the server only queues it)
+    _emit_analyzer_update({"request": analyzer_request, "response": error_response})
 
     return error_response
 
@@ -120,12 +133,8 @@ def get_order_status_with_auth(
             error_response["mode"] = "analyze"
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, "orderstatus")
-            # Emit socket event asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                "analyzer_update",
-                {"request": request_data, "response": error_response},
-            )
+            # Emit socket event (non-blocking: the server only queues it)
+            _emit_analyzer_update({"request": request_data, "response": error_response})
         else:
             log_executor.submit(async_log_order, "orderstatus", original_data, error_response)
         return False, error_response, status_code
@@ -169,12 +178,8 @@ def get_order_status_with_auth(
             error_response["mode"] = "analyze"
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, "orderstatus")
-            # Emit socket event asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                "analyzer_update",
-                {"request": request_data, "response": error_response},
-            )
+            # Emit socket event (non-blocking: the server only queues it)
+            _emit_analyzer_update({"request": request_data, "response": error_response})
         else:
             log_executor.submit(async_log_order, "orderstatus", original_data, error_response)
         return False, error_response, 404
@@ -263,12 +268,8 @@ def get_order_status_with_auth(
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, "orderstatus")
         logger.debug("[OrderStatus] Logged to analyzer database")
 
-        # Emit socket event for toast notification asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "analyzer_update",
-            {"request": analyzer_request, "response": response_data},
-        )
+        # Emit socket event for toast notification (non-blocking: the server only queues it)
+        _emit_analyzer_update({"request": analyzer_request, "response": response_data})
         logger.debug("[OrderStatus] Emitted socket event for analyzer update")
     else:
         logger.info(

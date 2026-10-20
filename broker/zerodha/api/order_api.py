@@ -5,6 +5,11 @@ import threading
 import time
 import urllib.parse
 
+from broker.zerodha.mapping.mcx_contract_size import (
+    McxQuantityError,
+    _resolve_size,
+    from_kite_quantity,
+)
 from broker.zerodha.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -15,6 +20,12 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -95,47 +106,48 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the cache is returned to its
+# own caller but never cached, so the next order cannot read the book from
+# before the previous fill (utils/smart_order_guard.py).
+_POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """Kite wraps a position book it read as {"status": "success", ...}."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            logger.debug("Position book served from cache")
-            return cached["data"]
-
-    # Cache miss or expired — fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book("zerodha", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
-    """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data.
+
+    Also stops a fetch that started before this order from caching the book
+    it read.
+    """
+    _POSITION_BOOK.invalidate(auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
@@ -152,11 +164,47 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position.get("exchange") == exchange
                 and position.get("product") == product
             ):
-                net_qty = position.get("quantity", "0")
+                # Raw Kite response, so MCX quantity is a contract count.
+                # place_smartorder_api compares this against a position size
+                # given in OpenAlgo units and hands the difference to
+                # place_order_api, which converts back -- so it has to be in
+                # units here or the order is divided by the lot size twice.
+                #
+                # An unresolved size must NOT fall back to a factor of 1 here.
+                # That is safe when reading an orderbook for display, but this
+                # value decides whether to trade: 30 held contracts read as 30
+                # units against a 30 unit target matches exactly, and the smart
+                # order reports "position already matched" while 450 units sit
+                # open and unhedged.
+                if _resolve_size(tradingsymbol, exchange) is None:
+                    raise McxQuantityError(
+                        f"Cannot read the open position in {tradingsymbol}: MCX has "
+                        f"revised its contract size and the master contract has no row "
+                        f"for this expiry. Re-download the master contract, then retry."
+                    )
+                net_qty = from_kite_quantity(
+                    position.get("quantity", "0"), tradingsymbol, exchange
+                )
                 logger.debug(f"Net Quantity {net_qty}")
                 break  # Assuming you need the first match
 
     return net_qty
+
+
+class _RejectedResponse:
+    """Stands in for an httpx response the request never earned.
+
+    place_order_api's callers read ``.status`` and the message out of the
+    response data, so a rejection shaped this way reaches the user as a 400
+    naming the real problem. Letting the exception escape instead lands in the
+    service layer's blanket handler, which reports "internal error" with a 500
+    and publishes an order-failed event -- true, but useless to whoever has to
+    fix the quantity.
+    """
+
+    def __init__(self, status=400):
+        self.status = status
+        self.status_code = status
 
 
 def place_order_api(data, auth):
@@ -165,7 +213,11 @@ def place_order_api(data, auth):
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     data["apikey"] = BROKER_API_KEY
     # token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data)
+    try:
+        newdata = transform_data(data)
+    except McxQuantityError as exc:
+        logger.info(f"Rejected order before sending to Kite: {exc}")
+        return _RejectedResponse(), {"status": "error", "message": str(exc)}, None
 
     # Prepare the payload
     payload = {
@@ -223,6 +275,7 @@ def place_order_api(data, auth):
     return response, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 
@@ -243,9 +296,9 @@ def place_smartorder_api(data, auth):
 
         # Per-symbol lock: only one smart order per symbol executes at a time.
         # Queued orders wait, then get fresh position data after cache invalidation.
-        symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-        with symbol_lock:
+        with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+            if not symbol_lock:
+                return SymbolLocks.busy(symbol)
             position_size = int(data.get("position_size", "0"))
 
             # Get current open position for the symbol
@@ -299,6 +352,13 @@ def place_smartorder_api(data, auth):
                 response_data = {"status": "success", "message": "No action needed. Position already matched."}
                 return res, response_data, orderid
 
+    except McxQuantityError as exc:
+        # Ahead of the generic handler, which leaves res as None for the
+        # service to read .status from.
+        logger.info(f"Rejected smart order before sending to Kite: {exc}")
+        return _RejectedResponse(), {"status": "error", "message": str(exc)}, None
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Error in place_smartorder_api: {e}"
         logger.exception(error_msg)
@@ -318,6 +378,8 @@ def close_all_positions(current_api_key, auth):
     if positions_response["data"] is None or not positions_response["data"]:
         return {"message": "No Open Positions Found"}, 200
 
+    failures: list[str] = []
+
     if positions_response["status"]:
         # Loop through each position to close
         for position in positions_response["data"]["net"]:
@@ -327,7 +389,15 @@ def close_all_positions(current_api_key, auth):
 
             # Determine action based on net quantity
             action = "SELL" if int(position["quantity"]) > 0 else "BUY"
-            quantity = abs(int(position["quantity"]))
+            # Same raw-response caveat as get_open_position: convert to OpenAlgo
+            # units here, because place_order_api converts back to contracts.
+            quantity = abs(
+                int(
+                    from_kite_quantity(
+                        position["quantity"], position["tradingsymbol"], position["exchange"]
+                    )
+                )
+            )
 
             # Get OA Symbol before sending to Place Order
             symbol = get_oa_symbol(position["tradingsymbol"], position["exchange"])
@@ -346,11 +416,30 @@ def close_all_positions(current_api_key, auth):
             logger.debug(f"Close position payload: {place_order_payload}")
 
             # Place the order to close the position
-            _, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
+            res, api_response, order_id = place_order_api(place_order_payload, AUTH_TOKEN)
 
             logger.debug(f"Close position response: {api_response}")
 
-            # Note: Ensure place_order_api handles any errors and logs accordingly
+            # A refused exit leaves the position open. Reporting "squared off"
+            # anyway is the worst possible answer: the caller stops watching a
+            # position the broker still holds. Collect the failures and say so.
+            if getattr(res, "status", None) != 200 or not order_id:
+                reason = (
+                    api_response.get("message", "order was refused")
+                    if isinstance(api_response, dict)
+                    else "order was refused"
+                )
+                failures.append(f"{symbol} ({position['exchange']}): {reason}")
+                logger.error(f"Square-off failed for {symbol}: {reason}")
+
+    if failures:
+        return {
+            "status": "error",
+            "message": (
+                f"{len(failures)} position(s) could not be squared off and are still "
+                f"open: {'; '.join(failures)}"
+            ),
+        }, 500
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -402,7 +491,11 @@ def cancel_order(orderid, auth):
 def modify_order(data, auth):
     AUTH_TOKEN = auth
 
-    newdata = transform_modify_order_data(data)  # You need to implement this function
+    try:
+        newdata = transform_modify_order_data(data)  # You need to implement this function
+    except McxQuantityError as exc:
+        logger.info(f"Rejected modify before sending to Kite: {exc}")
+        return {"status": "error", "message": str(exc)}, 400
 
     # Prepare the payload with proper handling of numeric fields
     payload = {

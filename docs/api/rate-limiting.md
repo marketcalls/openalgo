@@ -60,10 +60,23 @@ OpenAlgo implements differentiated rate limiting for various types of operations
 | Per Minute | 100 per minute | External webhook endpoints from trading platforms |
 
 **Applies to:**
-- `/strategy/webhook/<webhook_id>` - Strategy webhook from external platforms
 - `/chartink/webhook/<webhook_id>` - ChartInk webhook from external platforms
+- `/flow/webhook/<token>` - Flow workflow webhook from external platforms
+- `/flow/webhook/<token>/<symbol>` - the same, with the symbol in the path
 
 These limits protect against external DoS attacks and webhook flooding.
+
+The Flow webhook is counted twice at this budget, once by caller address and
+once by workflow token, because the two bound different things. The address
+limit is what stops a caller walking the token space; the token limit is what
+caps the order flow a single leaked token can drive, however many addresses
+replay it. Both routes above share one budget per key, so alternating between
+them does not double the rate.
+
+Unlike the rest of the product, a throttled Flow webhook answers `429` with a
+JSON body rather than redirecting to the `/rate-limited` page. Automated
+callers such as TradingView do not read an HTML page, and would otherwise
+record a redirect as a delivered alert.
 
 ### Strategy Management APIs
 
@@ -72,9 +85,6 @@ These limits protect against external DoS attacks and webhook flooding.
 | Per Minute | 200 per minute | Strategy creation, modification, and deletion |
 
 **Applies to:**
-- `/strategy/new` - Create new strategies
-- `/strategy/<id>/delete` - Delete strategies
-- `/strategy/<id>/configure` - Configure strategy symbols
 - `/chartink/new` - Create new ChartInk strategies
 - `/chartink/<id>/delete` - Delete ChartInk strategies
 - `/chartink/<id>/configure` - Configure ChartInk strategy symbols
@@ -101,6 +111,39 @@ These limits follow [Flask-Limiter syntax](https://flask-limiter.readthedocs.io/
 - `100 per minute`
 - `1000 per day`
 - `10 per second;40 per minute` (compound — both limits enforced simultaneously)
+
+## WebSocket Connection Limits
+
+OpenAlgo exposes a single WebSocket server (default `ws://127.0.0.1:8765`) that downstream client applications connect to for streaming market data. These limits are independent of the HTTP rate limits above and split into three dimensions: upstream broker capacity, downstream client connections, and per-client buffering.
+
+### Upstream broker capacity
+
+These variables control how OpenAlgo talks to the broker's market-data feed:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAX_SYMBOLS_PER_WEBSOCKET` | 1000 | Maximum symbols multiplexed on one broker WebSocket |
+| `MAX_WEBSOCKET_CONNECTIONS` | 3 | Maximum broker WebSocket connections per user/broker pool |
+
+Total upstream symbol capacity is approximately `MAX_SYMBOLS_PER_WEBSOCKET × MAX_WEBSOCKET_CONNECTIONS` (for example, 1000 × 3 = 3000 symbols).
+
+### Downstream client connections
+
+There is **no application-level cap** on how many separate client applications or processes can connect to OpenAlgo's own WebSocket server. `websocket_proxy/server.py` calls `websockets.serve()` without a connection limit and registers each client in `self.clients` with no count check. The practical ceiling is the server's file-descriptor / `ulimit -n` budget.
+
+### Per-client settings
+
+Each client connection has its own send queue and keepalive timers:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WS_MAX_QUEUE` | 1024 | Per-client send queue; absorbs tick bursts without disconnecting slow clients |
+| `WS_PING_INTERVAL` | 20 | Seconds between keepalive pings |
+| `WS_PING_TIMEOUT` | 20 | Seconds to wait for a pong before closing the connection |
+
+### Shared upstream feed and refcounting
+
+The broker feed is pooled per user/broker (`{broker}_{user_id}`) in `websocket_proxy/broker_factory.py` and shared across all connected clients. Subscriptions are refcounted by `ConnectionPool` in `websocket_proxy/connection_manager.py`. A second client subscribing to the same symbol does **not** open a new upstream broker connection or consume another `MAX_SYMBOLS_PER_WEBSOCKET` slot — upstream capacity is consumed by unique symbols, not by the number of downstream client connections.
 
 ## What Happens When Limits Are Exceeded
 

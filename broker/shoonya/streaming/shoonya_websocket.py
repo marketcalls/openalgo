@@ -4,14 +4,137 @@ Handles connection to Shoonya's market data streaming API
 """
 
 import json
-import logging
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable
 from typing import Any
 
 import websocket
+
+from utils.logging import get_logger
+
+
+class _WeakCallback:
+    """Holds an external callback without keeping its owner alive.
+
+    Bound methods are stored via ``weakref.WeakMethod``. The adapter passes
+    ``self._on_message`` and friends, so a strong reference here would pin the
+    adapter to this client — and this client is pinned by its own running
+    threads, so neither object's ``__del__`` could ever run and the adapter's
+    ZMQ socket and bound port would leak with it. Plain functions have no owner
+    to leak, so they are held strongly.
+    """
+
+    __slots__ = ("_ref", "_strong")
+
+    def __init__(self, fn: Callable | None):
+        self._ref: weakref.WeakMethod | None = None
+        self._strong: Callable | None = None
+        if fn is None:
+            return
+        try:
+            self._ref = weakref.WeakMethod(fn)
+        except TypeError:
+            # Not a bound method (plain function, lambda, functools.partial)
+            self._strong = fn
+
+    def __bool__(self) -> bool:
+        return self._ref is not None or self._strong is not None
+
+    def resolve(self) -> Callable | None:
+        """Return the live callable, or None if its owner has been collected."""
+        if self._strong is not None:
+            return self._strong
+        if self._ref is not None:
+            return self._ref()
+        return None
+
+
+def _make_ws_runner(client: "ShoonyaWebSocket", ws: Any) -> Callable:
+    """Thread target that blocks in ``run_forever`` for the whole session.
+
+    ``_weak_dispatch`` is no good here: it would resolve the weakref and then
+    hold the client strongly in its frame for the entire connection. This
+    runner keeps only the ``WebSocketApp`` alive (it must, to run it) and
+    touches the client through a weakref, so an abandoned client stays
+    collectable while its socket is up.
+    """
+    ref = weakref.ref(client)
+    ping_interval = client.PING_INTERVAL
+    ping_timeout = client.PING_TIMEOUT
+
+    def runner() -> None:
+        try:
+            ws.run_forever(ping_interval=ping_interval, ping_timeout=ping_timeout)
+        except Exception as e:
+            target = ref()
+            if target is not None:
+                target.logger.error(f"WebSocket run error: {e}")
+        finally:
+            target = ref()
+            if target is not None:
+                target._cleanup_connection_state()
+
+    return runner
+
+
+def _make_heartbeat_runner(client: "ShoonyaWebSocket") -> Callable:
+    """Thread target for the heartbeat loop, holding the client weakly.
+
+    The loop resolves the weakref once per tick and drops it again before
+    waiting, so a client abandoned mid-session becomes collectable within one
+    HEARTBEAT_INTERVAL instead of being pinned forever.
+    """
+    ref = weakref.ref(client)
+
+    def runner() -> None:
+        while True:
+            target = ref()
+            if target is None:
+                return
+            # Grab what the wait needs, then drop the strong reference: holding
+            # it across a HEARTBEAT_INTERVAL sleep would keep an abandoned
+            # client (and its socket) alive for a whole interval.
+            interval = target.HEARTBEAT_INTERVAL
+            shutdown = target._shutdown_event
+            del target
+
+            if shutdown.wait(interval):
+                return
+            del shutdown
+
+            target = ref()
+            if target is None:
+                return
+            keep_going = target._heartbeat_beat()
+            del target
+            if not keep_going:
+                return
+
+    return runner
+
+
+def _weak_dispatch(obj: "ShoonyaWebSocket", method_name: str) -> Callable:
+    """Bind ``obj.method_name`` through a weak reference.
+
+    Used for the callbacks handed to ``websocket.WebSocketApp`` and for thread
+    targets: a bound method would make the WebSocketApp (and the thread running
+    it) keep this client alive forever, so dropping the last external reference
+    to a *connected* client would strand its socket and threads for the life of
+    the process. Going through a weakref lets the client become collectable,
+    at which point ``__del__`` runs ``stop()`` and the socket is released.
+    """
+    ref = weakref.ref(obj)
+
+    def dispatch(*args: Any, **kwargs: Any) -> Any:
+        target = ref()
+        if target is None:
+            return None
+        return getattr(target, method_name)(*args, **kwargs)
+
+    return dispatch
 
 
 class ShoonyaWebSocket:
@@ -32,6 +155,19 @@ class ShoonyaWebSocket:
     PING_TIMEOUT = 10
     HEARTBEAT_JOIN_TIMEOUT = 3
 
+    # Market-data silence watchdog (issue #2075, same defect as Flattrade).
+    # A Noren session that keeps answering heartbeats while delivering no
+    # ticks is indistinguishable from a healthy one on _last_message_time
+    # alone, because every inbound frame stamps it - heartbeat acks included.
+    # Tick flow therefore gets its own clock, and the watchdog only arms once
+    # data has been arriving over time: frames in DATA_ARM_BUCKETS distinct
+    # buckets of DATA_ARM_BUCKET seconds, all within DATA_ARM_WINDOW. See
+    # _update_last_data_time for why spread matters and a frame count does not.
+    DATA_SILENCE_TIMEOUT = 180
+    DATA_ARM_BUCKET = 30
+    DATA_ARM_BUCKETS = 3
+    DATA_ARM_WINDOW = 300
+
     # Subscription batching — Shoonya supports '#'-separated scrip lists in
     # a single message; chunk large lists so each WS send stays small and
     # add a small delay between chunks to avoid server-side rate limits.
@@ -46,6 +182,12 @@ class ShoonyaWebSocket:
     # Message types (OAuth WebSocket API)
     MSG_TYPE_CONNECT = "a"
     MSG_TYPE_HEARTBEAT = "h"
+    # The doc's heartbeat ack is "hk"; "h" is kept because some Noren
+    # deployments echo the request type back instead. Only "h" was matched
+    # before, so an "hk" ack fell through to the market-data path - harmless
+    # while nothing read it, but it would have counted as a tick and defeated
+    # the silence watchdog below.
+    MSG_TYPE_HEARTBEAT_ACK = "hk"
     MSG_TYPE_AUTH_ACK = "ak"
     MSG_TYPE_TOUCHLINE_SUB = "t"
     MSG_TYPE_TOUCHLINE_UNSUB = "u"
@@ -95,16 +237,24 @@ class ShoonyaWebSocket:
         self.auth_failed = False
         self.auth_failure_reason: str | None = None
 
-        # Callbacks
-        self.on_message = on_message
-        self.on_error = on_error
-        self.on_close = on_close
-        self.on_open = on_open
+        # Callbacks — held weakly when they are bound methods so the owner
+        # (normally ShoonyaWebSocketAdapter) stays collectable. See _WeakCallback.
+        self.on_message = _WeakCallback(on_message)
+        self.on_error = _WeakCallback(on_error)
+        self.on_close = _WeakCallback(on_close)
+        self.on_open = _WeakCallback(on_open)
 
         # Heartbeat management
         self._heartbeat_thread = None
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
+
+        # Market-data liveness, kept apart from _last_message_time above so a
+        # socket that only answers heartbeats cannot pass for a live feed.
+        # Per connection: _reset_data_liveness() clears all three.
+        self._last_data_message_time = None
+        self._data_watchdog_armed = False
+        self._data_bucket_starts = deque(maxlen=self.DATA_ARM_BUCKETS)
 
         # Subscription batching — separate queues per (msg_type) since
         # touchline/depth use different message types but share one worker.
@@ -119,9 +269,16 @@ class ShoonyaWebSocket:
         self._shutdown_event = threading.Event()
 
         # Logging
-        self.logger = logging.getLogger("shoonya_websocket")
+        self.logger = get_logger("shoonya_websocket")
 
     def __del__(self):
+        """Last-resort teardown for a client dropped without stop().
+
+        This only fires because the WebSocketApp, the run_forever thread and
+        the heartbeat thread all hold this object weakly. Reinstating any of
+        them as a bound method would silently make this dead code and strand
+        one socket plus three threads per abandoned client.
+        """
         try:
             self.stop()
         except Exception:
@@ -157,15 +314,19 @@ class ShoonyaWebSocket:
         self.auth_failed = False
         self.auth_failure_reason = None
 
+        # Weak dispatch: a bound method here would let the WebSocketApp — and
+        # the thread blocked in run_forever() — pin this client, so an
+        # abandoned connected client could never be collected and its socket
+        # would stay ESTABLISHED for the life of the process.
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
+            on_open=_weak_dispatch(self, "_on_open"),
+            on_message=_weak_dispatch(self, "_on_message"),
+            on_error=_weak_dispatch(self, "_on_error"),
+            on_close=_weak_dispatch(self, "_on_close"),
         )
 
-        self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
+        self.ws_thread = threading.Thread(target=_make_ws_runner(self, self.ws), daemon=True)
         self.ws_thread.start()
 
     def _wait_for_connection(self) -> bool:
@@ -190,20 +351,15 @@ class ShoonyaWebSocket:
         self.stop()
         return False
 
-    def _run_websocket(self) -> None:
-        """Run the WebSocket connection with proper error handling"""
-        try:
-            self.ws.run_forever(ping_interval=self.PING_INTERVAL, ping_timeout=self.PING_TIMEOUT)
-        except Exception as e:
-            self.logger.error(f"WebSocket run error: {e}")
-        finally:
-            self._cleanup_connection_state()
+    # The run_forever loop lives in _make_ws_runner() rather than a bound
+    # method here, so the thread does not keep this client alive.
 
     def _cleanup_connection_state(self) -> None:
         """Clean up connection state"""
         self.connected = False
         with self._heartbeat_lock:
             self._last_message_time = None
+        self._reset_data_liveness()
         self._stop_heartbeat()
 
     def stop(self) -> None:
@@ -239,6 +395,13 @@ class ShoonyaWebSocket:
     # M3 fix: Null ws_thread after join to match _close_websocket pattern
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
+        # Guard against self-join, mirroring _stop_heartbeat. Now that the
+        # runner holds this client weakly, stop() can be reached from __del__
+        # while GC runs on the ws thread itself; joining there would deadlock
+        # until the timeout on every teardown.
+        if self.ws_thread is threading.current_thread():
+            self.ws_thread = None
+            return
         if self.ws_thread and self.ws_thread.is_alive():
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
@@ -251,6 +414,7 @@ class ShoonyaWebSocket:
     def _on_open(self, ws) -> None:
         """Handle WebSocket connection open event — wait for auth before marking connected"""
         self._update_last_message_time()
+        self._reset_data_liveness()
 
         self.logger.info("WebSocket connection opened, sending authentication")
 
@@ -295,6 +459,11 @@ class ShoonyaWebSocket:
         if self._handle_internal_message(message):
             return
 
+        # Everything that is not an auth ack or a heartbeat ack is a market
+        # data frame (tk/tf/dk/df), so this is the point where the feed - as
+        # opposed to the socket - proves it is alive. Issue #2075.
+        self._update_last_data_time()
+
         self._call_external_callback(self.on_message, ws, message)
 
     def _handle_internal_message(self, message: str) -> bool:
@@ -313,7 +482,7 @@ class ShoonyaWebSocket:
 
             if msg_type == self.MSG_TYPE_AUTH_ACK:
                 return self._handle_auth_response(data)
-            elif msg_type == self.MSG_TYPE_HEARTBEAT:
+            elif msg_type in (self.MSG_TYPE_HEARTBEAT_ACK, self.MSG_TYPE_HEARTBEAT):
                 self.logger.debug("Received heartbeat response")
                 return True
 
@@ -377,13 +546,70 @@ class ShoonyaWebSocket:
             callback: Callback function to call
             *args: Arguments to pass to callback
         """
-        if callback:
-            try:
-                callback(*args)
-            except Exception as e:
-                self.logger.error(f"Error in external callback: {e}")
+        if not callback:
+            return
+        # Callbacks are _WeakCallback wrappers; tolerate a raw callable in case
+        # a caller reassigns one directly.
+        fn = callback.resolve() if isinstance(callback, _WeakCallback) else callback
+        if fn is None:
+            # Owner was garbage collected — it can no longer want these events.
+            self.logger.debug("Skipping callback: owner has been collected")
+            return
+        try:
+            fn(*args)
+        except Exception as e:
+            self.logger.error(f"Error in external callback: {e}")
 
     # Heartbeat Management
+    def _update_last_data_time(self) -> None:
+        """Record a market-data frame and arm the data-silence watchdog.
+
+        Arming asks that data arrived *spread over time*, not that a lot of it
+        arrived. Noren answers every subscribe with a snapshot frame, so a
+        session opened overnight receives one frame per subscribed scrip
+        within a second of connecting - fifty symbols is fifty frames. Any
+        rule counting frames would arm on that burst and then recycle the
+        socket every DATA_SILENCE_TIMEOUT until the market opened.
+
+        Bucketing is what separates the two. A burst lands in one bucket (two
+        if it straddles a boundary), while a live feed keeps producing frames
+        bucket after bucket. Requiring DATA_ARM_BUCKETS distinct buckets means
+        at least a couple of DATA_ARM_BUCKET-second spans of real flow before
+        the watchdog can fire, and DATA_ARM_WINDOW stops stray after-hours
+        ticks hours apart from accumulating into a false arm.
+
+        Arming lasts only for this connection, so a market that closes while
+        the watchdog is armed costs one recycle and the replacement then sits
+        quiet.
+        """
+        now = time.time()
+        newly_armed = False
+
+        with self._heartbeat_lock:
+            self._last_data_message_time = now
+
+            if not self._data_watchdog_armed:
+                bucket_start = now - (now % self.DATA_ARM_BUCKET)
+                if not self._data_bucket_starts or self._data_bucket_starts[-1] != bucket_start:
+                    self._data_bucket_starts.append(bucket_start)
+
+                if (
+                    len(self._data_bucket_starts) == self._data_bucket_starts.maxlen
+                    and now - self._data_bucket_starts[0] <= self.DATA_ARM_WINDOW
+                ):
+                    self._data_watchdog_armed = True
+                    newly_armed = True
+
+        if newly_armed:
+            self.logger.info("Market data is flowing; watching for tick silence from here on")
+
+    def _reset_data_liveness(self) -> None:
+        """Clear the per-connection market-data liveness state."""
+        with self._heartbeat_lock:
+            self._last_data_message_time = None
+            self._data_watchdog_armed = False
+            self._data_bucket_starts.clear()
+
     def _update_last_message_time(self) -> None:
         """Update the timestamp of the last received message"""
         with self._heartbeat_lock:
@@ -406,7 +632,9 @@ class ShoonyaWebSocket:
                 else:
                     return
 
-            self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+            self._heartbeat_thread = threading.Thread(
+                target=_make_heartbeat_runner(self), daemon=True
+            )
             self._heartbeat_thread.start()
             self.logger.debug("Heartbeat thread started")
 
@@ -427,24 +655,30 @@ class ShoonyaWebSocket:
             if self._heartbeat_thread is thread:
                 self._heartbeat_thread = None
 
-    def _heartbeat_worker(self) -> None:
-        """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
-        while self.running and self.connected:
-            try:
-                # Phase 8: interruptible — exit immediately on shutdown signal
-                if self._shutdown_event.wait(self.HEARTBEAT_INTERVAL):
-                    break
+    def _heartbeat_beat(self) -> bool:
+        """One beat of the heartbeat loop, run after the interval has elapsed.
 
-                if self.running and self.connected:
-                    if not self._send_heartbeat():
-                        break
+        Split out of the old _heartbeat_worker so the waiting happens in
+        _make_heartbeat_runner without a strong reference to this client — the
+        loop used to pin it for the life of the connection, which kept an
+        abandoned client's socket open indefinitely.
 
-                    if not self._check_connection_health():
-                        break
+        Returns:
+            bool: True to keep looping, False to stop the heartbeat thread.
+        """
+        try:
+            if not (self.running and self.connected):
+                return False
 
-            except Exception as e:
-                self.logger.error(f"Heartbeat worker error: {e}")
-                break
+            if not self._send_heartbeat():
+                return False
+
+            if not self._check_connection_health():
+                return False
+        except Exception as e:
+            self.logger.error(f"Heartbeat worker error: {e}")
+            return False
+        return True
 
     # L1 fix: Snapshot self.ws to prevent race with _close_websocket nulling it
     def _send_heartbeat(self) -> bool:
@@ -469,24 +703,45 @@ class ShoonyaWebSocket:
 
     # M3 fix: Set flag under lock, close websocket OUTSIDE lock to avoid blocking
     def _check_connection_health(self) -> bool:
-        """
-        Check connection health based on last message timestamp
+        """Recycle the socket when the session has stopped being useful.
+
+        Two independent timeouts, because a Noren session fails in two ways:
+
+        * HEARTBEAT_TIMEOUT catches a socket that has gone quiet altogether.
+        * DATA_SILENCE_TIMEOUT catches one that still answers heartbeats while
+          delivering no market data. That case used to be invisible here - the
+          heartbeat ack itself refreshed _last_message_time - so the feed could
+          stay dead for the rest of the session with the app still reporting a
+          healthy connection, and nothing downstream that runs on ticks (stop
+          losses, sandbox order triggers, Flow conditions) would fire. Checked
+          only once the watchdog is armed; see _update_last_data_time.
+          Issue #2075.
 
         Returns:
-            bool: True if connection is healthy, False if timed out
+            bool: True if connection is healthy, False if it was recycled
         """
         # M5 fix: Don't write self.running under _heartbeat_lock — it's not the
         # lock that protects running. Set it alongside should_close outside the lock.
-        should_close = False
+        now = time.time()
+        reason = None
+
         with self._heartbeat_lock:
-            if self._last_message_time:
-                time_since_message = time.time() - self._last_message_time
-                if time_since_message > self.HEARTBEAT_TIMEOUT:
-                    self.logger.error("Connection timeout - no messages received")
-                    should_close = True
+            if self._last_message_time and now - self._last_message_time > self.HEARTBEAT_TIMEOUT:
+                reason = "no messages received"
+            elif (
+                self._data_watchdog_armed
+                and self._last_data_message_time
+                and now - self._last_data_message_time > self.DATA_SILENCE_TIMEOUT
+            ):
+                silent_for = now - self._last_data_message_time
+                reason = (
+                    f"no market data for {silent_for:.0f}s while the session kept "
+                    "answering heartbeats"
+                )
 
         # SW-R6-3 fix: Merged redundant should_close checks
-        if should_close:
+        if reason is not None:
+            self.logger.error(f"Connection timeout - {reason}")
             self.running = False
             self._close_websocket()
             return False

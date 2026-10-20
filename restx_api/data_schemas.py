@@ -1,12 +1,13 @@
 import re
 
 from marshmallow import Schema, ValidationError, fields, validate
+from utils.constants import SUPPORTED_INTERVALS
 
 from utils.constants import VALID_EXCHANGES
 
 
 # Custom validator for date or timestamp string
-def validate_date_or_timestamp(data):
+def validate_date_or_timestamp(data: str) -> None:
     """
     Validates that the input string is either in 'YYYY-MM-DD' format or a numeric timestamp.
     """
@@ -19,7 +20,7 @@ def validate_date_or_timestamp(data):
 
 
 # Custom validator for option offset
-def validate_option_offset(data):
+def validate_option_offset(data: str) -> bool:
     """
     Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
     """
@@ -61,37 +62,7 @@ class HistorySchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
     interval = fields.Str(
         required=True,
-        validate=validate.OneOf(
-            [
-                # Seconds intervals
-                "1s",
-                "5s",
-                "10s",
-                "15s",
-                "30s",
-                "45s",
-                # Minutes intervals
-                "1m",
-                "2m",
-                "3m",
-                "5m",
-                "10m",
-                "15m",
-                "20m",
-                "30m",
-                # Hours intervals
-                "1h",
-                "2h",
-                "3h",
-                "4h",
-                # Daily, Weekly, Monthly, Quarterly, Yearly intervals
-                "D",
-                "W",
-                "M",
-                "Q",
-                "Y",
-            ]
-        ),
+        validate=validate.OneOf(SUPPORTED_INTERVALS),
     )
     start_date = fields.Date(required=True, format="%Y-%m-%d")  # YYYY-MM-DD
     end_date = fields.Date(required=True, format="%Y-%m-%d")  # YYYY-MM-DD
@@ -145,7 +116,7 @@ class SearchSchema(Schema):
 #: three schemas, and NCO was added to the platform without reaching any of
 #: them, so every expiry and option-chain request for NSE commodities was
 #: rejected at the API boundary before the service ever ran. See #1748.
-F_AND_O_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "CRYPTO"]
+F_AND_O_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "NCDEX", "CRYPTO"]
 
 
 class ExpirySchema(Schema):
@@ -226,6 +197,12 @@ class OptionChainSchema(Schema):
     strike_count = fields.Int(
         required=False, validate=validate.Range(min=1, max=100), allow_none=True
     )  # Number of strikes above/below ATM. If not provided, returns entire chain
+    with_greeks = fields.Bool(
+        required=False, load_default=False
+    )  # Attach IV + delta/gamma/theta/vega to every leg, from the quotes already fetched
+    interest_rate = fields.Float(
+        required=False, validate=validate.Range(min=0, max=100), allow_none=True
+    )  # Annualized risk-free rate percentage, Greeks only. Defaults to the exchange default (0)
 
 
 class MarketHolidaysSchema(Schema):

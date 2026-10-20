@@ -1,6 +1,7 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Zerodha Margin API https://kite.trade/docs/connect/v3/margins/
 
+from broker.zerodha.mapping.mcx_contract_size import McxQuantityError, to_kite_quantity
 from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
@@ -51,7 +52,9 @@ def transform_margin_positions(positions):
                 "variety": "regular",  # Default variety for margin calculation
                 "product": map_product_type(position["product"]),
                 "order_type": map_order_type(position["pricetype"]),
-                "quantity": int(position["quantity"]),
+                # Kite prices MCX margin per contract, so this leaves in
+                # the same units the matching order will.
+                "quantity": int(to_kite_quantity(position["quantity"], symbol, exchange)),
                 "price": float(position.get("price", 0)),
                 "trigger_price": float(position.get("trigger_price", 0)),
             }
@@ -61,6 +64,12 @@ def transform_margin_positions(positions):
                 f"Successfully transformed position: {symbol} ({exchange}) -> {br_symbol_str}"
             )
 
+        except McxQuantityError:
+            # Deliberately ahead of the catch-and-skip below. A quantity that is
+            # not a whole number of contracts is the caller's mistake, not a row
+            # to drop: silently pricing a basket that is missing a leg and
+            # returning it as success is worse than refusing the request.
+            raise
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
             skipped_positions.append(f"{position.get('symbol', 'unknown')} - Error: {str(e)}")

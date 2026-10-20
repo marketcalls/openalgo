@@ -107,6 +107,13 @@ export const tools: Tool[] = [
     color: 'bg-indigo-500',
   },
   {
+    title: 'Strike Profile',
+    description:
+      'GEX and DEX heatmap by strike and expiry with per-expiry peaks, gamma flip, call and put walls',
+    href: '/strikeprofile',
+    color: 'bg-blue-600',
+  },
+  {
     title: 'Gamma Density',
     description:
       'Γ×OI density and convexity zones with intraday & to-expiry views, ATM IV, and ±1σ/±2σ expected-move bands',

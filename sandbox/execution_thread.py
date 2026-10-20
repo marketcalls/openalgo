@@ -266,11 +266,19 @@ def stop_execution_engine():
     global _execution_thread, _websocket_engine, _current_engine_type
     global _auto_upgrade_thread, _auto_upgrade_enabled
 
+    # Stop the auto-upgrade watcher BEFORE taking _thread_lock. The watcher
+    # takes that lock itself once its health check passes, so joining it
+    # while holding the lock could only time out: the stop waited its full
+    # five seconds, then declared stopped a watcher that went on to act on
+    # the engine afterwards.
+    _stop_websocket_upgrade_watcher()
+
     with _thread_lock:
         stopped_any = False
 
-        # Stop auto-upgrade watcher
-        _stop_websocket_upgrade_watcher()
+        # A watcher started while this call waited for the lock is told to
+        # stop too; it re-checks the flag as soon as it holds the lock.
+        _auto_upgrade_stop_event.set()
 
         _stop_gtt_maintenance()
 
@@ -333,6 +341,10 @@ def _start_websocket_upgrade_watcher():
             if not _is_websocket_proxy_healthy():
                 continue
             with _thread_lock:
+                # Re-check after acquiring: a stop may have been signalled
+                # while this watcher waited for the lock.
+                if _auto_upgrade_stop_event.is_set():
+                    break
                 # Only upgrade if polling is running and websocket engine is not
                 if _execution_thread is None or not _execution_thread.is_alive():
                     continue
@@ -360,9 +372,7 @@ def _start_websocket_upgrade_watcher():
                         _execution_thread = None
                         break
                     else:
-                        logger.warning(
-                            f"Auto-upgrade failed to start WebSocket engine: {message}"
-                        )
+                        logger.warning(f"Auto-upgrade failed to start WebSocket engine: {message}")
                 except Exception as e:
                     logger.exception(f"Error during auto-upgrade to WebSocket engine: {e}")
 
@@ -379,6 +389,15 @@ def _stop_websocket_upgrade_watcher():
     _auto_upgrade_stop_event.set()
     if _auto_upgrade_thread and _auto_upgrade_thread.is_alive():
         _auto_upgrade_thread.join(timeout=5)
+        if _auto_upgrade_thread.is_alive():
+            # Keep the reference: a live thread recorded as stopped is how an
+            # orphan goes on changing engine state unnoticed, and the next
+            # start would clear the stop flag it is still looping on.
+            logger.error(
+                "The sandbox engine's upgrade watcher did not stop within 5 seconds; "
+                "it is left recorded as running"
+            )
+            return
     _auto_upgrade_thread = None
 
 

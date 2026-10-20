@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import uuid
 
 import httpx
 
@@ -15,6 +16,8 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -99,46 +102,50 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="angel smart orders")
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """Angel marks success with status true, a real bool.
+
+    get_api_response's own failures carry status "error", which is truthy, so
+    the value has to be checked, not its truthiness.
+    """
+    return isinstance(positions_data, dict) and positions_data.get("status") in (True, "true")
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book("angel", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 
@@ -181,6 +188,9 @@ def place_order_api(data, auth):
         "X-MACAddress": "MAC_ADDRESS",
         "X-PrivateKey": newdata["apikey"],
     }
+    # Angel exposes ordertag in the order book, so it can be used to recover
+    # an order when the placement response is lost or cannot be decoded.
+    ordertag = f"oa{uuid.uuid4().hex[:16]}"
     payload = json.dumps(
         {
             "variety": newdata.get("variety", "NORMAL"),
@@ -196,6 +206,7 @@ def place_order_api(data, auth):
             "squareoff": newdata.get("squareoff", "0"),
             "stoploss": newdata.get("stoploss", "0"),
             "quantity": newdata["quantity"],
+            "ordertag": ordertag,
         }
     )
 
@@ -205,18 +216,91 @@ def place_order_api(data, auth):
     client = get_httpx_client()
 
     # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder",
-        headers=headers,
-        content=payload,
+    place_order_url = (
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder"
     )
+    try:
+        response = client.post(place_order_url, headers=headers, content=payload)
+    except httpx.TransportError as exc:
+        logger.warning("Angel order placement transport error: %s", exc)
+        response = httpx.Response(
+            502,
+            request=httpx.Request("POST", place_order_url),
+            json={},
+        )
 
     # Add status attribute to make response compatible with http.client response
     # as the rest of the codebase expects .status instead of .status_code
     response.status = response.status_code
 
-    # Parse the JSON response
-    response_data = response.json()
+    # An empty or invalid body does not mean the order was rejected. Never
+    # retry this POST; check the order book using the tag sent with the order.
+    try:
+        response_data = response.json()
+        if not isinstance(response_data, dict):
+            raise ValueError("Order response is not a JSON object")
+    except (ValueError, json.JSONDecodeError):
+        response_data = None
+
+    valid_order_response = (
+        isinstance(response_data, dict)
+        and response_data.get("status") is True
+        and isinstance(response_data.get("data"), dict)
+        and bool(response_data["data"].get("orderid"))
+    )
+    explicit_rejection = (
+        isinstance(response_data, dict) and response_data.get("status") is False
+    )
+    if explicit_rejection and response.status_code == 200:
+        response.status = 500
+    if not valid_order_response and not explicit_rejection:
+        logger.warning(
+            "Ambiguous Angel order response (HTTP %s); reconciling ordertag %s",
+            response.status_code,
+            ordertag,
+        )
+        try:
+            order_book = get_order_book(auth)
+        except Exception:
+            logger.exception("Could not reconcile ambiguous Angel order response")
+            order_book = None
+        orders = order_book.get("data") if isinstance(order_book, dict) else None
+        expected = {
+            "tradingsymbol": newdata["tradingsymbol"],
+            "symboltoken": newdata["symboltoken"],
+            "exchange": newdata["exchange"],
+            "transactiontype": newdata["transactiontype"],
+            "quantity": newdata["quantity"],
+        }
+        matching_orders = [
+            order
+            for order in orders or []
+            if isinstance(order, dict)
+            and order.get("ordertag") == ordertag
+            and all(str(order.get(key, "")) == str(value) for key, value in expected.items())
+        ]
+        matched_order = matching_orders[0] if len(matching_orders) == 1 else None
+        if matched_order:
+            response.status = 200
+            response_data = {
+                "status": True,
+                "message": "Order found in order book after ambiguous placement response",
+                "data": {
+                    "orderid": matched_order.get("orderid"),
+                    "uniqueorderid": matched_order.get("uniqueorderid"),
+                },
+            }
+        else:
+            if response.status_code == 200:
+                response.status = 500
+            response_data = {
+                "status": "unknown",
+                "message": (
+                    "AngelOne returned an empty or invalid order response and no matching "
+                    "ordertag was found in the order book. Check order status before retrying."
+                ),
+                "ordertag": ordertag,
+            }
 
     # Use .get() so a malformed / non-conforming response (gateway error
     # envelope, partial response, network blip) returns a clean
@@ -226,12 +310,14 @@ def place_order_api(data, auth):
     # existing None-orderid error path. See issue #846 for the original
     # KeyError trace this hardening eliminates.
     if response_data.get("status") is True:
-        orderid = response_data.get("data", {}).get("orderid")
+        order_data = response_data.get("data") or {}
+        orderid = order_data.get("orderid") if isinstance(order_data, dict) else None
     else:
         orderid = None
     return response, response_data, orderid
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 
@@ -245,7 +331,9 @@ def place_smartorder_api(data, auth):
     # Per-symbol lock: serialize smart orders per symbol
     symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-    with symbol_lock:
+    with symbol_lock as acquired:
+        if not acquired:
+            return SymbolLocks.busy(symbol)
         position_size = int(data.get("position_size", "0"))
 
         # Get current open position for the symbol

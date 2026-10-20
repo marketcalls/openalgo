@@ -34,74 +34,90 @@ Example Usage (OLD METHOD - Legacy):
 """
 
 import importlib
+import math
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
+from services.flow_node_contracts import parse_underlying_symbol
 from services.quotes_service import get_quotes
+from utils import real_threading
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 # ============================================================================
 # STRIKES CACHE - In-Memory Cache for Ultra-Fast Lookups
 # ============================================================================
-# Cache structure: {(base_symbol, expiry, option_type, exchange): [sorted_strikes]}
-_STRIKES_CACHE: dict[tuple[str, str, str, str], list[float]] = {}
+# Key: (base_symbol, expiry, option_type, exchange). Value: the sorted strikes
+# as a tuple, so no caller can change the copy every other caller reads.
+#
+# Three rules keep a lookup from being refused for the rest of the day:
+#
+# * An empty result is never stored. A lookup that runs while a master
+#   contract download has deleted the old rows and not yet inserted the new
+#   ones finds nothing, and storing that would answer "No strikes found ...
+#   update master contract" for every later order on that underlying, even
+#   after the download finished.
+# * Entries expire, so strikes the exchange lists during the day are picked up
+#   without a restart. A master contract load can drop everything at once with
+#   clear_strikes_cache().
+# * Every read and write is one atomic operation on a locked cache. A plain
+#   dict tested with ``in`` and then indexed raised KeyError when a clear ran
+#   in between, and that KeyError also came back as "no strikes".
+#
+# The lock is a real one because the agent's tools call this from a real OS
+# thread; it guards dictionary work only, and the database query runs outside it.
+
+#: Most (underlying, expiry, type, exchange) combinations held at once.
+STRIKES_CACHE_MAXSIZE = 4096
+
+#: How long a strike list is reused before it is read again, in seconds.
+STRIKES_CACHE_TTL_SECONDS = 3600
+
+_STRIKES_CACHE = LockedTTLCache(maxsize=STRIKES_CACHE_MAXSIZE, ttl=STRIKES_CACHE_TTL_SECONDS)
 _CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
+_CACHE_STATS_LOCK = real_threading.Lock()
+
+
+def _count_strikes_lookup(hit: bool) -> None:
+    """Record one lookup in the cache statistics."""
+    with _CACHE_STATS_LOCK:
+        _CACHE_STATS["total_queries"] += 1
+        _CACHE_STATS["hits" if hit else "misses"] += 1
 
 
 def get_strikes_cache_stats() -> dict:
     """Get cache statistics for monitoring"""
-    total = _CACHE_STATS["total_queries"]
-    hit_rate = (_CACHE_STATS["hits"] / total * 100) if total > 0 else 0.0
+    with _CACHE_STATS_LOCK:
+        stats = dict(_CACHE_STATS)
+    total = stats["total_queries"]
+    hit_rate = (stats["hits"] / total * 100) if total > 0 else 0.0
     return {
-        "hits": _CACHE_STATS["hits"],
-        "misses": _CACHE_STATS["misses"],
-        "total_queries": _CACHE_STATS["total_queries"],
+        "hits": stats["hits"],
+        "misses": stats["misses"],
+        "total_queries": total,
         "hit_rate": f"{hit_rate:.2f}%",
         "cached_entries": len(_STRIKES_CACHE),
     }
 
 
 def clear_strikes_cache():
-    """Clear the strikes cache (call when master contracts are updated)"""
-    global _STRIKES_CACHE, _CACHE_STATS
+    """Clear the strikes cache (call when master contracts are updated).
+
+    A lookup already reading the database when this runs still gets its own
+    result, but that result is not stored, so nothing read before the clear
+    can come back after it.
+    """
     _STRIKES_CACHE.clear()
-    _CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
+    with _CACHE_STATS_LOCK:
+        for key in _CACHE_STATS:
+            _CACHE_STATS[key] = 0
     logger.info("Strikes cache cleared")
-
-
-def parse_underlying_symbol(underlying: str) -> tuple[str, str | None]:
-    """
-    Parse underlying symbol to extract base symbol and expiry date if present.
-
-    Args:
-        underlying: Symbol like "NIFTY" or "NIFTY28OCT25FUT" or "RELIANCE31JAN25FUT"
-
-    Returns:
-        Tuple of (base_symbol, expiry_date)
-        e.g., ("NIFTY", "28OCT25") or ("NIFTY", None)
-    """
-    # Pattern to match: SYMBOL + DDMMMYY + optional FUT
-    # Examples: NIFTY28OCT25FUT, BANKNIFTY31JAN25FUT, RELIANCE28MAR24FUT
-    pattern = r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(?:FUT)?$"
-
-    match = re.match(pattern, underlying.upper())
-    if match:
-        base_symbol = match.group(1)
-        expiry_date = match.group(2)
-        logger.info(
-            f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_date}'"
-        )
-        return base_symbol, expiry_date
-
-    # If no pattern match, treat the entire string as base symbol
-    logger.info(f"Underlying '{underlying}' has no embedded expiry, using as-is")
-    return underlying.upper(), None
 
 
 #: Exchanges whose options have no tradable spot instrument. The underlying
@@ -141,16 +157,13 @@ def find_near_month_futures(base_symbol: str, exchange: str) -> dict[str, Any] |
         return None
 
     try:
-        rows = (
-            SymToken.query.filter(
-                SymToken.symbol.like(f"{base}%FUT"),
-                SymToken.exchange == exch,
-                SymToken.instrumenttype == "FUT",
-                SymToken.expiry.isnot(None),
-                SymToken.expiry != "",
-            )
-            .all()
-        )
+        rows = SymToken.query.filter(
+            SymToken.symbol.like(f"{base}%FUT"),
+            SymToken.exchange == exch,
+            SymToken.instrumenttype == "FUT",
+            SymToken.expiry.isnot(None),
+            SymToken.expiry != "",
+        ).all()
     except Exception:
         logger.exception(f"Error looking up near-month futures for {base} on {exch}")
         return None
@@ -197,6 +210,85 @@ def resolve_underlying_quote(base_symbol: str, exchange: str) -> tuple[str, str]
     return (fut["symbol"], fut["exchange"])
 
 
+# ============================================================================
+# INPUT VALIDATION - Guards for the resolver boundary
+# ============================================================================
+#: Option types this resolver understands. Every strike calculation below
+#: branches on CE and treats anything else as a put, so an unrecognised type
+#: such as "CALL", "C" or None used to resolve to the put strike instead of
+#: being refused. The symbol built around it then failed the master-contract
+#: lookup, so the caller saw a confusing "not found" where the real fault was
+#: the option type.
+VALID_OPTION_TYPES = ("CE", "PE")
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Whether a value is a real number that is neither NaN nor infinite.
+
+    math.isfinite() is used rather than an isinstance() check so that a numpy
+    scalar off a pandas or DuckDB path is still accepted - np.int64 is not an
+    int - while strings, None and sequences raise TypeError and are refused.
+    bool is excluded explicitly because it is an int subclass, so True would
+    otherwise pass as a strike interval of 1.
+
+    OverflowError and ValueError are refused alongside TypeError: an int too
+    large to convert to a float raises OverflowError, and Decimal("sNaN")
+    raises ValueError. Both are reachable from the public endpoint, because
+    OptionSymbolSchema validates a range, not a magnitude or a numeric type.
+    """
+    if isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except (TypeError, OverflowError, ValueError):
+        return False
+
+
+def validate_option_type(option_type: Any) -> str:
+    """Normalize an option type to CE or PE.
+
+    Args:
+        option_type: Option type supplied by the caller, in any case.
+
+    Returns:
+        "CE" or "PE".
+
+    Raises:
+        ValueError: If the option type is missing or unsupported.
+    """
+    if isinstance(option_type, str):
+        normalized = option_type.strip().upper()
+        if normalized in VALID_OPTION_TYPES:
+            return normalized
+
+    raise ValueError(f"Invalid option_type: {option_type!r}. Supported option types are CE and PE.")
+
+
+def validate_strike_interval(strike_int: Any) -> float:
+    """Validate a strike interval before it is used as a divisor.
+
+    Args:
+        strike_int: Strike interval supplied by the caller.
+
+    Returns:
+        The strike interval as a float, so every caller is guaranteed a value
+        it can divide by. Returning it unchanged would not be: Decimal("50")
+        is finite and positive, but float / Decimal raises TypeError. The
+        conversion also covers Fraction and numpy scalars uniformly.
+
+    Raises:
+        ValueError: If the interval is not a positive finite number. Zero
+            raises ZeroDivisionError inside the ATM calculation, and a
+            negative, NaN or infinite interval produces a strike that no
+            exchange lists.
+    """
+    if not _is_finite_number(strike_int) or strike_int <= 0:
+        raise ValueError(
+            f"Invalid strike_int: {strike_int!r}. Strike interval must be a positive number."
+        )
+    return float(strike_int)
+
+
 def get_atm_strike(ltp: float, strike_int: int) -> float:
     """
     Calculate ATM strike price based on LTP and strike interval.
@@ -208,10 +300,14 @@ def get_atm_strike(ltp: float, strike_int: int) -> float:
     Returns:
         ATM strike price rounded to nearest strike interval
 
+    Raises:
+        ValueError: If strike_int is not a positive finite number.
+
     Example:
         LTP = 23587.50, strike_int = 50
         ATM = round(23587.50 / 50) * 50 = 23600
     """
+    strike_int = validate_strike_interval(strike_int)
     atm_strike = round(ltp / strike_int) * strike_int
     logger.info(f"Calculated ATM: LTP={ltp}, strike_int={strike_int}, ATM={atm_strike}")
     return atm_strike
@@ -241,12 +337,17 @@ def calculate_offset_strike(
             - ITM: ATM + (N * strike_int)  [Higher strike]
             - OTM: ATM - (N * strike_int)  [Lower strike]
 
+    Raises:
+        ValueError: If option_type is not CE or PE, if strike_int is not a
+            positive finite number, or if the offset is unrecognised.
+
     Example:
         ATM = 23600, strike_int = 50, option_type = "CE", offset = "ITM2"
         Target = 23600 - (2 * 50) = 23500
     """
+    option_type = validate_option_type(option_type)
+    strike_int = validate_strike_interval(strike_int)
     offset = offset.upper()
-    option_type = option_type.upper()
 
     if offset == "ATM":
         target_strike = atm_strike
@@ -369,12 +470,63 @@ def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any]
         return None
 
 
+def _query_available_strikes(
+    base_symbol: str, expiry_date: str, option_type: str, exchange: str
+) -> list:
+    """Read the sorted strikes for one underlying, expiry and type from SymToken."""
+    # Convert expiry from DDMMMYY to DD-MMM-YY format used in database
+    # e.g., "28OCT25" -> "28-OCT-25"
+    expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}"
+
+    if exchange.upper() in CRYPTO_EXCHANGES:
+        # CRYPTO canonical format: BTC28FEB2580000CE (Indian F&O-style, no dashes)
+        # Prefix-match on base symbol; let expiry + instrumenttype + exchange narrow it.
+        underlying_pattern = f"{base_symbol.upper()}%"
+        results = (
+            db_session.query(SymToken.strike)
+            .filter(
+                SymToken.symbol.like(underlying_pattern),
+                SymToken.expiry == expiry_formatted.upper(),
+                SymToken.instrumenttype == option_type.upper(),
+                SymToken.exchange.in_(CRYPTO_EXCHANGES),
+            )
+            .distinct()
+            .order_by(SymToken.strike)
+            .all()
+        )
+        return [r.strike for r in results if r.strike is not None and r.strike > 0]
+
+    # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
+    # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
+    expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
+    symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
+
+    # Query database for all strikes matching the criteria
+    # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
+    results = (
+        db_session.query(SymToken.strike)
+        .filter(
+            SymToken.symbol.like(symbol_pattern),
+            SymToken.expiry == expiry_formatted.upper(),
+            SymToken.instrumenttype == option_type.upper(),
+            SymToken.exchange == exchange.upper(),
+        )
+        .distinct()
+        .order_by(SymToken.strike)
+        .all()
+    )
+    return [result.strike for result in results if result.strike is not None]
+
+
 def get_available_strikes(
     base_symbol: str, expiry_date: str, option_type: str, exchange: str
 ) -> list:
     """
     Fetch all available strikes from cache or database for a given underlying, expiry, and option type.
     Uses in-memory cache for ultra-fast lookups (O(1) instead of database query).
+
+    Only a non-empty result is cached (see the note on _STRIKES_CACHE), and
+    every caller gets its own list.
 
     Args:
         base_symbol: Base symbol like "NIFTY", "BANKNIFTY", "RELIANCE"
@@ -389,8 +541,6 @@ def get_available_strikes(
         get_available_strikes("NIFTY", "28OCT25", "CE", "NFO")
         -> [23000, 23050, 23100, 23150, 23200, ...]
     """
-    global _STRIKES_CACHE, _CACHE_STATS
-
     try:
         # Normalize inputs for cache key
         cache_key = (
@@ -400,75 +550,37 @@ def get_available_strikes(
             exchange.upper(),
         )
 
-        # Update query stats
-        _CACHE_STATS["total_queries"] += 1
+        loaded = False
 
-        # Check cache first (O(1) lookup)
-        if cache_key in _STRIKES_CACHE:
-            _CACHE_STATS["hits"] += 1
-            strikes = _STRIKES_CACHE[cache_key]
+        def _load() -> tuple:
+            nonlocal loaded
+            loaded = True
+            logger.debug(
+                f"Cache MISS: Querying database for {base_symbol} {expiry_date} {option_type}"
+            )
+            return tuple(_query_available_strikes(base_symbol, expiry_date, option_type, exchange))
+
+        # One atomic read; the query runs outside the lock, and an empty
+        # result is handed back without being stored.
+        strikes = _STRIKES_CACHE.get_or_load(cache_key, _load, should_cache=bool)
+        _count_strikes_lookup(hit=not loaded)
+
+        if not loaded:
             logger.debug(
                 f"Cache HIT: {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type}"
             )
-            return strikes
-
-        # Cache miss - query database
-        _CACHE_STATS["misses"] += 1
-        logger.debug(f"Cache MISS: Querying database for {base_symbol} {expiry_date} {option_type}")
-
-        # Convert expiry from DDMMMYY to DD-MMM-YY format used in database
-        # e.g., "28OCT25" -> "28-OCT-25"
-        expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}"
-
-        if exchange.upper() in CRYPTO_EXCHANGES:
-            # CRYPTO canonical format: BTC28FEB2580000CE (Indian F&O-style, no dashes)
-            # Prefix-match on base symbol; let expiry + instrumenttype + exchange narrow it.
-            underlying_pattern = f"{base_symbol.upper()}%"
-            results = (
-                db_session.query(SymToken.strike)
-                .filter(
-                    SymToken.symbol.like(underlying_pattern),
-                    SymToken.expiry == expiry_formatted.upper(),
-                    SymToken.instrumenttype == option_type.upper(),
-                    SymToken.exchange.in_(CRYPTO_EXCHANGES),
-                )
-                .distinct()
-                .order_by(SymToken.strike)
-                .all()
+        elif strikes:
+            logger.info(
+                f"Cached {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type} on {exchange}"
             )
-            strikes = [r.strike for r in results if r.strike is not None and r.strike > 0]
-        else:
-            # Construct symbol pattern: BASE + EXPIRY (without hyphens) + % wildcard
-            # e.g., "NIFTY" + "18NOV25" + "%" = "NIFTY18NOV25%"
-            expiry_no_hyphen = expiry_date.upper()  # Already in DDMMMYY format
-            symbol_pattern = f"{base_symbol}{expiry_no_hyphen}%{option_type.upper()}"
-
-            # Query database for all strikes matching the criteria
-            # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
-            results = (
-                db_session.query(SymToken.strike)
-                .filter(
-                    SymToken.symbol.like(symbol_pattern),
-                    SymToken.expiry == expiry_formatted.upper(),
-                    SymToken.instrumenttype == option_type.upper(),
-                    SymToken.exchange == exchange.upper(),
-                )
-                .distinct()
-                .order_by(SymToken.strike)
-                .all()
-            )
-            strikes = [result.strike for result in results if result.strike is not None]
-
-        # Store in cache for future requests
-        _STRIKES_CACHE[cache_key] = strikes
-
-        logger.info(
-            f"Cached {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type} on {exchange}"
-        )
-        if strikes:
             logger.info(f"Strike range: {strikes[0]} to {strikes[-1]}")
+        else:
+            logger.debug(
+                f"No strikes in the master contract for {base_symbol} {expiry_date} "
+                f"{option_type} on {exchange}; not cached, so the next lookup reads it again"
+            )
 
-        return strikes
+        return list(strikes)
 
     except Exception as e:
         logger.exception(f"Error fetching available strikes: {e}")
@@ -496,6 +608,12 @@ def find_atm_strike_from_actual(ltp: float, available_strikes: list) -> float | 
         logger.warning("No available strikes to find ATM")
         return None
 
+    if not _is_finite_number(ltp):
+        # min() with a NaN key compares false against every strike and returns
+        # the first one, which would then be reported as the ATM strike.
+        logger.error(f"Cannot find ATM strike from a non-numeric LTP: {ltp!r}")
+        return None
+
     # Find the strike closest to LTP
     atm_strike = min(available_strikes, key=lambda x: abs(x - ltp))
 
@@ -518,6 +636,9 @@ def calculate_offset_strike_from_actual(
     Returns:
         Target strike price or None if offset is out of range
 
+    Raises:
+        ValueError: If option_type is not CE or PE.
+
     Logic:
         For CE (Call):
             - ITM: Lower strikes (traverse down the list from ATM)
@@ -535,12 +656,13 @@ def calculate_offset_strike_from_actual(
         For CE ITM2: Move 2 positions DOWN from ATM
         Result: 23400 (actual strike from database)
     """
+    option_type = validate_option_type(option_type)
+
     if not available_strikes or atm_strike not in available_strikes:
         logger.error(f"ATM strike {atm_strike} not found in available strikes")
         return None
 
     offset = offset.upper()
-    option_type = option_type.upper()
 
     # Find the index of ATM in the sorted strikes list
     atm_index = available_strikes.index(atm_strike)
@@ -651,6 +773,15 @@ def get_option_symbol(
         Tuple of (success, response_data, status_code)
     """
     try:
+        # Step 0: Refuse unusable inputs before spending a quote request or a
+        # database lookup on them. Flow, multi-leg orders and MCP call this
+        # resolver directly, without the REST schema that checks these two
+        # fields, so the resolver validates them for itself. The ValueErrors
+        # raised here are answered as HTTP 400 at the bottom of this function.
+        option_type = validate_option_type(option_type)
+        if strike_int is not None:
+            strike_int = validate_strike_interval(strike_int)
+
         # Step 1: Parse underlying to extract base symbol and expiry
         base_symbol, embedded_expiry = parse_underlying_symbol(underlying)
 
@@ -697,12 +828,18 @@ def get_option_symbol(
             from utils.constants import INSTRUMENT_PERPFUT
 
             _perp = fno_search_symbols(
-                query=f"{base_symbol}USDFUT", exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+                query=f"{base_symbol}USDFUT",
+                exchange=exchange,
+                instrumenttype=INSTRUMENT_PERPFUT,
+                limit=1,
             )
             if not _perp:
                 return (
                     False,
-                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    {
+                        "status": "error",
+                        "message": f"No perpetual futures found for {base_symbol} on {exchange}",
+                    },
                     404,
                 )
             quote_symbol = _perp[0]["symbol"]
@@ -712,6 +849,29 @@ def get_option_symbol(
                 quote_symbol = underlying.upper()
             else:
                 quote_symbol = base_symbol
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # The caller named a bare product ("CRUDEOIL") on an exchange that
+            # lists no spot instrument, so there is nothing to quote for the ATM
+            # reference. Price it off the near-month future, which is what the
+            # option chain, the IV surface and the straddle charts already do --
+            # without this the LTP lookup asked MCX for a symbol that cannot
+            # exist and the order failed with "Could not determine LTP".
+            resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if not resolved:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures contract for {base_symbol} on "
+                            f"{exchange.upper()}, so the ATM reference price cannot "
+                            "be determined. Check the symbol, or re-download the "
+                            "master contract."
+                        ),
+                    },
+                    404,
+                )
+            quote_symbol, quote_exchange = resolved
         else:
             quote_symbol = underlying
 
@@ -750,6 +910,19 @@ def get_option_symbol(
                 )
 
             logger.info(f"Got LTP: {ltp} for {quote_symbol}")
+
+        # A non-finite LTP resolves to a strike no exchange lists, so stop
+        # here rather than constructing a symbol around NaN or infinity.
+        if not _is_finite_number(ltp):
+            logger.error(f"Unusable LTP {ltp!r} for {quote_symbol}")
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Could not determine a usable LTP for {quote_symbol}.",
+                },
+                500,
+            )
 
         # Step 4: Map to options exchange
         options_exchange = get_option_exchange(quote_exchange)

@@ -9,6 +9,7 @@ Features:
 """
 
 import os
+import threading
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -21,22 +22,9 @@ logger = get_logger(__name__)
 # IST timezone
 IST = pytz.timezone("Asia/Kolkata")
 
-
-def get_last_session_boundary():
-    """
-    Get the most recent session boundary time (SESSION_EXPIRY_TIME)
-    Returns datetime in IST
-    """
-    session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-    reset_hour, reset_minute = map(int, session_expiry_str.split(":"))
-
-    now = datetime.now(IST)
-    today_boundary = now.replace(hour=reset_hour, minute=reset_minute, second=0, microsecond=0)
-
-    if now >= today_boundary:
-        return today_boundary
-    else:
-        return today_boundary - timedelta(days=1)
+#: Single-flight guard for run_catch_up_tasks. Only ever acquired without
+#: blocking, so nothing waits on it, from a green thread or a real one.
+_catch_up_lock = threading.Lock()
 
 
 def catch_up_mis_squareoff():
@@ -49,18 +37,39 @@ def catch_up_mis_squareoff():
     be added to today_realized_pnl - only to accumulated/all-time realized_pnl
     """
     try:
-        from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
+        from database.sandbox_db import SandboxPositions, db_session
         from sandbox.fund_manager import FundManager
+        from sandbox.position_manager import claim_position_for_settlement
+        from sandbox.session_boundary import last_session_expiry_utc
 
-        # Get today's date at midnight IST
-        today = datetime.now(IST).date()
-        today_start = datetime.combine(today, datetime.min.time())
-        today_start = IST.localize(today_start)
+        session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+        last_session_expiry = last_session_expiry_utc(session_expiry_str, datetime.now(IST))
 
-        # Find MIS positions from previous days (created before today)
+        # Crypto / 24x7 brokers have no daily session boundary, so there is no
+        # scheduled square-off to catch up. Mirroring squareoff_manager, skip any
+        # exchange that has no configured square-off time.
+        from utils.session import is_session_expiry_disabled
+
+        if is_session_expiry_disabled():
+            logger.debug(
+                "Catch-up: skipping MIS square-off because session expiry is disabled (crypto/24x7)"
+            )
+            return
+
+        from sandbox.squareoff_manager import SquareOffManager
+
+        squareoff_manager = SquareOffManager()
+        configured_exchanges = set(squareoff_manager.square_off_times)
+
+        # Square off MIS positions that were not touched since the last session
+        # boundary. Use updated_at (database UTC clock), not created_at: reopened
+        # symbols reuse the same row and keep an old created_at (#1794).
         stale_mis_positions = (
             SandboxPositions.query.filter_by(product="MIS")
-            .filter(SandboxPositions.quantity != 0, SandboxPositions.created_at < today_start)
+            .filter(
+                SandboxPositions.quantity != 0,
+                SandboxPositions.updated_at < last_session_expiry,
+            )
             .all()
         )
 
@@ -75,7 +84,29 @@ def catch_up_mis_squareoff():
         # Process each stale MIS position manually (not through normal close flow)
         # This ensures we don't add to today_realized_pnl
         for position in stale_mis_positions:
+            if position.exchange not in configured_exchanges:
+                logger.debug(
+                    f"Catch-up: skipping {position.symbol} on {position.exchange} "
+                    "(no square-off time configured)"
+                )
+                continue
+
             try:
+                # Claim the row first: a second catch-up (another device's
+                # login) or a fill may be acting on it too. The boundary test
+                # is repeated under the claim, so a position traded since the
+                # query is no longer treated as left over from a past session.
+                if not claim_position_for_settlement(
+                    position,
+                    position.quantity,
+                    SandboxPositions.updated_at < last_session_expiry,
+                ):
+                    db_session.rollback()
+                    logger.info(
+                        f"Catch-up: {position.symbol} was settled or changed elsewhere; skipping"
+                    )
+                    continue
+
                 user_id = position.user_id
                 symbol = position.symbol
                 quantity = position.quantity
@@ -90,32 +121,33 @@ def catch_up_mis_squareoff():
 
                 # Calculate realized P&L (apply contract_value for crypto, e.g. 0.01 for ETHUSD.P)
                 from database.token_db import get_symbol_info as _get_sym_info
+
                 _sym_cv = _get_sym_info(symbol, position.exchange)
-                _cv = Decimal(str(_sym_cv.contract_value)) if _sym_cv and _sym_cv.contract_value else Decimal("1.0")
+                _cv = (
+                    Decimal(str(_sym_cv.contract_value))
+                    if _sym_cv and _sym_cv.contract_value
+                    else Decimal("1.0")
+                )
                 if quantity > 0:
                     realized_pnl = (settlement_price - avg_price) * Decimal(str(quantity)) * _cv
                 else:
-                    realized_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity))) * _cv
+                    realized_pnl = (
+                        (avg_price - settlement_price) * Decimal(str(abs(quantity))) * _cv
+                    )
 
                 logger.info(
                     f"Catch-up settling stale MIS: {symbol} for {user_id}, "
                     f"qty={quantity}, pnl={realized_pnl}, margin={margin_blocked}"
                 )
 
-                # Update funds - add to realized_pnl but NOT today_realized_pnl
-                funds = SandboxFunds.query.filter_by(user_id=user_id).first()
-                if funds:
-                    # Release margin back to available balance
-                    funds.available_balance += margin_blocked + realized_pnl
-                    funds.used_margin -= margin_blocked
-
-                    # Add to all-time realized P&L only (NOT today_realized_pnl)
-                    funds.realized_pnl = (funds.realized_pnl or Decimal("0.00")) + realized_pnl
-                    funds.total_pnl = funds.realized_pnl + (funds.unrealized_pnl or Decimal("0.00"))
-
-                    # Ensure used_margin doesn't go negative
-                    if funds.used_margin < 0:
-                        funds.used_margin = Decimal("0.00")
+                # Update funds - add to realized_pnl but NOT today_realized_pnl.
+                # Staged as a compare-and-set and committed with the position
+                # below; a missing funds row is left missing, as before.
+                FundManager(user_id).stage_prior_session_release(
+                    margin_blocked,
+                    realized_pnl,
+                    f"Catch-up MIS square-off: {symbol}",
+                )
 
                 # Update position to closed state
                 position.quantity = 0
@@ -148,11 +180,13 @@ def catch_up_t1_settlement():
     try:
         from database.sandbox_db import SandboxPositions
         from sandbox.holdings_manager import process_all_t1_settlements
+        from sandbox.session_boundary import as_db_utc
 
-        # Check if there are any CNC positions that need settlement
-        ist = IST
-        today = datetime.now(ist).date()
-        settlement_cutoff = datetime.combine(today, datetime.min.time())
+        # Check if there are any CNC positions that need settlement.
+        # created_at is the database clock (UTC). Build IST midnight, then
+        # convert, or the comparison is read as UTC and lands 5.5h late.
+        today = datetime.now(IST).date()
+        settlement_cutoff = as_db_utc(IST.localize(datetime.combine(today, datetime.min.time())))
 
         pending_positions = (
             SandboxPositions.query.filter_by(product="CNC")
@@ -178,21 +212,23 @@ def catch_up_daily_pnl_reset():
     """
     try:
         from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
+        from sandbox.session_boundary import last_session_expiry_utc
 
-        last_session_boundary = get_last_session_boundary()
+        session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+        last_session_expiry = last_session_expiry_utc(session_expiry_str, datetime.now(IST))
 
         # Check if there are positions with non-zero today_realized_pnl
         # that were last updated before the session boundary
         positions_needing_reset = SandboxPositions.query.filter(
-            SandboxPositions.today_realized_pnl != None,
+            SandboxPositions.today_realized_pnl.is_not(None),
             SandboxPositions.today_realized_pnl != Decimal("0.00"),
-            SandboxPositions.updated_at < last_session_boundary,
+            SandboxPositions.updated_at < last_session_expiry,
         ).count()
 
         funds_needing_reset = SandboxFunds.query.filter(
-            SandboxFunds.today_realized_pnl != None,
+            SandboxFunds.today_realized_pnl.is_not(None),
             SandboxFunds.today_realized_pnl != Decimal("0.00"),
-            SandboxFunds.updated_at < last_session_boundary,
+            SandboxFunds.updated_at < last_session_expiry,
         ).count()
 
         if positions_needing_reset > 0 or funds_needing_reset > 0:
@@ -201,11 +237,11 @@ def catch_up_daily_pnl_reset():
             )
 
             # Reset all today_realized_pnl that are from before session boundary
-            SandboxPositions.query.filter(
-                SandboxPositions.updated_at < last_session_boundary
-            ).update({"today_realized_pnl": Decimal("0.00")})
+            SandboxPositions.query.filter(SandboxPositions.updated_at < last_session_expiry).update(
+                {"today_realized_pnl": Decimal("0.00")}
+            )
 
-            SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_boundary).update(
+            SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_expiry).update(
                 {"today_realized_pnl": Decimal("0.00")}
             )
 
@@ -216,6 +252,28 @@ def catch_up_daily_pnl_reset():
 
     except Exception as e:
         logger.exception(f"Error in catch-up daily PnL reset: {e}")
+
+
+def is_pnl_snapshot_day(day) -> bool:
+    """Whether a dated P&L snapshot should be written for `day`.
+
+    Indian markets: only trading days, from the market calendar, so a weekend
+    or holiday does not clone the previous session's numbers into a new row
+    (issue #876). A special session such as Muhurat trading still counts.
+
+    A 24/7 crypto instance (session expiry disabled, as the installer sets for
+    a crypto broker) trades every day, weekends included, so every day gets
+    its own row. Skipping them would fold Saturday's and Sunday's P&L into
+    Monday's.
+    """
+    from utils.session import is_session_expiry_disabled
+
+    if is_session_expiry_disabled():
+        return True
+
+    from database.market_calendar_db import is_market_holiday
+
+    return not is_market_holiday(day)
 
 
 def catch_up_daily_pnl_snapshot():
@@ -240,10 +298,8 @@ def catch_up_daily_pnl_snapshot():
         # Skip non-trading days (issue #876): without this, an app started on
         # Monday backfills a Sunday snapshot, and one started on Sunday
         # backfills Saturday -- manufacturing the same weekend duplication the
-        # 23:59 cron gate now prevents.
-        from database.market_calendar_db import is_market_holiday
-
-        if is_market_holiday(yesterday):
+        # 23:59 cron gate now prevents. A 24/7 crypto instance trades every day.
+        if not is_pnl_snapshot_day(yesterday):
             logger.debug(
                 f"Catch-up: Skipping P&L snapshot backfill for {yesterday}: not a trading day"
             )
@@ -311,7 +367,23 @@ def run_catch_up_tasks():
 
     Note: Runs regardless of sandbox mode - the sandbox database exists independently
     and positions need to be settled even if user is not in analyzer mode
+
+    One run at a time. Every login starts one on its master-contract thread
+    (up to five devices at once), and two sweeps settling the same stale
+    positions side by side is the race the claims below exist for. A trigger
+    that arrives while a run is under way is skipped: the run in progress
+    does the same work.
     """
+    if not _catch_up_lock.acquire(blocking=False):
+        logger.info("Catch-up tasks are already running; skipping this trigger")
+        return
+    try:
+        _run_catch_up_tasks()
+    finally:
+        _catch_up_lock.release()
+
+
+def _run_catch_up_tasks():
     try:
         logger.info("Running catch-up tasks after master contract download...")
 

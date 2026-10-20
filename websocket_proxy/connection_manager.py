@@ -15,7 +15,7 @@ import os
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import zmq
 
@@ -88,6 +88,14 @@ class SharedZmqPublisher:
     Shared ZeroMQ publisher that can be used by multiple adapter instances.
     Ensures all connections publish to the same ZeroMQ socket, so the WebSocketProxy
     receives data from all connections on a single port.
+
+    The singleton is built completely before it is published. It used to be
+    published by ``__new__`` and then set up by ``__init__``, which marked it
+    initialised before creating the context, the socket and the connection
+    flag: a second thread arriving in between got the half-built object and
+    failed reading ``_connected``, so a cache invalidation after a re-login or
+    an order update was silently dropped. ``SharedZmqPublisher()`` and
+    :meth:`instance` both return the finished object.
     """
 
     _instance = None
@@ -95,26 +103,45 @@ class SharedZmqPublisher:
 
     def __new__(cls):
         """Singleton pattern to ensure only one shared publisher exists"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
+        return cls.instance()
+
+    @classmethod
+    def instance(cls) -> "SharedZmqPublisher":
+        """Return the shared publisher, building it on first use.
+
+        Built and set up entirely under ``_lock``, and only then published,
+        so no caller can see a publisher without its socket.
+        """
+        existing = cls._instance
+        if existing is not None:
+            return existing
+        with cls._lock:
+            if cls._instance is None:
+                publisher = super().__new__(cls)
+                publisher._setup()
+                cls._instance = publisher
+            return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
+        # Construction happens once, in instance(); calling the class again
+        # must not reset a publisher other threads are using.
+        pass
 
-        self._initialized = True
+    def _setup(self) -> None:
         self.logger = get_logger("shared_zmq_publisher")
+        self.zmq_port = None
+        self._connected = False
+        self._publish_lock = threading.Lock()
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PUB)
         self.socket.setsockopt(zmq.LINGER, 1000)
         self.socket.setsockopt(zmq.SNDHWM, 1000)
-        self.zmq_port = None
-        self._connected = False
-        self._publish_lock = threading.Lock()
+        self._initialized = True
+
+    @property
+    def connected(self) -> bool:
+        """True once connect() has attached this publisher to the proxy's SUB."""
+        return self._connected
 
     def connect(self) -> int:
         """Connect this PUB to the proxy's SUB on the ZMQ bus.
@@ -162,6 +189,10 @@ class SharedZmqPublisher:
             return
 
         with self._publish_lock:
+            if self.socket is None:
+                # cleanup() closed it; a publish racing the shutdown is dropped.
+                self.logger.debug("Cannot publish: ZMQ publisher already closed")
+                return
             try:
                 self.socket.send_multipart(
                     [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
@@ -171,28 +202,33 @@ class SharedZmqPublisher:
 
     def cleanup(self):
         """Clean up ZeroMQ resources with separate error handling for each step"""
-        # Close socket first (separate try/except to ensure context.term() is attempted)
-        try:
-            if self.socket:
-                self.socket.close(linger=0)
-        except Exception as e:
-            self.logger.warning(f"Error closing shared ZMQ socket: {e}")
-        finally:
-            self.socket = None
+        # Under the publish lock, so no publish can be using the socket while
+        # it closes (a ZMQ socket must never be used from two threads at once).
+        with self._publish_lock:
+            # Close socket first (separate try/except to ensure context.term() is attempted)
+            try:
+                if self.socket:
+                    self.socket.close(linger=0)
+            except Exception as e:
+                self.logger.warning(f"Error closing shared ZMQ socket: {e}")
+            finally:
+                self.socket = None
 
-        # Terminate context (always attempt even if socket.close() failed)
-        try:
-            if self.context:
-                self.context.term()
-        except Exception as e:
-            self.logger.warning(f"Error terminating shared ZMQ context: {e}")
-        finally:
-            self.context = None
+            # Terminate context (always attempt even if socket.close() failed)
+            try:
+                if self.context:
+                    self.context.term()
+            except Exception as e:
+                self.logger.warning(f"Error terminating shared ZMQ context: {e}")
+            finally:
+                self.context = None
 
-        # Reset state
-        self._connected = False
-        self._initialized = False
-        SharedZmqPublisher._instance = None
+            # Reset state
+            self._connected = False
+            self._initialized = False
+        with SharedZmqPublisher._lock:
+            if SharedZmqPublisher._instance is self:
+                SharedZmqPublisher._instance = None
         self.logger.info("Shared ZMQ publisher cleaned up")
 
 
@@ -414,7 +450,7 @@ class ConnectionPool:
                 # - {"success": False, "error": "..."} (ConnectionPool format)
                 # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
                 is_error = (
-                    (result and result.get("success") == False) or
+                    (result and result.get("success") is False) or
                     (result and result.get("status") == "error")
                 )
                 if is_error:
@@ -441,15 +477,9 @@ class ConnectionPool:
         detected on connect/subscribe (issue #1419).
         """
         try:
-            from database.auth_db import auth_cache, feed_token_cache
+            from database.auth_db import invalidate_user_auth_cache
 
-            cleared = []
-            if f"auth-{self.user_id}" in auth_cache:
-                del auth_cache[f"auth-{self.user_id}"]
-                cleared.append("auth_cache")
-            if f"feed-{self.user_id}" in feed_token_cache:
-                del feed_token_cache[f"feed-{self.user_id}"]
-                cleared.append("feed_token_cache")
+            cleared = invalidate_user_auth_cache(self.user_id)
             if cleared:
                 self.logger.info(
                     f"Cleared auth caches for user {self.user_id}: {', '.join(cleared)}"
@@ -552,7 +582,7 @@ class ConnectionPool:
                     # - {"success": False, "error": "..."} (ConnectionPool format)
                     # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
                     is_error = (
-                        (result and result.get("success") == False) or
+                        (result and result.get("success") is False) or
                         (result and result.get("status") == "error")
                     )
                     if is_error:
@@ -796,9 +826,53 @@ class ConnectionPool:
 
                     if mode > new_highest:
                         # DOWNGRADE: removed the highest mode, broker needs to switch down
-                        adapter.unsubscribe(symbol, exchange, mode)
-                        result = adapter.subscribe(symbol, exchange, new_highest, 5)
-                        if result.get("status") == "success":
+                        try:
+                            release_result = adapter.unsubscribe(symbol, exchange, mode)
+                        except Exception as release_error:
+                            release_result = {
+                                "status": "error",
+                                "message": str(release_error),
+                            }
+
+                        if (
+                            not isinstance(release_result, dict)
+                            or release_result.get("status") != "success"
+                        ):
+                            self.subscription_map[sub_key] = adapter_idx
+                            self.subscription_depths[sub_key] = old_depth
+                            release_message = (
+                                release_result.get("message", "broker release refused")
+                                if isinstance(release_result, dict)
+                                else "invalid broker release response"
+                            )
+                            return {
+                                "status": "error",
+                                "code": "DOWNGRADE_RELEASE_FAILED",
+                                "message": (
+                                    f"Could not release mode {mode} for "
+                                    f"{symbol}.{exchange}: {release_message}"
+                                ),
+                                "phase": "release_high_mode",
+                                "rollback": {"status": "not_required"},
+                                "reconciliation_required": False,
+                            }
+
+                        lower_key = (symbol, exchange, new_highest)
+                        lower_depth = self.subscription_depths.get(lower_key, 5)
+                        try:
+                            result = adapter.subscribe(
+                                symbol, exchange, new_highest, lower_depth
+                            )
+                        except Exception as subscribe_error:
+                            result = {
+                                "status": "error",
+                                "message": str(subscribe_error),
+                            }
+
+                        if (
+                            isinstance(result, dict)
+                            and result.get("status") == "success"
+                        ):
                             self.logger.info(
                                 f"[POOL] Downgraded {symbol}.{exchange} from mode {mode} "
                                 f"to mode {new_highest} on connection {adapter_idx + 1}"
@@ -806,21 +880,58 @@ class ConnectionPool:
                             return {
                                 "status": "success",
                                 "message": f"Unsubscribed mode {mode}, downgraded to mode {new_highest}",
+                                "phase": "complete",
+                                "release": {"status": "success", "mode": mode},
+                                "reconciliation_required": False,
                             }
                         else:
-                            # Re-subscribe failed — rollback: restore tracking and try to
-                            # re-subscribe at the old mode so the symbol isn't left dangling
+                            # Lower subscribe failed after a proven high release.
+                            # Restore desired ownership and report whether the
+                            # broker-side high-mode rollback also succeeded.
                             self.logger.error(
                                 f"[POOL] Failed to downgrade {symbol}.{exchange} to mode "
                                 f"{new_highest}, rolling back: {result}"
                             )
                             self.subscription_map[sub_key] = adapter_idx
                             self.subscription_depths[sub_key] = old_depth
-                            adapter.subscribe(symbol, exchange, mode, old_depth)
+                            try:
+                                rollback_result = adapter.subscribe(
+                                    symbol, exchange, mode, old_depth
+                                )
+                            except Exception as rollback_error:
+                                rollback_result = {
+                                    "status": "error",
+                                    "message": str(rollback_error),
+                                }
+
+                            rollback_ok = (
+                                isinstance(rollback_result, dict)
+                                and rollback_result.get("status") == "success"
+                            )
+                            rollback_summary = {
+                                "status": "success" if rollback_ok else "error",
+                                "mode": mode,
+                            }
+                            if not rollback_ok:
+                                rollback_summary["message"] = (
+                                    rollback_result.get(
+                                        "message", "broker rollback refused"
+                                    )
+                                    if isinstance(rollback_result, dict)
+                                    else "invalid broker rollback response"
+                                )
                             return {
                                 "status": "error",
-                                "code": "DOWNGRADE_FAILED",
+                                "code": (
+                                    "DOWNGRADE_FAILED"
+                                    if rollback_ok
+                                    else "DOWNGRADE_RECONCILIATION_REQUIRED"
+                                ),
                                 "message": f"Failed to downgrade {symbol}.{exchange} to mode {new_highest}",
+                                "phase": "subscribe_lower_mode",
+                                "release": {"status": "success", "mode": mode},
+                                "rollback": rollback_summary,
+                                "reconciliation_required": not rollback_ok,
                             }
                     else:
                         # Removed a lower mode — broker still has the higher mode active
@@ -843,7 +954,12 @@ class ConnectionPool:
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe_all(self):
-        """Unsubscribe from all symbols across all connections"""
+        """Unsubscribe from all symbols across all connections.
+
+        Pool ownership is committed only when every child adapter explicitly
+        acknowledges the release.  A caller can then disconnect the pool when
+        any child refuses or returns an invalid response.
+        """
         with self.lock:
             # Log stats before clearing
             total_symbols = sum(self.adapter_symbol_counts) if self.adapter_symbol_counts else 0
@@ -860,15 +976,43 @@ class ConnectionPool:
                         )
                 self.logger.info("[POOL] ==========================================")
 
-            for adapter in self.adapters:
-                if hasattr(adapter, "unsubscribe_all"):
-                    adapter.unsubscribe_all()
+            errors = []
+            for index, adapter in enumerate(self.adapters):
+                if not hasattr(adapter, "unsubscribe_all"):
+                    errors.append(f"connection {index + 1}: unsupported")
+                    continue
+                try:
+                    response = adapter.unsubscribe_all()
+                except Exception as exc:
+                    self.logger.exception(
+                        "Error unsubscribing all on connection %s", index + 1
+                    )
+                    errors.append(f"connection {index + 1}: {exc}")
+                    continue
+                if not isinstance(response, dict) or response.get("status") != "success":
+                    message = (
+                        response.get("message")
+                        if isinstance(response, dict)
+                        else "invalid response"
+                    )
+                    errors.append(f"connection {index + 1}: {message}")
+
+            if errors:
+                return {
+                    "status": "error",
+                    "code": "UNSUBSCRIBE_ALL_ERROR",
+                    "message": "; ".join(errors),
+                }
 
             self.subscription_map.clear()
             self.subscription_depths.clear()
             self.adapter_symbol_counts = [0] * len(self.adapters)
 
             self.logger.info("[POOL] Unsubscribed from all symbols")
+            return {
+                "status": "success",
+                "message": "Unsubscribed from all symbols",
+            }
 
     def disconnect(self):
         """Disconnect all adapters and clean up"""
@@ -908,6 +1052,7 @@ class ConnectionPool:
             self.adapters.clear()
             self.adapter_symbol_counts.clear()
             self.subscription_map.clear()
+            self.subscription_depths.clear()
             self.connected = False
             self.initialized = False
 

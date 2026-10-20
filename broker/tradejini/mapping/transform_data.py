@@ -2,6 +2,9 @@
 # Mapping Tradejini API Parameters https://api.tradejini.com/v2
 
 from database.token_db import get_br_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def transform_data(data, token):
@@ -21,11 +24,16 @@ def transform_data(data, token):
         "product": map_product_type(data["product"]),
         "limitPrice": str(data.get("price", "0")),
         "trigPrice": str(data.get("trigger_price", "0")),
-        "validity": map_validity(data.get("validity", "DAY")),
+        "validity": map_validity(data.get("validity", "DAY"), data.get("exchange")),
         "discQty": str(data.get("disclosed_quantity", "0")),
-        "amo": data.get("amo", False),
-        "remarks": data.get("remarks", ""),
+        # Remarks are capped at 10 characters - anything longer is stripped out
+        # by the broker, so truncate here to keep the tag readable.
+        "remarks": str(data.get("remarks", ""))[:10],
     }
+
+    # 'amo' is optional; only send it when the order really is an AMO
+    if data.get("amo"):
+        transformed["amo"] = "true"
 
     # Add market protection percentage for market and stopmarket orders
     if order_type in ("market", "stopmarket"):
@@ -65,7 +73,7 @@ def transform_modify_order_data(data, token):
         "orderId": data["orderid"],
         "qty": total_qty,
         "type": map_order_type(data["pricetype"]),
-        "validity": map_validity(data.get("validity", "DAY")),
+        "validity": map_validity(data.get("validity", "DAY"), data.get("exchange")),
         "side": data["action"].lower(),
     }
 
@@ -106,17 +114,61 @@ def map_product_type(product):
     return product_type_mapping.get(product, "intraday")
 
 
-def map_validity(validity):
+# Exchanges on which the API accepts 'eos' (End-of-Session) validity.
+BSE_EXCHANGES = {"BSE", "BFO", "BCD"}
+
+
+def map_validity(validity, exchange=None):
     """
     Maps OpenAlgo validity types to Tradejini validity types.
+
+    Args:
+        validity: OpenAlgo validity - DAY, IOC, GTC or EOS.
+        exchange: OpenAlgo exchange code. 'eos' (End-of-Session) is accepted for
+            BSE scrips only, so it falls back to 'day' anywhere else rather than
+            being sent and rejected by the exchange.
     """
-    validity_mapping = {"DAY": "day", "IOC": "ioc", "GTC": "gtc"}
-    return validity_mapping.get(validity, "day")
+    validity_mapping = {"DAY": "day", "IOC": "ioc", "GTC": "gtc", "EOS": "eos"}
+    mapped = validity_mapping.get(str(validity).upper(), "day")
+
+    if mapped == "eos" and str(exchange).upper() not in BSE_EXCHANGES:
+        logger.warning(f"EOS validity is BSE-only; falling back to DAY for exchange {exchange}")
+        return "day"
+
+    return mapped
 
 
 def reverse_map_product_type(product):
     """
     Maps Tradejini product types back to OpenAlgo product types.
+
+    Tradejini products are 'delivery', 'intraday', 'normal', 'cover' and
+    'bracket' (order book, trade book and position book all use this set).
     """
-    reverse_product_type_mapping = {"delivery": "CNC", "normal": "NRML", "intraday": "MIS"}
-    return reverse_product_type_mapping.get(product)
+    reverse_product_type_mapping = {
+        "delivery": "CNC",
+        "normal": "NRML",
+        "intraday": "MIS",
+        "cover": "CO",
+        "bracket": "BO",
+        # Legacy / long-form spellings seen on some responses
+        "margin": "NRML",
+        "coverorder": "CO",
+        "bracketorder": "BO",
+    }
+    return reverse_product_type_mapping.get(str(product).lower())
+
+
+def reverse_map_order_type(order_type):
+    """
+    Maps Tradejini price types back to OpenAlgo price types.
+
+    Tradejini uses 'limit', 'market', 'stoplimit' and 'stopmarket'.
+    """
+    reverse_order_type_mapping = {
+        "market": "MARKET",
+        "limit": "LIMIT",
+        "stoplimit": "SL",
+        "stopmarket": "SL-M",
+    }
+    return reverse_order_type_mapping.get(str(order_type).lower(), str(order_type).upper())

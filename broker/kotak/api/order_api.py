@@ -18,6 +18,8 @@ from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -26,7 +28,7 @@ def get_api_response(endpoint, auth_token, method="GET", payload=""):
     """
     Updated for Kotak Neo API v2 - uses dynamic baseUrl, httpx connection pooling, and new header structure
     """
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"ORDER API - Using baseUrl: {base_url}")
@@ -60,8 +62,104 @@ def get_trade_book(auth_token):
     return get_api_response("/quick/user/trades", auth_token)
 
 
+def _backfill_ltp(response, auth_token):
+    """Kotak's positions payload never includes a live price field at all,
+    for an open position or a closed one - confirmed against the raw
+    endpoint response and against Kotak's own SDK docs, whose "Profit N
+    Loss" formula treats LTP as an external input the caller must supply,
+    not something this endpoint returns. Zerodha's equivalent positions API
+    does return one (`last_price`, straight from Kite) - transform_positions_data
+    just reads it - so this is a Kotak-specific gap, not a display bug in
+    any consumer.
+
+    Batch-fetches one quote per distinct position via the same multiquotes
+    endpoint the option chain/quotes routes already use, and stamps each
+    raw row with an "_ltp" scratch field for transform_positions_data to
+    pick up. Deliberately not the final "ltp" key: this runs before
+    map_position_data's exchange/symbol resolution, so trdSym/exSeg here
+    are still Kotak's raw broker-native values, not OpenAlgo's - resolving
+    them again independently (not mutating the row) keeps get_positions()'s
+    contract of returning raw, unmapped data intact for its other caller
+    (map_position_data itself, called right after this by
+    services/positionbook_service.py).
+
+    Best-effort and non-fatal: any failure here (a bad auth token, the
+    quotes endpoint being down, a symbol that can't be resolved) just
+    leaves positions without a price, exactly as before this function
+    existed - it must never break the positions endpoint itself.
+    """
+    try:
+        # Inside the try, not ahead of it: this is the one statement that can
+        # reach a payload Kotak did not shape as an object (an error body that
+        # decodes to a list, say), and the docstring's promise that positions
+        # never break on our account has to cover it too.
+        positions = response.get("data")
+        if not positions:
+            return
+
+        from broker.kotak.api.data import BrokerData
+        from broker.kotak.mapping.order_data import _openalgo_symbol
+
+        resolved = []
+        for position in positions:
+            oa_exchange = map_exchange(position.get("exSeg", ""))
+            oa_symbol = _openalgo_symbol(position, oa_exchange) or position.get("trdSym", "")
+            if oa_symbol:
+                resolved.append((position, oa_symbol, oa_exchange))
+        if not resolved:
+            return
+
+        broker_data = BrokerData(auth_token)
+        # One quote per *distinct* instrument. The same symbol is routinely
+        # held under two products (MIS and NRML), and one entry per position
+        # would send it twice in the same request - wasted room against a
+        # batch cap that get_multiquotes splits at 25. dict.fromkeys keeps
+        # the first-seen order; the price is matched back per position below,
+        # so both rows still get stamped.
+        symbols = [
+            {"symbol": s, "exchange": e} for s, e in dict.fromkeys((s, e) for _, s, e in resolved)
+        ]
+        # One batched call for every position (get_multiquotes splits at
+        # Kotak's own sub-50 cap internally, 25 per request since #1961) -
+        # not one call per position, which is the per-symbol-latency concern
+        # that stalled an earlier, unrelated Kotak P&L PR (#1224).
+        quotes = broker_data.get_multiquotes(symbols)
+
+        ltp_by_key = {}
+        for item in quotes or []:
+            data = item.get("data") or {}
+            ltp = data.get("ltp")
+            if ltp:
+                ltp_by_key[(item.get("symbol"), item.get("exchange"))] = float(ltp)
+
+        for position, oa_symbol, oa_exchange in resolved:
+            ltp = ltp_by_key.get((oa_symbol, oa_exchange))
+            if ltp:
+                position["_ltp"] = ltp
+    except Exception as e:
+        logger.warning(f"Could not backfill LTP for positions: {e}")
+
+
 def get_positions(auth_token):
-    return get_api_response("/quick/user/positions", auth_token)
+    response = get_api_response("/quick/user/positions", auth_token)
+    if not isinstance(response, dict):
+        # Every caller indexes this as an object - the positionbook mapping,
+        # the smart-order position lookup, close_all_positions - so a payload
+        # that is not one can only fail. Failing here names it; letting it
+        # through surfaced as "list indices must be integers" from inside the
+        # mapping layer, several frames from the cause.
+        #
+        # Deliberately NOT normalized to an empty book. close_all_positions
+        # reads a response with no positions in it as "No Open Positions Found"
+        # and returns 200, which close_position_service reports as a successful
+        # square-off - so quietly standing in for a failed read would tell an
+        # operator their positions were closed while the broker still held them.
+        # A read that did not work has to say so.
+        raise Exception(
+            f"Kotak returned a positions payload that is not an object: {type(response).__name__}"
+        )
+    _backfill_ltp(response, auth_token)
+    return response
 
 
 def get_holdings(auth_token):
@@ -71,46 +169,53 @@ def get_holdings(auth_token):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the cache is returned to its
+# own caller but never cached, so the next order cannot read the book from
+# before the previous fill (utils/smart_order_guard.py).
+_POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """Kotak marks a read that worked with stat "Ok".
+
+    Its failures say "Not_Ok", and a rejected session answers with no stat.
+    """
+    if not isinstance(positions_data, dict):
+        return False
+    return str(positions_data.get("stat", "")).lower() == "ok"
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book("kotak", lambda: get_positions(auth), _position_book_ok),
+    )
 
 
 def _invalidate_position_cache(auth):
-    """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data.
+
+    Also stops a fetch that started before this order from caching the book
+    it read.
+    """
+    _POSITION_BOOK.invalidate(auth)
 
 
 
@@ -139,7 +244,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth_token):
 
 
 def place_order_api(data, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"PLACE ORDER API - Using baseUrl: {base_url}")
@@ -174,7 +279,7 @@ def place_order_api(data, auth_token):
 
     try:
         response = client.post(url, headers=headers, content=payload)
-        logger.debug(f"PLACE ORDER API Response: {response.status_code} {response.text}")
+        logger.info(f"PLACE ORDER API Response: {response.status_code} {response.text}")
 
         # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
@@ -191,6 +296,7 @@ def place_order_api(data, auth_token):
         return None, {"stat": "NotOk", "error": str(e)}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth_token):
     # If no API call is made in this function then res will return None
     res = None
@@ -201,9 +307,9 @@ def place_smartorder_api(data, auth_token):
     product = data.get("product")
 
     # Per-symbol lock: serialize smart orders per symbol
-    symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-    with symbol_lock:
+    with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+        if not symbol_lock:
+            return SymbolLocks.busy(symbol)
         return _place_smartorder_locked_kotak(data, auth_token, symbol, exchange, product)
 
 
@@ -343,7 +449,7 @@ def close_all_positions(current_api_key, auth_token):
 
 
 def cancel_order(orderid, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -380,7 +486,7 @@ def cancel_order(orderid, auth_token):
 
 
 def modify_order(data, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"MODIFY ORDER API - Using baseUrl: {base_url}")

@@ -1,6 +1,5 @@
 import base64
 import json
-import logging
 import os
 import sys
 import threading
@@ -10,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from broker.wisdom.streaming.wisdom_websocket import WisdomWebSocketClient
 from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -26,7 +26,7 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("wisdom_websocket")
+        self.logger = get_logger("wisdom_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "wisdom"
@@ -90,7 +90,7 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        self.logger.debug(f"Using API Key: {api_key[:10]}... for Wisdom XTS connection")
+        self.logger.debug("Using configured API key for Wisdom XTS connection")
 
         # Create Wisdom WebSocket client with API credentials
         self.ws_client = WisdomWebSocketClient(

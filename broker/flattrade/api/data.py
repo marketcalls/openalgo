@@ -1,114 +1,88 @@
 import asyncio
 import json
+import math
 import os
-import threading
 import time
 import urllib.parse
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime, timedelta
+from datetime import time as dt_time
 
 import httpx
 import pandas as pd
 
+from broker.flattrade.api.rate_limit import (
+    DATA_LIMITER,
+    is_rate_limit_error,
+    rate_limit_retry_delay,
+)
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from utils import runtime
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.shared_executors import get_executor
 
-# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
-# asyncio.run() cannot be called under eventlet's monkey-patched event loop
-def _is_eventlet_patched():
-    try:
-        import eventlet.patcher
-        return eventlet.patcher.is_monkey_patched("socket")
-    except (ImportError, AttributeError):
-        return False
-
-USE_ASYNC = not _is_eventlet_patched()
+# Which quote fan-out this process uses. asyncio.run() cannot run under
+# eventlet's monkey-patched loop, so production has always taken the thread
+# pool path; only the dev server takes the asyncio one. The gthread worker
+# stays on the thread pool too: production must not switch to a path it has
+# never run. utils.runtime answers both questions without importing eventlet.
+USE_ASYNC = not (runtime.is_monkey_patched() or runtime.gthread_active())
 
 logger = get_logger(__name__)
 
-# Global rate limiter for Flattrade data APIs (issue #1663).
-#
-# Official limits (Flattrade docs): 40 req/sec AND 200 req/min. The previous
-# implementation enforced a fixed 0.55s gap between requests -- the most
-# pessimistic reading of a per-minute cap (~1.8/sec, ~109/min, no bursting),
-# which serialized parallel history fetches: 45 symbols took 45 x 0.55 = ~25s
-# regardless of worker count, while the same code on Shoonya took ~2s.
-#
-# This dual sliding-window limiter allows bursts up to the per-second cap and
-# throttles only when a rolling window is actually full. A one-shot scan of a
-# 45-symbol universe now completes in ~1-2s; sustained loads remain hard-capped
-# under both broker ceilings. We run slightly under the official numbers
-# (38/sec, 190/min) as margin for clock skew between our rolling windows and
-# however the broker measures theirs. Accounts provisioned below the documented
-# limits are still covered by the retry-with-backoff in get_api_response.
-FLATTRADE_MAX_PER_SECOND = 38
-FLATTRADE_MAX_PER_MINUTE = 190
+#: Threads in the shared quote pool. Matches the multiquote batch size, which is
+#: the most one request fans out at a time.
+QUOTE_POOL_SIZE = 10
 
-_rate_limit_lock = threading.Lock()
-_reserved_call_times: deque = deque()
+#: Workers in the pool each call starts for itself off gthread, as it always has.
+PER_CALL_QUOTE_WORKERS = 40
 
 
-def _reserve_rate_limit_slot() -> float:
-    """Reserve the earliest slot satisfying both rolling windows.
+def _quote_pool():
+    """The executor for one quote batch, as a context manager.
 
-    Returns the seconds the caller must sleep before making its request.
-    Reservation happens inside the lock; sleeping is the caller's job, outside
-    the lock, so concurrent threads queue without serializing on the lock.
-
-    The deque holds reserved call timestamps in non-decreasing order (each new
-    reservation is >= the previous by construction: a full window pushes the
-    new slot past entries the previous reservation also sat behind). The
-    earliest permissible slot is:
-
-      - now, if neither window is full at that instant;
-      - 1s after the Nth-most-recent reservation when the per-second window
-        is full (that entry must age out of the rolling second first);
-      - 60s after the Mth-most-recent reservation when the per-minute window
-        is full;
-
-    whichever is latest. Entries older than 60s can no longer constrain any
-    future slot and are purged.
+    Under the gthread worker it is one process-wide pool, which the ``with``
+    block must not shut down: a pool per call started real OS threads for
+    every batch of every request. Under eventlet and on the development server
+    it is a pool of its own per call, exactly as before, so no threads outlive
+    the call and the health monitor counts what it always counted.
     """
-    with _rate_limit_lock:
-        now = time.time()
-        while _reserved_call_times and _reserved_call_times[0] <= now - 60.0:
-            _reserved_call_times.popleft()
+    if runtime.gthread_active():
+        return nullcontext(get_executor("flattrade-quotes", QUOTE_POOL_SIZE))
+    return ThreadPoolExecutor(max_workers=PER_CALL_QUOTE_WORKERS)
 
-        slot = now
-        if len(_reserved_call_times) >= FLATTRADE_MAX_PER_SECOND:
-            slot = max(slot, _reserved_call_times[-FLATTRADE_MAX_PER_SECOND] + 1.0)
-        if len(_reserved_call_times) >= FLATTRADE_MAX_PER_MINUTE:
-            slot = max(slot, _reserved_call_times[-FLATTRADE_MAX_PER_MINUTE] + 60.0)
-
-        _reserved_call_times.append(slot)
-        return slot - now
-
-
-def _apply_rate_limit():
-    """Sync rate limiter - burst-friendly, capped at 38/sec and 190/min."""
-    sleep_time = _reserve_rate_limit_slot()
-    if sleep_time > 0:
-        logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Flattrade API call")
-        time.sleep(sleep_time)
+# Request pacing for Flattrade data APIs (issue #1663).
+#
+# The dual sliding-window limiter now lives in broker/flattrade/api/rate_limit.py
+# so that order_api.py, funds.py and margin_api.py share the same windows — they
+# previously issued unpaced requests against the same account, which meant the
+# window this module maintained was never the whole picture (issue #1806).
+# Module-level aliases are kept so the existing call sites below read unchanged.
+_apply_rate_limit = DATA_LIMITER.acquire
+_apply_rate_limit_async = DATA_LIMITER.acquire_async
+_is_rate_limit_error = is_rate_limit_error
 
 
-async def _apply_rate_limit_async():
-    """Async variant - same reservation, awaits asyncio.sleep so the event loop is not blocked."""
-    sleep_time = _reserve_rate_limit_slot()
-    if sleep_time > 0:
-        await asyncio.sleep(sleep_time)
+def _candle_number(candle: dict, key: str) -> float | None:
+    """A numeric candle field, or None when Flattrade sent it null, empty or not at all.
 
-
-def _is_rate_limit_error(response: dict) -> bool:
-    """Return True when Flattrade's response indicates a rate-limit hit."""
-    if not isinstance(response, dict):
-        return False
-    if response.get("stat") != "Not_Ok":
-        return False
-    emsg = response.get("emsg", "")
-    return "exceeds Limit" in emsg or "exceeds limit" in emsg
+    ``float(candle.get(key, 0))`` raised TypeError on a null (which the candle
+    loop does not catch, so one bad row failed the whole history request) and
+    turned a missing price into a real-looking 0. NaN and infinity are treated
+    as missing too: float() accepts them, a NaN price would be charted, and
+    int(inf) raises OverflowError, which the candle loop does not catch.
+    """
+    value = candle.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
@@ -116,9 +90,6 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
     Common function to make API calls to Flattrade using httpx with connection pooling.
     Applies global rate limiting and retries with exponential backoff on rate-limit errors.
     """
-    MAX_RETRIES = 3
-    RETRY_DELAY = 2.0  # base seconds for exponential backoff
-
     # Apply rate limiting before making the request
     _apply_rate_limit()
 
@@ -154,13 +125,11 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
         logger.info(f"Response data: {data}")
         raise
 
-    # Retry on rate-limit error with exponential backoff
-    if _is_rate_limit_error(parsed) and retry_count < MAX_RETRIES:
-        retry_delay = RETRY_DELAY * (2**retry_count)
-        logger.warning(
-            f"Flattrade rate limit hit ({parsed.get('emsg')}). "
-            f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
-        )
+    # Clamp to whatever ceiling the rejection names, then retry, so the retry is
+    # not just a slower repeat of a request this account was never provisioned
+    # to make.
+    retry_delay = rate_limit_retry_delay(parsed, DATA_LIMITER, retry_count, endpoint)
+    if retry_delay is not None:
         time.sleep(retry_delay)
         return get_api_response(endpoint, auth, method, payload, retry_count + 1)
 
@@ -233,6 +202,8 @@ class BrokerData:
                 "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
 
@@ -247,10 +218,20 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Flattrade API rate limits: 10 requests/second
-            # Process one symbol at a time since API doesn't support batching
-            BATCH_SIZE = 10  # Process 10 symbols per batch (matches rate limit per second)
-            RATE_LIMIT_DELAY = 1.1  # 1.1 second delay between batches for safety margin
+            # Flattrade has no bulk-quote endpoint, so this is one GetQuotes call
+            # per symbol. Chunking keeps the in-flight fan-out bounded; the
+            # PACING is owned by DATA_LIMITER, not by this loop.
+            #
+            # There used to be a fixed 1.1s sleep between chunks as a "safety
+            # margin". It was doing more harm than good once the shared limiter
+            # landed: it is per-invocation, so it cannot see the OTHER option
+            # chain fetches running concurrently (the live log for 2026-09-01
+            # shows three 42-symbol fetches starting at 11:16:41, :44 and :49
+            # before any of them finished), while the limiter's rolling window is
+            # global and does bound them together. All the sleep added was ~4.4s
+            # of latency per call, which pushed each response out far enough for
+            # the next refresh to pile on top of it.
+            BATCH_SIZE = 10
 
             if len(symbols) > BATCH_SIZE:
                 logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
@@ -264,10 +245,6 @@ class BrokerData:
 
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -293,9 +270,6 @@ class BrokerData:
         Fetch quote for a single symbol synchronously (for ThreadPoolExecutor).
         Honors the global rate limiter and retries with exponential backoff on rate-limit errors.
         """
-        MAX_RETRIES = 3
-        RETRY_DELAY = 2.0
-
         try:
             # Serialize through the shared rate limiter
             _apply_rate_limit()
@@ -306,18 +280,20 @@ class BrokerData:
             headers = {"Content-Type": "application/x-www-form-urlencoded"}
             url = "https://piconnect.flattrade.in/PiConnectAPI/GetQuotes"
 
-            # Use httpx.post for sync requests
-            http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
+            # Shared pooled client rather than a bare httpx.post: this runs once
+            # per symbol under a ThreadPoolExecutor, so a per-call connection is
+            # a socket churned for every quote in the batch.
+            http_response = get_httpx_client().post(
+                url, content=payload_str, headers=headers, timeout=10.0
+            )
             response = http_response.json()
 
             if response.get("stat") != "Ok":
                 # Retry on rate-limit error
-                if _is_rate_limit_error(response) and retry_count < MAX_RETRIES:
-                    retry_delay = RETRY_DELAY * (2**retry_count)
-                    logger.warning(
-                        f"Flattrade rate limit hit for {symbol}@{exchange}. "
-                        f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
-                    )
+                retry_delay = rate_limit_retry_delay(
+                    response, DATA_LIMITER, retry_count, f"{symbol}@{exchange}"
+                )
+                if retry_delay is not None:
                     time.sleep(retry_delay)
                     return self._fetch_single_quote_sync(
                         symbol, exchange, api_exchange, token, api_key, retry_count + 1
@@ -362,9 +338,6 @@ class BrokerData:
         Fetch quote for a single symbol asynchronously.
         Honors the global rate limiter and retries with exponential backoff on rate-limit errors.
         """
-        MAX_RETRIES = 3
-        RETRY_DELAY = 2.0
-
         try:
             # Serialize through the shared rate limiter (async-safe sleep)
             await _apply_rate_limit_async()
@@ -381,12 +354,10 @@ class BrokerData:
 
             if response.get("stat") != "Ok":
                 # Retry on rate-limit error
-                if _is_rate_limit_error(response) and retry_count < MAX_RETRIES:
-                    retry_delay = RETRY_DELAY * (2**retry_count)
-                    logger.warning(
-                        f"Flattrade rate limit hit for {symbol}@{exchange}. "
-                        f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
-                    )
+                retry_delay = rate_limit_retry_delay(
+                    response, DATA_LIMITER, retry_count, f"{symbol}@{exchange}"
+                )
+                if retry_delay is not None:
                     await asyncio.sleep(retry_delay)
                     return await self._fetch_single_quote_async(
                         client, symbol, exchange, api_exchange, token, api_key, retry_count + 1
@@ -532,9 +503,10 @@ class BrokerData:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
-            # ThreadPoolExecutor approach (works in any context)
+            # Thread pool approach (works in any context); see _quote_pool.
+            # DATA_LIMITER, not the pool size, owns the pacing.
             results = []
-            with ThreadPoolExecutor(max_workers=40) as executor:
+            with _quote_pool() as executor:
                 future_to_symbol = {
                     executor.submit(
                         self._fetch_single_quote_sync,
@@ -637,6 +609,8 @@ class BrokerData:
                 "oi": int(response.get("oi", 0)),  # Open Interest
             }
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
@@ -668,6 +642,9 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
+            # Keep the OpenAlgo exchange: get_quotes below must resolve the token
+            # against it, not the broker exchange (SENSEX lives under BSE_INDEX).
+            oa_exchange = exchange
 
             if exchange == "NSE_INDEX":
                 exchange = "NSE"
@@ -708,6 +685,8 @@ class BrokerData:
                         "/PiConnectAPI/EODChartData", self.auth_token, payload=payload
                     )
                     logger.debug(f"EOD Response: {response}")  # Debug print
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in EOD request: {e}")
                     response = []  # Continue with empty response to try quotes
@@ -743,64 +722,86 @@ class BrokerData:
                     candle = json.loads(candle)
 
                 try:
+                    # Both endpoints use into/inth/intl/intc for OHLC and intv for
+                    # volume. A candle missing any price is skipped rather than
+                    # filled with 0, which would chart as a crash to zero.
+                    op = _candle_number(candle, "into")
+                    hi = _candle_number(candle, "inth")
+                    lo = _candle_number(candle, "intl")
+                    cl = _candle_number(candle, "intc")
+                    if None in (op, hi, lo, cl):
+                        logger.warning(f"Skipping Flattrade candle with missing OHLC: {candle}")
+                        continue
+                    volume = int(_candle_number(candle, "intv") or 0)
+                    oi = int(_candle_number(candle, "oi") or 0)
+
                     # Parse timestamp based on interval
                     if interval == "D":
-                        # EOD data format: "21-SEP-2022"
-                        timestamp = int(candle.get("ssboe", 0))  # Use ssboe for timestamp
+                        # EOD data format: "21-SEP-2022"; ssboe is the epoch timestamp
+                        ssboe = _candle_number(candle, "ssboe")
+                        if ssboe is None:
+                            logger.warning(f"Skipping Flattrade EOD candle with no ssboe: {candle}")
+                            continue
+                        timestamp = int(ssboe)
+                        # Flattrade's BSE index EOD rows (SENSEX) often carry a close
+                        # outside the day's high/low. Widen the range to cover open
+                        # and close so the candle stays valid for charting.
+                        if hi < max(op, cl) or lo > min(op, cl):
+                            logger.debug(f"Inconsistent EOD candle from Flattrade: {candle}")
+                            hi = max(hi, op, cl)
+                            lo = min(lo, op, cl)
                         data.append(
                             {
                                 "timestamp": timestamp,
-                                "open": float(candle.get("into", 0)),  # EOD uses 'into' for open
-                                "high": float(candle.get("inth", 0)),  # EOD uses 'inth' for high
-                                "low": float(candle.get("intl", 0)),  # EOD uses 'intl' for low
-                                "close": float(candle.get("intc", 0)),  # EOD uses 'intc' for close
-                                "volume": int(
-                                    float(candle.get("intv", 0))
-                                ),  # EOD uses 'intv' for volume
-                                "oi": int(float(candle.get("oi", 0))),  # Open Interest
+                                "open": op,
+                                "high": hi,
+                                "low": lo,
+                                "close": cl,
+                                "volume": volume,
+                                "oi": oi,
                             }
                         )
                     else:
                         # Intraday format: "02-06-2020 15:46:23"
                         try:
-                            timestamp = int(
-                                datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S").timestamp()
-                            )
+                            candle_dt = datetime.strptime(candle["time"], "%d-%m-%Y %H:%M:%S")
+                            timestamp = int(candle_dt.timestamp())
                         except ValueError:
                             logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
-                        # Skip candles with all zero values
+                        # On NSE/BSE cash and F&O, TPSeries adds a 09:14 bar holding
+                        # the pre-open discovered price: flat OHLC, zero bar volume.
+                        # The session opens at 09:15, so drop it (QA HS-07).
                         if (
-                            float(candle.get("into", 0)) == 0
-                            and float(candle.get("inth", 0)) == 0
-                            and float(candle.get("intl", 0)) == 0
-                            and float(candle.get("intc", 0)) == 0
+                            exchange in ("NSE", "BSE", "NFO", "BFO")
+                            and candle_dt.time() < dt_time(9, 15)
                         ):
+                            continue
+
+                        # Skip candles with all zero values
+                        if op == 0 and hi == 0 and lo == 0 and cl == 0:
                             continue
 
                         data.append(
                             {
                                 "timestamp": timestamp,
-                                "open": float(
-                                    candle.get("into", 0)
-                                ),  # Intraday also uses 'into' for open
-                                "high": float(
-                                    candle.get("inth", 0)
-                                ),  # Intraday also uses 'inth' for high
-                                "low": float(
-                                    candle.get("intl", 0)
-                                ),  # Intraday also uses 'intl' for low
-                                "close": float(
-                                    candle.get("intc", 0)
-                                ),  # Intraday also uses 'intc' for close
-                                "volume": int(
-                                    float(candle.get("intv", 0))
-                                ),  # Intraday also uses 'intv' for volume
-                                "oi": int(float(candle.get("oi", 0))),  # Open Interest
+                                "open": op,
+                                "high": hi,
+                                "low": lo,
+                                "close": cl,
+                                # During the NSE closing session (15:15-15:30)
+                                # Flattrade's cumulative 'v' switches to a separate
+                                # counter and back, so 'intv' (its bar-to-bar
+                                # difference) goes negative, e.g. INFY -13,357,992
+                                # at 15:20. A bar cannot trade negative volume and
+                                # the chart rejects the whole history on one, so
+                                # floor it at 0.
+                                "volume": max(volume, 0),
+                                "oi": oi,
                             }
                         )
-                except (KeyError, ValueError) as e:
+                except (KeyError, TypeError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
             df = pd.DataFrame(data)
@@ -822,7 +823,7 @@ class BrokerData:
                     if df.empty or df["timestamp"].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            quotes = self.get_quotes(symbol, exchange)
+                            quotes = self.get_quotes(symbol, oa_exchange)
 
                             if quotes:
                                 today_data = {
@@ -855,6 +856,8 @@ class BrokerData:
 
             return df
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             raise Exception(f"Error fetching historical data: {str(e)}")
 

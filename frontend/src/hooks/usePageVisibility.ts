@@ -76,9 +76,10 @@ export function usePageVisibility(): UsePageVisibilityReturn {
     // SSR guard
     if (typeof document === 'undefined') return
 
-    const handleVisibilityChange = () => {
-      const nowVisible = document.visibilityState === 'visible'
-      const now = Date.now()
+    let active = true
+    const pending = new Set<ReturnType<typeof setTimeout>>()
+    const applyVisibilityChange = (nowVisible: boolean, now: number) => {
+      if (!active) return
 
       // Detect if returning from hidden state
       if (nowVisible && !previousVisibleRef.current) {
@@ -95,9 +96,23 @@ export function usePageVisibility(): UsePageVisibilityReturn {
       }
 
       previousVisibleRef.current = nowVisible
+      isVisibleRef.current = nowVisible
       setIsVisible(nowVisible)
       setLastVisibilityChange(now)
       updateTimers()
+    }
+
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState === 'visible'
+      const time = Date.now()
+      // A browser navigation can deliver this while React is rendering the
+      // outgoing page. A microtask can still run at a nested browser checkpoint;
+      // use the next task and retain the event's time and visibility snapshot.
+      const task = setTimeout(() => {
+        pending.delete(task)
+        applyVisibilityChange(visible, time)
+      }, 0)
+      pending.add(task)
     }
 
     // Listen for visibility changes
@@ -124,6 +139,9 @@ export function usePageVisibility(): UsePageVisibilityReturn {
     const timerInterval = setInterval(updateTimers, 1000)
 
     return () => {
+      active = false
+      for (const task of pending) clearTimeout(task)
+      pending.clear()
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('focus', handleFocus)
       window.removeEventListener('blur', handleBlur)

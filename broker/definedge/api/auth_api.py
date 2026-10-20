@@ -3,6 +3,8 @@ import os
 import urllib.parse
 from hashlib import sha256
 
+import httpx
+
 from broker.definedge.api.baseurl import SESSION_URL
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -84,6 +86,9 @@ def login_step1(api_token=None, api_secret=None):
 
         return response_data
 
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Step 1 error: HTTP {e.response.status_code} from {SESSION_URL}/login")
+        return None
     except Exception as e:
         logger.error(f"Step 1 error: {e}")
         return None

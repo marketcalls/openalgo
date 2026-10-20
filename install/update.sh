@@ -46,6 +46,85 @@ check_status() {
     fi
 }
 
+# >>> Telegram /chart browser (kept identical in install.sh, install-multi.sh and update.sh)
+# Telegram /chart draws its images with Kaleido, which starts a headless Chrome or
+# Chromium as the OpenAlgo service account. A snap browser cannot start as that
+# account: snap needs a writable home, and a service account's home (/var/www) is not
+# one ("cannot create snap home dir"), so every render fails with "The browser seemed
+# to close immediately after starting". Ubuntu's chromium and chromium-browser packages
+# only install that snap, so they are never used here.
+
+# Prints the browser Kaleido will start and succeeds when it is one the service account
+# can run. Kaleido looks for Google Chrome first, then takes the first Chromium on PATH,
+# so the first name found below is the one it uses.
+chart_browser_path() {
+    local name path real
+    for name in chrome google-chrome google-chrome-stable chromium chromium-browser; do
+        path="$(command -v "$name" 2>/dev/null)" || continue
+        real="$(readlink -f "$path")"
+        # A snap command is /snap/bin/<name>, a link to /usr/bin/snap; Ubuntu's
+        # chromium-browser is a small script that starts the snap.
+        case "$path" in /snap/*) return 1 ;; esac
+        [ "$(basename "$real")" = "snap" ] && return 1
+        if [ "$(head -c 2 "$real" 2>/dev/null)" = "#!" ] && grep -qs "/snap/" "$real"; then
+            return 1
+        fi
+        echo "$real"
+        return 0
+    done
+    return 1
+}
+
+# Installs a browser for Telegram /chart when there is none the service account can run.
+# With apt: Google Chrome's .deb on amd64 (it adds Google's apt source, so Chrome
+# updates with the system), else Debian's own chromium package, never Ubuntu's snap.
+# With dnf or yum: the distribution's chromium, else Google Chrome's rpm on x86_64.
+# With pacman: chromium. Never fatal: OpenAlgo runs without it, only /chart cannot draw.
+ensure_chart_browser() {
+    local found tmp candidate
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart browser: $found" "$GREEN"
+        return 0
+    fi
+    log_message "\nInstalling a browser for Telegram /chart rendering..." "$BLUE"
+    if command -v apt-get >/dev/null 2>&1; then
+        if [ "$(dpkg --print-architecture 2>/dev/null)" = "amd64" ]; then
+            tmp="$(mktemp -d)"
+            if curl -fsSL -o "$tmp/google-chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; then
+                sudo apt-get install -y "$tmp/google-chrome.deb" fonts-liberation || true
+            fi
+            rm -rf "$tmp"
+        fi
+        if ! chart_browser_path >/dev/null; then
+            # On Ubuntu the only candidate is the snap stub, whose version names the snap.
+            candidate="$(apt-cache policy chromium 2>/dev/null | awk '/Candidate:/ {print $2}')"
+            if [ -n "$candidate" ] && [ "$candidate" != "(none)" ] && [[ "$candidate" != *snap* ]]; then
+                sudo apt-get install -y chromium fonts-liberation || true
+            fi
+        fi
+    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+        local pm=dnf
+        command -v dnf >/dev/null 2>&1 || pm=yum
+        sudo "$pm" install -y chromium liberation-fonts || true
+        if ! chart_browser_path >/dev/null && [ "$(uname -m)" = "x86_64" ]; then
+            sudo "$pm" install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm liberation-fonts || true
+        fi
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm --needed chromium ttf-liberation || true
+    fi
+    if found="$(chart_browser_path)"; then
+        log_message "Telegram /chart will use $found" "$GREEN"
+        if command -v snap >/dev/null 2>&1 && snap list chromium >/dev/null 2>&1; then
+            log_message "The chromium snap is not used by OpenAlgo. If nothing else needs it: sudo snap remove chromium" "$YELLOW"
+        fi
+    else
+        log_message "No browser the OpenAlgo service can start was installed, so Telegram /chart will not draw charts" "$YELLOW"
+        log_message "Install Google Chrome (amd64) or your distribution's chromium package; on arm64 Ubuntu, Chromium exists only as a snap, which cannot run as a service" "$YELLOW"
+    fi
+    return 0
+}
+# <<< Telegram /chart browser
+
 # Start logging
 log_message "Starting OpenAlgo update log at: $LOG_FILE" "$BLUE"
 log_message "----------------------------------------" "$BLUE"
@@ -110,13 +189,15 @@ detect_uv() {
 
 # Find server deployments installed via install.sh
 #
-# Two layouts are supported:
+# Three layouts are supported:
 #   1. Simple (current install.sh)   /var/python/openalgo, service "openalgo"
 #   2. Legacy multi-deploy           /var/python/openalgo-flask/<deploy>/openalgo,
-#                                    service "openalgo-<deploy>" (still produced
-#                                    by install/install-multi.sh)
+#                                    service "openalgo-<deploy>"
+#   3. install/install-multi.sh      /var/python/openalgo-flask/openalgoN,
+#                                    service "openalgoN" (see find_multi_instances)
 # We try the simple layout first because it's unambiguous; only fall back
-# to scanning the legacy parent dir when the simple path is absent.
+# to scanning the legacy parent dir when the simple path is absent, and to
+# install-multi.sh instances when neither is found.
 SIMPLE_PATH="/var/python/openalgo"
 DEPLOY_BASE="/var/python/openalgo-flask"
 SERVER_MODE=false
@@ -180,6 +261,113 @@ if [ "$SERVER_MODE" = false ] && [ ${#DEPLOYMENTS[@]} -gt 0 ]; then
     SERVICE_NAME="openalgo-$SELECTED_DEPLOY"
 
     log_message "\nUpdating deployment: $SELECTED_DEPLOY" "$BLUE"
+    log_message "Path: $OPENALGO_PATH" "$BLUE"
+    log_message "Service: $SERVICE_NAME" "$BLUE"
+fi
+
+# Instances made by install/install-multi.sh
+#
+# install-multi.sh clones each instance straight into its own folder under
+# $DEPLOY_BASE (openalgo1, openalgo2, ...), with its Python environment in
+# <folder>/venv and a systemd service named after the folder. Neither layout
+# above matches that, so the updater used to fall through to local development
+# mode and update the instance as root, with no service restart. An instance is
+# a checkout (.git, app.py, .env and venv) whose service file's
+# WorkingDirectory is that folder, the same test the web server switch script
+# uses to find OpenAlgo services. Only looked for when neither layout above was
+# found, so those behave exactly as before.
+MULTI_SYSTEMD_DIR="/etc/systemd/system"
+
+find_multi_instances() {
+    local dir name unit workdir
+    [ -d "$DEPLOY_BASE" ] || return 0
+    for dir in "$DEPLOY_BASE"/*/; do
+        dir="${dir%/}"
+        [ -d "$dir/.git" ] && [ -f "$dir/app.py" ] && [ -f "$dir/.env" ] || continue
+        [ -x "$dir/venv/bin/python" ] || continue
+        name="$(basename "$dir")"
+        unit="$MULTI_SYSTEMD_DIR/$name.service"
+        [ -f "$unit" ] || continue
+        workdir="$(tr -d '\r' < "$unit" | grep -E '^[[:space:]]*WorkingDirectory=' | tail -n 1 \
+            | sed -E 's/^[[:space:]]*WorkingDirectory=//')"
+        [ "${workdir%/}" = "$dir" ] || continue
+        printf '%s\n' "$name"
+    done
+}
+
+if [ "$SERVER_MODE" = false ]; then
+    MULTI_INSTANCES=($(find_multi_instances))
+fi
+
+# The instance this updater belongs to, else the one it was run from.
+SELECTED_DEPLOY=""
+OWN_CHECKOUT=""
+if [ "$SERVER_MODE" = false ] && [ ${#MULTI_INSTANCES[@]} -gt 0 ]; then
+    for here in "$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd -P)" "$(pwd -P)"; do
+        for name in "${MULTI_INSTANCES[@]}"; do
+            instance_dir="$(cd "$DEPLOY_BASE/$name" 2>/dev/null && pwd -P)"
+            case "$here/" in
+                "$instance_dir"/*) SELECTED_DEPLOY="$name"; break 2 ;;
+            esac
+        done
+    done
+
+    # Run from an OpenAlgo checkout that is none of the instances, such as a
+    # developer clone on the same server: that checkout is the one asked for,
+    # and it is updated in local development mode exactly as before these
+    # instances were recognised. Picking an instance here instead would stop
+    # and restart its service, in the middle of a trading day, for an update
+    # nobody asked it to take.
+    if [ -z "$SELECTED_DEPLOY" ]; then
+        if [ -d ".git" ] && [ -f "app.py" ]; then
+            OWN_CHECKOUT="$(pwd -P)"
+        elif [ -d "$SCRIPT_DIR/../.git" ] && [ -f "$SCRIPT_DIR/../app.py" ]; then
+            OWN_CHECKOUT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+        fi
+    fi
+    if [ -n "$OWN_CHECKOUT" ]; then
+        log_message "This updater was run from $OWN_CHECKOUT, which is not one of the OpenAlgo instances made by install-multi.sh, so that checkout is the one updated and no instance is touched." "$YELLOW"
+        log_message "To update an instance, run the updater from inside it, for example:" "$YELLOW"
+        log_message "  cd $DEPLOY_BASE/${MULTI_INSTANCES[0]} && sudo bash install/update.sh" "$YELLOW"
+    fi
+fi
+
+if [ "$SERVER_MODE" = false ] && [ ${#MULTI_INSTANCES[@]} -gt 0 ] && [ -z "$OWN_CHECKOUT" ]; then
+    SERVER_MODE=true
+    log_message "Found ${#MULTI_INSTANCES[@]} OpenAlgo instance(s) made by install-multi.sh:" "$GREEN"
+    for i in "${!MULTI_INSTANCES[@]}"; do
+        log_message "  $((i+1)). ${MULTI_INSTANCES[$i]}" "$BLUE"
+    done
+
+    if [ -n "$SELECTED_DEPLOY" ]; then
+        log_message "\nSelected the instance this updater was run from: $SELECTED_DEPLOY" "$GREEN"
+    elif [ ${#MULTI_INSTANCES[@]} -eq 1 ]; then
+        SELECTED_DEPLOY="${MULTI_INSTANCES[0]}"
+        log_message "\nAuto-selected: $SELECTED_DEPLOY" "$GREEN"
+    else
+        echo ""
+        while true; do
+            if ! read -p "Select instance to update (1-${#MULTI_INSTANCES[@]}): " choice; then
+                log_message "\nNo instance was chosen, so nothing was changed. Run the updater from inside the instance you want to update, for example:" "$RED"
+                log_message "  cd $DEPLOY_BASE/${MULTI_INSTANCES[0]} && sudo bash install/update.sh" "$YELLOW"
+                exit 1
+            fi
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#MULTI_INSTANCES[@]} ]; then
+                SELECTED_DEPLOY="${MULTI_INSTANCES[$((choice-1))]}"
+                break
+            else
+                log_message "Invalid choice. Please enter a number between 1 and ${#MULTI_INSTANCES[@]}." "$RED"
+            fi
+        done
+    fi
+
+    # Derive paths from the instance folder (install-multi.sh layout)
+    BASE_PATH="$DEPLOY_BASE/$SELECTED_DEPLOY"
+    OPENALGO_PATH="$BASE_PATH"
+    VENV_PATH="$BASE_PATH/venv"
+    SERVICE_NAME="$SELECTED_DEPLOY"
+
+    log_message "\nUpdating instance: $SELECTED_DEPLOY" "$BLUE"
     log_message "Path: $OPENALGO_PATH" "$BLUE"
     log_message "Service: $SERVICE_NAME" "$BLUE"
 fi
@@ -482,15 +670,31 @@ if [ "$SERVER_MODE" = true ]; then
     sudo chown -R "$WEB_USER:$WEB_GROUP" "$OPENALGO_PATH"
     sudo chmod 700 "$OPENALGO_PATH/keys"
 
+    # The recursive chmod 755 above opens every file to all local accounts,
+    # undoing step 4b. Close the files that hold secrets again, as install.sh
+    # and install-multi.sh do: .env (APP_KEY, API_KEY_PEPPER, broker
+    # credentials) and the databases (sessions, auth tokens, orders).
+    # gunicorn and the migrations run as the owner, so owner-only is enough.
+    if [ -f "$OPENALGO_PATH/.env" ]; then
+        sudo chmod 600 "$OPENALGO_PATH/.env"
+    fi
+    sudo find "$OPENALGO_PATH/db" -type f -exec chmod 600 {} +
+
     log_message "Permissions set successfully" "$GREEN"
 
     # Run migrations as the web user (database files are owned by web user)
     if [ -f "$OPENALGO_PATH/upgrade/migrate_all.py" ]; then
         log_message "Running database migrations..." "$BLUE"
         sudo -u "$WEB_USER" bash -c "source $VENV_PATH/bin/activate && cd $OPENALGO_PATH && python upgrade/migrate_all.py" 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        migration_status=${PIPESTATUS[0]}
+        if [ "$migration_status" -ne 0 ]; then
             log_message "Retrying migrations with elevated permissions..." "$YELLOW"
             sudo bash -c "source $VENV_PATH/bin/activate && cd $OPENALGO_PATH && python upgrade/migrate_all.py" 2>&1 | tee -a "$LOG_FILE"
+            migration_status=${PIPESTATUS[0]}
+            if [ "$migration_status" -ne 0 ]; then
+                log_message "Database migrations failed after retry; update aborted." "$RED"
+                exit 1
+            fi
         fi
         log_message "Database migrations completed" "$GREEN"
     else
@@ -501,10 +705,27 @@ else
     if [ -f "$OPENALGO_PATH/upgrade/migrate_all.py" ]; then
         cd "$OPENALGO_PATH"
         $UV_CMD run upgrade/migrate_all.py 2>&1 | tee -a "$LOG_FILE"
+        migration_status=${PIPESTATUS[0]}
+        if [ "$migration_status" -ne 0 ]; then
+            log_message "Database migrations failed; update aborted." "$RED"
+            exit 1
+        fi
         log_message "Database migrations completed" "$GREEN"
     else
         log_message "No migration script found (upgrade/migrate_all.py)" "$YELLOW"
     fi
+fi
+
+# ============================================
+# Telegram /chart browser
+# ============================================
+# Installs made before this check could hold only Ubuntu's chromium snap, which the
+# service account cannot start, so /chart never drew. A server gets a working browser
+# here; a local install, running as its own user, is told what to install.
+if [ "$SERVER_MODE" = true ]; then
+    ensure_chart_browser
+elif ! chart_browser_path >/dev/null; then
+    log_message "Telegram /chart needs Google Chrome or a Chromium that is not a snap, and none was found" "$YELLOW"
 fi
 
 # ============================================
@@ -516,9 +737,156 @@ if [ "$SERVER_MODE" = true ]; then
     # Reload systemd in case service file changed
     sudo systemctl daemon-reload
 
+    # Retrofit deployments created by older installers. The guard is written
+    # into each OpenAlgo server block, so inherited/default nginx access logs
+    # are replaced by a conditional log that excludes replayable URL secrets.
+    # Every edit is backed up and nginx -t must pass before the backup is
+    # discarded; otherwise all touched files are restored.
+    harden_nginx_webhook_logs() {
+        local backup_dir manifest conf temp_file backup_file changed=0 index=0
+        backup_dir=$(mktemp -d /tmp/openalgo-nginx-log-guard-XXXXXX) || return 1
+        manifest="$backup_dir/manifest"
+        : > "$manifest"
+
+        cleanup_nginx_log_guard_temp() {
+            sudo find "$backup_dir" -type f -delete 2>/dev/null || true
+            sudo rmdir "$backup_dir" 2>/dev/null || true
+        }
+
+        restore_nginx_log_guard_backups() {
+            while IFS="$(printf '\t')" read -r conf backup_file; do
+                [ -n "$conf" ] || continue
+                sudo cp "$backup_file" "$conf"
+            done < "$manifest"
+        }
+
+        for conf in /etc/nginx/sites-available/* /etc/nginx/conf.d/*.conf; do
+            [ -f "$conf" ] || continue
+            grep -q 'unix:.*\.sock\|openalgo\|gunicorn' "$conf" 2>/dev/null || continue
+            grep -q 'OPENALGO_WEBHOOK_LOG_GUARD' "$conf" 2>/dev/null && continue
+
+            index=$((index + 1))
+            backup_file="$backup_dir/config-$index"
+            temp_file="$backup_dir/rendered-$index"
+            sudo cp "$conf" "$backup_file" || {
+                restore_nginx_log_guard_backups
+                cleanup_nginx_log_guard_temp
+                return 1
+            }
+            printf '%s\t%s\n' "$conf" "$backup_file" >> "$manifest"
+
+            awk '
+                function emit_guard(indent) {
+                    print indent "# OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs."
+                    print indent "set $openalgo_loggable 1;"
+                    print indent "if ($uri ~ ^/(strategy|flow|chartink)/webhook/) {"
+                    print indent "    set $openalgo_loggable 0;"
+                    print indent "}"
+                    print indent "access_log /var/log/nginx/openalgo_access.log combined if=$openalgo_loggable;"
+                }
+                {
+                    line = $0
+                    trimmed = line
+                    sub(/^[[:space:]]+/, "", trimmed)
+                    if (trimmed ~ /^access_log[[:space:]]+/ &&
+                        trimmed !~ /^access_log[[:space:]]+off[[:space:]]*;/ &&
+                        trimmed !~ /if=\$openalgo_loggable/) {
+                        if (trimmed ~ /^access_log[[:space:]]+[^[:space:];]+[[:space:]]*;/) {
+                            sub(/;[[:space:]]*$/, " combined if=$openalgo_loggable;", line)
+                        } else {
+                            sub(/;[[:space:]]*$/, " if=$openalgo_loggable;", line)
+                        }
+                    }
+                    print line
+                    if (trimmed ~ /^server_name[[:space:]]+/) {
+                        match(line, /^[[:space:]]*/)
+                        emit_guard(substr(line, 1, RLENGTH))
+                    }
+                }
+            ' "$conf" > "$temp_file" || {
+                restore_nginx_log_guard_backups
+                cleanup_nginx_log_guard_temp
+                return 1
+            }
+            sudo cp "$temp_file" "$conf" || {
+                restore_nginx_log_guard_backups
+                cleanup_nginx_log_guard_temp
+                return 1
+            }
+            changed=1
+        done
+
+        if [ "$changed" -eq 1 ] && ! sudo nginx -t; then
+            restore_nginx_log_guard_backups
+            sudo nginx -t >/dev/null 2>&1 || true
+            log_message "Restored nginx configs after webhook log guard validation failed" "$RED"
+            cleanup_nginx_log_guard_temp
+            return 1
+        fi
+
+        if [ "$changed" -eq 1 ]; then
+            log_message "Installed OPENALGO_WEBHOOK_LOG_GUARD in existing nginx config(s)" "$GREEN"
+        fi
+        cleanup_nginx_log_guard_temp
+        return 0
+    }
+
+    harden_nginx_webhook_logs
+    check_status "Failed to harden nginx webhook access logs"
+
     # Start the OpenAlgo service
     sudo systemctl start "$SERVICE_NAME"
     check_status "Failed to start $SERVICE_NAME"
+
+    # --------------------------------------------------------------
+    # Warn about the forced WebSocket upgrade header on the main proxy
+    # block. Configs written by earlier installers set
+    #     proxy_set_header Upgrade $http_upgrade;
+    #     proxy_set_header Connection "upgrade";
+    # inside `location / {`, which carries ordinary HTTP, not WebSockets
+    # (/ws, /ws/ and /socket.io/ have their own blocks). Every normal
+    # request then reaches gunicorn claiming an upgrade with an empty
+    # Upgrade:, which breaks HTTP/1.1 keep-alive and shows up as
+    # intermittent truncated asset responses and 5xx (issue #1807).
+    #
+    # This only reports; it does not edit nginx configs. A wrong automated
+    # rewrite of a live reverse proxy takes the whole instance offline, and
+    # admins routinely hand-customise these files, so the edit is left to a
+    # human who can run `nginx -t` and watch the reload.
+    # --------------------------------------------------------------
+    check_nginx_upgrade_header() {
+        local conf found=""
+        for conf in /etc/nginx/sites-available/* /etc/nginx/conf.d/*.conf; do
+            [ -f "$conf" ] || continue
+            grep -q 'unix:.*\.sock\|openalgo\|gunicorn' "$conf" 2>/dev/null || continue
+            # Report only when `location / {` still forces the header.
+            if awk '
+                /location \/ \{/           { inroot = 1 }
+                inroot && /^[[:space:]]*\}/ { inroot = 0 }
+                inroot && /proxy_set_header[[:space:]]+Connection[[:space:]]+"upgrade";/ { hit = 1 }
+                END { exit !hit }
+            ' "$conf" 2>/dev/null; then
+                found="$found $conf"
+            fi
+        done
+
+        [ -n "$found" ] || return 0
+
+        log_message "
+Nginx: the main proxy block forces a WebSocket upgrade header" "$YELLOW"
+        log_message "Affected config(s):$found" "$YELLOW"
+        log_message "Inside the 'location / {' block only, replace these two lines:" "$YELLOW"
+        log_message "    proxy_set_header Upgrade \$http_upgrade;" "$YELLOW"
+        log_message "    proxy_set_header Connection \"upgrade\";" "$YELLOW"
+        log_message "with this single line:" "$YELLOW"
+        log_message "    proxy_set_header Connection \"\";" "$YELLOW"
+        log_message "Leave the /ws, /ws/ and /socket.io/ blocks unchanged, then run:" "$YELLOW"
+        log_message "    sudo nginx -t && sudo systemctl reload nginx" "$YELLOW"
+        log_message "Background: https://github.com/marketcalls/openalgo/issues/1807
+" "$YELLOW"
+    }
+
+    check_nginx_upgrade_header
 
     # Reload Nginx
     sudo systemctl reload nginx
@@ -597,3 +965,23 @@ if [ "$STASHED" = true ]; then
 fi
 
 log_message "\nUpdate completed successfully!" "$GREEN"
+
+# OPENALGO WEB SERVER SWITCH: begin
+# Only for an install whose .env asks for the gthread web server
+# (OPENALGO_WORKER_CLASS = 'gthread') and whose service does not use the
+# launcher yet. Every other install skips this silently: nothing is printed
+# and nothing changes. The switch script comes from the code just pulled and
+# keeps its own backup, checks OpenAlgo after the restart and puts the
+# previous service file back if anything fails. It refuses to restart
+# OpenAlgo between 09:00 and 23:30 IST. Guide: docs/gthread/README.md
+if [ "$SERVER_MODE" = true ] && [ -f "$OPENALGO_PATH/install/switch-worker.sh" ] \
+    && sudo -n bash "$OPENALGO_PATH/install/switch-worker.sh" --check --service "$SERVICE_NAME" > /dev/null 2>&1; then
+    log_message "\nYour .env asks for the gthread web server. Switching $SERVICE_NAME to it..." "$BLUE"
+    sudo bash "$OPENALGO_PATH/install/switch-worker.sh" --service "$SERVICE_NAME" --yes 2>&1 | tee -a "$LOG_FILE"
+    switch_status=${PIPESTATUS[0]}
+    if [ "$switch_status" -eq 2 ]; then
+        log_message "OpenAlgo is not running after the switch. See the messages above." "$RED"
+        exit 1
+    fi
+fi
+# OPENALGO WEB SERVER SWITCH: end

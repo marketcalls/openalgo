@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, OrderCancelledEvent, OrderCancelFailedEvent
+from utils.broker_backpressure import BrokerBusyError
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -133,6 +134,24 @@ def cancel_order_with_auth(
     try:
         # Use the dynamically imported module's function to cancel the order
         response_message, status_code = broker_module.cancel_order(orderid, auth_token)
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Cancel not sent, broker busy: {e}")
+        error_response = {"status": "error", "message": str(e)}
+        bus.publish(
+            OrderCancelFailedEvent(
+                mode="live",
+                api_type=API_TYPE,
+                orderid=orderid,
+                error_message=str(e),
+                request_data=order_request_data,
+                response_data=error_response,
+                api_key=original_data.get("apikey", ""),
+            )
+        )
+        return False, error_response, 429
     except Exception as e:
         logger.exception(f"Error in broker_module.cancel_order: {e}")
         error_response = {

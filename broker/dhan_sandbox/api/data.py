@@ -18,6 +18,11 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# MCX index derivatives. Dhan classifies these as FUTIDX / OPTIDX, not the
+# FUTCOM / OPTFUT used by the commodity contracts, so the history API needs the
+# index instrument type for them.
+MCX_INDEX_UNDERLYINGS = ("MCXBULLDEX", "MCXMETLDEX", "MCXENRGDEX")
+
 
 def _get_dhan_client_id() -> str | None:
     """Extract Dhan client-id from BROKER_API_KEY env value."""
@@ -211,6 +216,7 @@ class BrokerData:
             "NFO": "NSE_FNO",  # NSE F&O
             "BFO": "BSE_FNO",  # BSE F&O
             "MCX": "MCX_COMM",  # MCX Commodity
+            "NCO": "NSE_COMM",  # NSE Commodity
             "CDS": "NSE_CURRENCY",  # NSE Currency
             "BCD": "BSE_CURRENCY",  # BSE Currency
             "NSE_INDEX": "IDX_I",  # NSE Index
@@ -270,13 +276,20 @@ class BrokerData:
                 # For stock futures
                 return "FUTSTK"
 
-        # For commodity market (MCX)
-        elif exchange == "MCX":
-            # For commodity options on futures
+        # NSE commodity derivatives, listed by Dhan as OPTFUT like MCX.
+        elif exchange == "NCO":
             if symbol.endswith("CE") or symbol.endswith("PE"):
                 return "OPTFUT"
-            # For commodity futures
             return "FUTCOM"
+
+        # For commodity market (MCX)
+        elif exchange == "MCX":
+            is_index = symbol.startswith(MCX_INDEX_UNDERLYINGS)
+            # For commodity options on futures, or options on an MCX index
+            if symbol.endswith("CE") or symbol.endswith("PE"):
+                return "OPTIDX" if is_index else "OPTFUT"
+            # For commodity futures, or an MCX index future
+            return "FUTIDX" if is_index else "FUTCOM"
 
         # For currency market (CDS, BCD)
         elif exchange in ["CDS", "BCD"]:
@@ -659,48 +672,13 @@ class BrokerData:
             # Create DataFrame from all candles
             df = pd.DataFrame(all_candles)
             if df.empty:
-                logger.info(f"Sandbox returned empty history for {symbol}, generating fake candles.")
-
-                # Calculate interval in seconds based on requested timeframe
-                interval_seconds = self.timeframe_map.get(interval, 300)
-
-                # Determine number of candles to generate based on date range
-                start_dt = datetime.strptime(str(start_date), "%Y-%m-%d")
-                end_dt = datetime.strptime(str(end_date), "%Y-%m-%d")
-                date_range_days = (end_dt - start_dt).days + 1
-
-                # For daily data, generate one candle per day in range
-                if interval == "D":
-                    num_candles = min(date_range_days, 365)  # Cap at 1 year
-                    base_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-                else:
-                    # For intraday, generate candles from market open
-                    # Calculate trading hours in seconds (9:15 AM to 3:30 PM = 6h 15m = 22500 seconds)
-                    trading_session_seconds = 6 * 60 + 15  # 375 minutes
-                    num_candles = min(trading_session_seconds // interval_seconds, 75)
-                    base_dt = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
-
-                base_ts = int(base_dt.timestamp())
-                quote_tmpl = {"ltp": 0, "open": 0, "high": 0, "low": 0, "volume": 0, "oi": 0}
-
-                # Generate candles respecting the requested interval
-                for i in range(num_candles):
-                    candle_ts = base_ts + (i * interval_seconds)
-                    realistic = self._apply_sandbox_mock_realism(
-                        symbol,
-                        quote_tmpl.copy(),
-                        seed=candle_ts,
-                    )
-                    fake_candles.append({
-                        "timestamp": candle_ts,
-                        "open": realistic["open"],
-                        "high": realistic["high"],
-                        "low": realistic["low"],
-                        "close": realistic["ltp"],
-                        "volume": realistic["volume"],
-                        "oi": realistic["oi"],
-                    })
-                df = pd.DataFrame(fake_candles)
+                # No candles is reported as no candles, as live Dhan does.
+                # Placeholder bars would be dated today whatever range was asked
+                # for and priced from noise, and a chart or backtest cannot tell
+                # them from real ones.
+                df = pd.DataFrame(
+                    columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
+                )
             else:
                 # Sort by timestamp and remove duplicates
                 df = (
@@ -956,8 +934,10 @@ class BrokerData:
 
         quote["ltp"] = round(max(0.05, ltp), 2)
         quote["open"] = round(max(0.05, ltp_center + self._stable_noise(seed_key + "|open", -span, span)), 2)
-        quote["high"] = round(max(quote["ltp"], ltp_center + self._stable_noise(seed_key + "|high", 0, span * 1.8)), 2)
-        quote["low"] = round(max(0.05, min(quote["ltp"], ltp_center - abs(self._stable_noise(seed_key + "|low", 0, span * 1.8)))), 2)
+        # open is drawn independently of ltp, so high and low must bound it too;
+        # the /trading chart rejects the whole history on one malformed candle.
+        quote["high"] = round(max(quote["ltp"], quote["open"], ltp_center + self._stable_noise(seed_key + "|high", 0, span * 1.8)), 2)
+        quote["low"] = round(max(0.05, min(quote["ltp"], quote["open"], ltp_center - abs(self._stable_noise(seed_key + "|low", 0, span * 1.8)))), 2)
 
         if not quote.get("oi"):
             quote["oi"] = max(1000, int(abs(self._stable_noise(seed_key + "|oi", 1000, 100000))))

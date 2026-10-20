@@ -61,7 +61,10 @@ def authenticate_broker(userid, authCode):
         data_dict = response.json()
 
         # Log full response for debugging
-        logger.info(f"AliceBlue API response: {json.dumps(data_dict, indent=2)}")
+        logger.info(
+            f"AliceBlue API response: stat={data_dict.get('stat')} "
+            f"fields={sorted(data_dict.keys())}"
+        )
 
         # --- Parse the response ---
 
@@ -84,7 +87,9 @@ def authenticate_broker(userid, authCode):
             return None, None, f"API error: {error_msg}"
 
         # If we got here, we couldn't find a session token
-        logger.error(f"Couldn't extract userSession from response: {data_dict}")
+        logger.error(
+            f"Couldn't extract userSession from response. fields={sorted(data_dict.keys())}"
+        )
         return (
             None,
             None,

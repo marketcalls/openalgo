@@ -30,6 +30,7 @@ Drift check:
 
 from __future__ import annotations
 
+import threading
 from typing import Callable, Iterable
 
 from utils.logging import get_logger
@@ -117,17 +118,64 @@ TOOL_SCOPES: dict[str, str] = {
 }
 
 
+# Tools that change something but are deliberately not write-scoped.
+# Every entry is a tool a read-only token can still trigger, so each one
+# needs a justification next to its TOOL_SCOPES entry above.
+WRITE_SCOPE_EXCEPTIONS = {"send_telegram_alert"}
+
+
 def required_scope(tool_name: str) -> str | None:
     """Return the scope required to call ``tool_name``, or None if unknown."""
     return TOOL_SCOPES.get(tool_name)
 
 
+def active_tool_names() -> set[str] | None:
+    """Tool names the MCP server actually registered this boot.
+
+    ``mcp/mcpserver.py`` narrows its own registration from
+    ``OPENALGO_MCP_TOOLSETS`` / ``OPENALGO_MCP_READ_ONLY``. The HTTP
+    transport reads the result here so both transports advertise and
+    accept the same set — an operator who boots read-only must not find
+    order placement still reachable over HTTP.
+
+    Returns None when the set cannot be determined, which callers treat
+    as "no filtering" so a metadata failure never takes the transport
+    down. ``tools/list`` did not previously load the tool module at all,
+    so the load is guarded here rather than allowed to surface as a
+    JSON-RPC error.
+    """
+    try:
+        module = _load_mcpserver_module()
+    except Exception:
+        logger.exception("Could not load mcp/mcpserver.py to read active tools")
+        return None
+    names = getattr(module, "ACTIVE_TOOL_NAMES", None) if module else None
+    if not names:
+        return None
+    return set(names)
+
+
 def list_tools_for_scopes(granted_scopes: Iterable[str]) -> list[str]:
-    """Tool names callable under at least one of the granted scopes."""
+    """Tool names callable under at least one of the granted scopes.
+
+    Intersected with the tools actually registered this boot.
+    """
     granted = set(granted_scopes)
+    active = active_tool_names()
     return sorted(
-        name for name, scope in TOOL_SCOPES.items() if scope in granted
+        name
+        for name, scope in TOOL_SCOPES.items()
+        if scope in granted and (active is None or name in active)
     )
+
+
+#: Serialises the one-time load of mcp/mcpserver.py. Two first MCP requests
+#: arriving together (initialize and tools/list) used to execute the file
+#: twice, replacing sys.modules["openalgo_mcp_server"] under the first and
+#: building duplicate SDK clients and tool registrations. A plain stdlib lock,
+#: green under eventlet: only request code loads the module, and the load is
+#: file I/O and imports, which must not hold a real lock under the hub.
+_mcpserver_load_lock = threading.Lock()
 
 
 def _load_mcpserver_module():
@@ -137,15 +185,24 @@ def _load_mcpserver_module():
     ``__init__.py``) and the pip-installed ``mcp`` package shadows the
     name in normal imports. To reach our tool definitions we therefore
     resolve the file by path and load it through ``importlib.util``.
-    Cached on the function attribute so repeat calls are free.
+    Cached on the function attribute so repeat calls are free, and loaded
+    by exactly one caller.
     """
-    import importlib.util
-    import os
-    import sys
-
     cached = getattr(_load_mcpserver_module, "_module", None)
     if cached is not None:
         return cached
+    with _mcpserver_load_lock:
+        cached = getattr(_load_mcpserver_module, "_module", None)
+        if cached is not None:
+            return cached
+        return _load_mcpserver_module_locked()
+
+
+def _load_mcpserver_module_locked():
+    """The load behind _load_mcpserver_module. Call with its lock held."""
+    import importlib.util
+    import os
+    import sys
 
     # This file lives at <project>/utils/mcp_tool_registry.py; the MCP
     # entry point lives at <project>/mcp/mcpserver.py. Walk up + over.
@@ -169,8 +226,15 @@ def get_tool_callable(tool_name: str) -> Callable | None:
     The HTTP transport is responsible for setting
     ``OPENALGO_MCP_HTTP_BOOT=1`` before this module is loaded so the
     stdio argv check is bypassed.
+
+    Returns None for a tool the server did not register this boot, so a
+    narrowed server (read-only, or a subset of toolsets) refuses the
+    call instead of running a tool it never advertised.
     """
     if tool_name not in TOOL_SCOPES:
+        return None
+    active = active_tool_names()
+    if active is not None and tool_name not in active:
         return None
     module = _load_mcpserver_module()
     if module is None:
@@ -179,21 +243,20 @@ def get_tool_callable(tool_name: str) -> Callable | None:
     return fn if callable(fn) else None
 
 
-def audit_registry() -> None:
-    """Warn about MCP tools registered with FastMCP but missing a scope.
+def registered_tool_names() -> set[str]:
+    """Tool names FastMCP holds in its internal tool table.
 
     Best-effort — FastMCP's internal layout has shifted across versions,
-    so multiple attribute paths are tried. A False return from this
-    function is informational only; the HTTP transport still functions
-    using TOOL_SCOPES alone.
+    so multiple attribute paths are tried. An empty set means the layout
+    was not recognised, not that there are no tools.
     """
     _mod = _load_mcpserver_module()
     if _mod is None:
-        return
+        return set()
 
     fastmcp = getattr(_mod, "mcp", None)
     if fastmcp is None:
-        return
+        return set()
 
     candidates = []
     for path in ("_tool_manager", "_tool_registry", "tools"):
@@ -208,17 +271,74 @@ def audit_registry() -> None:
         if isinstance(obj, dict):
             candidates.append(obj)
 
-    if not candidates:
-        return
-
     seen: set[str] = set()
     for d in candidates:
         seen.update(d.keys())
+    return seen
 
-    missing = seen - set(TOOL_SCOPES.keys())
+
+def audit_registry() -> None:
+    """Log drift between mcp/mcpserver.py and this scope map.
+
+    Three checks, all advisory — the HTTP transport still functions on
+    TOOL_SCOPES alone, so a metadata mismatch degrades to a log line
+    rather than a failed boot:
+
+    1. A tool registered with FastMCP but absent from TOOL_SCOPES is
+       unreachable over HTTP.
+    2. A TOOL_SCOPES entry with no corresponding tool is dead config,
+       usually a rename that only got applied on one side.
+    3. A tool whose annotations disagree with its scope — a write tool
+       filed under a read scope would be callable with a read-only
+       token, so this is the one that actually matters for security.
+
+    test/test_mcp_integrity.py asserts all three are clean, so in a
+    healthy tree these never fire.
+    """
+    _mod = _load_mcpserver_module()
+    if _mod is None:
+        return
+
+    seen = registered_tool_names()
+    if not seen:
+        return
+
+    scoped = set(TOOL_SCOPES)
+
+    missing = seen - scoped
     if missing:
         logger.warning(
             "MCP tools registered with FastMCP but missing TOOL_SCOPES "
             f"entries: {sorted(missing)}. They will not be reachable via "
             "the HTTP transport. Add them to utils/mcp_tool_registry.py."
         )
+
+    # Only meaningful when the server booted unfiltered; a narrowed
+    # server is expected to leave scope entries without a live tool.
+    tool_meta = getattr(_mod, "TOOL_META", {}) or {}
+    if tool_meta and len(seen) == len(tool_meta):
+        orphaned = scoped - seen
+        if orphaned:
+            logger.warning(
+                f"TOOL_SCOPES entries with no registered MCP tool: {sorted(orphaned)}. "
+                "Stale after a rename or removal; drop them from "
+                "utils/mcp_tool_registry.py."
+            )
+
+    for name, meta in tool_meta.items():
+        scope = TOOL_SCOPES.get(name)
+        if scope is None or name in WRITE_SCOPE_EXCEPTIONS:
+            continue
+        if not meta.read_only and scope != SCOPE_WRITE_ORDERS:
+            logger.warning(
+                f"MCP tool '{name}' is annotated as a write "
+                f"(readOnlyHint=False) but carries scope '{scope}'. A read-only "
+                "token could call it. Fix the scope in "
+                "utils/mcp_tool_registry.py or the annotation in mcp/mcpserver.py."
+            )
+        elif meta.read_only and scope == SCOPE_WRITE_ORDERS:
+            logger.warning(
+                f"MCP tool '{name}' is annotated read-only but requires the "
+                f"'{SCOPE_WRITE_ORDERS}' scope. Clients will be denied a call "
+                "their annotations say is safe."
+            )

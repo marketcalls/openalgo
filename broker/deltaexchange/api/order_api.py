@@ -5,6 +5,14 @@ import threading
 import time
 
 from broker.deltaexchange.api.baseurl import get_auth_headers, get_url
+from broker.deltaexchange.api.rate_limiter import (
+    MAX_RETRIES,
+    PRIVATE,
+    DeltaRateLimitError,
+    consume,
+    note_429,
+    retry_delay_from_headers,
+)
 from broker.deltaexchange.mapping.transform_data import (
     map_exchange_type,
     map_product_type,
@@ -15,6 +23,12 @@ from broker.deltaexchange.mapping.transform_data import (
 from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
@@ -45,15 +59,6 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
     body = payload if payload else ""
 
-    headers = get_auth_headers(
-        method=method.upper(),
-        path=endpoint,
-        query_string=query_string,
-        payload=body,
-        api_key=auth,
-        api_secret=api_secret,
-    )
-
     # Build full URL (include query string inline so the signed string matches exactly)
     url = get_url(endpoint)
     full_url = url + query_string if query_string else url
@@ -61,14 +66,34 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     client = get_httpx_client()
     logger.debug(f"[DeltaExchange] {method.upper()} {full_url}")
 
-    # Retry up to 3 times on HTTP 429 (rate limit) with exponential backoff + jitter.
-    # The Retry-After header is honoured when present.  On each retry the HMAC
-    # signature is rebuilt with a fresh timestamp.
-    _MAX_RETRIES = 3
-    _RETRY_BASE  = 1.0  # seconds; doubles each attempt
+    # Retry up to MAX_RETRIES times on HTTP 429.  Delta reports the wait in
+    # X-RATE-LIMIT-RESET (milliseconds until the 5-minute quota window resets),
+    # not Retry-After, so the delay comes from the shared rate limiter.  On each
+    # retry the HMAC signature is rebuilt with a fresh timestamp.
     response = None
 
-    for _attempt in range(_MAX_RETRIES + 1):
+    for _attempt in range(MAX_RETRIES + 1):
+        # Weighted quota accounting; authenticated calls draw on the per-user
+        # bucket, which public market data cannot exhaust.  This runs BEFORE the
+        # request is signed: consume() can block waiting for the quota window,
+        # and Delta rejects any signature more than 5 seconds old
+        # ("SignatureExpired"), so a signature made first would be dead on
+        # arrival.
+        try:
+            consume(endpoint, method=method, bucket=PRIVATE)
+        except DeltaRateLimitError as exc:
+            logger.error(f"[DeltaExchange] {exc}")
+            return {"success": False, "error": {"code": "rate_limited", "message": str(exc)}}
+
+        headers = get_auth_headers(
+            method=method.upper(),
+            path=endpoint,
+            query_string=query_string,
+            payload=body,
+            api_key=auth,
+            api_secret=api_secret,
+        )
+
         try:
             m = method.upper()
             if m == "GET":
@@ -85,26 +110,17 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
             logger.error(f"[DeltaExchange] Request error: {e}")
             return {"success": False, "error": {"code": "request_error", "message": str(e)}}
 
-        if response.status_code == 429 and _attempt < _MAX_RETRIES:
-            retry_after = response.headers.get("Retry-After")
-            wait = (
-                float(retry_after) if retry_after
-                else (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
-            )
+        if response.status_code == 429:
+            note_429(response.headers, bucket=PRIVATE)
+            if _attempt >= MAX_RETRIES:
+                break
+            wait = retry_delay_from_headers(response.headers, _attempt) + random.uniform(0.0, 0.5)
             logger.warning(
                 f"[DeltaExchange] HTTP 429 rate-limit on {endpoint} "
-                f"(attempt {_attempt + 1}/{_MAX_RETRIES}). Retrying in {wait:.1f}s ..."
+                f"(attempt {_attempt + 1}/{MAX_RETRIES}). Retrying in {wait:.1f}s ..."
             )
             time.sleep(wait)
-            # Re-sign with a fresh timestamp before the next attempt
-            headers = get_auth_headers(
-                method=method.upper(),
-                path=endpoint,
-                query_string=query_string,
-                payload=body,
-                api_key=auth,
-                api_secret=api_secret,
-            )
+            # The next pass re-signs with a fresh timestamp after consume().
             continue
         break  # success, non-429, or retries exhausted
 
@@ -231,7 +247,7 @@ def get_trade_book(auth):
 # Positions / holdings
 # ---------------------------------------------------------------------------
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Fetch all open positions — both derivatives (margined) and spot (wallet).
 
@@ -239,8 +255,13 @@ def get_positions(auth):
     Spot holdings come from GET /v2/wallet/balances — non-INR assets with
     a non-zero balance are synthesised into position-like dicts so they
     appear in the OpenAlgo position book alongside derivative positions.
+
+    A half that cannot be read is logged and left out, which is right for the
+    position book. The smart order passes strict=True, because a missing half
+    reads as flat there: it then raises PositionReadError instead.
     """
     positions = []
+    failures = []
 
     # 1. Derivative positions (perpetual futures, options)
     try:
@@ -250,8 +271,10 @@ def get_positions(auth):
             positions.extend(result.get("result", []))
         else:
             logger.warning(f"[DeltaExchange] get_positions/margined unexpected: {result}")
+            failures.append(f"positions/margined: {str(result)[:200]}")
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in get_positions/margined: {e}")
+        failures.append(f"positions/margined: {e}")
 
     # 2. Spot holdings from wallet balances
     try:
@@ -281,8 +304,15 @@ def get_positions(auth):
                     "unrealized_pnl": "0",
                     "_is_spot": True,  # Internal flag for downstream mapping
                 })
+        else:
+            logger.warning(f"[DeltaExchange] get_positions/wallet unexpected: {wallet_result}")
+            failures.append(f"wallet/balances: {str(wallet_result)[:200]}")
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception fetching spot wallet positions: {e}")
+        failures.append(f"wallet/balances: {e}")
+
+    if strict and failures:
+        raise PositionReadError("deltaexchange", "; ".join(failures))
 
     return positions
 
@@ -295,46 +325,50 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry only holds the symbols in use right now, and under the gthread
+# worker a smart order gives up after SMART_ORDER_LOCK_WAIT_SECONDS rather
+# than hold a request thread behind a slow broker. Under eventlet and the dev
+# server it waits as long as it takes, as before.
+_symbol_locks = SymbolLocks(name="deltaexchange smart orders")
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the book is returned to
+# its own caller but never cached, so the next order cannot size itself
+# against the position from before that fill.
+_position_cache = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the per-symbol smart-order lock for the body of a ``with`` block.
+
+    Yields True while held, or False when the bounded wait under the gthread
+    worker ran out; the caller then returns ``SymbolLocks.busy(symbol)`` and
+    places nothing.
+    """
+    return _symbol_locks.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """get_positions(strict=True) returns a list, or raises when a read failed."""
+    return isinstance(positions_data, list)
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _position_cache.get(
+        auth,
+        lambda: read_position_book(
+            "deltaexchange",
+            lambda: get_positions(auth, strict=True),
+            _position_book_ok,
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
     """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    _position_cache.invalidate(auth)
 
 
 
@@ -500,6 +534,7 @@ def place_bracket_order_api(data, auth):
     return place_order_api(data, auth)
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Smart order: adjusts position to reach the desired position_size.
@@ -514,7 +549,9 @@ def place_smartorder_api(data, auth):
     # Per-symbol lock: serialize smart orders per symbol
     symbol_lock = _get_symbol_lock(symbol, exchange, product)
 
-    with symbol_lock:
+    with symbol_lock as acquired:
+        if not acquired:
+            return SymbolLocks.busy(symbol)
         position_size = float(data.get("position_size", "0"))
 
         current_position = float(

@@ -1,26 +1,30 @@
 /**
  * Chart-type catalogue for the trading terminal: the dropdown
  * groups, each type's icon, its underlying openalgo-charts series, and (for
- * movement-driven types) a transform factory. Kagi and Point & Figure are
- * intentionally omitted for now.
+ * movement-driven types) the transform the chart applies to the raw bars.
  */
 
-import {
-  HeikinAshiTransform,
-  type ISeriesTransform,
-  LineBreakTransform,
-  RangeBarsTransform,
-  RenkoTransform,
-} from 'openalgo-charts/transform'
+import type { Bar, SeriesTransformSpec } from 'openalgo-charts'
+// Registers the in-chart transforms the specs below name, and the point and
+// figure and Kagi renderers. Imported here, beside the catalogue that names
+// them, so every chart reading this catalogue can apply them.
+import 'openalgo-charts/transform'
 import type { ReactNode } from 'react'
+import { ChromeIcon, hasChromeIcon, lineStroke24 } from './glyphs'
 
 export interface ChartTypeDef {
   value: string
   label: string
   iconKey: string
   series: string
-  /** Movement-driven types run this transform over the raw bars first. */
-  transform?: (boxSize: number) => ISeriesTransform
+  /**
+   * Movement-driven types: the transform the chart applies to the raw bars,
+   * for a box (or range, or reversal) sized from the instrument's price. The
+   * chart forms the elements again on every tick, so a brick appears as the
+   * bar that completes it arrives. `value` stays the saved name, which is why
+   * it is not always the transform's own id (`range` is `range-bars`).
+   */
+  transform?: (boxSize: number) => SeriesTransformSpec
   /** Baseline needs a baseValue in its series style. */
   baseline?: boolean
 }
@@ -28,22 +32,37 @@ export interface ChartTypeDef {
 /** Ordered groups (separators between them), matching the dropdown layout. */
 export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
   [
-    { value: 'bar', label: 'Bars (OHLC)', iconKey: 'bars', series: 'bar' },
-    { value: 'candlestick', label: 'Candles', iconKey: 'candle', series: 'candlestick' },
-    { value: 'hollow-candle', label: 'Hollow Candles', iconKey: 'hollow', series: 'hollow-candle' },
-    { value: 'volume-candle', label: 'Volume Candles', iconKey: 'vol', series: 'volume-candle' },
-    { value: 'high-low', label: 'High-Low', iconKey: 'highLow', series: 'high-low' },
+    { value: 'bar', label: 'Bars (OHLC)', iconKey: 'chart-bar', series: 'bar' },
+    { value: 'candlestick', label: 'Candles', iconKey: 'chart-candlestick', series: 'candlestick' },
+    {
+      value: 'hollow-candle',
+      label: 'Hollow Candles',
+      iconKey: 'chart-hollow-candle',
+      series: 'hollow-candle',
+    },
+    {
+      value: 'volume-candle',
+      label: 'Volume Candles',
+      iconKey: 'chart-volume-candle',
+      series: 'volume-candle',
+    },
+    { value: 'high-low', label: 'High-Low', iconKey: 'chart-high-low', series: 'high-low' },
   ],
   [
-    { value: 'line', label: 'Line', iconKey: 'line', series: 'line' },
-    { value: 'line-markers', label: 'Line + Markers', iconKey: 'lineDots', series: 'line-markers' },
-    { value: 'step', label: 'Step', iconKey: 'step', series: 'step' },
-    { value: 'area', label: 'Area', iconKey: 'area', series: 'area' },
-    { value: 'hlc-area', label: 'HLC Area', iconKey: 'area', series: 'hlc-area' },
+    { value: 'line', label: 'Line', iconKey: 'chart-line', series: 'line' },
+    {
+      value: 'line-markers',
+      label: 'Line + Markers',
+      iconKey: 'chart-line-markers',
+      series: 'line-markers',
+    },
+    { value: 'step', label: 'Step', iconKey: 'chart-step', series: 'step' },
+    { value: 'area', label: 'Area', iconKey: 'chart-area', series: 'area' },
+    { value: 'hlc-area', label: 'HLC Area', iconKey: 'chart-hlc-area', series: 'hlc-area' },
     {
       value: 'baseline',
       label: 'Baseline',
-      iconKey: 'baseline',
+      iconKey: 'chart-baseline',
       series: 'baseline',
       baseline: true,
     },
@@ -52,30 +71,57 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
     {
       value: 'heikin-ashi',
       label: 'Heikin Ashi',
-      iconKey: 'candle',
+      iconKey: 'chart-heikin-ashi',
       series: 'candlestick',
-      transform: () => new HeikinAshiTransform(),
+      transform: () => ({ type: 'heikin-ashi' }),
     },
     {
       value: 'renko',
       label: 'Renko',
-      iconKey: 'bricks',
+      iconKey: 'chart-renko',
       series: 'candlestick',
-      transform: (b) => new RenkoTransform({ boxSize: b }),
+      transform: (b) => ({ type: 'renko', options: { boxSize: b } }),
     },
     {
       value: 'range',
       label: 'Range Bars',
-      iconKey: 'bricks',
+      iconKey: 'chart-range-bars',
       series: 'candlestick',
-      transform: (b) => new RangeBarsTransform({ range: b }),
+      transform: (b) => ({ type: 'range-bars', options: { range: b } }),
     },
     {
       value: 'line-break',
       label: 'Line Break',
-      iconKey: 'bricks',
+      iconKey: 'chart-line-break',
       series: 'candlestick',
-      transform: () => new LineBreakTransform({ lines: 3 }),
+      transform: () => ({ type: 'line-break', options: { lines: 3 } }),
+    },
+    {
+      value: 'point-figure',
+      label: 'Point & Figure',
+      iconKey: 'chart-point-figure',
+      series: 'point-figure',
+      // Three boxes to reverse, from each bar's high and low: the standard
+      // construction, and the transform's own defaults.
+      transform: (b) => ({ type: 'point-figure', options: { boxSize: b } }),
+    },
+    {
+      value: 'kagi',
+      label: 'Kagi',
+      iconKey: 'chart-kagi',
+      series: 'kagi',
+      // A reversal of two boxes, the proportion the transform itself takes
+      // between its box and a Kagi reversal when it sizes both from history.
+      transform: (b) => ({ type: 'kagi', options: { reversal: Number((b * 2).toPrecision(12)) } }),
+    },
+  ],
+  [
+    { value: 'tpo', label: 'Time Price Opportunity', iconKey: 'tpo', series: 'candlestick' },
+    {
+      value: 'session-volume-profile',
+      label: 'Session Volume Profile',
+      iconKey: 'profile',
+      series: 'candlestick',
     },
   ],
 ]
@@ -83,6 +129,54 @@ export const CHART_TYPE_GROUPS: ChartTypeDef[][] = [
 export const CHART_TYPES: Record<string, ChartTypeDef> = Object.fromEntries(
   CHART_TYPE_GROUPS.flat().map((d) => [d.value, d])
 )
+
+/**
+ * The types built from price boxes, which carry a settings dialog of their own
+ * beside the chart type: box size and how it is measured, reversal, prices.
+ */
+export function isBoxChartType(value: string): value is 'renko' | 'point-figure' {
+  return value === 'renko' || value === 'point-figure'
+}
+
+/**
+ * The chart type id the packaged widget knows a value by. The widget applies
+ * a transform itself under the transform's own id, so `range` is `range-bars`
+ * there; every other value is the same word.
+ */
+export function widgetChartType(value: string): string {
+  return CHART_TYPES[value]?.transform?.(0).type ?? value
+}
+
+/**
+ * Volume under each element of a transformed chart: the raw bars' volume summed
+ * onto the element they formed, keyed by the element's time. An element's own
+ * `volume` is not traded volume (a Kagi line keeps its thickness there and a
+ * brick carries none), so this is what a volume histogram under one draws.
+ * Raw bars after the last element (a brick still forming) count toward it.
+ */
+export function volumeUnderElements(elements: readonly Bar[], raw: readonly Bar[]): Bar[] {
+  const out: Bar[] = []
+  let ri = 0
+  for (const element of elements) {
+    let v = 0
+    while (ri < raw.length && raw[ri].time <= element.time) {
+      v += raw[ri].volume || 0
+      ri++
+    }
+    out.push({ time: element.time, open: 0, high: v, low: 0, close: v })
+  }
+  let rest = 0
+  while (ri < raw.length) {
+    rest += raw[ri].volume || 0
+    ri++
+  }
+  if (out.length && rest) {
+    const last = out[out.length - 1]
+    last.high += rest
+    last.close += rest
+  }
+  return out
+}
 
 const s = {
   fill: 'none',
@@ -92,97 +186,26 @@ const s = {
   strokeLinejoin: 'round' as const,
 }
 
-/** Icon for a chart-type value (used in the dropdown button + menu items). */
+/**
+ * Icon for a chart-type value (used in the dropdown button + menu items).
+ *
+ * Every type the engine draws a glyph for uses it, so the chart-type menu
+ * reads from the same set as the toolbar around it. The two profile types are
+ * this terminal's own and keep their pictures, drawn at the same line.
+ */
 export function chartTypeIcon(iconKey: string): ReactNode {
+  if (hasChromeIcon(iconKey)) return <ChromeIcon id={iconKey} />
   switch (iconKey) {
-    case 'candle':
+    case 'tpo':
       return (
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <rect x="4.5" y="9" width="4" height="7" rx="1" />
-          <rect x="6" y="5" width="1" height="15" rx=".5" />
-          <rect x="14.5" y="7" width="4" height="6" rx="1" />
-          <rect x="16" y="4" width="1" height="16" rx=".5" />
+        <svg viewBox="0 0 24 24" {...s} strokeWidth={lineStroke24(16)}>
+          <path d="M4 3v18M4 6h8M4 10h16M4 14h12M4 18h8M8 4v16M12 4v16M16 8v8M20 8v4" />
         </svg>
       )
-    case 'hollow':
+    case 'profile':
       return (
-        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.6}>
-          <rect x="4.5" y="9" width="4" height="7" rx="1" />
-          <path d="M6.5 9V5M6.5 16v3" />
-          <rect x="14.5" y="7" width="4" height="6" rx="1" />
-          <path d="M16.5 7V4M16.5 13v3" />
-        </svg>
-      )
-    case 'bars':
-      return (
-        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.6}>
-          <path d="M7 4v16M4 8h3M7 13h3M17 5v14M14 9h3M17 15h3" />
-        </svg>
-      )
-    case 'highLow':
-      return (
-        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.8}>
-          <path d="M6 6v12M12 4v14M18 8v10" />
-        </svg>
-      )
-    case 'vol':
-      return (
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <rect x="5" y="6" width="4" height="6" rx="1" />
-          <rect x="6.5" y="3" width="1" height="13" />
-          <rect x="4.5" y="18" width="5" height="2.5" rx=".5" opacity=".5" />
-          <rect x="14.5" y="8" width="4" height="5" rx="1" />
-          <rect x="16" y="5" width="1" height="13" />
-          <rect x="14" y="16" width="5" height="4.5" rx=".5" opacity=".5" />
-        </svg>
-      )
-    case 'line':
-      return (
-        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.8}>
-          <path d="M3 16l4-5 4 3 4-6 6 4" />
-        </svg>
-      )
-    case 'lineDots':
-      return (
-        <svg viewBox="0 0 24 24" {...s} strokeWidth={1.5}>
-          <path d="M3 16l4-5 4 3 4-6 6 4" />
-          <circle cx="7" cy="11" r="1.7" fill="currentColor" stroke="none" />
-          <circle cx="11" cy="14" r="1.7" fill="currentColor" stroke="none" />
-          <circle cx="15" cy="8" r="1.7" fill="currentColor" stroke="none" />
-        </svg>
-      )
-    case 'step':
-      return (
-        <svg viewBox="0 0 24 24" {...s}>
-          <path d="M3 17h4v-6h5V7h4v4h1" />
-        </svg>
-      )
-    case 'area':
-      return (
-        <svg viewBox="0 0 24 24">
-          <path d="M3 17l4-5 4 3 4-6 6 4v6H3z" fill="currentColor" opacity=".32" />
-          <path d="M3 17l4-5 4 3 4-6 6 4" {...s} strokeWidth={1.6} />
-        </svg>
-      )
-    case 'baseline':
-      return (
-        <svg viewBox="0 0 24 24">
-          <path
-            d="M3 12h18"
-            stroke="currentColor"
-            strokeWidth={1}
-            strokeDasharray="2 2"
-            opacity=".6"
-          />
-          <path d="M3 13l4-5 4 2 4-5 6 4" {...s} strokeWidth={1.6} />
-        </svg>
-      )
-    case 'bricks':
-      return (
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <rect x="3" y="13" width="5" height="5" rx=".6" />
-          <rect x="9.5" y="8.5" width="5" height="5" rx=".6" />
-          <rect x="16" y="10" width="5" height="5" rx=".6" />
+        <svg viewBox="0 0 24 24" {...s} strokeWidth={lineStroke24(16)}>
+          <path d="M4 3v18M4 5h7v4H4M4 9h16v4H4M4 13h12v4H4M4 17h5v4H4" />
         </svg>
       )
     default:

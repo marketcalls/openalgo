@@ -25,6 +25,14 @@ def _configure_execution(monkeypatch, api_type, order_data, broker):
         "get_pending_order_by_id",
         lambda pending_order_id: pending_order,
     )
+    # The execution claim is a conditional UPDATE on the pending_orders row,
+    # which this in-memory order does not have. Tests of the claim itself live
+    # in test_gthread_strategy_action_center.py.
+    monkeypatch.setattr(
+        execution_service,
+        "claim_pending_order_for_execution",
+        lambda pending_order_id: True,
+    )
     monkeypatch.setattr(
         execution_service,
         "get_api_key_for_tradingview",
@@ -252,7 +260,11 @@ def test_only_pilot_brokers_ship_gtt_modules():
     brokers = {
         path.parent.parent.name for path in (repository_root / "broker").glob("*/api/gtt_api.py")
     }
-    assert brokers == {"dhan", "zerodha"}
+    # Angel, Fyers and Upstox joined the Dhan and Zerodha pilot in 6d7f2552.
+    # The set is exhaustive on purpose: a broker gaining a gtt_api module by
+    # accident should fail here rather than silently start routing GTTs.
+    # Rupeezy joined with its Vortex GTT API (single + OCO).
+    assert brokers == {"angel", "dhan", "fyers", "rupeezy", "upstox", "zerodha"}
 
 
 def test_queue_order_remains_successful_when_notification_fails(monkeypatch):
@@ -263,8 +275,8 @@ def test_queue_order_remains_successful_when_notification_fails(monkeypatch):
         lambda user_id, api_type, order_data: 73,
     )
     monkeypatch.setattr(
-        order_router_service.socketio,
-        "start_background_task",
+        order_router_service,
+        "emit_from_any_thread",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("socket unavailable")),
     )
 

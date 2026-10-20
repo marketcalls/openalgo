@@ -1,0 +1,57 @@
+version 1
+
+// STOP AND REVERSE: always in the market, turning round on each signal.
+//
+// THE SIZE IS WHAT MAKES ONE CALL ENOUGH, and getting it wrong is the trap.
+// `buy` and `sell` move a position BY an amount; they do not set it TO a side.
+// So `sell(qty = lots)` while long one leaves the position flat and never
+// short: a long only strategy wearing a short's clothing, which takes about
+// half the trades and looks plausible in a report.
+//
+// `lots + abs(pos.size)` is the amount that covers what is open and opens the
+// new side in one order. It is correct from flat too, where `pos.size` is zero
+// and the order is simply the entry.
+//
+// One order rather than `close()` then `buy()` also matters at the broker: two
+// orders are two lots of brokerage and two chances to be half filled. The
+// engine still reports it as the two trades it is.
+//
+// THERE IS ALSO `order.reverse()`, AND IT IS NOT THE SAME CALL. It closes what
+// is open and opens the same size the other way, as two orders. So:
+//
+//   order.reverse()                   two orders, new size = the size that was open
+//   buy(qty = lots + abs(pos.size))   one order,  new size = lots
+//
+// They agree only while the open size is already `lots`. They part the moment
+// it is not: after a pyramided entry, or after somebody changes the quantity
+// input mid-run, `order.reverse()` carries the old size forward and this line
+// does not. Neither is the right one in general. Pick the one whose sentence is
+// the sentence you mean, and this script means "hold `lots`, whichever way".
+
+atrLen = input(10, "ATR length", min = 1, max = 200)
+factor = input(3.0, "Factor", min = 0.1, max = 20)
+lots = input(1, "Quantity", min = 1)
+
+strategy("Stop and reverse", overlay = true, qty = lots)
+
+// supertrend answers two series: the band, and the direction. The direction is
+// negative while the trend is up, which is the library's convention and not
+// something this script decides.
+s = supertrend(factor, atrLen)
+band = s[0]
+dir = s[1]
+isLong = dir < 0
+
+// The first bar has no previous direction to compare against, so it can flip
+// neither way. Without this guard the run opens a position on bar zero
+// whichever way the trend happened to start.
+turnedUp = not bar.isFirst and isLong and not isLong[1]
+turnedDown = not bar.isFirst and not isLong and isLong[1]
+
+plot(bar.isFirst ? none : band, "Supertrend", isLong ? lime : red, width = 2)
+
+if turnedUp
+    buy(qty = lots + abs(pos.size), tag = "Up")
+
+if turnedDown
+    sell(qty = lots + abs(pos.size), tag = "Down")

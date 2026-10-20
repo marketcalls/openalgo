@@ -116,8 +116,8 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 ## P3 · Order semantics — every entry surface
 - **Deliverables:** manifest-driven validation (collapse `schemas.py` +
   `constants.py`); append-only order-type/TIF/exec-flag extension; **fractional
-  quantity in live order-entry persistence** — `strategy_db` + `chartink_db`
-  Integer→Decimal (live models, **moved here from P5**); apply across **all**
+  quantity in live order-entry persistence** — `chartink_db` Integer→Decimal
+  (live models, **moved here from P5**); apply across **all**
   surfaces enumerated in P0A (REST, smart/basket/split/options/GTT (experimental),
   UI, Flow, strategies, webhooks, MCP, scalping, action center, sandbox).
 - **Depends:** P2
@@ -141,8 +141,8 @@ P0A ─► P0B ─► P1 ─► P1.5(Delta) ─► P2 ─► P3 ─► P4 ─►
 - **Goal:** the sandbox works for any market — **schema + execution changes, not
   just wiring.**
 - **Deliverables:** **sandbox-specific** schema + execution — fractional
-  quantities (Integer→Decimal in `sandbox_db`; `strategy_db`/`chartink_db` are done
-  in P3), high-precision prices, contract multipliers, quote/settlement currency,
+  quantities (Integer→Decimal in `sandbox_db`; `chartink_db` is done in P3),
+  high-precision prices, contract multipliers, quote/settlement currency,
   **partial fills**, fees, funding, liquidation, isolated-vs-cross margin, explicit
   24/7 daily accounting boundaries; wire to the resolvers.
 - **Depends:** **P2, P3, P4**

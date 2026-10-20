@@ -27,7 +27,7 @@ verified against the docs/code and addressed below.
 | 4 | Registry bootstrap under-specified | P1 now lists the decisions: Python-vs-`plugin.json` authority, static-vs-discovery, **lazy-load only the configured broker** (never import all 34), health on import/config failure, and a **pre-auth `BrokerDescriptor`** (public form/login metadata; secrets private). |
 | 5 | Required-vs-optional ambiguous; idempotency over-promised | P1 delivers an **operation matrix** (required-always / required-when-declared / optional-experimental / expected-unsupported / shim-emulatable / conformance-fixture). Idempotency reworded to an **adapter-side ledger + request fingerprint + reconciliation + `unknown_execution_state`** (not "never duplicates"). |
 | 6 | Migration terms reflect plugins | P0B: **broker-owned migration registration** (file/convention-based, precedes the registry); per-file transaction boundaries, checkpoint/resume, checksum ownership, backup/restore, dual-read/write for Float→Decimal. |
-| 7 | Fractional-qty migrations too late | `strategy_db` + `chartink_db` Integer→Decimal **moved from P5 to P3** (live order-entry persistence). P5 keeps sandbox-only. |
+| 7 | Fractional-qty migrations too late | `chartink_db` Integer→Decimal **moved from P5 to P3** (live order-entry persistence). P5 keeps sandbox-only. |
 | — | Delta gets auto-Indian manifest | Shim auto-generates Indian manifests for the **33 Indian** brokers only; **Delta authors its own crypto manifest**. |
 | — | Compat tests too narrow | P0B fixtures now include official **Python/Node clients, webhooks, error status/message, strict decoders**. |
 

@@ -3,7 +3,6 @@
 import base64
 import os
 
-from cachetools import TTLCache
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -14,12 +13,19 @@ from sqlalchemy.pool import NullPool
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
 # Settings cache - 1 hour TTL (settings rarely change)
 # This cache significantly reduces DB queries since get_analyze_mode() is called on every request
-_settings_cache = TTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
+#
+# get_analyze_mode() decides whether an order goes to the broker or to the
+# sandbox, so a stale entry is an order sent to the wrong place for up to the
+# TTL. Readers fill with the generation they read before their query, and
+# every writer invalidates after its commit, so a read that raced a toggle is
+# returned to its own caller but never cached (see utils/thread_safe_cache).
+_settings_cache = LockedTTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -83,11 +89,15 @@ def get_analyze_mode():
     """Get current analyze mode setting (cached for 1 hour)"""
     cache_key = "analyze_mode"
 
-    # Check cache first
-    if cache_key in _settings_cache:
-        return _settings_cache[cache_key]
+    # Check cache first. One get, never a membership test then a subscript:
+    # the entry can go between the two, and the KeyError failed the order.
+    cached = _settings_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
 
-    # Cache miss - query database
+    # Cache miss - query database. The generation is read first, so a toggle
+    # that commits while this read is in flight keeps its value in the cache.
+    generation = _settings_cache.generation
     settings = Settings.query.first()
     if not settings:
         settings = Settings(analyze_mode=False)  # Default to Live Mode
@@ -95,8 +105,9 @@ def get_analyze_mode():
         db_session.commit()
 
     # Store in cache
-    _settings_cache[cache_key] = settings.analyze_mode
-    return settings.analyze_mode
+    mode = settings.analyze_mode
+    _settings_cache.fill(cache_key, mode, generation)
+    return mode
 
 
 def set_analyze_mode(mode: bool):
@@ -109,9 +120,10 @@ def set_analyze_mode(mode: bool):
         settings.analyze_mode = mode
     db_session.commit()
 
-    # Invalidate cache after update
-    if "analyze_mode" in _settings_cache:
-        del _settings_cache["analyze_mode"]
+    # Invalidate cache after update. After the commit, never before, and an
+    # invalidation rather than a delete: a reader that loaded the old mode
+    # before this commit is then refused when it tries to store it.
+    _settings_cache.invalidate("analyze_mode")
 
 
 # SMTP password encryption.
@@ -226,10 +238,12 @@ def get_security_settings():
     cache_key = "security_settings"
 
     # Check cache first
-    if cache_key in _settings_cache:
-        return _settings_cache[cache_key]
+    cached = _settings_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
 
     # Cache miss - query database
+    generation = _settings_cache.generation
     settings = Settings.query.first()
     if not settings:
         # Create with defaults
@@ -255,7 +269,7 @@ def get_security_settings():
     }
 
     # Store in cache
-    _settings_cache[cache_key] = result
+    _settings_cache.fill(cache_key, result, generation)
     return result
 
 
@@ -290,8 +304,7 @@ def set_security_settings(
     logger.info("Security settings updated successfully")
 
     # Invalidate cache after update
-    if "security_settings" in _settings_cache:
-        del _settings_cache["security_settings"]
+    _settings_cache.invalidate("security_settings")
 
 
 def clear_settings_cache():
@@ -299,5 +312,5 @@ def clear_settings_cache():
     Clear all settings caches.
     Called on logout/session expiry to ensure fresh data on next login.
     """
-    _settings_cache.clear()
+    _settings_cache.invalidate()
     logger.info("Settings cache cleared")

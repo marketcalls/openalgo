@@ -1,7 +1,12 @@
 import json
 import os
 
-from broker.flattrade.mapping.margin_data import parse_margin_response, transform_margin_positions
+from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
+from broker.flattrade.mapping.margin_data import (
+    MarginPriceUnavailable,
+    parse_margin_response,
+    transform_margin_positions,
+)
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -35,7 +40,16 @@ def calculate_margin_api(positions, auth):
 
     userid = full_api_key.split(":::")[0]
 
-    margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
+    try:
+        margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
+    except MarginPriceUnavailable as e:
+        error_response = {"status": "error", "message": str(e)}
+
+        class MockResponse:
+            status_code = 400
+            status = 400
+
+        return MockResponse(), error_response
 
     if "tsym" not in margin_data:
         error_response = {
@@ -59,6 +73,10 @@ def calculate_margin_api(positions, auth):
 
     client = get_httpx_client()
 
+    # GetBasketMargin is a non-order endpoint but is called per basket preview,
+    # so it shares the data window with the rest of the Flattrade client.
+    DATA_LIMITER.acquire()
+
     try:
         response = client.post(
             "https://piconnect.flattrade.in/PiConnectAPI/GetBasketMargin",
@@ -70,6 +88,10 @@ def calculate_margin_api(positions, auth):
 
         try:
             response_data = response.json()
+            # Learn a lower ceiling from the rejection. Not retried: a basket
+            # margin preview is user-initiated, so a stale retry is worse than
+            # surfacing the error.
+            clamp_from_response(response_data, DATA_LIMITER)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON response: {response.text}")
             error_response = {"status": "error", "message": "Invalid response from broker API"}

@@ -67,6 +67,7 @@ _initialized = False
 class StrategyBookUnavailable(RuntimeError):
     """The per-strategy book could not be read, so its figures are unknown."""
 
+
 engine = create_db_engine()
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
@@ -176,12 +177,29 @@ def _prune_old_tags() -> None:
             .filter(StrategyOrderTag.created_at < cutoff)
             .delete(synchronize_session=False)
         )
+        # Committed whether or not anything matched. The DELETE opens SQLite's
+        # write transaction the moment it runs, and a prune that matches
+        # nothing is the ordinary case, so committing only when `removed` was
+        # truthy left that transaction open on this thread's session.
+        #
+        # This runs from app startup, inside the single app context that wraps
+        # the whole of `_init_databases_and_schedulers`. `teardown_appcontext`
+        # therefore does not fire until every startup step has finished, so the
+        # write lock was held straight through the ones that still had writing
+        # to do. Every other writer on openalgo.db backed off for its full
+        # budget and failed with "database is locked", strategy recovery among
+        # them, which is how a run that was already finished stayed open across
+        # every restart.
+        db_session.commit()
         if removed:
-            db_session.commit()
             logger.info(f"Strategy book: pruned {removed} order tag(s) past retention")
     except Exception:
         db_session.rollback()
         logger.exception("Could not prune old order tags")
+    finally:
+        # Released here rather than left to the context teardown, which does
+        # not run until the rest of startup has finished.
+        db_session.remove()
 
 
 def _migrate_add_columns():
@@ -241,7 +259,13 @@ def record_order_tag(
     if not orderid or not strategy:
         return False
     with _fill_lock:
-        return _record_order_tag_locked(orderid, user_id, strategy, symbol, exchange, product)
+        # Fresh reads, and the session released afterwards, for the reason
+        # given in apply_fill.
+        db_session.expire_all()
+        try:
+            return _record_order_tag_locked(orderid, user_id, strategy, symbol, exchange, product)
+        finally:
+            db_session.remove()
 
 
 def _record_order_tag_locked(
@@ -347,8 +371,11 @@ def _prune_pending_fills() -> None:
             .filter(StrategyPendingFill.created_at < cutoff)
             .delete(synchronize_session=False)
         )
+        # Unconditionally, for the reason given in _prune_old_tags: the DELETE
+        # takes the write lock whether or not it matches a row, so a commit
+        # guarded on the row count leaves the transaction open.
+        db_session.commit()
         if removed:
-            db_session.commit()
             # The bulk delete bypasses the identity map; drop the stale entries
             # so a reused primary key does not warn on the next flush.
             db_session.expire_all()
@@ -382,9 +409,21 @@ def apply_fill(
     updates for the same order can run concurrently. Reading the watermark,
     booking the delta and writing the watermark back must be one critical
     section or a duplicate event double-books the fill.
+
+    The lock alone is not enough. The bus runs callbacks on long-lived pool
+    threads, each with its own scoped session, and SQLAlchemy does not refresh
+    an object already in a session's identity map when it is queried again. A
+    worker that loaded this order's tag earlier (a duplicate event that booked
+    nothing and never committed) would read its old watermark, inside the lock,
+    and book the same quantity a second time. So the session is expired before
+    the watermark is read and released afterwards, whichever thread runs this.
     """
     with _fill_lock:
-        return _apply_fill_locked(orderid, filled_quantity, average_price, action)
+        db_session.expire_all()
+        try:
+            return _apply_fill_locked(orderid, filled_quantity, average_price, action)
+        finally:
+            db_session.remove()
 
 
 def _apply_fill_locked(

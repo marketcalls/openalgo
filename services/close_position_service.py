@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, PositionClosedEvent
+from utils.broker_backpressure import BrokerBusyError
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -139,6 +140,27 @@ def close_position_with_auth(
         # Use the dynamically imported module's function to close all positions
         api_key = position_data.get("apikey", "")
         response_code, status_code = broker_module.close_all_positions(api_key, auth_token)
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Close positions not sent, broker busy: {e}")
+        error_response = {"status": "error", "message": str(e)}
+        bus.publish(
+            PositionClosedEvent(
+                mode="live",
+                api_type=API_TYPE,
+                symbol=position_data.get("symbol", ""),
+                exchange=position_data.get("exchange", ""),
+                product=position_data.get("product_type", "") or position_data.get("product", ""),
+                orderid="",
+                message=str(e),
+                request_data=position_request_data,
+                response_data=error_response,
+                api_key=original_data.get("apikey", ""),
+            )
+        )
+        return False, error_response, 429
     except Exception as e:
         logger.exception(f"Error in broker_module.close_all_positions: {e}")
         error_response = {

@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "src/**/*.jsx"]
+    "includes": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "src/**/*.js",
+      "src/**/*.jsx",
+      "!src/lib/trading/chromeIcons.ts",
+      "!src/lib/trading/drawingToolMetadata.ts"
+    ]
   },
   "formatter": {
     "enabled": true,

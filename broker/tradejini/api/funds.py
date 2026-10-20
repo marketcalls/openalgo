@@ -1,6 +1,6 @@
 import json
-import os
 
+from broker.tradejini.api.auth_api import API_KEY_MISSING_ERROR, get_api_key
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -29,9 +29,9 @@ def get_margin_data(auth_token):
     """
     try:
         # Get API key from environment
-        api_key = os.getenv("BROKER_API_SECRET")
+        api_key = get_api_key()
         if not api_key:
-            logger.info("Error: BROKER_API_SECRET not set")
+            logger.error(API_KEY_MISSING_ERROR)
             return {}
 
         # Get the shared httpx client
@@ -59,8 +59,26 @@ def get_margin_data(auth_token):
             logger.info(f"Invalid response format: {data}")
             return {}
 
-        # Extract margin details
+        # Extract margin details. /api/oms/limits documents 'd' as an object but
+        # returns a per-segment array in practice - accept either shape and sum
+        # the numeric fields across segments when it is an array.
         margin = data["d"]
+        if isinstance(margin, list):
+            if not margin:
+                logger.info("Empty limits payload from Tradejini")
+                return {}
+            merged = {}
+            for segment in margin:
+                if not isinstance(segment, dict):
+                    continue
+                for key, value in segment.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        merged[key] = merged.get(key, 0) + value
+            margin = merged
+
+        if not isinstance(margin, dict):
+            logger.info(f"Unexpected limits payload type: {type(margin)}")
+            return {}
 
         # Map Tradejini response to OpenAlgo format
         processed_margin_data = {

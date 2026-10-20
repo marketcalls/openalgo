@@ -85,35 +85,43 @@ await ordersApi.cancelOrder(orderId)
 await ordersApi.modifyOrder(orderId, modifications)
 ```
 
-### Strategy API
+### Flow API
 
 ```tsx
-// src/api/strategy.ts
-import { strategyApi } from '@/api/strategy'
+// src/api/flow.ts
+import {
+  listWorkflows,
+  getWorkflow,
+  createWorkflow,
+  updateWorkflow,
+  deleteWorkflow,
+  activateWorkflow,
+  getWebhookInfo,
+} from '@/api/flow'
 
-// Get all strategies
-const strategies = await strategyApi.getStrategies()
+// Get all workflows
+const workflows = await listWorkflows()
 
-// Get single strategy
-const strategy = await strategyApi.getStrategy(strategyId)
+// Get single workflow (nodes + edges)
+const workflow = await getWorkflow(workflowId)
 
-// Create strategy
-const newStrategy = await strategyApi.createStrategy({
-  name: 'My Strategy',
-  description: 'Strategy description',
+// Create workflow
+const created = await createWorkflow({
+  name: 'My Workflow',
+  description: 'Workflow description',
 })
 
-// Update strategy
-await strategyApi.updateStrategy(strategyId, updates)
+// Update workflow graph
+await updateWorkflow(workflowId, { nodes, edges })
 
-// Delete strategy
-await strategyApi.deleteStrategy(strategyId)
+// Delete workflow
+await deleteWorkflow(workflowId)
 
-// Get webhook URL
-const webhookUrl = strategyApi.getWebhookUrl(webhookId)
+// Activate workflow
+await activateWorkflow(workflowId)
 
-// Configure symbols
-await strategyApi.configureSymbols(strategyId, symbols)
+// Webhook token, secret, and auth type
+const webhook = await getWebhookInfo(workflowId)
 ```
 
 ### Chartink API
@@ -442,18 +450,18 @@ function PlaceOrderForm() {
 ### Dependent Queries
 
 ```tsx
-function StrategyDetails({ strategyId }) {
+function WorkflowDetails({ workflowId }) {
   // First query
-  const strategyQuery = useQuery({
-    queryKey: ['strategy', strategyId],
-    queryFn: () => strategyApi.getStrategy(strategyId),
+  const workflowQuery = useQuery({
+    queryKey: ['flow', 'workflow', workflowId],
+    queryFn: () => getWorkflow(workflowId),
   })
 
   // Dependent query
-  const symbolsQuery = useQuery({
-    queryKey: ['strategy-symbols', strategyId],
-    queryFn: () => strategyApi.getSymbols(strategyId),
-    enabled: !!strategyQuery.data, // Only run when strategy is loaded
+  const executionsQuery = useQuery({
+    queryKey: ['flow', 'executions', workflowId],
+    queryFn: () => getWorkflowExecutions(workflowId),
+    enabled: !!workflowQuery.data, // Only run when the workflow is loaded
   })
 
   // ...
@@ -596,23 +604,29 @@ interface Position {
 ### Strategy Types
 
 ```tsx
-// src/types/strategy.ts
+// src/types/chartink.ts
 
-interface Strategy {
-  id: string
+interface ChartinkStrategy {
+  id: number
   name: string
-  description?: string
   webhook_id: string
   is_active: boolean
+  is_intraday: boolean
+  start_time: string | null
+  end_time: string | null
+  squareoff_time: string | null
   created_at: string
   updated_at: string
 }
 
-interface ChartinkStrategy extends Strategy {
-  is_intraday: boolean
-  start_time?: string
-  end_time?: string
-  squareoff_time?: string
+interface ChartinkSymbolMapping {
+  id: number
+  strategy_id: number
+  chartink_symbol: string
+  exchange: 'NSE' | 'BSE'
+  quantity: number
+  product_type: 'MIS' | 'CNC'
+  created_at: string
 }
 ```
 

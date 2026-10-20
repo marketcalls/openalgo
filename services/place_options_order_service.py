@@ -19,6 +19,7 @@ from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, OptionsOrderCompletedEvent
 from services.option_symbol_service import get_option_symbol
 from services.place_order_service import place_order
+from utils.broker_backpressure import BrokerBusyError
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -385,6 +386,12 @@ def place_options_order(
             logger.error(f"Failed to place options order: {order_response.get('message')}")
             return False, order_response, status_code
 
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Options order not sent, broker busy: {e}")
+        return False, {"status": "error", "message": str(e)}, 429
     except Exception as e:
         logger.exception(f"Error in place_options_order: {e}")
         return (

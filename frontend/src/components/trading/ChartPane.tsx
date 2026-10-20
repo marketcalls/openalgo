@@ -1,6 +1,21 @@
-import { ChevronDown, RefreshCw, Search } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
+// Lucide survives for the context menu's cut glyph only, which the engine's
+// chrome set has no picture for; it is drawn at the engine's line weight.
+// Everything else in the toolbar and the menus is the engine's chrome set.
+import { Scissors } from 'lucide-react'
+import type { ChartObjects, LinkGroup } from 'openalgo-charts'
+import type { MagnetMode } from 'openalgo-charts/draw'
+import type { WorkspacePane } from 'openalgo-charts/workspace'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,91 +24,151 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
-import type { IntervalGroup } from '@/lib/trading/intervals'
+import type { DataExportOptions } from '@/lib/trading/chartDataExport'
 import {
-  type CtxItem,
-  type DrawSelection,
-  type DrawStats,
-  type IndicatorSettingsRequest,
-  type SymbolView,
-  type TerminalCallbacks,
-  TradingTerminal,
-} from '@/lib/trading/terminal'
-import { cn } from '@/lib/utils'
-import { useThemeStore } from '@/stores/themeStore'
-import { showToast } from '@/utils/toast'
-import { DrawingStyleBar } from './DrawingStyleBar'
-import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
-import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
-import { SymbolSearchDialog } from './SymbolSearchDialog'
+  type ChartStateGate,
+  type ChartStateView,
+  createChartStateGate,
+  LOADING_DELAY_MS,
+} from '@/lib/trading/chartState'
+import {
+  CHART_TYPE_GROUPS,
+  CHART_TYPES,
+  chartTypeIcon,
+  isBoxChartType,
+} from '@/lib/trading/chartTypes'
+import { MOD_KEY } from '@/lib/trading/drawingKeys'
+import { ChromeIcon, chromeStroke, lineStroke24 } from '@/lib/trading/glyphs'
+import { chartTimeframePreferences } from '@/lib/trading/timeframePreferences'
+import { TimeframeMenu } from './TimeframeMenu'
 
-/** Camera (screenshot) glyph. */
+/**
+ * The snapshot glyph: a rounded body, a softened hump and an open lens ring, on
+ * the engine's 16 unit grid at its line. The engine's own camera is square
+ * cornered with a dot for a lens, which reads as a box at 16px.
+ */
 function CameraIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={chromeStroke(16)}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3.5 4.5h1.6l.9-1.3c.2-.3.5-.45.85-.45h2.3c.35 0 .65.15.85.45l.9 1.3h1.6a1.75 1.75 0 0 1 1.75 1.75v5.25a1.75 1.75 0 0 1-1.75 1.75h-9A1.75 1.75 0 0 1 1.75 11.5V6.25A1.75 1.75 0 0 1 3.5 4.5z" />
+      <circle cx="8" cy="8.6" r="2.4" />
+    </svg>
+  )
+}
+
+/**
+ * The Indicators glyph: a derived series read against a level. Kept over the
+ * engine's formula glyph at the user's request, because traders already know
+ * this mark; it is drawn at the toolbar's line weight so the set still reads as
+ * one. The dashed rule and the dot survive 16px.
+ */
+function IndicatorIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.7}
+      strokeWidth={lineStroke24(16)}
+      strokeLinecap="round"
+      strokeLinejoin="round"
       className={className}
       aria-hidden="true"
     >
-      <path d="M4 8.5h3l1.2-2h7.6L18 8.5h2A1.5 1.5 0 0 1 21.5 10v8A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18v-8A1.5 1.5 0 0 1 4 8.5Z" />
-      <circle cx="12" cy="13.5" r="3.2" />
+      <path d="M3 12h18" strokeDasharray="2.5 2.6" opacity={0.55} />
+      <path d="M3 17.5c2.2 0 2.4-9 5-9s2.6 8 5 8 2.6-9 5-9 2.6 4.5 3 5" />
+      <circle cx="13" cy="12" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   )
 }
 
-const glyph = {
-  fill: 'none' as const,
-  stroke: 'currentColor',
-  strokeWidth: 1.7,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-}
+import type { IntervalGroup } from '@/lib/trading/intervals'
+import { lotInfoText } from '@/lib/trading/legend'
+import { isProfileKind } from '@/lib/trading/profileSettings'
+import {
+  type AlertFire,
+  type AlertsHandle,
+  type AlertsView,
+  type BrandingLink,
+  type ChartSettingsRequest,
+  type DrawSelection,
+  type DrawStats,
+  type IndicatorSettingsRequest,
+  type OrderTicketRequest,
+  type ReplayState,
+  type SymbolView,
+  type TerminalCallbacks,
+  type TerminalComparisonState,
+  type TerminalContextMenu,
+  TradingTerminal,
+} from '@/lib/trading/terminal'
+import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
+import { showToast } from '@/utils/toast'
+import { ChartStateOverlay } from './ChartStateOverlay'
+import { ChartToolbar } from './ChartToolbar'
+import { ComparisonMenu } from './ComparisonMenu'
+import { DrawingStyleBar } from './DrawingStyleBar'
+import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
+import { ChartOrderBridgeContext } from './dock/chartOrderBridge'
+import {
+  type ChartOrderAction,
+  chartOrderRows,
+  confirmationFor,
+  type PositionRow,
+  reverseTicket,
+  stillHeld,
+} from './dock/chartOrderRows'
+import { cancelDockOrder, closeDockPosition } from './dock/orderActions'
+import { PriceScaleMenu } from './PriceScaleMenu'
+import { QuickIntervalBox, useQuickEntry, useSeedBuffer } from './QuickEntry'
+import { Tip } from './Tip'
+import {
+  MenuChevron,
+  TB_BTN,
+  TB_COUNT,
+  TB_ICON,
+  TB_LABEL_2XL,
+  TB_LABEL_WIDE,
+  TB_ON,
+  ToolbarDivider,
+} from './toolbarStyles'
 
-function IndicatorIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M3 16.5l4-7 3.5 3.5L14 5l3.5 5.5L21 8" />
-    </svg>
-  )
-}
-
-function PencilIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M4 20.5h4L20 8.5a2.4 2.4 0 0 0-3.4-3.4L4.5 17z" />
-      <path d="M15.5 6.5 18.5 9.5" />
-    </svg>
-  )
-}
-
-/** Three rising bars — the volume histogram in miniature. */
-function VolumeIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
-      <path d="M5 20v-6M12 20V8M19 20v-9" />
-    </svg>
-  )
-}
-
-function GridIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
-    </svg>
-  )
-}
-
-function FullscreenIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M13 4h7v7M11 20H4v-7M20 4l-7 7M4 20l7-7" />
-    </svg>
-  )
-}
+// The forms a chart opens on request: none is needed to paint it. Mounted only
+// while open, so their code is fetched on the first opening rather than with
+// every chart.
+const AlertsDialog = lazy(() => import('./AlertsDialog').then((m) => ({ default: m.AlertsDialog })))
+const ChartDataDialog = lazy(() =>
+  import('./ChartDataDialog').then((m) => ({ default: m.ChartDataDialog }))
+)
+const ChartSettingsDialog = lazy(() =>
+  import('./ChartSettingsDialog').then((m) => ({ default: m.ChartSettingsDialog }))
+)
+const BoxChartSettingsDialog = lazy(() =>
+  import('./BoxChartSettingsDialog').then((m) => ({ default: m.BoxChartSettingsDialog }))
+)
+const IndicatorSettingsDialog = lazy(() =>
+  import('./IndicatorSettingsDialog').then((m) => ({ default: m.IndicatorSettingsDialog }))
+)
+const IndicatorPickerDialog = lazy(() =>
+  import('./IndicatorPickerDialog').then((m) => ({ default: m.IndicatorPickerDialog }))
+)
+const PlaceOrderDialog = lazy(() =>
+  import('./PlaceOrderDialog').then((m) => ({ default: m.PlaceOrderDialog }))
+)
+const SymbolSearchDialog = lazy(() =>
+  import('./SymbolSearchDialog').then((m) => ({ default: m.SymbolSearchDialog }))
+)
 
 function ledClass(state: string): string {
   if (state === 'live' || state === 'open')
@@ -102,22 +177,24 @@ function ledClass(state: string): string {
   return 'bg-amber-500'
 }
 
-function lotInfoText(v: SymbolView | null, qty: number): string {
-  if (!v) return ''
-  if (v.lots) {
-    const lots = Math.max(1, Math.floor(qty || 1))
-    let t = `${lots} × ${v.lotsize} = ${lots * v.lotsize} qty`
-    if (v.freezeQty > 1 && lots * v.lotsize > v.freezeQty) t += ` ⚠ freeze ${v.freezeQty}`
-    return t
-  }
-  return v.quoteOnly ? 'quote-only (no trading)' : ''
-}
-
 interface Props {
+  /** Undefined keeps the local toolbar; null waits for the shared host. */
+  toolbarHost?: HTMLElement | null
+  focused?: boolean
+  paneLabel?: string
   /** Stable pane id — namespaces the pane's persisted symbol/interval/type. */
   paneId: string
   apiKey: string
   wsUrl: string
+  initialWorkspacePane?: WorkspacePane
+  transitionLocked?: boolean
+  onInitialized?(paneId: string, terminal: TradingTerminal): void
+  onInitializationError?(paneId: string, error: unknown): void
+  onWorkspaceChange?(): void
+  /** A page owner replaces the individual replay transport. */
+  onReplayStart?(paneId: string): void
+  workspaceReplay?: WorkspaceReplaySnapshot
+  onBeforeSourceChange?(): void
   /** Grid placement (e.g. `{ gridArea }`) applied to the pane's root. */
   style?: React.CSSProperties
   /**
@@ -125,32 +202,107 @@ interface Props {
    * each arms the same tool and whichever pane you draw in gets the shape.
    */
   sharedTool?: string | null
-  sharedMagnet?: boolean
+  sharedMagnet?: MagnetMode
+  sharedStay?: boolean
+  /** The armed tool is held after each placement until Escape (a rail double-click). */
+  sharedLatch?: boolean
   /** This pane became the drawing target (pointer went down inside it). */
-  onFocusPane?(terminal: TradingTerminal | null): void
+  onFocusPane?(terminal: TradingTerminal | null, paneId?: string): void
+  /**
+   * Reports this pane's instrument as `EXCHANGE:SYMBOL`, so the page can show
+   * which watchlist row is charted here. Fires on every load, not only on
+   * focus: a pane can change symbol from its own toolbar, from a linked group
+   * or from a panel click, and the highlight has to follow all three.
+   */
+  onSymbolChange?(paneId: string, key: string | null): void
+  /**
+   * Reports this pane's timeframe, so a panel acting on the chart can follow it.
+   *
+   * Fires on every change, from this pane's own toolbar or from anywhere else
+   * that sets one. Without it the only way for a panel to notice a timeframe
+   * was to read the chart on a timer, which is a question asked every second
+   * and answered differently a few times a day.
+   */
+  onIntervalChange?(paneId: string, interval: string): void
+  /**
+   * Announces this pane's terminal to the page as it is built, and passes null
+   * as it is torn down. The page-level side panels act on a pane rather than
+   * owning one, so without this they would have nothing to act on until the
+   * user had clicked a chart -- a watchlist whose search returned no results
+   * and whose rows charted nothing, on a page that looks perfectly ready.
+   */
+  onTerminalChange?(paneId: string, terminal: TradingTerminal | null): void
+  /** Reports the current chart generation's object inventory. */
+  onObjectsChange?(paneId: string, objects: ChartObjects | null): void
+  /**
+   * The braces button on an OpenScript study's legend row was pressed: open
+   * this file's source. The page owns the panel that shows it, so the pane
+   * passes it straight up rather than rendering anything itself.
+   */
+  onOpenScriptSource?(file: string): void
+  /** This pane's alert controller, or null once its chart has gone. */
+  onAlertsReady?(paneId: string, view: AlertsView | null): void
+  /** An alert fired on this pane. */
+  onAlertFired?(fire: AlertFire): void
+  /** This pane's set of alerts changed. */
+  onAlertsChanged?(): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
+  /** Workspace link group this pane joins, if the page made one. */
+  linkGroup?: LinkGroup | null
+  /**
+   * One-Click, from the page's switch. Off (the default), the on-chart Buy
+   * and Sell and the context-menu rows open an order ticket in this pane; on,
+   * they place at once. One switch for every pane, like sync: a grid where
+   * one chart fires and the next one asks is a grid that will be misread.
+   */
+  armed?: boolean
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
+  /** Workspace controls displayed beside the selected chart's controls. */
+  layoutPicker?: React.ReactNode
 }
 
 /**
- * One independent charting terminal in the grid: its own toolbar (symbol search,
- * timeframe, chart type, product, qty), its own openalgo-charts instance + feeds
- * (via `TradingTerminal`), and its own on-chart order/position lines.
+ * One independent terminal, retaining its controls, feeds and overlays when
+ * the selected chart's toolbar is displayed in the shared workspace row.
  */
 export function ChartPane({
+  toolbarHost,
+  focused = true,
+  paneLabel,
   paneId,
   apiKey,
   wsUrl,
+  initialWorkspacePane,
+  transitionLocked = false,
+  onInitialized,
+  onInitializationError,
+  onWorkspaceChange,
+  onReplayStart,
+  workspaceReplay,
+  onBeforeSourceChange,
   style,
   sharedTool,
   sharedMagnet,
+  sharedStay,
+  sharedLatch,
   onFocusPane,
+  onSymbolChange,
+  onIntervalChange,
+  onTerminalChange,
+  onObjectsChange,
+  onOpenScriptSource,
+  onAlertsReady,
+  onAlertFired,
+  onAlertsChanged,
   onDrawStats,
+  linkGroup,
+  armed = false,
   onToggleRail,
   railVisible,
+  layoutPicker,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const legendRef = useRef<HTMLDivElement>(null)
@@ -161,113 +313,375 @@ export function ChartPane({
    */
   const paneRef = useRef<HTMLElement>(null)
   const terminalRef = useRef<TradingTerminal | null>(null)
-  const aliveRef = useRef(true)
+  const workspaceCbRef = useRef(onWorkspaceChange)
+  workspaceCbRef.current = onWorkspaceChange
+  const preparedRef = useRef(false)
+  const initializedCbRef = useRef(onInitialized)
+  initializedCbRef.current = onInitialized
+  const initializationErrorCbRef = useRef(onInitializationError)
+  initializationErrorCbRef.current = onInitializationError
+  const lockedRef = useRef(transitionLocked)
+  lockedRef.current = transitionLocked
   const statsCbRef = useRef(onDrawStats)
   statsCbRef.current = onDrawStats
+  // Held in a ref for the same reason as statsCbRef: the terminal's callbacks
+  // are captured once when it boots, so reading the prop directly would pin
+  // the first render's closure for the life of the pane.
+  const symbolCbRef = useRef(onSymbolChange)
+  symbolCbRef.current = onSymbolChange
+  const intervalCbRef = useRef(onIntervalChange)
+  intervalCbRef.current = onIntervalChange
+  const terminalCbRef = useRef(onTerminalChange)
+  terminalCbRef.current = onTerminalChange
+  const objectsCbRef = useRef(onObjectsChange)
+  objectsCbRef.current = onObjectsChange
+  const scriptSourceCbRef = useRef(onOpenScriptSource)
+  scriptSourceCbRef.current = onOpenScriptSource
+  const alertsCbRef = useRef({ onAlertsReady, onAlertFired, onAlertsChanged })
+  alertsCbRef.current = { onAlertsReady, onAlertFired, onAlertsChanged }
+  // The flag as it stands when the terminal boots; the effect below tracks it
+  // from then on. Read through a ref so the boot effect does not re-run and
+  // rebuild the terminal on every toggle.
+  const armedRef = useRef(armed)
+  armedRef.current = armed
   const { mode, appMode } = useThemeStore()
 
   const [ready, setReady] = useState(false)
+  /**
+   * The load state drawn over the chart: dots for a slow load, a card for no
+   * data or a failure. The gate holds the dots back for a fast load.
+   */
+  const [chartState, setChartState] = useState<ChartStateView | null>(null)
+  const chartStateGate = useRef<ChartStateGate | null>(null)
+  // Before the terminal boots below, so its first load has somewhere to go.
+  useEffect(() => {
+    const gate = createChartStateGate(setChartState)
+    chartStateGate.current = gate
+    return () => {
+      gate.destroy()
+      if (chartStateGate.current === gate) chartStateGate.current = null
+    }
+  }, [])
+  /** True once the first build has taken long enough to show the dots for. */
+  const [bootSlow, setBootSlow] = useState(false)
+  useEffect(() => {
+    if (ready) {
+      setBootSlow(false)
+      return
+    }
+    const timer = setTimeout(() => setBootSlow(true), LOADING_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [ready])
   const [intervalGroups, setIntervalGroups] = useState<IntervalGroup[]>([])
   const [interval, setIntervalState] = useState('5m')
   const [chartType, setChartTypeState] = useState('candlestick')
+  // The type on screen now, for a reply that lands after the type has moved on.
+  const chartTypeRef = useRef(chartType)
+  chartTypeRef.current = chartType
   const [sym, setSym] = useState<SymbolView | null>(null)
+  const [branding, setBranding] = useState<BrandingLink | null>(null)
   const [qty, setQty] = useState(1)
   const [wsState, setWsState] = useState('connecting')
+  /**
+   * Just the two history flags, mirrored locally. The full DrawStats is pushed
+   * to the parent for the drawing rail, but the toolbar's undo/redo sit in THIS
+   * component, and reading a parent's state back down would make the buttons
+   * lag a shape behind. Narrowed to two booleans on purpose: every drawing edit
+   * fires this, and re-rendering the toolbar because a tool was armed or a
+   * shape was selected would be work for nothing.
+   */
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false })
+  const noteHistory = useCallback((s: DrawStats) => {
+    setHistory((prev) =>
+      prev.canUndo === s.canUndo && prev.canRedo === s.canRedo
+        ? prev
+        : { canUndo: s.canUndo, canRedo: s.canRedo }
+    )
+  }, [])
 
   // symbol search modal (per-pane; opened from the toolbar symbol pill)
   const [searchOpen, setSearchOpen] = useState(false)
+  /**
+   * What quick entry typed into the search, or null when the pill opened it.
+   * `live` while the box is still opening and keys are being kept for it.
+   */
+  const [searchSeed, setSearchSeed] = useState<{ text: string; live: boolean } | null>(null)
+  /** The interval box a digit typed on the chart opens, holding that digit. */
+  const [intervalBox, setIntervalBox] = useState<string | null>(null)
 
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
+  const [comparisons, setComparisons] = useState<TerminalComparisonState>({
+    mode: 'price',
+    items: [],
+  })
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
   const [volumeOn, setVolumeOn] = useState(true)
+  /**
+   * The snapshot menu: saving and pasting are both wanted, so the camera asks.
+   *
+   * Held as viewport coordinates rather than opened as an absolutely positioned
+   * child, because the toolbar row scrolls horizontally: `overflow-x: auto`
+   * forces the other axis to `auto` as well, and the row is only 111px tall, so
+   * an absolute child was clipped to a three-pixel sliver. Nothing inside a
+   * scrolling strip can hang below it.
+   */
+  const [snapOpen, setSnapOpen] = useState(false)
+  useEffect(() => {
+    if (!focused) setSnapOpen(false)
+  }, [focused])
+  const [snapAt, setSnapAt] = useState<{ top: number; right: number } | null>(null)
+  const snapBtnRef = useRef<HTMLButtonElement>(null)
+
+  const openSnapMenu = useCallback(() => {
+    const r = snapBtnRef.current?.getBoundingClientRect()
+    if (!r) return
+    // Right-aligned to the button, so the menu opens inward and cannot run off
+    // the window edge the camera sits near.
+    setSnapAt({ top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) })
+    setSnapOpen(true)
+  }, [])
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  /** The alert dialog's handle, or null when it is shut. */
+  const [alertsHandle, setAlertsHandle] = useState<AlertsHandle | null>(null)
+  // Read from the chart each time the gear is clicked rather than held: the
+  // schema depends on the live series type, theme and timezone.
+  const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
+  // The Renko or point and figure dialog. It belongs to the type it was opened
+  // for, so a switch to any other type closes it.
+  const [boxSettings, setBoxSettings] = useState<{
+    type: 'renko' | 'point-figure'
+    req: ChartSettingsRequest
+  } | null>(null)
+  useEffect(() => {
+    setBoxSettings((open) => (open && open.type !== chartType ? null : open))
+  }, [chartType])
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
+  /** The CSV download's choices, while its dialog is open. */
+  const [dataExport, setDataExport] = useState<{
+    studies: { id: string; name: string }[]
+    comparisons: number
+  } | null>(null)
+  /** Remove all drawings, waiting for the trader to confirm it. */
+  const [removeAll, setRemoveAll] = useState<{ count: number; symbol: string } | null>(null)
+  /** An order action from the right-click menu, waiting for the trader to confirm it. */
+  const [pendingOrder, setPendingOrder] = useState<ChartOrderAction | null>(null)
+  /** The dock's books and order actions; null where there is no dock. */
+  const orderBridge = useContext(ChartOrderBridgeContext)
 
   // right-click menu: order entry, then the view actions
-  const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  const [ctx, setCtx] = useState<TerminalContextMenu | null>(null)
+  /**
+   * The order ticket, while One-Click is off. The terminal validates the
+   * click and hands over what it would have sent; the same dialog the option
+   * chain opens confirms it, so a chart button starts an order but never
+   * places one until the trader says so.
+   */
+  const [ticket, setTicket] = useState<OrderTicketRequest | null>(null)
+  // Null whenever the chart is live. The transport bar renders only while
+  // replay owns the data, so there is nothing to hide when it does not.
+  const [replay, setReplay] = useState<ReplayState | null>(null)
+  /** True while a start bar is being chosen, before replay owns the data. */
+  const [picking, setPicking] = useState(false)
+  const [replayLoading, setReplayLoading] = useState(false)
+  /** The confirm shown on leaving: the playhead is the only record of the walk. */
+  const [confirmLeave, setConfirmLeave] = useState(false)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
-    aliveRef.current = true
+    let current = true
+    preparedRef.current = false
+    setReady(false)
     let terminal: TradingTerminal | null = null
 
     const callbacks: TerminalCallbacks = {
+      onContextMenu: (menu) => {
+        if (!current) return
+        setGridSub(false)
+        setCtx({
+          ...menu,
+          x: Math.max(0, Math.min(menu.x, window.innerWidth - 240)),
+          y: Math.max(
+            0,
+            Math.min(
+              menu.y,
+              window.innerHeight -
+                (menu.axis ? 470 : (menu.profile ? 490 : 430) + (menu.drawing ? 105 : 0))
+            )
+          ),
+        })
+      },
+      onWorkspaceChange: () => {
+        if (current && preparedRef.current) workspaceCbRef.current?.()
+      },
       onReady: ({ intervalGroups: g, interval: iv, chartType: ct }) => {
-        if (!aliveRef.current) return
+        if (!current) return
         setIntervalGroups(g)
         setIntervalState(iv)
         setChartTypeState(ct)
-        setReady(true)
       },
       onToast: (msg, kind) => {
+        if (!current) return
         if (kind === 'ok') showToast.success(msg)
         else if (kind === 'err') showToast.error(msg)
         else showToast.info(msg)
       },
-      onWsState: (s) => aliveRef.current && setWsState(s),
+      // Undo and redo change the type inside the terminal; the toolbar follows it.
+      onChartTypeChange: (ct) => {
+        if (!current) return
+        setChartTypeState(ct)
+      },
+      onIntervalChange: (iv) => {
+        if (!current) return
+        setIntervalState(iv)
+        intervalCbRef.current?.(paneId, iv)
+      },
+      onWsState: (s) => current && setWsState(s),
       onSymbolLoaded: (view) => {
-        if (!aliveRef.current) return
+        if (!current) return
         setSym(view)
         setQty(1)
+        symbolCbRef.current?.(paneId, `${view.exchange}:${view.symbol}`)
+        if (preparedRef.current) workspaceCbRef.current?.()
       },
+      onBrandingChange: (link) => current && setBranding(link),
       onLtp: () => {}, // legend overlay + canvas render the live price
       onDrawChange: (s) => {
-        if (!aliveRef.current) return
+        if (!current) return
         statsCbRef.current?.(s)
+        noteHistory(s)
       },
-      onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
-      onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
-      onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      onIndicatorsChange: (list) => current && setIndicators(list),
+      onComparisonsChange: (state) => current && setComparisons(state),
+      onIndicatorSettings: (req) => current && setIndSettings(req),
+      // Null is the terminal saying the chart this dialog belonged to has gone,
+      // which shuts it rather than leaving it writing into a dead controller.
+      onAlerts: (handle) => current && setAlertsHandle(handle),
+      onAlertsReady: (view) => current && alertsCbRef.current.onAlertsReady?.(paneId, view),
+      onAlertFired: (fire) => current && alertsCbRef.current.onAlertFired?.(fire),
+      onAlertsChanged: () => current && alertsCbRef.current.onAlertsChanged?.(),
+      onChartSettings: (req) => current && setChartSettings(req),
+      onObjectsChange: (objects) => current && objectsCbRef.current?.(paneId, objects),
+      onOpenScriptSource: (file) => current && scriptSourceCbRef.current?.(file),
+      onDrawSelect: (sel) => current && setDrawSel(sel),
+      onDrawRemoveAll: (req) => current && setRemoveAll(req),
+      // The legend readout is a second switch for the same thing as the context
+      // menu row, so the menu label has to follow it.
+      onVolumeChange: (on) => current && setVolumeOn(on),
+      onChartState: (state) => {
+        if (current) chartStateGate.current?.set(state)
+      },
+      onReplayChange: (state) => {
+        if (!current) return
+        setReplay(state)
+        setPicking(terminalRef.current?.replayPickingBar() ?? false)
+        setReplayLoading(terminalRef.current?.replayLoadingBars() ?? false)
+        if (state === null) setConfirmLeave(false)
+      },
       onDrawTextEdit: (r) => {
-        if (!aliveRef.current) return
+        if (!current) return
         // The ref, not the local: `terminal` is still unassigned while this
         // object literal is being built. Callbacks only fire after construction.
         const style = terminalRef.current?.drawTextStyle(r.id)
         if (style) setTextReq({ id: r.id, tool: r.tool, style })
       },
+      onOrderTicket: (req) => current && setTicket(req),
+    }
+
+    const release = () => {
+      current = false
+      preparedRef.current = false
+      terminalCbRef.current?.(paneId, null)
+      terminal?.destroy()
+      if (terminalRef.current === terminal) terminalRef.current = null
+    }
+    const fail = (error: unknown) => {
+      if (!current) return
+      release()
+      setReady(false)
+      if (initializationErrorCbRef.current) initializationErrorCbRef.current(paneId, error)
+      else showToast.error(error instanceof Error ? error.message : 'Chart initialization failed')
     }
 
     if (chartRef.current && legendRef.current) {
-      terminal = new TradingTerminal({
-        apiKey,
-        wsUrl,
-        container: chartRef.current,
-        legendEl: legendRef.current,
-        storageKey: `oa-trading-${paneId}`,
-        getTheme: () => {
-          const s = useThemeStore.getState()
-          return { mode: s.mode, appMode: s.appMode }
-        },
-        callbacks,
-      })
-      terminalRef.current = terminal
-      terminal.init()
-      statsCbRef.current?.(terminal.drawStats())
-      setGrid(terminal.gridState())
-      setVolumeOn(terminal.volumeVisible())
+      try {
+        const owner = new TradingTerminal({
+          apiKey,
+          // Only the messaging channels of an alert need it, and an empty name
+          // is a terminal that works with those two refused by the server.
+          username: useAuthStore.getState().user?.username ?? '',
+          wsUrl,
+          container: chartRef.current,
+          legendEl: legendRef.current,
+          storageKey: `oa-trading-${paneId}`,
+          initialWorkspacePane,
+          getTheme: () => {
+            const s = useThemeStore.getState()
+            return { mode: s.mode, appMode: s.appMode }
+          },
+          callbacks,
+        })
+        terminal = owner
+        terminalRef.current = owner
+        owner.setWorkspaceTransitionLocked(lockedRef.current)
+        owner.setArmed(armedRef.current && !lockedRef.current)
+        terminalCbRef.current?.(paneId, owner)
+        owner.setLinkGroup(linkGroup ?? null)
+        void owner
+          .init()
+          .then(() => {
+            if (!current) return
+            preparedRef.current = true
+            const stats = owner.drawStats()
+            statsCbRef.current?.(stats)
+            noteHistory(stats)
+            setGrid(owner.gridState())
+            setVolumeOn(owner.volumeVisible())
+            setReady(true)
+            initializedCbRef.current?.(paneId, owner)
+          })
+          .catch(fail)
+      } catch (error) {
+        fail(error)
+      }
     }
 
     return () => {
-      aliveRef.current = false
-      terminal?.destroy()
-      terminalRef.current = null
+      if (current) release()
     }
-  }, [paneId, apiKey, wsUrl])
+    // `username` is read at build time rather than subscribed: a terminal is
+    // rebuilt on a sign-in change anyway, and re-creating the chart because a
+    // display name moved would throw away every drawing on it.
+  }, [paneId, apiKey, wsUrl, noteHistory, linkGroup, initialWorkspacePane])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
   useEffect(() => {
-    if (sharedTool === undefined) return
+    if (sharedTool === undefined || (initialWorkspacePane && !preparedRef.current)) return
     void terminalRef.current?.setDrawTool(sharedTool)
-  }, [sharedTool])
+  }, [sharedTool, initialWorkspacePane])
   useEffect(() => {
-    if (sharedMagnet === undefined) return
+    if (sharedMagnet === undefined || (initialWorkspacePane && !preparedRef.current)) return
     terminalRef.current?.setMagnet(sharedMagnet)
-  }, [sharedMagnet])
+  }, [sharedMagnet, initialWorkspacePane])
+
+  useEffect(() => {
+    if (sharedStay === undefined || (initialWorkspacePane && !preparedRef.current)) return
+    terminalRef.current?.setDrawStay(sharedStay)
+  }, [sharedStay, initialWorkspacePane])
+  useEffect(() => {
+    if (sharedLatch === undefined || (initialWorkspacePane && !preparedRef.current)) return
+    terminalRef.current?.setDrawLatch(sharedLatch)
+  }, [sharedLatch, initialWorkspacePane])
+  /* ── follow the page-level One-Click switch ───────────────────────────── */
+  useEffect(() => {
+    terminalRef.current?.setWorkspaceTransitionLocked(transitionLocked)
+    terminalRef.current?.setArmed(armed && !transitionLocked)
+  }, [armed, transitionLocked])
 
   /* ── keep the canvas theme in sync with the app theme ─────────────────── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: mode/appMode are the trigger — the effect re-themes the canvas whenever the app theme changes
@@ -276,13 +690,32 @@ export function ChartPane({
   }, [mode, appMode])
 
   /* ── toolbar actions ──────────────────────────────────────────────────── */
+  // The toolbar's switches are undo steps; the terminal records them.
   const changeInterval = (iv: string) => {
-    setIntervalState(iv)
-    terminalRef.current?.setInterval(iv)
+    onBeforeSourceChange?.()
+    setIntervalState(terminalRef.current?.chooseInterval(iv) ?? iv)
   }
   const changeChartType = (v: string) => {
-    setChartTypeState(v)
-    terminalRef.current?.setChartType(v)
+    onBeforeSourceChange?.()
+    setChartTypeState(terminalRef.current?.chooseChartType(v) ?? v)
+  }
+  /** Write the CSV. Throws with a sentence the download dialog shows. */
+  const downloadCsv = (options: DataExportOptions) => {
+    const terminal = terminalRef.current
+    if (!terminal) throw new Error('The chart is not ready')
+    const url = URL.createObjectURL(
+      new Blob([terminal.exportDataCsv(options)], { type: 'text/csv;charset=utf-8' })
+    )
+    const link = document.createElement('a')
+    try {
+      link.href = url
+      link.download = `${sym?.symbol ?? paneId}-${interval}.csv`.replace(/[^a-zA-Z0-9._-]/g, '_')
+      document.body.append(link)
+      link.click()
+    } finally {
+      link.remove()
+      URL.revokeObjectURL(url)
+    }
   }
   const changeProduct = (p: string) => {
     if (!sym) return
@@ -296,39 +729,56 @@ export function ChartPane({
   }
 
   /* ── right-click order menu ───────────────────────────────────────────── */
-  const onContextMenu = (e: React.MouseEvent) => {
-    const t = terminalRef.current
-    if (!t || !chartRef.current) return
-    const rect = chartRef.current.getBoundingClientRect()
-    // Order rows need a tradeable instrument; the view actions below them do
-    // not, so a quote-only index still gets the menu, just without them.
-    const res = t.contextMenuAt(e.clientY - rect.top)
-    e.preventDefault()
-    setGridSub(false)
-    setCtx({
-      x: Math.min(e.clientX, window.innerWidth - 240),
-      y: Math.min(e.clientY, window.innerHeight - 360),
-      items: res ? res.items : [],
-    })
-  }
   useEffect(() => {
     if (!ctx) return
     const close = () => {
       setGridSub(false)
       setCtx(null)
     }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    // A scroll that moves the chart moves the price under the menu, so the
+    // menu goes. One that does not, such as the toolbar's own row settling
+    // after a control took focus, leaves the chart and the menu where they
+    // are: closing on it took the menu away the moment it opened.
+    const onScroll = (e: Event) => {
+      const target = e.target
+      const chart = chartRef.current
+      if (!(target instanceof Node) || !chart || target.contains(chart)) close()
+    }
     window.addEventListener('click', close)
-    window.addEventListener('scroll', close, true)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('click', close)
-      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('keydown', onKeyDown)
     }
   }, [ctx])
 
   /* ── drawing / indicator / view actions (additive) ────────────────────── */
+  /**
+   * Rebuild the catalogue every time the picker opens, not only the first time.
+   *
+   * **A `catalog.length` guard here used to make this run once per page load**,
+   * which quietly defeated the tier below it. `terminal.indicatorCatalog` calls
+   * `loadIndicators`, which re-reads `strategies/indicators/` and
+   * `strategies/openscript/` on purpose and skips what it has already seen, so
+   * that a script saved from the panel appears on the next picker open rather
+   * than after a reload. That is what its comments say it is for, and both
+   * loaders are keyed on modification time to make the repeat call cheap. None
+   * of it ran a second time: a trader who saved a study, or installed one from
+   * the skill, opened the list and could not find it, and nothing said why,
+   * because from the page's point of view nothing had happened.
+   *
+   * The repeat cost is one small JSON fetch per tier plus a map over the
+   * registry. A script already compiled at its current modification time costs
+   * nothing, which is the case on nearly every open.
+   */
   const openIndicators = async () => {
     const t = terminalRef.current
-    if (!t || catalog.length) return
+    if (!t) return
     try {
       setCatalog(await t.indicatorCatalog())
     } catch {
@@ -374,16 +824,166 @@ export function ChartPane({
     setGridSub(false)
     setCtx(null)
   }
+  /**
+   * The order rows for the symbol on this chart, read from the dock's books
+   * as the menu opens. Null when it has no working order and no position,
+   * and the menu then shows none.
+   */
+  const orderRows = useMemo(() => {
+    if (!ctx || !sym || sym.quoteOnly || sym.synthetic) return null
+    const bridge = orderBridge?.current
+    return bridge ? chartOrderRows(sym, bridge.book()) : null
+  }, [ctx, sym, orderBridge])
+  /** The lot size a position row is counted in: 1 where quantity is in units. */
+  const lotSizeOf = (row: PositionRow) =>
+    sym?.lots
+      ? row.position.lot_size && row.position.lot_size > 0
+        ? row.position.lot_size
+        : sym.lotsize
+      : 1
+
+  /**
+   * Send what the trader just confirmed. Cancel and Close are the dock's own
+   * functions; Close half is the chart's ticket path; Reverse is the dock's
+   * Close followed by the ticket, filled in and not sent. Each refuses while
+   * trading is locked, and the server decides analyzer or live, as it does
+   * for the dock.
+   */
+  const runOrderAction = async (action: ChartOrderAction) => {
+    const bridge = orderBridge?.current
+    if (!bridge) return
+    const { actions } = bridge
+    if (action.kind === 'cancel') {
+      if (actions.refuse()) return
+      for (const order of action.orders) await cancelDockOrder(order, actions)
+      return
+    }
+    const { row } = action
+    const p = row.position
+    if (action.kind === 'close') {
+      await closeDockPosition(p, actions)
+      return
+    }
+    if (action.kind === 'reverse') {
+      const closed = await closeDockPosition(p, actions)
+      if (closed && sym) setTicket(reverseTicket(row, sym.tick, action.lotSize))
+      return
+    }
+    if (actions.refuse()) return
+    const terminal = terminalRef.current
+    if (!terminal) return
+    try {
+      // Half of a position is a fixed quantity, so it is sent only against
+      // the position as the server holds it now, not as the menu saw it.
+      if (!stillHeld(p, await bridge.freshPositions())) {
+        showToast.error(
+          `The ${p.symbol} ${p.product} position changed since the menu opened. Nothing was sent. Check the position and try again.`
+        )
+        actions.refresh()
+        return
+      }
+    } catch {
+      showToast.error('The position could not be read, so nothing was sent. Try again.')
+      return
+    }
+    try {
+      await terminal.placeTicket({
+        symbol: p.symbol,
+        exchange: p.exchange,
+        action: row.side,
+        quantity: row.half,
+        pricetype: 'MARKET',
+        product: p.product as 'MIS' | 'NRML' | 'CNC',
+      })
+    } catch (e) {
+      showToast.error(e instanceof Error ? e.message : 'The order could not be placed')
+    }
+    actions.refresh()
+  }
+  // The mode the dock acts in, so the confirmation and the action agree.
+  const pendingText = pendingOrder
+    ? confirmationFor(pendingOrder, orderBridge?.current?.actions.appMode ?? appMode)
+    : null
+
+  /**
+   * Keep the open menu on screen. Its rows depend on what was under the
+   * pointer, so its height is read once it is drawn rather than guessed.
+   */
+  const ctxRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = ctxRef.current
+    if (!ctx || !el) return
+    const bottom = el.getBoundingClientRect().bottom
+    if (bottom > window.innerHeight - 4) {
+      el.style.top = `${Math.max(4, ctx.y - (bottom - window.innerHeight + 4))}px`
+    }
+  }, [ctx])
+
+  /**
+   * The right-click menu's drawing rows. On a drawing: copy, cut and delete
+   * it. On empty space: paste, when something was copied on this page, and
+   * remove all, when there is anything to remove. Each row shows its key.
+   */
+  const drawingRows = (d: NonNullable<TerminalContextMenu['drawing']>) => {
+    const t = terminalRef.current
+    if (!t) return []
+    const id = d.id
+    const rows: {
+      label: string
+      icon: React.ReactNode
+      shortcut?: string
+      keys?: string
+      danger?: boolean
+      run(): void
+    }[] = []
+    const mod = MOD_KEY === 'Cmd' ? 'Meta' : 'Control'
+    if (id) {
+      rows.push(
+        {
+          label: 'Copy',
+          icon: <ChromeIcon id="copy" size={14} />,
+          shortcut: `${MOD_KEY}+C`,
+          keys: `${mod}+C`,
+          run: () => void t.copyDrawings(id),
+        },
+        {
+          label: 'Cut',
+          icon: <Scissors className="h-3.5 w-3.5" strokeWidth={lineStroke24(14)} />,
+          shortcut: `${MOD_KEY}+X`,
+          keys: `${mod}+X`,
+          run: () => void t.cutDrawings(id),
+        },
+        {
+          label: 'Delete drawing',
+          icon: <ChromeIcon id="trash" size={14} />,
+          shortcut: 'Del',
+          keys: 'Delete',
+          run: () => t.removeDrawing(id),
+        }
+      )
+    } else {
+      if (d.paste)
+        rows.push({
+          label: 'Paste',
+          icon: <ChromeIcon id="paste" size={14} />,
+          shortcut: `${MOD_KEY}+V`,
+          keys: `${mod}+V`,
+          run: () => void t.pasteDrawings(),
+        })
+      if (d.removable > 0)
+        rows.push({
+          label: `Remove all drawings (${d.removable})`,
+          icon: <ChromeIcon id="trash" size={14} />,
+          danger: true,
+          run: () => t.requestRemoveAllDrawings(),
+        })
+    }
+    return rows
+  }
+  const ctxDrawingRows = ctx?.drawing ? drawingRows(ctx.drawing) : []
 
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
-
-  const catalogGroups = catalog.reduce<Record<string, typeof catalog>>((acc, d) => {
-    const list = acc[d.category] ?? []
-    list.push(d)
-    acc[d.category] = list
-    return acc
-  }, {})
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -391,271 +991,1040 @@ export function ChartPane({
     : ''
 
   const chartTypeDef = CHART_TYPES[chartType] ?? CHART_TYPES.candlestick
+  // The three chart-owned settings editors are deliberately lightweight host
+  // overlays rather than Radix dialogs. Publish their presence on the pane so
+  // the page-level Escape handler can dismiss only the top surface.
+  const paneDialogOpen =
+    searchOpen ||
+    pickerOpen ||
+    chartSettings !== null ||
+    indSettings !== null ||
+    alertsHandle !== null ||
+    textReq !== null ||
+    removeAll !== null ||
+    pendingOrder !== null ||
+    ticket !== null ||
+    confirmLeave ||
+    intervalBox !== null ||
+    dataExport !== null
+
+  const replayTitle =
+    workspaceReplay && workspaceReplay.phase !== 'idle'
+      ? 'Stop workspace replay'
+      : replay
+        ? 'Leave replay'
+        : replayLoading
+          ? 'Cancel replay loading'
+          : picking
+            ? 'Cancel bar selection'
+            : 'Replay'
+
+  useQuickEntry({
+    enabled:
+      focused &&
+      ready &&
+      !transitionLocked &&
+      !paneDialogOpen &&
+      ctx === null &&
+      !snapOpen &&
+      !picking &&
+      !replayLoading,
+    onStart: (kind, text) => {
+      if (kind === 'interval') {
+        setIntervalBox(text)
+        return
+      }
+      setSearchSeed({ text, live: true })
+      setSearchOpen(true)
+    },
+  })
+  useSeedBuffer(
+    searchOpen && searchSeed?.live === true,
+    (update) => setSearchSeed((seed) => (seed ? { ...seed, text: update(seed.text) } : seed)),
+    () => setSearchSeed((seed) => (seed?.live ? { ...seed, live: false } : seed))
+  )
+  // The search is fetched on its first opening. A selected chart fetches it
+  // ahead of time, so a letter typed onto the chart opens it at once.
+  useEffect(() => {
+    if (focused && ready) void import('./SymbolSearchDialog')
+  }, [focused, ready])
 
   return (
     <section
       ref={paneRef}
+      aria-label={paneLabel ?? `Chart ${paneId}`}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: Focusing this canvas region selects the chart for toolbar and keyboard actions.
+      tabIndex={0}
+      data-chart-pane={paneId}
+      data-chart-focused={focused}
+      data-trading-dialog-open={paneDialogOpen ? 'true' : undefined}
       style={style}
-      className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+      className={cn(
+        'relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        // The frame says which chart the shared toolbar drives, so it only
+        // speaks when there is more than one chart: the accent edge plus a
+        // soft outer ring, which holds on a near-white accent in dark mode as
+        // well as on the violet. A lone chart keeps its quiet border.
+        toolbarHost !== undefined &&
+          focused &&
+          '[&:not(:only-child)]:border-primary/80 [&:not(:only-child)]:ring-2 [&:not(:only-child)]:ring-primary/25'
+      )}
+      onFocusCapture={(event) => {
+        if (transitionLocked || (event.target as Element).closest('[data-workspace-control]'))
+          return
+        onFocusPane?.(terminalRef.current, paneId)
+      }}
+      onPointerUpCapture={() => {
+        if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
+      }}
+      onWheelCapture={() => {
+        if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
+      }}
+      onKeyUpCapture={() => {
+        if (ready && !transitionLocked && !replay && !picking) onWorkspaceChange?.()
+      }}
+      onPointerDownCapture={(event) => {
+        // Workspace controls keep the chart selected before the control opened.
+        if (transitionLocked || (event.target as Element).closest('[data-workspace-control]'))
+          return
+        onFocusPane?.(terminalRef.current, paneId)
+      }}
     >
-      {/* Per-pane control row. One line: the row scrolls rather than wrapping,
-          so the view actions stay beside the instrument controls instead of
-          dropping to a second row and eating chart height. */}
-      <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
-        {/* Symbol pill — opens the search modal for this pane */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0 gap-2 font-medium"
-          onClick={() => setSearchOpen(true)}
-          title="Search symbol"
-        >
-          <Search className="h-3.5 w-3.5 opacity-60" />
-          <span className="max-w-[10rem] truncate">{sym?.symbol ?? 'Search symbol'}</span>
-          {sym && (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {sym.exchange}
-            </span>
+      <ChartToolbar host={toolbarHost} active={focused} fullscreen={fullscreen}>
+        <div
+          role="toolbar"
+          aria-label="Chart controls"
+          data-toolbar-pane={paneId}
+          inert={transitionLocked ? true : undefined}
+          // Borderless controls on one band. In the page's row the band and
+          // its hairline belong to the page, which also holds the controls
+          // either side of this one; on its own (full screen) it carries them.
+          className={cn(
+            'flex h-10 min-w-0 flex-nowrap items-center gap-0.5 no-scrollbar overflow-x-auto px-1',
+            (toolbarHost === undefined || fullscreen) && 'oa-terminal-band border-b'
           )}
-        </Button>
+        >
+          {/* Symbol: a search glyph in a soft square, then the instrument in
+            the row's strongest type. The square is what says it is a field. */}
+          <Tip
+            tip={{
+              title: 'Symbol search',
+              chord: 'Type a letter',
+              sub: 'Find an instrument, or build an expression such as NIFTY/BANKNIFTY',
+            }}
+          >
+            <button
+              type="button"
+              className={cn(TB_BTN, 'gap-1.5 pl-0.5 pr-1.5 text-foreground')}
+              onClick={() => {
+                setSearchSeed(null)
+                setSearchOpen(true)
+              }}
+            >
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-foreground/[0.07] text-muted-foreground">
+                <ChromeIcon id="search" size={14} />
+              </span>
+              <span className="max-w-[10rem] truncate text-sm font-semibold tracking-tight">
+                {sym?.symbol ?? 'Search symbol'}
+              </span>
+              {sym && (
+                <span className="rounded bg-foreground/[0.07] px-1 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+                  {sym.exchange}
+                </span>
+              )}
+            </button>
+          </Tip>
 
-        {/* Timeframe */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 min-w-12 shrink-0 gap-1 font-medium">
-              {interval || '—'}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="w-64">
-            {intervalGroups.map((g) => (
-              <div key={g.label} className="px-1 pb-1">
-                <div className="px-1 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {g.label}
-                </div>
-                <div className="grid grid-cols-4 gap-1">
-                  {g.items.map((iv) => (
+          <ToolbarDivider />
+          {/* Shared choices, with selection owned by this pane. */}
+          <TimeframeMenu
+            current={interval}
+            groups={intervalGroups}
+            preferences={chartTimeframePreferences()}
+            canSelectInterval={(code) =>
+              terminalRef.current?.supportsInterval?.(code) ??
+              intervalGroups.some((group) => group.items.includes(code))
+            }
+            onSelect={changeInterval}
+            container={menuHost}
+          />
+
+          <ToolbarDivider />
+          {/* Chart type */}
+          <DropdownMenu>
+            <Tip tip={{ title: 'Chart type', sub: chartTypeDef.label }}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(TB_BTN, 'gap-1 px-1.5')}
+                  aria-label={`Chart type: ${chartTypeDef.label}`}
+                >
+                  <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
+                  <MenuChevron />
+                </button>
+              </DropdownMenuTrigger>
+            </Tip>
+            <DropdownMenuContent container={menuHost} align="start" className="w-60">
+              {CHART_TYPE_GROUPS.map((group, gi) => (
+                <div key={group[0].value}>
+                  {gi > 0 && <DropdownMenuSeparator />}
+                  {group.map((d) => (
                     <DropdownMenuItem
-                      key={iv}
-                      onSelect={() => changeInterval(iv)}
-                      className={cn(
-                        'justify-center rounded border text-xs',
-                        iv === interval && 'border-primary bg-primary/10 text-primary'
-                      )}
+                      key={d.value}
+                      onSelect={() => changeChartType(d.value)}
+                      className={cn('gap-2 text-sm', d.value === chartType && 'text-primary')}
                     >
-                      {iv}
+                      <span className="h-4 w-4">{chartTypeIcon(d.iconKey)}</span>
+                      {d.label}
                     </DropdownMenuItem>
                   ))}
                 </div>
-              </div>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-        {/* Chart type */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1" title={chartTypeDef.label}>
-              <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="w-52">
-            {CHART_TYPE_GROUPS.map((group, gi) => (
-              <div key={group[0].value}>
-                {gi > 0 && <DropdownMenuSeparator />}
-                {group.map((d) => (
-                  <DropdownMenuItem
-                    key={d.value}
-                    onSelect={() => changeChartType(d.value)}
-                    className={cn('gap-2 text-sm', d.value === chartType && 'text-primary')}
-                  >
-                    <span className="h-4 w-4">{chartTypeIcon(d.iconKey)}</span>
-                    {d.label}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          {/* Box settings, beside the type they belong to and only while it is
+            on screen: the size, how it is measured, and the reversal are what
+            a trader changes while reading boxes, so they get a click rather
+            than a trip through the chart settings Price tab. */}
+          {isBoxChartType(chartType) && (
+            <Tip
+              tip={{
+                title: `${chartTypeDef.label} settings`,
+                sub: 'Box size, reversal and colours',
+              }}
+            >
+              <button
+                type="button"
+                className={cn(TB_BTN, TB_ICON)}
+                aria-label={`${chartTypeDef.label} settings`}
+                onClick={() => {
+                  const type = chartType
+                  void terminalRef.current
+                    ?.chartSettings()
+                    // A switch while the request was out leaves this reply for a type no
+                    // longer on screen, and its options would land on the new type.
+                    .then((cs) => {
+                      if (cs && chartTypeRef.current === type) setBoxSettings({ type, req: cs })
+                    })
+                }}
+              >
+                <ChromeIcon id="settings" />
+              </button>
+            </Tip>
+          )}
 
-        {/* Product. Always exactly two options (MIS|CNC for equity, MIS|NRML
+          <ToolbarDivider />
+
+          {/* Product. Always exactly two options (MIS|CNC for equity, MIS|NRML
             for derivatives), so a segmented control spends double the width to
-            show one you are not using — this toggles and names the other. */}
-        {sym && !sym.quoteOnly && sym.productOptions.length > 0 && (
-          <button
-            type="button"
-            onClick={() => changeProduct(nextProduct)}
-            title={`Product ${sym.product} — click for ${nextProduct}`}
-            aria-label={`Product ${sym.product}, click for ${nextProduct}`}
-            className="h-8 shrink-0 whitespace-nowrap rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
-          >
-            {sym.product}
-          </button>
-        )}
+            show one you are not using; this toggles and names the other. */}
+          {sym && !sym.quoteOnly && sym.productOptions.length > 0 && (
+            <Tip tip={{ title: `Product ${sym.product}`, sub: `Click for ${nextProduct}` }}>
+              <button
+                type="button"
+                onClick={() => changeProduct(nextProduct)}
+                aria-label={`Product ${sym.product}, click for ${nextProduct}`}
+                className={cn(TB_BTN, TB_ON, 'px-2.5 text-xs font-semibold tracking-wide')}
+              >
+                {sym.product}
+              </button>
+            </Tip>
+          )}
 
-        {/* Quantity */}
-        <div className="flex shrink-0 items-center gap-1">
-          <label className="whitespace-nowrap text-[11px] text-muted-foreground" htmlFor={`qty-${paneId}`}>
-            {sym?.lots ? 'Lots' : 'Qty'}
-          </label>
-          <Input
-            id={`qty-${paneId}`}
-            type="number"
-            min={1}
-            value={qty}
-            onChange={(e) => changeQty(Number(e.target.value))}
-            className="h-8 w-16 text-sm"
-          />
-        </div>
+          {/* Quantity: the one field in the row keeps a fill, so it reads as editable. */}
+          <div className="flex shrink-0 items-center gap-1.5 pl-1">
+            <label
+              className="whitespace-nowrap text-[11px] font-medium text-muted-foreground"
+              htmlFor={`qty-${paneId}`}
+            >
+              {sym?.lots ? 'Lots' : 'Qty'}
+            </label>
+            <Input
+              id={`qty-${paneId}`}
+              type="number"
+              min={1}
+              value={qty}
+              onChange={(e) => changeQty(Number(e.target.value))}
+              className="h-7 w-16 rounded-md border-transparent bg-foreground/[0.06] px-2 text-[13px] font-medium tabular-nums shadow-none hover:bg-foreground/[0.09] focus-visible:border-ring dark:bg-foreground/[0.07]"
+            />
+          </div>
 
-        {/* Indicators (additive) */}
-        <DropdownMenu onOpenChange={(o) => o && void openIndicators()}>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1" title="Indicators">
+          <ToolbarDivider />
+
+          {/* Indicators. A dialog rather than a dropdown: 105 built-ins in a
+            264px column was a scroll race, with no way to jump to a category
+            and no memory of what you reach for daily. */}
+          <Tip tip={{ title: 'Indicators', sub: 'Add studies and saved scripts to this chart' }}>
+            <button
+              type="button"
+              className={TB_BTN}
+              aria-label="Indicators"
+              onClick={() => {
+                setPickerOpen(true)
+                void openIndicators()
+              }}
+            >
               <IndicatorIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Indicators</span>
-              {indicators.length > 0 && (
-                <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-                  {indicators.length}
-                </span>
-              )}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="max-h-80 w-64 overflow-y-auto">
-            {indicators.length > 0 && (
-              <>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  On this chart
-                </div>
-                {indicators.map((i) => (
-                  <DropdownMenuItem
-                    key={i.id}
-                    onSelect={(e) => {
-                      // Settings and remove on one row; the gear must not fall
-                      // through to the row's remove action.
-                      const target = e.target as HTMLElement
-                      if (target.closest('[data-act="settings"]')) {
-                        e.preventDefault()
-                        terminalRef.current?.openIndicatorSettings(i.id)
-                        return
-                      }
-                      terminalRef.current?.removeIndicatorById(i.id)
-                    }}
-                    className="justify-between gap-2 text-sm"
-                  >
-                    {i.name}
-                    <span className="flex items-center gap-2">
-                      <span data-act="settings" className="text-xs text-primary hover:underline">
-                        settings
-                      </span>
-                      <span className="text-xs text-muted-foreground">remove</span>
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-              </>
-            )}
-            {Object.entries(catalogGroups).map(([cat, list]) => (
-              <div key={cat}>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {cat}
-                </div>
-                {list.map((d) => (
-                  <DropdownMenuItem
-                    key={d.id}
-                    onSelect={() => void terminalRef.current?.addIndicatorById(d.id)}
-                    className="text-sm"
-                  >
-                    {d.name}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ))}
-            {catalog.length === 0 && (
-              <div className="px-2 py-3 text-sm text-muted-foreground">Loading…</div>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <span className={TB_LABEL_2XL}>Indicators</span>
+              {indicators.length > 0 && <span className={TB_COUNT}>{indicators.length}</span>}
+            </button>
+          </Tip>
 
-        {/* Right side: connection LED + actions */}
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <span
-            className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
-            title={`WebSocket ${wsState}`}
+          <Tip tip={{ title: 'Alerts', sub: 'Create and manage price alerts for this chart' }}>
+            <button
+              type="button"
+              className={TB_BTN}
+              aria-label="Alerts"
+              onClick={() => void terminalRef.current?.openAlerts()}
+            >
+              <ChromeIcon id="bell" />
+              <span className={TB_LABEL_WIDE}>Alerts</span>
+            </button>
+          </Tip>
+
+          <ComparisonMenu
+            state={comparisons}
+            disabled={
+              !ready ||
+              transitionLocked ||
+              (workspaceReplay
+                ? workspaceReplay.phase !== 'idle'
+                : Boolean(replay || picking || replayLoading))
+            }
+            container={menuHost}
+            search={(query, exchange, limit) =>
+              terminalRef.current?.search(query, exchange, limit) ?? Promise.resolve([])
+            }
+            onAdd={(symbol, exchange) =>
+              terminalRef.current?.addComparison(symbol, exchange) ??
+              Promise.reject(new Error('Chart is not ready'))
+            }
+            onRemove={(id) => terminalRef.current?.removeComparison(id)}
+            onToggle={(id, visible) => terminalRef.current?.setComparisonVisible(id, visible)}
+            onRetry={(id) =>
+              terminalRef.current?.retryComparison(id) ??
+              Promise.reject(new Error('Chart is not ready'))
+            }
+            onModeChange={(value) => terminalRef.current?.setComparisonMode(value)}
           />
-          {/* Full screen chart (additive) */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn('h-8 w-8', fullscreen && 'text-primary')}
-            onClick={toggleFullscreen}
-            title={fullscreen ? 'Exit full screen (Esc)' : 'Full screen chart'}
-            aria-label="Toggle full screen chart"
+
+          {/* Replay. A toolbar action rather than a context-menu entry: it changes
+            what the whole chart is showing, and the transport bar it opens has
+            to be discoverable without a right-click. */}
+          <Tip
+            tip={{
+              title: replayTitle,
+              sub: 'Play the session back bar by bar from a bar you pick',
+            }}
           >
-            <FullscreenIcon className="h-[17px] w-[17px]" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => terminalRef.current?.screenshot()}
-            title="Save chart screenshot"
-            aria-label="Save chart screenshot"
+            <button
+              type="button"
+              aria-label="Replay"
+              className={cn(
+                TB_BTN,
+                (workspaceReplay
+                  ? workspaceReplay.phase !== 'idle'
+                  : replay || picking || replayLoading) && TB_ON
+              )}
+              onClick={() => {
+                if (onReplayStart) {
+                  onReplayStart(paneId)
+                  return
+                }
+                if (replay) setConfirmLeave(true)
+                else if (replayLoading) terminalRef.current?.stopReplay()
+                else if (picking) terminalRef.current?.cancelReplayPick()
+                else terminalRef.current?.startReplay()
+              }}
+            >
+              <ChromeIcon id="replay" />
+              <span className={TB_LABEL_2XL}>Replay</span>
+            </button>
+          </Tip>
+
+          {/* Workspace controls share the selected chart's row, but they are not
+            about this chart: they are the grid, its templates and whether a
+            click anywhere in it sends an order. Their own groups, after
+            everything that acts on this chart, with the dividers saying so. */}
+          {!fullscreen && layoutPicker}
+
+          {/* Undo / redo for the chart. Also on the drawing rail, and deliberately
+            here as well: the rail can be hidden, and these two are reached far
+            more often than the tool that made the shape. Both stay mounted and
+            go dimmed rather than disappearing, so the toolbar does not reflow
+            as you draw. They walk the chart's changes (drawings, studies,
+            panes, scales, chart type, interval), and the labels say "chart
+            change" so that, next to a Replay button and an order panel, they
+            cannot read as taking back an order. */}
+          <ToolbarDivider />
+          {/* Wrapped, so the label still shows while the button is disabled: a
+              disabled button takes no pointer events of its own. */}
+          <Tip
+            tip={{
+              title: 'Undo chart change',
+              chord: `${MOD_KEY}+Z`,
+              sub: 'Orders are never undone',
+            }}
           >
-            <CameraIcon className="h-[17px] w-[17px]" />
-          </Button>
+            <span className="inline-flex shrink-0">
+              <button
+                type="button"
+                className={cn(TB_BTN, TB_ICON)}
+                onClick={() => terminalRef.current?.historyPress('undo')}
+                disabled={!history.canUndo}
+                aria-label="Undo chart change"
+              >
+                <ChromeIcon id="undo" />
+              </button>
+            </span>
+          </Tip>
+          <Tip tip={{ title: 'Redo chart change', chord: `${MOD_KEY}+Y` }}>
+            <span className="inline-flex shrink-0">
+              <button
+                type="button"
+                className={cn(TB_BTN, TB_ICON)}
+                onClick={() => terminalRef.current?.historyPress('redo')}
+                disabled={!history.canRedo}
+                aria-label="Redo chart change"
+              >
+                <ChromeIcon id="redo" />
+              </button>
+            </span>
+          </Tip>
+
+          {/* Right side: the feed, then the view actions. */}
+          <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+            {branding && (
+              <a
+                href={branding.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={branding.label}
+                className="inline-flex min-h-11 items-center whitespace-nowrap px-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground sm:min-h-0"
+              >
+                {branding.label}
+              </a>
+            )}
+            <span
+              className={cn('mx-1 inline-block h-2 w-2 shrink-0 rounded-full', ledClass(wsState))}
+              title={`WebSocket ${wsState}`}
+            />
+            <ToolbarDivider />
+            {/* Full screen chart (additive) */}
+            <Tip
+              tip={
+                fullscreen
+                  ? { title: 'Exit full screen', chord: 'Esc' }
+                  : { title: 'Full screen chart', sub: 'This chart alone, with its toolbar' }
+              }
+            >
+              <button
+                type="button"
+                className={cn(TB_BTN, TB_ICON, fullscreen && TB_ON)}
+                onClick={toggleFullscreen}
+                aria-label="Toggle full screen chart"
+              >
+                <ChromeIcon id={fullscreen ? 'fullscreen-exit' : 'fullscreen'} />
+              </button>
+            </Tip>
+            {/* Positioned, so the menu below anchors to the camera and not to
+              whatever ancestor happens to be relative. */}
+            <div className="relative">
+              <Tip
+                disabled={snapOpen}
+                tip={{
+                  title: 'Chart snapshot',
+                  chord: 'Alt+Shift+S',
+                  sub: 'Save or copy an image, or download the data. Shift-click saves the image.',
+                }}
+              >
+                <button
+                  type="button"
+                  className={cn(TB_BTN, TB_ICON, snapOpen && TB_ON)}
+                  ref={snapBtnRef}
+                  onClick={(e) => {
+                    // Shift skips the menu and saves, for anyone who only ever saves.
+                    if (e.shiftKey) {
+                      void terminalRef.current?.screenshot()
+                      return
+                    }
+                    if (snapOpen) setSnapOpen(false)
+                    else openSnapMenu()
+                  }}
+                  aria-label="Chart snapshot"
+                >
+                  <CameraIcon className="h-4 w-4" />
+                </button>
+              </Tip>
+              {snapOpen && (
+                <>
+                  {/* Catches the click that dismisses, so the menu closes on any
+                  outside press without a document listener that would also
+                  swallow the press that opened it. */}
+                  <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
+                  <div
+                    className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
+                    style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
+                  >
+                    <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Chart snapshot
+                    </div>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                      onClick={() => {
+                        setSnapOpen(false)
+                        void terminalRef.current?.screenshot()
+                      }}
+                    >
+                      <ChromeIcon id="download" size={14} className="opacity-70" />
+                      Download image
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent disabled:opacity-40"
+                      disabled={
+                        workspaceReplay
+                          ? workspaceReplay.phase === 'picking' ||
+                            workspaceReplay.phase === 'loading'
+                          : picking || replayLoading
+                      }
+                      title={
+                        workspaceReplay?.phase === 'picking' ||
+                        workspaceReplay?.phase === 'loading' ||
+                        picking ||
+                        replayLoading
+                          ? 'Finish selecting and loading replay before exporting data'
+                          : 'Export displayed chart data'
+                      }
+                      onClick={() => {
+                        setSnapOpen(false)
+                        const terminal = terminalRef.current
+                        if (terminal) setDataExport(terminal.dataExportChoices())
+                      }}
+                    >
+                      <ChromeIcon id="download" size={14} className="opacity-70" />
+                      Download CSV
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                      onClick={() => {
+                        setSnapOpen(false)
+                        void terminalRef.current?.copyScreenshot()
+                      }}
+                    >
+                      <ChromeIcon id="copy" size={14} className="opacity-70" />
+                      Copy image
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      </ChartToolbar>
 
       {/* Chart area */}
-      <div className="relative min-h-0 flex-1 bg-card">
+      {/* A size container, so the drawing properties bar fits the pane it is in. */}
+      <div className="@container relative min-h-0 flex-1 bg-card">
         <DrawingStyleBar
           sel={drawSel}
           onStyle={(patch) => terminalRef.current?.styleSelectedDrawing(patch)}
+          onSettings={(values) => terminalRef.current?.setSelectedDrawingSettings(values)}
           onDelete={() => terminalRef.current?.removeDrawings(false)}
           onEditText={() => drawSel && terminalRef.current?.requestDrawTextEdit(drawSel.id)}
+          onDuplicate={() => terminalRef.current?.duplicateSelectedDrawings()}
+          onOrder={(where) => terminalRef.current?.orderSelectedDrawings(where)}
+          onHide={() => terminalRef.current?.hideSelectedDrawings()}
+          readLevels={() => terminalRef.current?.drawLevels() ?? null}
+          onLevels={(levels) => terminalRef.current?.setDrawLevels(levels)}
         />
+        {dataExport && (
+          <Suspense fallback={null}>
+            <ChartDataDialog
+              source={`${sym ? `${sym.exchange}:${sym.symbol}` : 'This chart'}, ${interval}`}
+              studies={dataExport.studies}
+              comparisons={dataExport.comparisons}
+              onDownload={downloadCsv}
+              onClose={() => setDataExport(null)}
+            />
+          </Suspense>
+        )}
+        {intervalBox !== null && (
+          <QuickIntervalBox
+            initial={intervalBox}
+            available={intervalGroups.flatMap((group) => group.items)}
+            canSelectInterval={(code) => terminalRef.current?.supportsInterval?.(code) ?? false}
+            onApply={(code) => {
+              setIntervalBox(null)
+              if (!intervalGroups.some((group) => group.items.includes(code)))
+                chartTimeframePreferences().addCustom(code)
+              if (code !== interval) changeInterval(code)
+            }}
+            onClose={() => setIntervalBox(null)}
+          />
+        )}
         <DrawingTextDialog
           req={textReq}
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
         />
-        <IndicatorSettingsDialog
-          req={indSettings}
-          onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
-          onDefaults={(id) =>
-            terminalRef.current
-              ? terminalRef.current.indicatorDefaultsFor(id)
-              : Promise.resolve(null)
-          }
-          onClose={() => setIndSettings(null)}
-        />
+        {pickerOpen && (
+          <Suspense fallback={null}>
+            <IndicatorPickerDialog
+              open={pickerOpen}
+              catalog={catalog}
+              active={indicators}
+              onAdd={(id) => void terminalRef.current?.addIndicatorById(id)}
+              onRemove={(id) => terminalRef.current?.removeIndicatorById(id)}
+              onSettings={(id) => terminalRef.current?.openIndicatorSettings(id)}
+              onClose={() => setPickerOpen(false)}
+            />
+          </Suspense>
+        )}
+        {chartSettings && (
+          <Suspense fallback={null}>
+            <ChartSettingsDialog
+              req={chartSettings}
+              onApply={(patch) => {
+                void terminalRef.current?.applyChartSettings(patch)
+              }}
+              onClose={() => setChartSettings(null)}
+            />
+          </Suspense>
+        )}
+        {boxSettings && (
+          <Suspense fallback={null}>
+            <BoxChartSettingsDialog
+              type={boxSettings.type}
+              req={boxSettings.req}
+              onApply={(patch) => {
+                void terminalRef.current?.applyChartSettings(patch)
+              }}
+              onClose={() => setBoxSettings(null)}
+            />
+          </Suspense>
+        )}
+        {alertsHandle && (
+          <Suspense fallback={null}>
+            <AlertsDialog handle={alertsHandle} onClose={() => setAlertsHandle(null)} />
+          </Suspense>
+        )}
+        {indSettings && (
+          <Suspense fallback={null}>
+            <IndicatorSettingsDialog
+              req={indSettings}
+              chartInterval={interval}
+              onApply={(id, patch, barSource) =>
+                terminalRef.current?.updateIndicatorSettings(id, patch, barSource)
+              }
+              onDefaults={(id) =>
+                terminalRef.current
+                  ? terminalRef.current.indicatorDefaultsFor(id)
+                  : Promise.resolve(null)
+              }
+              onClose={() => setIndSettings(null)}
+              onPick={(field, onValue) => {
+                const terminal = terminalRef.current
+                if (terminal) return terminal.pickInput(field, onValue)
+                onValue(null)
+                return () => {}
+              }}
+            />
+          </Suspense>
+        )}
         <div className="pointer-events-none absolute left-3 top-1.5 z-10 flex flex-col gap-0.5">
           <div ref={legendRef} className="text-xs font-medium text-foreground" />
           {sym && lotInfoText(sym, qty) && (
             <span className="text-[10px] text-muted-foreground">{lotInfoText(sym, qty)}</span>
           )}
         </div>
-        <div
-          ref={chartRef}
-          className="absolute inset-0"
-          onContextMenu={onContextMenu}
-          onPointerDownCapture={() => onFocusPane?.(terminalRef.current)}
+        {/* The armed drawing tool's glyph follows the pointer: the terminal
+            sets --tool-cursor while a tool is armed and clears it after. */}
+        <div ref={chartRef} className="absolute inset-0 [cursor:var(--tool-cursor,auto)]" />
+
+        {/* Nothing on this pane takes input until it has been built. */}
+        {!ready && <div className="absolute inset-0" aria-hidden="true" />}
+        <ChartStateOverlay
+          view={
+            chartState ??
+            (!ready && bootSlow ? { kind: 'loading', symbol: '', interval: '' } : null)
+          }
+          onRetry={() => terminalRef.current?.retryLoad()}
+          onDismiss={() => chartStateGate.current?.dismiss()}
         />
 
-        {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-            Loading…
+        {/*
+          Replay transport. The engine's controller is headless by design, so the
+          bar, the clock and the scrub are ours to draw. It renders only while
+          replay owns the chart's data: `replay` is null the moment we are live
+          again, which is also the signal that Exit has done its work.
+        */}
+        {/*
+          Step one of replay. The bar you start from is the whole premise of the
+          exercise, so it is picked rather than guessed at from the viewport, and
+          everything to its right is greyed while it is being picked: choosing a
+          start with the next twenty bars readable is choosing on hindsight.
+        */}
+        {!onReplayStart && (picking || replayLoading) && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-popover/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
+            <span>
+              <span className="font-medium">
+                {replayLoading ? 'Loading replay history' : 'Select a bar'}
+              </span>{' '}
+              {!replayLoading && <span className="text-muted-foreground">to replay from</span>}
+            </span>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-1 hover:bg-accent"
+              onClick={() => terminalRef.current?.cancelReplayPick()}
+            >
+              Cancel
+            </button>
           </div>
         )}
 
-        {ctx && (
+        {pendingOrder && pendingText && (
           <div
+            role="alertdialog"
+            aria-label={pendingText.title}
+            className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45"
+          >
+            <div className="w-[360px] max-h-[calc(100%-24px)] max-w-[calc(100%-24px)] overflow-y-auto rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">{pendingText.title}</h4>
+              {pendingText.body.map((line) => (
+                <p key={line} className="mb-2 text-xs leading-relaxed text-muted-foreground">
+                  {line}
+                </p>
+              ))}
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  // Focus starts on the button that sends nothing, so an Enter
+                  // pressed out of habit keeps the position as it is.
+                  // biome-ignore lint/a11y/noAutofocus: a confirmation must take focus, and it must be the safe choice.
+                  autoFocus
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setPendingOrder(null)}
+                >
+                  {pendingText.keep}
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:opacity-90"
+                  onClick={() => {
+                    const action = pendingOrder
+                    setPendingOrder(null)
+                    void runOrderAction(action)
+                  }}
+                >
+                  {pendingText.confirm}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {removeAll && (
+          <div
+            role="alertdialog"
+            aria-label="Remove all drawings"
+            className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45"
+          >
+            <div className="w-[340px] max-w-[calc(100%-24px)] rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">
+                Remove all {removeAll.count} {removeAll.count === 1 ? 'drawing' : 'drawings'}
+                {removeAll.symbol ? ` from ${removeAll.symbol}` : ''}?
+              </h4>
+              <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+                Every drawing on this chart goes, hidden ones included. Order and position lines
+                stay. Undo ({MOD_KEY} + Z) brings the drawings back.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setRemoveAll(null)}
+                >
+                  Keep them
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:opacity-90"
+                  onClick={() => {
+                    setRemoveAll(null)
+                    terminalRef.current?.removeDrawings(true)
+                  }}
+                >
+                  Remove all
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!onReplayStart && confirmLeave && (
+          <div className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45">
+            <div className="w-[340px] rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">Leave replay?</h4>
+              <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+                The chart goes back to the live session and the playhead is lost.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setConfirmLeave(false)}
+                >
+                  Stay
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                  onClick={() => {
+                    setConfirmLeave(false)
+                    terminalRef.current?.stopReplay()
+                  }}
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!onReplayStart && replay && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title={`Step back ${replay.subSteps > 1 ? 'one step of the forming bar' : 'one bar'}`}
+              onClick={() => terminalRef.current?.replayStepBack()}
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+              title={replay.playing ? 'Pause' : 'Play'}
+              onClick={() =>
+                replay.playing
+                  ? terminalRef.current?.replayPause()
+                  : terminalRef.current?.replayPlay()
+              }
+            >
+              {replay.playing ? 'Pause' : 'Play'}
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title={`Step forward ${replay.subSteps > 1 ? 'one step of the forming bar' : 'one bar'}`}
+              onClick={() => terminalRef.current?.replayStep()}
+            >
+              Next
+            </button>
+
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, replay.total - 1)}
+              value={replay.index}
+              className="mx-1 h-1 w-40 cursor-pointer accent-primary"
+              title="Scrub the session"
+              onChange={(e) => terminalRef.current?.replaySeek(Number(e.target.value))}
+            />
+
+            <span className="tabular-nums text-[11px] text-muted-foreground">
+              {replay.index + 1} / {replay.total}
+            </span>
+            {/* Only while a bar actually forms over several steps, so a plain
+                whole-bar replay does not carry a permanent "1/1". */}
+            {replay.subSteps > 1 && (
+              <span className="tabular-nums text-[11px] text-primary">
+                {replay.subIndex + 1}/{replay.subSteps}
+              </span>
+            )}
+
+            <select
+              className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
+              value={replay.speed}
+              title="Bars per second"
+              onChange={(e) => terminalRef.current?.replayPlay(Number(e.target.value))}
+            >
+              {[0.5, 1, 2, 4, 10].map((x) => (
+                <option key={x} value={x}>
+                  {x}x
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Leave replay and return to the live chart"
+              onClick={() => setConfirmLeave(true)}
+            >
+              Exit
+            </button>
+          </div>
+        )}
+
+        {ctx?.axis && (
+          <PriceScaleMenu
+            menu={ctx.axis}
+            x={ctx.x}
+            y={ctx.y}
+            onCommand={(command, keepOpen) => {
+              const t = terminalRef.current
+              if (!t) return
+              const done = t.priceAxisCommand(command)
+              if (!keepOpen) {
+                setCtx(null)
+                return
+              }
+              // Read back once the choice has landed, so the switch shows it.
+              void done.then(() => {
+                const next = t.priceAxisMenu()
+                setCtx((c) => (c?.axis && next ? { ...c, axis: next } : c))
+              })
+            }}
+            onSettings={() => {
+              setCtx(null)
+              void terminalRef.current
+                ?.chartSettings()
+                .then((cs) => cs && setChartSettings({ ...cs, initialTab: 'axes' }))
+            }}
+          />
+        )}
+        {ctx && !ctx.axis && (
+          <div
+            ref={ctxRef}
             className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
             style={{ left: ctx.x, top: ctx.y }}
           >
+            {ctx.profile && (
+              <>
+                <div className="px-2 py-1 text-xs text-muted-foreground">
+                  {ctx.profile.sessionLabel}
+                </div>
+                <button type="button" className={ctxRow} onClick={() => run(ctx.profile!.run)}>
+                  {ctx.profile.label}
+                </button>
+                <div className="my-1 h-px bg-border" />
+              </>
+            )}
+            {ctx.study && (
+              <>
+                {ctx.study.study && (
+                  <>
+                    <button
+                      type="button"
+                      className={cn(
+                        ctxRow,
+                        !ctx.study.study.configurable && 'cursor-not-allowed opacity-40'
+                      )}
+                      disabled={!ctx.study.study.configurable}
+                      title={
+                        ctx.study.study.configurable ? undefined : 'This study keeps its settings'
+                      }
+                      onClick={() => {
+                        const id = ctx.study?.study?.id
+                        if (id) run(() => terminalRef.current?.openIndicatorSettings(id))
+                      }}
+                    >
+                      <ChromeIcon id="settings" size={14} className="opacity-70" />
+                      <span className="truncate">{ctx.study.study.name} settings...</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        ctxRow,
+                        ctx.study.study.removable
+                          ? 'text-destructive hover:text-destructive'
+                          : 'cursor-not-allowed opacity-40'
+                      )}
+                      disabled={!ctx.study.study.removable}
+                      title={
+                        ctx.study.study.removable ? undefined : 'This study stays on the chart'
+                      }
+                      onClick={() => {
+                        const id = ctx.study?.study?.id
+                        if (id) run(() => terminalRef.current?.removeIndicatorById(id))
+                      }}
+                    >
+                      <ChromeIcon id="trash" size={14} className="opacity-70" />
+                      <span className="truncate">Remove {ctx.study.study.name}</span>
+                    </button>
+                  </>
+                )}
+                {ctx.study.pane && (
+                  <>
+                    {(
+                      [
+                        ['Move pane up', -1, ctx.study.pane.up],
+                        ['Move pane down', 1, ctx.study.pane.down],
+                      ] as const
+                    ).map(([label, direction, move]) => (
+                      <button
+                        type="button"
+                        key={label}
+                        className={cn(ctxRow, move.disabled && 'cursor-not-allowed opacity-40')}
+                        disabled={move.disabled}
+                        title={move.reason}
+                        onClick={() => {
+                          const index = ctx.study?.pane?.index
+                          if (index !== undefined)
+                            run(() => terminalRef.current?.moveStudyPane(index, direction))
+                        }}
+                      >
+                        <span className="w-3.5" aria-hidden="true" />
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className={ctxRow}
+                      onClick={() => {
+                        const pane = ctx.study?.pane
+                        if (pane)
+                          run(() =>
+                            terminalRef.current?.setStudyPaneCollapsed(pane.index, !pane.collapsed)
+                          )
+                      }}
+                    >
+                      <span className="w-3.5" aria-hidden="true" />
+                      {ctx.study.pane.collapsed ? 'Expand pane' : 'Collapse pane'}
+                    </button>
+                  </>
+                )}
+                <div className="my-1 h-px bg-border" />
+              </>
+            )}
+            {ctx.alert && (
+              <button
+                type="button"
+                className={cn(ctxRow, ctx.alert.disabled && 'cursor-not-allowed opacity-40')}
+                disabled={ctx.alert.disabled}
+                title={ctx.alert.reason}
+                onClick={() => {
+                  // Made there and then. The price is the one thing a form
+                  // would ask for and it has just been given by pointing at it;
+                  // the alert is editable from the rail the moment it exists.
+                  void terminalRef.current?.createAlertAt(ctx.alert!.source)
+                  setCtx(null)
+                }}
+              >
+                {ctx.alert.label}
+              </button>
+            )}
+            {/* No entry for the form. The menu's job here is the alert at the
+                price under the pointer, which the entry above makes; a second
+                entry one line below it, spelled almost the same and doing
+                something else, is a choice nobody wants to make mid-gesture.
+                The form is on the toolbar, where somebody who wants it is
+                already looking. */}
             {ctx.items.map((it) => (
               <button
                 type="button"
@@ -679,33 +2048,148 @@ export function ChartPane({
               </button>
             ))}
 
+            {/* What is open on this symbol: its working orders and positions.
+                Only rows with something to act on; each asks first. */}
+            {orderRows && (
+              <>
+                <div className="my-1 h-px bg-border" />
+                {orderRows.working.length > 0 && (
+                  <button
+                    type="button"
+                    className={ctxRow}
+                    onClick={() =>
+                      run(() =>
+                        setPendingOrder({
+                          kind: 'cancel',
+                          symbol: orderRows.symbol,
+                          exchange: orderRows.exchange,
+                          orders: orderRows.working,
+                        })
+                      )
+                    }
+                  >
+                    <span className="truncate">
+                      Cancel orders on {orderRows.symbol} ({orderRows.working.length})
+                    </span>
+                  </button>
+                )}
+                {orderRows.positions.map((row) => {
+                  const lotSize = lotSizeOf(row)
+                  const tag = row.suffix ? ` ${row.suffix}` : ''
+                  const key = `${row.position.product}`
+                  return (
+                    <div key={key}>
+                      <button
+                        type="button"
+                        className={ctxRow}
+                        onClick={() => run(() => setPendingOrder({ kind: 'close', row, lotSize }))}
+                      >
+                        {row.suffix ? `Close ${row.suffix} position` : 'Close position'}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(ctxRow, row.half === 0 && 'cursor-not-allowed opacity-40')}
+                        disabled={row.half === 0}
+                        title={row.halfReason}
+                        onClick={() => run(() => setPendingOrder({ kind: 'half', row, lotSize }))}
+                      >
+                        Close half{tag}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(ctxRow, row.reverseReason && 'cursor-not-allowed opacity-40')}
+                        disabled={!!row.reverseReason}
+                        title={row.reverseReason}
+                        onClick={() =>
+                          run(() => setPendingOrder({ kind: 'reverse', row, lotSize }))
+                        }
+                      >
+                        {row.suffix ? `Reverse ${row.suffix} position` : 'Reverse position'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </>
+            )}
+
+            {/* Drawing rows, only where they apply: on a drawing, what can be
+                done to it; on empty space, paste and remove all. */}
+            {(ctx.items.length > 0 || ctx.alert) && ctxDrawingRows.length > 0 && (
+              <div className="my-1 h-px bg-border" />
+            )}
+            {ctxDrawingRows.map((r) => (
+              <button
+                type="button"
+                key={r.label}
+                className={cn(ctxRow, r.danger && 'text-destructive hover:text-destructive')}
+                aria-keyshortcuts={r.keys}
+                onClick={() => run(r.run)}
+              >
+                <span className="inline-flex opacity-70">{r.icon}</span>
+                <span className="flex-1">{r.label}</span>
+                {r.shortcut && <span className="text-xs text-muted-foreground">{r.shortcut}</span>}
+              </button>
+            ))}
+
             {/* View actions live here rather than in the toolbar — they are
                 occasional, and the row they used to occupy is chart height. */}
-            {ctx.items.length > 0 && <div className="my-1 h-px bg-border" />}
-            <button type="button" className={ctxRow} onClick={() => run(() => terminalRef.current?.resetScale())}>
-              <RefreshCw className="h-3.5 w-3.5 opacity-70" />
+            {(ctx.items.length > 0 || ctxDrawingRows.length > 0) && (
+              <div className="my-1 h-px bg-border" />
+            )}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() => run(() => terminalRef.current?.resetScale())}
+            >
+              <ChromeIcon id="refresh" size={14} className="opacity-70" />
               Reset chart view
             </button>
-            {onToggleRail && (
-              <button type="button" className={ctxRow} onClick={() => run(onToggleRail)}>
-                <PencilIcon className="h-3.5 w-3.5 opacity-70" />
-                {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
-              </button>
-            )}
+            {/* Settings sits on the chart it configures rather than in the
+                toolbar: right-click is where a terminal user reaches for it, and
+                the toolbar row is already the most contended space on the page. */}
             <button
               type="button"
               className={ctxRow}
               onClick={() =>
                 run(() => {
-                  const next = !volumeOn
-                  terminalRef.current?.setVolumeVisible(next)
-                  setVolumeOn(next)
+                  void terminalRef.current?.chartSettings().then((cs) => cs && setChartSettings(cs))
                 })
               }
             >
-              <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
-              {volumeOn ? 'Hide volume' : 'Show volume'}
+              <ChromeIcon id="settings" size={14} className="opacity-70" />
+              Chart settings...
             </button>
+            {/* The alerts list, the same one the toolbar's Alerts opens. */}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() => run(() => void terminalRef.current?.openAlerts())}
+            >
+              <ChromeIcon id="bell" size={14} className="opacity-70" />
+              Alerts...
+            </button>
+            {onToggleRail && (
+              <button type="button" className={ctxRow} onClick={() => run(onToggleRail)}>
+                <ChromeIcon id="brush" size={14} className="opacity-70" />
+                {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
+              </button>
+            )}
+            {!isProfileKind(chartType) && (
+              <button
+                type="button"
+                className={ctxRow}
+                onClick={() =>
+                  run(() => {
+                    const next = !volumeOn
+                    terminalRef.current?.setVolumeVisible(next)
+                    setVolumeOn(next)
+                  })
+                }
+              >
+                <ChromeIcon id="chart-column" size={14} className="opacity-70" />
+                {volumeOn ? 'Hide volume' : 'Show volume'}
+              </button>
+            )}
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
                 type="button"
@@ -721,9 +2205,9 @@ export function ChartPane({
                 }}
                 aria-expanded={gridSub}
               >
-                <GridIcon className="h-3.5 w-3.5 opacity-70" />
+                <ChromeIcon id="grid" size={14} className="opacity-70" />
                 Grid
-                <ChevronDown className="ml-auto h-3.5 w-3.5 -rotate-90 opacity-60" />
+                <ChromeIcon id="chevron-right" size={14} className="ml-auto opacity-60" />
               </button>
               {gridSub && (
                 <div
@@ -760,15 +2244,62 @@ export function ChartPane({
         )}
       </div>
 
-      <SymbolSearchDialog
-        open={searchOpen}
-        onOpenChange={setSearchOpen}
-        search={(q, ex, limit) =>
-          terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
-        }
-        onPick={(row) => terminalRef.current?.loadSymbol(row)}
-        initialQuery={sym?.symbol}
-      />
+      {searchOpen && (
+        <Suspense fallback={null}>
+          <SymbolSearchDialog
+            open={searchOpen}
+            onOpenChange={(next) => {
+              setSearchOpen(next)
+              if (!next) setSearchSeed(null)
+            }}
+            search={(q, ex, limit) =>
+              terminalRef.current ? terminalRef.current.search(q, ex, limit) : Promise.resolve([])
+            }
+            onPick={(row) => {
+              onBeforeSourceChange?.()
+              void terminalRef.current?.loadSymbol(row)
+            }}
+            initialQuery={searchSeed ? searchSeed.text : sym?.symbol}
+            selectInitial={searchSeed === null}
+          />
+        </Suspense>
+      )}
+
+      {/* The order ticket One-Click off opens: the same dialog the option chain
+          and pages/OptionChain.tsx use, so quantity, product and price are
+          confirmed in one place and analyze mode is honoured the same way.
+          A success needs no toast here; the socket provider shows the broker's
+          order event once, for every surface. The confirmed order goes out
+          through the terminal's own feed, never straight to the API: the
+          feed asserts the page's mode against the server first, the way the
+          armed path does. Portalled into the pane while it is the fullscreen
+          element, as the menus are, or it would open unseen behind it. */}
+      {ticket !== null && (
+        <Suspense fallback={null}>
+          <PlaceOrderDialog
+            open={ticket !== null}
+            onOpenChange={(next) => !next && setTicket(null)}
+            container={menuHost}
+            place={(order) => {
+              const terminal = terminalRef.current
+              if (!terminal) return Promise.reject(new Error('chart is not ready'))
+              return terminal.placeTicket(order)
+            }}
+            symbol={ticket?.symbol}
+            exchange={ticket?.exchange}
+            action={ticket?.action}
+            quantity={ticket?.quantity}
+            lotSize={ticket?.lotSize}
+            tickSize={ticket?.tickSize}
+            product={ticket?.product}
+            priceType={ticket?.priceType}
+            price={ticket?.price}
+            triggerPrice={ticket?.triggerPrice}
+            strategy={ticket?.strategy}
+            onSuccess={() => setTicket(null)}
+          />
+        </Suspense>
+      )}
     </section>
   )
 }

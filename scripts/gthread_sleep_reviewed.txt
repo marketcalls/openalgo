@@ -1,0 +1,21 @@
+# Reviewed sleeps for scripts/gthread_sleep_gate.py.
+#
+# Format:  path::qualname  # benign|pending <owner>: reason
+#
+# One entry covers the named function. A reviewed sleep is reported and never
+# fails the gate. "benign" means it never holds a request thread, or holds it
+# for a bounded, intended time. "pending" means the thread it holds is a
+# known cost whose fix belongs to the partition named; the entry goes when
+# the fix lands (the gate then reports it as stale). Re-review an entry
+# whenever the function it names changes.
+
+# --- Background threads, never a request thread ---------------------------
+services/broker_keepalive_service.py::_keepalive_loop  # benign: the keepalive thread's own loop
+services/market_data_service.py::MarketDataService._cleanup_loop  # benign: a background cleanup every 5 minutes
+services/whatsapp_bot_service.py::WhatsAppBotService._run_pair  # benign: its own thread during pairing, bounded at 300 s
+
+# --- Streams that hold a request thread while they are open ---------------
+services/agent/stream.py::_pump  # benign: under gthread at most 6 agent streams are admitted and a turn ends after 15 minutes; every runtime ends the stream when shutdown begins
+
+# --- Short bounded waits on a request thread -------------------------------
+services/openscript_commands.py::_across_processes  # benign: polls a non-blocking lock on the OpenScript command file every 10 ms for at most 2 s, holding no other lock; a change holds it for milliseconds, so a Stop waits only behind another process's change

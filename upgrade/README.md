@@ -12,6 +12,11 @@ cd ..
 
 Each migration automatically skips if already applied, so it's safe to run anytime.
 
+`migrate_all.py` applies changes; it has no preview or master `--status` mode.
+Unsupported options are rejected before any child migration starts. If the
+command exits non-zero, do not start the newer application code: read the
+migration output, correct the failure, and run the same command again.
+
 ---
 
 ## Recovery and Diagnostics

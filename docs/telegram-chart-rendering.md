@@ -380,7 +380,9 @@ abstraction.
 
 ---
 
-## 5. Legacy files: `telegram_bot_service_fixed.py`, `telegram_bot_service_v2.py`
+## 5. Legacy files: `telegram_bot_service_fixed.py`, `telegram_bot_service_v2.py` (deleted)
+
+Both files have been deleted. The section below is kept as the record of why.
 
 Both of these exist in `services/` and both contain the **unfixed** pattern:
 
@@ -485,8 +487,6 @@ When `/chart RELIANCE` returns ` Failed to generate charts for RELIANCE`:
 | `install/install-multi.sh` | Multi-tenant bare-metal installer; Chromium install block after main `apt-get install` |
 | `install/update.sh` | In-place updater; does **not** touch system packages — operators must install Chromium manually when upgrading an old install |
 | `pyproject.toml` | Pins `kaleido==1.2.0` and `plotly==6.6.0` |
-| `services/telegram_bot_service_fixed.py` | Legacy backup — unused, contains unfixed pattern |
-| `services/telegram_bot_service_v2.py` | Legacy backup — unused, contains unfixed pattern |
 
 ---
 

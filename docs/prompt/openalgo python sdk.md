@@ -40,6 +40,9 @@ import openalgo
 openalgo.__version__
 ```
 
+GTT orders and the strategy module methods need **openalgo 2.0.4 or newer**.
+Upgrade with `pip install -U openalgo`.
+
 ### Examples
 
 Please refer to the documentation on [order constants](https://docs.openalgo.in/api-documentation/v1/order-constants), and consult the API reference for details on optional parameters
@@ -126,7 +129,7 @@ response = client.optionsorder(
       strategy="python",
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="28OCT25",
+      expiry_date="25AUG26",
       offset="ATM",
       option_type="CE",
       action="BUY",
@@ -148,8 +151,8 @@ Place Options Order Response
   "option_type": "CE",
   "orderid": "25102800000006",
   "status": "success",
-  "symbol": "NIFTY28OCT2525950CE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2625950CE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -161,7 +164,7 @@ response = client.optionsorder(
       strategy="python",
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="28OCT25",
+      expiry_date="25AUG26",
       offset="ITM4",
       option_type="PE",
       action="BUY",
@@ -183,8 +186,8 @@ Place Options Order Response
   "option_type": "PE",
   "orderid": "25102800000007",
   "status": "success",
-  "symbol": "NIFTY28OCT2526150PE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2626150PE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -196,7 +199,7 @@ response = client.optionsorder(
       strategy="python",
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="28OCT25",
+      expiry_date="25AUG26",
       offset="OTM5",
       option_type="CE",
       action="BUY",
@@ -219,8 +222,8 @@ Place Options Order Response
   "option_type": "CE",
   "orderid": "25102800000008",
   "status": "success",
-  "symbol": "NIFTY28OCT2526200CE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2626200CE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -234,7 +237,7 @@ response = client.optionsmultiorder(
     strategy="Iron Condor Test",
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="25NOV25",
+    expiry_date="25AUG26",
     legs=[
         {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
         {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
@@ -262,7 +265,7 @@ Place OptionsMultiOrder Response
             'option_type': 'CE',
             'orderid': '25111996859688',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2526350CE'
+            'symbol': 'NIFTY25AUG2626350CE'
         },
         {
             'action': 'BUY',
@@ -272,7 +275,7 @@ Place OptionsMultiOrder Response
             'option_type': 'PE',
             'orderid': '25111996042210',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2525750PE'
+            'symbol': 'NIFTY25AUG2625750PE'
         },
         {
             'action': 'SELL',
@@ -282,7 +285,7 @@ Place OptionsMultiOrder Response
             'option_type': 'CE',
             'orderid': '25111922189638',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2526250CE'
+            'symbol': 'NIFTY25AUG2626250CE'
         },
         {
             'action': 'SELL',
@@ -292,7 +295,7 @@ Place OptionsMultiOrder Response
             'option_type': 'PE',
             'orderid': '25111919252668',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2525850PE'
+            'symbol': 'NIFTY25AUG2625850PE'
         }
     ]
 }
@@ -307,8 +310,8 @@ response = client.optionsmultiorder(
       underlying="NIFTY",
       exchange="NSE_INDEX",
       legs=[
-          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
-          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "29SEP26"},
+          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25AUG26"}
       ]
   )
 
@@ -329,7 +332,7 @@ Place OptionsMultiOrder Response
             "option_type": "CE",
             "orderid": "25111933337854",
             "status": "success",
-            "symbol": "NIFTY30DEC2525950CE"
+            "symbol": "NIFTY29SEP2625950CE"
         },
         {
             "action": "SELL",
@@ -339,7 +342,7 @@ Place OptionsMultiOrder Response
             "option_type": "CE",
             "orderid": "25111957475473",
             "status": "success",
-            "symbol": "NIFTY25NOV2526150CE"
+            "symbol": "NIFTY25AUG2626150CE"
         }
     ],
     "status": "success",
@@ -607,6 +610,206 @@ OpenPosition Response
 {'quantity': '-10', 'status': 'success'}
 ```
 
+### PlaceGTTOrder Example
+
+A GTT (Good Till Triggered) order is a price trigger that sits with the broker until
+LTP crosses your level, then places the underlying order automatically.
+
+There are two shapes, and picking the wrong one is the usual mistake:
+
+| Type | Use when | Triggers | Orders fired |
+|------|----------|----------|--------------|
+| `SINGLE` | One entry or exit at a level | 1 | 1 |
+| `OCO` | You hold a position and want both a stoploss and a target, whichever hits first | 2 | 1 of 2, the other is auto-cancelled |
+
+For a **SINGLE**, exactly one of `triggerprice_sl` / `triggerprice_tg` carries your
+level and the other stays `0`. Pick by where the trigger sits relative to LTP:
+`triggerprice_sl` for a level **below** LTP (sell stop-loss, buy the dip),
+`triggerprice_tg` for one **above** (breakout buy, sell at target). A SINGLE has no
+stoploss leg, so the suffix is only a directional hint.
+
+For an **OCO**, the suffix is a real role and all four fields are required:
+`triggerprice_sl` with its `stoploss` limit, and `triggerprice_tg` with its `target`
+limit, where `triggerprice_sl < triggerprice_tg`.
+
+GTT accepts `CNC` and `NRML` only. `MIS` is refused: a GTT can sit for days and MIS is
+squared off the same session.
+
+```python
+# SINGLE - "Buy IDEA if it dips to 9.55, with a LIMIT order at 9.50"
+# LTP is above 9.55, so the trigger sits below it -> triggerprice_sl
+response = client.placegttorder(
+    strategy="My GTT Strategy",
+    symbol="IDEA",
+    action="BUY",
+    exchange="NSE",
+    product="CNC",
+    quantity=1,
+    price_type="LIMIT",
+    price=9.50,
+    triggerprice_sl=9.55
+)
+print(response)
+```
+
+```python
+# SINGLE - "Buy RELIANCE at MARKET if it breaks above 1450"
+# LTP is below 1450, so the trigger sits above it -> triggerprice_tg
+response = client.placegttorder(
+    strategy="My GTT Strategy",
+    symbol="RELIANCE",
+    action="BUY",
+    exchange="NSE",
+    product="CNC",
+    quantity=1,
+    price_type="MARKET",
+    price=0,
+    triggerprice_tg=1450
+)
+```
+
+```python
+# OCO - "I am short 5 INFY. Stop me out at 1480, take profit at 1620"
+# price is 0: OCO prices each leg separately through stoploss and target
+response = client.placegttorder(
+    strategy="Bracket OCO",
+    trigger_type="OCO",
+    symbol="INFY",
+    action="SELL",
+    exchange="NSE",
+    product="CNC",
+    quantity=5,
+    price_type="LIMIT",
+    price=0,
+    triggerprice_sl=1480,
+    stoploss=1478,
+    triggerprice_tg=1620,
+    target=1622
+)
+```
+
+PlaceGTTOrder Response:
+
+```json
+{"status": "success", "trigger_id": "23132604291205"}
+```
+
+Save the `trigger_id`: modify and cancel both need it.
+
+### ModifyGTTOrder Example
+
+Modify is a **full replacement**, not a patch. Every field on the trigger is replaced
+by what the call sends, so pass everything you want to keep rather than only the
+values that changed.
+
+```python
+response = client.modifygttorder(
+    trigger_id="23132604291205",
+    strategy="My GTT Strategy",
+    symbol="IDEA",
+    action="BUY",
+    exchange="NSE",
+    product="CNC",
+    quantity=1,
+    price_type="LIMIT",
+    price=9.60,           # was 9.50
+    triggerprice_sl=9.65  # was 9.55
+)
+print(response)
+```
+
+ModifyGTTOrder Response:
+
+```json
+{"status": "success", "trigger_id": "23132604291205"}
+```
+
+Trigger prices, limit prices, quantity and pricetype are modifiable. `trigger_type`,
+`symbol`, `exchange` and `action` are not - cancel and re-place instead. Only active
+GTTs can be modified; triggered, cancelled and expired ones are immutable.
+
+### CancelGTTOrder Example
+
+```python
+response = client.cancelgttorder(
+    trigger_id="23132604291205",
+    strategy="My GTT Strategy"
+)
+print(response)
+```
+
+CancelGTTOrder Response:
+
+```json
+{"status": "success", "trigger_id": "23132604291205"}
+```
+
+Cancelling an OCO removes both legs atomically; there is no per-leg cancel.
+
+### GTTOrderBook Example
+
+By default this lists **active** triggers only, the ones that can still fire. Pass
+`status="all"` to include the history as well (triggered, cancelled, expired,
+rejected), ordered active first; in analyzer mode a fired leg also carries the
+`triggered_order_id` of the sandbox order it placed.
+
+```python
+# Active triggers only (default)
+response = client.gttorderbook()
+print(response)
+
+# Active triggers first, then the triggered / cancelled / expired history
+response = client.gttorderbook(status="all")
+for gtt in response["data"]:
+    print(gtt["trigger_id"], gtt["status"], gtt["symbol"], gtt["trigger_prices"])
+```
+
+GTTOrderBook Response:
+
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "trigger_id": "23132604291205",
+      "trigger_type": "single",
+      "status": "active",
+      "symbol": "IDEA",
+      "exchange": "NSE",
+      "trigger_prices": [9.55],
+      "last_price": 9.50,
+      "legs": [
+        {
+          "action": "BUY",
+          "quantity": 1,
+          "price": 9.50,
+          "pricetype": "LIMIT",
+          "product": "CNC"
+        }
+      ],
+      "created_at": "2026-04-29 12:18:42",
+      "updated_at": "",
+      "expires_at": ""
+    }
+  ]
+}
+```
+
+`trigger_prices` is sorted ascending: a SINGLE has one element and one leg, an OCO has
+two of each with the stoploss first.
+
+The SDK refuses an impossible trigger spec before anything leaves the machine, and
+returns the refusal in the same shape as an API error:
+
+```python
+# SINGLE with no trigger price at all
+client.placegttorder(symbol="IDEA", action="BUY", exchange="NSE",
+                     product="CNC", quantity=1, price=9.50)
+# {'status': 'error',
+#  'message': 'SINGLE GTT requires a positive triggerprice_sl or triggerprice_tg.',
+#  'error_type': 'validation_error'}
+```
+
 ### Quotes Example
 
 ```python
@@ -851,196 +1054,206 @@ Note : To fetch entire option chain for a expiry remove the strike\_count (optio
 chain = client.optionchain(
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="30DEC25",
+    expiry_date="25AUG26",
     strike_count=10
 )
 ```
 
+Pass `with_greeks=True` for implied volatility and Greeks on every leg. They are
+derived from the quotes the call already fetches, so this adds no extra broker
+requests, and unlike `multioptiongreeks` it is not capped at 50 symbols.
+
+```python
+chain = client.optionchain(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25AUG26",
+    strike_count=10,
+    with_greeks=True,   # implied_volatility, delta, gamma, theta, vega per leg
+    interest_rate=0     # annualized percentage, defaults to 0
+)
+
+for row in chain["chain"]:
+    ce, pe = row.get("ce") or {}, row.get("pe") or {}
+    print(row["strike"],
+          ce.get("implied_volatility"), ce.get("delta"),
+          pe.get("implied_volatility"), pe.get("delta"))
+```
+
+Greeks use Black-76 and are priced off the forward, which the service derives from
+the ATM call and put via put-call parity and reports as `forward_price`. Vega is per
+1% change in volatility and theta is per calendar day, matching `optiongreeks`. A leg
+whose Greeks are not computable simply omits the fields.
+
 **Symbols Response**
+
+Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set.
 
 ```json
 {
     "status": "success",
     "underlying": "NIFTY",
-    "underlying_ltp": 26215.55,
-    "expiry_date": "30DEC25",
-    "atm_strike": 26200.0,
+    "underlying_ltp": 24560.15,
+    "underlying_prev_close": 24570.65,
+    "expiry_date": "25AUG26",
+    "expiry_ts": 1787652000,
+    "server_ts": 1786356402,
+    "atm_strike": 24550.0,
+    "quotes_included": true,
+    "greeks_included": true,
+    "forward_price": 24580.0,
     "chain": [
         {
-            "strike": 26100.0,
+            "strike": 24450.0,
             "ce": {
-                "symbol": "NIFTY30DEC2526100CE",
-                "label": "ITM2",
-                "ltp": 490,
-                "bid": 490,
-                "ask": 491,
-                "open": 540,
-                "high": 571,
-                "low": 444.75,
-                "prev_close": 496.8,
-                "volume": 1195800,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
-            },
-            "pe": {
-                "symbol": "NIFTY30DEC2526100PE",
-                "label": "OTM2",
-                "ltp": 193,
-                "bid": 191.2,
-                "ask": 193,
-                "open": 204.1,
-                "high": 229.95,
-                "low": 175.6,
-                "prev_close": 215.95,
-                "volume": 1832700,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
-            }
-        },
-        {
-            "strike": 26150.0,
-            "ce": {
-                "symbol": "NIFTY30DEC2526150CE",
+                "symbol": "NIFTY25AUG2624450CE",
                 "label": "ITM1",
-                "ltp": 460.5,
-                "bid": 452.9,
-                "ask": 463,
-                "open": 475.8,
-                "high": 535.7,
-                "low": 414.6,
-                "prev_close": 461.05,
-                "volume": 183525,
-                "oi": 0,
+                "ltp": 373.3,
+                "bid": 372.8,
+                "ask": 373.8,
+                "bid_qty": 1500,
+                "ask_qty": 2250,
+                "open": 395.7,
+                "high": 414.35,
+                "low": 343.45,
+                "prev_close": 388.25,
+                "volume": 2841075,
+                "oi": 4218300,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 15.33,
+                "delta": 0.5739,
+                "gamma": 0.000513,
+                "theta": -9.9854,
+                "vega": 19.5342
             },
             "pe": {
-                "symbol": "NIFTY30DEC2526150PE",
+                "symbol": "NIFTY25AUG2624450PE",
                 "label": "OTM1",
-                "ltp": 208.5,
-                "bid": 207.85,
-                "ask": 210.1,
-                "open": 218.2,
-                "high": 248.8,
-                "low": 190.75,
-                "prev_close": 233.7,
-                "volume": 332100,
-                "oi": 0,
+                "ltp": 243.3,
+                "bid": 242.8,
+                "ask": 243.8,
+                "bid_qty": 2100,
+                "ask_qty": 1875,
+                "open": 231.15,
+                "high": 262.75,
+                "low": 216.55,
+                "prev_close": 236.0,
+                "volume": 3162450,
+                "oi": 5104275,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 15.33,
+                "delta": -0.4261,
+                "gamma": 0.000513,
+                "theta": -9.9854,
+                "vega": 19.5342
             }
         },
         {
-            "strike": 26200.0,
+            "strike": 24550.0,
             "ce": {
-                "symbol": "NIFTY30DEC2526200CE",
+                "symbol": "NIFTY25AUG2624550CE",
                 "label": "ATM",
-                "ltp": 427,
-                "bid": 425.05,
-                "ask": 427,
-                "open": 449.95,
-                "high": 503.5,
-                "low": 384,
-                "prev_close": 433.2,
-                "volume": 2994000,
-                "oi": 0,
+                "ltp": 311.6,
+                "bid": 311.1,
+                "ask": 312.1,
+                "bid_qty": 1500,
+                "ask_qty": 2250,
+                "open": 330.3,
+                "high": 345.9,
+                "low": 286.65,
+                "prev_close": 324.05,
+                "volume": 2841075,
+                "oi": 4218300,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.92,
+                "delta": 0.5221,
+                "gamma": 0.000536,
+                "theta": -9.8729,
+                "vega": 19.8452
             },
             "pe": {
-                "symbol": "NIFTY30DEC2526200PE",
+                "symbol": "NIFTY25AUG2624550PE",
                 "label": "ATM",
-                "ltp": 227.4,
-                "bid": 227.35,
-                "ask": 228.5,
-                "open": 251.9,
-                "high": 269.15,
-                "low": 205.95,
-                "prev_close": 251.9,
-                "volume": 3745350,
-                "oi": 0,
+                "ltp": 281.6,
+                "bid": 281.1,
+                "ask": 282.1,
+                "bid_qty": 2100,
+                "ask_qty": 1875,
+                "open": 267.5,
+                "high": 304.15,
+                "low": 250.6,
+                "prev_close": 273.15,
+                "volume": 3162450,
+                "oi": 5104275,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.92,
+                "delta": -0.4779,
+                "gamma": 0.000536,
+                "theta": -9.8729,
+                "vega": 19.8452
             }
         },
         {
-            "strike": 26250.0,
+            "strike": 24650.0,
             "ce": {
-                "symbol": "NIFTY30DEC2526250CE",
+                "symbol": "NIFTY25AUG2624650CE",
                 "label": "OTM1",
-                "ltp": 398,
-                "bid": 395.4,
-                "ask": 400.5,
-                "open": 442.1,
-                "high": 468.5,
-                "low": 355.75,
-                "prev_close": 401.9,
-                "volume": 407100,
-                "oi": 0,
+                "ltp": 259.1,
+                "bid": 258.6,
+                "ask": 259.6,
+                "bid_qty": 1500,
+                "ask_qty": 2250,
+                "open": 274.65,
+                "high": 287.6,
+                "low": 238.35,
+                "prev_close": 269.45,
+                "volume": 2841075,
+                "oi": 4218300,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.71,
+                "delta": 0.4679,
+                "gamma": 0.000543,
+                "theta": -9.717,
+                "vega": 19.8115
             },
             "pe": {
-                "symbol": "NIFTY30DEC2526250PE",
+                "symbol": "NIFTY25AUG2624650PE",
                 "label": "ITM1",
-                "ltp": 243.85,
-                "bid": 243.6,
-                "ask": 246.15,
-                "open": 264.25,
-                "high": 288,
-                "low": 222.15,
-                "prev_close": 269.7,
-                "volume": 487575,
-                "oi": 0,
+                "ltp": 329.1,
+                "bid": 328.6,
+                "ask": 329.6,
+                "bid_qty": 2100,
+                "ask_qty": 1875,
+                "open": 312.65,
+                "high": 355.45,
+                "low": 292.9,
+                "prev_close": 319.25,
+                "volume": 3162450,
+                "oi": 5104275,
                 "lotsize": 75,
-                "tick_size": 0.05
-            }
-        },
-        {
-            "strike": 26300.0,
-            "ce": {
-                "symbol": "NIFTY30DEC2526300CE",
-                "label": "OTM2",
-                "ltp": 367.55,
-                "bid": 364,
-                "ask": 367.55,
-                "open": 378,
-                "high": 437.4,
-                "low": 327.25,
-                "prev_close": 371.45,
-                "volume": 2416350,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
-            },
-            "pe": {
-                "symbol": "NIFTY30DEC2526300PE",
-                "label": "ITM2",
-                "ltp": 266,
-                "bid": 264.2,
-                "ask": 266.5,
-                "open": 263.1,
-                "high": 311.55,
-                "low": 240,
-                "prev_close": 289.85,
-                "volume": 2891100,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.71,
+                "delta": -0.5321,
+                "gamma": 0.000543,
+                "theta": -9.717,
+                "vega": 19.8115
             }
         }
     ]
 }
-
 ```
+
 
 ### Symbol Example
 
 ```python
 response = client.symbol(
-            symbol="NIFTY30DEC25FUT",
+            symbol="NIFTY25AUG26FUT",
             exchange="NFO"
             )
 print(response)
@@ -1052,16 +1265,16 @@ print(response)
 {
   "data": {
     "brexchange": "NSE_FO",
-    "brsymbol": "NIFTY FUT 30 DEC 25",
+    "brsymbol": "NIFTY FUT 25 AUG 26",
     "exchange": "NFO",
-    "expiry": "30-DEC-25",
+    "expiry": "25-AUG-26",
     "freeze_qty": 1800,
     "id": 57900,
     "instrumenttype": "FUT",
     "lotsize": 75,
     "name": "NIFTY",
     "strike": 0,
-    "symbol": "NIFTY30DEC25FUT",
+    "symbol": "NIFTY25AUG26FUT",
     "tick_size": 10,
     "token": "NSE_FO|49543"
   },
@@ -1083,15 +1296,15 @@ print(response)
   "data": [
     {
       "brexchange": "NSE_FO",
-      "brsymbol": "NIFTY 26000 CE 30 DEC 25",
+      "brsymbol": "NIFTY 26000 CE 25 AUG 26",
       "exchange": "NFO",
-      "expiry": "30-DEC-25",
+      "expiry": "25-AUG-26",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
       "lotsize": 75,
       "name": "NIFTY",
       "strike": 26000,
-      "symbol": "NIFTY30DEC2526000CE",
+      "symbol": "NIFTY25AUG2626000CE",
       "tick_size": 5,
       "token": "NSE_FO|71399"
     },
@@ -1139,15 +1352,15 @@ print(response)
     },
     {
       "brexchange": "NSE_FO",
-      "brsymbol": "FINNIFTY 26000 CE 30 DEC 25",
+      "brsymbol": "FINNIFTY 26000 CE 25 AUG 26",
       "exchange": "NFO",
-      "expiry": "30-DEC-25",
+      "expiry": "25-AUG-26",
       "freeze_qty": 1200,
       "instrumenttype": "CE",
       "lotsize": 65,
       "name": "FINNIFTY",
       "strike": 26000,
-      "symbol": "FINNIFTY30DEC2526000CE",
+      "symbol": "FINNIFTY25AUG2626000CE",
       "tick_size": 5,
       "token": "NSE_FO|61709"
     },
@@ -1193,7 +1406,7 @@ ATM Option
 response = client.optionsymbol(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="30DEC25",
+      expiry_date="25AUG26",
       offset="ATM",
       option_type="CE"
   )
@@ -1206,7 +1419,7 @@ print(response)
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2525950CE",
+  "symbol": "NIFTY25AUG2625950CE",
   "exchange": "NFO",
   "lotsize": 75,
   "tick_size": 5,
@@ -1221,7 +1434,7 @@ ITM Option
 response = client.optionsymbol(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="30DEC25",
+      expiry_date="25AUG26",
       offset="ITM3",
       option_type="PE"
   )
@@ -1234,7 +1447,7 @@ print(response)
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2526100PE",
+  "symbol": "NIFTY25AUG2626100PE",
   "exchange": "NFO",
   "lotsize": 75,
   "tick_size": 5,
@@ -1249,7 +1462,7 @@ OTM Option
 response = client.optionsymbol(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="30DEC25",
+      expiry_date="25AUG26",
       offset="OTM4",
       option_type="CE"
   )
@@ -1262,7 +1475,7 @@ print(response)
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2526150CE",
+  "symbol": "NIFTY25AUG2626150CE",
   "exchange": "NFO",
   "lotsize": 75,
   "tick_size": 5,
@@ -1277,7 +1490,7 @@ print(response)
 response = client.syntheticfuture(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="25NOV25"
+      expiry_date="25AUG26"
   )
 
 print(response)
@@ -1288,7 +1501,7 @@ SyntheticFuture **Response**
 ```
 {
  'atm_strike': 25900.0,
- 'expiry': '25NOV25',
+ 'expiry': '25AUG26',
  'status': 'success',
  'synthetic_future_price': 25980.05,
  'underlying': 'NIFTY',
@@ -1300,7 +1513,7 @@ SyntheticFuture **Response**
 
 ```python
 response = client.optiongreeks(
-      symbol="NIFTY25NOV2526000CE",
+      symbol="NIFTY25AUG2626000CE",
       exchange="NFO",
       interest_rate=0.00,
       underlying_symbol="NIFTY",
@@ -1329,7 +1542,7 @@ OptionGreeks  **Response**
  'spot_price': 25966.05,
  'status': 'success',
  'strike': 26000.0,
- 'symbol': 'NIFTY25NOV2526000CE',
+ 'symbol': 'NIFTY25AUG2626000CE',
  'underlying': 'NIFTY'
 }
 ```
@@ -1549,7 +1762,7 @@ print(response)
 ```python
 response = client.margin(positions=[
       {
-          "symbol": "NIFTY25NOV2525000CE",
+          "symbol": "NIFTY25AUG2625000CE",
           "exchange": "NFO",
           "action": "BUY",
           "product": "NRML",
@@ -1557,7 +1770,7 @@ response = client.margin(positions=[
           "quantity": "75"
       },
       {
-          "symbol": "NIFTY25NOV2525500CE",
+          "symbol": "NIFTY25AUG2625500CE",
           "exchange": "NFO",
           "action": "SELL",
           "product": "NRML",
@@ -1862,6 +2075,430 @@ Analyzer Toggle Response
   'total_logs': 2},
  'status': 'success'}
 ```
+
+### Strategy Module
+
+OpenAlgo's `/strategy` module runs multi-leg options strategies with end-to-end risk
+management, plus a signal-driven mode for TradingView alerts. Two surfaces reach it,
+and they take different credentials:
+
+| Surface | Credential | Use for |
+|---------|-----------|---------|
+| `api(api_key=...)` | Your OpenAlgo API key | Lifecycle and reads: list, status, start, stop, close_all, close_leg, runs, orders, events |
+| `Strategy(...)` | The strategy's `oaws_` webhook token | The public webhook at `/strategy/webhook/<token>`, which is what TradingView posts to |
+
+Building a strategy stays in the browser wizard at `/strategy`. The API-key surface is
+lifecycle plus reads only: nothing on it can create a strategy, edit its
+configuration, enable live trading, rotate a webhook token, or delete anything.
+
+Two strategy kinds, and each refuses the other's vocabulary:
+
+- **batch** - a multi-leg spread entered and exited as a unit. `start` / `stop`.
+- **signal** - one alert moves one leg. `long_entry` / `long_exit` / `short_entry` /
+  `short_exit`. There is no start and no mode: the first signal after the platform
+  session boundary opens the run.
+
+Four rules worth knowing before you call anything:
+
+1. **`mode` on start is required and is never defaulted**, in the SDK or on the
+   server. It is a keyword argument with no default, so omitting it is a `TypeError`
+   rather than a live order.
+2. **Live is opt-in per strategy.** A strategy is created sandbox-only, and
+   `mode="live"` is refused with a 409 until the operator enables live trading on the
+   strategy page.
+3. **An accepted stop is not proof of flatness.** Read `stop_pending` and the per-leg
+   outcomes; never infer flatness from the HTTP status.
+4. **A strategy that is not yours answers 404**, identical to one that does not exist,
+   so the id space cannot be probed.
+
+### StrategyList Example
+
+```python
+response = client.strategylist()
+print(response)
+
+# Optional filters. An out-of-vocabulary status is a 400, not an empty list.
+client.strategylist(status="running")
+client.strategylist(q="NIFTY")
+```
+
+StrategyList Response:
+
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "id": 7,
+      "name": "NIFTY Short Straddle",
+      "strategy_kind": "batch",
+      "direction": "both",
+      "underlying": "NIFTY",
+      "underlying_exchange": "NSE_INDEX",
+      "strategy_type": "intraday",
+      "entry_time": "09:20",
+      "exit_time": "15:10",
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "overall_sl_mtm": -5000.0,
+      "overall_target_mtm": 8000.0,
+      "live_enabled": false,
+      "status": "running",
+      "current_run_id": 42,
+      "last_finalized_run": {"id": 41, "pnl_realized": 1250.0, "stopped_at": "2026-08-29T09:40:11.482913+00:00"}
+    }
+  ]
+}
+```
+
+The list form omits `legs`; call `strategystatus` for one strategy's legs. For a
+stopped strategy, `last_finalized_run.pnl_realized` is the durable final P&L.
+
+### StrategyStatus Example
+
+```python
+response = client.strategystatus(strategy_id=7)
+print(response)
+```
+
+StrategyStatus Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "id": 7,
+    "name": "NIFTY Short Straddle",
+    "status": "running",
+    "current_run_id": 42,
+    "legs": [
+      {"id": 1, "segment": "options", "position": "S", "lots": 1, "option_type": "CE",
+       "strike_mode": "atm", "atm_offset": "ATM", "expiry": "weekly",
+       "sl_pts": 30, "target_pts": 60, "trail": {"x": 10, "y": 5}}
+    ]
+  },
+  "run": {
+    "id": 42,
+    "mode": "sandbox",
+    "broker": "sandbox",
+    "started_at": "2026-08-30T03:50:11.402118+00:00",
+    "stopped_at": null,
+    "stop_reason": null,
+    "stop_requested_at": null,
+    "stop_requested_reason": null,
+    "pnl_realized": 0.0,
+    "pnl_peak": 0.0,
+    "pnl_trough": 0.0,
+    "trigger_source": "manual",
+    "resolved_expiries": {"1": "04-SEP-26", "2": "04-SEP-26"}
+  }
+}
+```
+
+`run` is `null` whenever the strategy has no current run, which is the normal state of
+a stopped strategy. Prefer it over the strategy's own `status` when you need to know
+whether anything is actually open. A populated `stop_requested_reason` means a stop is
+durable but not yet confirmed flat: the run is still current and still managed.
+
+### StrategyStart Example
+
+Starts a **batch** strategy: every leg's entry order is placed.
+
+```python
+response = client.strategystart(strategy_id=7, mode="sandbox")
+print(response)
+
+# Partial success is a 200. Check each leg rather than assuming they all
+# reached the market.
+for leg in response.get("legs", []):
+    if not leg["ok"]:
+        print(f"leg {leg['leg_id']} rejected: {leg['error']}")
+```
+
+StrategyStart Response:
+
+```json
+{
+  "status": "success",
+  "run_id": 42,
+  "mode": "sandbox",
+  "legs": [
+    {"leg_id": 1, "ok": true, "acknowledged": true,
+     "symbol": "NIFTY04SEP2624500CE", "broker_order_id": "26083004118201", "error": null},
+    {"leg_id": 2, "ok": true, "acknowledged": true,
+     "symbol": "NIFTY04SEP2624500PE", "broker_order_id": "26083004118244", "error": null}
+  ]
+}
+```
+
+`ok: true` with `acknowledged: false` is a real broker order whose id could not be
+written back, not a rejection - it reconciles itself. A second start against a running
+strategy answers 409, so two triggers firing at once cannot both place a full set of
+entries.
+
+### StrategyStop Example
+
+Exits every owned position at market.
+
+```python
+response = client.strategystop(strategy_id=7)
+print(response)
+```
+
+StrategyStop Response:
+
+```json
+{
+  "status": "success",
+  "run_id": 42,
+  "stop_pending": true,
+  "exits": [
+    {"leg_id": 1, "ok": true, "position_ref": "969bc536b1c14d15992f730c2c136d7a",
+     "exit_owner": "live", "error": null}
+  ]
+}
+```
+
+`stop_pending: true` means the request is durable and its exits were accepted, but the
+run stays open, subscribed and managed until fills prove every position is flat. A 409
+can also carry `stop_pending: true` when an unfilled entry or a refused exit still
+needs management - retry the stop in that case.
+
+### StrategyCloseAll Example
+
+Same stop mechanics as `strategystop`, different audit intent: a `close_all_manual`
+event is written first, which proves an operator asked for a flatten.
+
+```python
+response = client.strategycloseall(strategy_id=7)
+print(response)
+```
+
+### StrategyCloseLeg Example
+
+Exits one leg at market; the run continues with the rest. `leg_id` is the id the
+wizard assigned within the strategy, the same value that appears in `legs[].id` on
+`strategystatus`. It is not an order id.
+
+```python
+response = client.strategycloseleg(strategy_id=7, leg_id=2)
+print(response)
+```
+
+StrategyCloseLeg Response:
+
+```json
+{
+  "status": "success",
+  "run_id": 42,
+  "leg_id": 2,
+  "run_stopped": false,
+  "exits": [
+    {"leg_id": 2, "ok": true, "position_ref": "80bb5fc9333f4922a582229f06a0fe45",
+     "exit_owner": "live", "error": null}
+  ]
+}
+```
+
+`run_stopped` reports only what this call could prove. A live broker normally
+acknowledges before its fill, so even the last accepted exit returns `false` and the
+fill finalises the run later. A `leg_id` that names no open leg is a 409, not a 404.
+
+### StrategyRuns Example
+
+Every activation of a strategy, newest first.
+
+```python
+response = client.strategyruns(strategy_id=7, limit=10)
+print(response)
+```
+
+StrategyRuns Response:
+
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "id": 42,
+      "strategy_id": 7,
+      "mode": "sandbox",
+      "broker": "sandbox",
+      "started_at": "2026-08-30T03:50:11.402118+00:00",
+      "stopped_at": "2026-08-30T09:40:02.771905+00:00",
+      "stop_reason": "eod",
+      "pnl_realized": 3140.5,
+      "pnl_peak": 4880.0,
+      "pnl_trough": -1220.25,
+      "trigger_source": "manual",
+      "resolved_expiries": {"1": "04-SEP-26", "2": "04-SEP-26"}
+    }
+  ]
+}
+```
+
+`limit` is 1 to 500 and is bounded rather than clamped: a value outside the range is a
+400, so you learn it was refused. An overall threshold triggers an exit, it does not
+promise the result - market exits fill at the available bid/ask, so `pnl_realized` can
+differ from the threshold that caused the stop.
+
+### StrategyOrders Example
+
+Every order the engine placed, oldest first, so an entry always precedes its exit.
+
+```python
+response = client.strategyorders(strategy_id=7)
+
+# Narrow a long history to one run. A run belonging to another strategy matches
+# nothing rather than leaking its orders.
+response = client.strategyorders(strategy_id=7, run_id=42)
+print(response)
+```
+
+StrategyOrders Response:
+
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "id": 318,
+      "run_id": 42,
+      "leg_id": 1,
+      "kind": "entry",
+      "position_ref": "969bc536b1c14d15992f730c2c136d7a",
+      "broker_order_id": "26083004118201",
+      "symbol": "NIFTY04SEP2624500CE",
+      "exchange": "NFO",
+      "action": "SELL",
+      "qty": 75,
+      "product": "NRML",
+      "pricetype": "MARKET",
+      "price": 0.0,
+      "status": "complete",
+      "placed_at": "2026-08-30T03:50:11.610224+00:00",
+      "filled_at": "2026-08-30T03:50:12.004881+00:00",
+      "avg_fill_price": 142.35,
+      "filled_qty": 75,
+      "reject_reason": null
+    }
+  ]
+}
+```
+
+A row is written **before** the broker answers, so an order can appear with
+`status: "pending"` and a null `broker_order_id`. That is deliberate: an order that
+reached the broker but was never recorded would be invisible to crash recovery.
+
+### StrategyEvents Example
+
+The risk-event audit trail, newest first. The trail is append-only.
+
+```python
+response = client.strategyevents(strategy_id=7, limit=100)
+
+# Filters. An out-of-vocabulary kind or severity is a 400, not an empty list.
+client.strategyevents(strategy_id=7, run_id=42)
+client.strategyevents(strategy_id=7, severity="critical")
+client.strategyevents(strategy_id=7, kind="run_stop_failed")
+```
+
+StrategyEvents Response:
+
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "id": 2041,
+      "run_id": 42,
+      "strategy_id": 7,
+      "ts": "2026-08-30T06:21:40.104112+00:00",
+      "kind": "leg_sl_hit",
+      "severity": "warn",
+      "leg_id": 1,
+      "message": "stop loss hit: last price 172.8 is at or above the stop 172.35 on a short position",
+      "payload": null
+    }
+  ]
+}
+```
+
+Events an operator should not ignore:
+
+| Kind | Severity | Meaning |
+|------|----------|---------|
+| `run_stop_requested` | info | The stop is durable and new signal entries are gated. Not proof the broker is flat |
+| `run_stop_failed` | critical | The broker refused a stop's exits and the run is **still holding** those positions |
+| `order_ack_unrecorded` | critical | The broker accepted an order but its acknowledgement could not be written; it reconciles itself |
+| `leg_expiry_fallback` | warn | The chain did not list the expiry rank the leg asked for, so a nearer one was used |
+| `flip_outgoing_exit_rejected` | critical | The outgoing side of a signal flip is still held |
+
+### Strategy Webhook Example
+
+The public webhook is what TradingView and other alert senders post to. It is not
+under `/api/v1` and takes no API key: the `oaws_` token in the URL is the whole
+credential. It is shown exactly once, in the browser, when the strategy is created or
+its token is rotated - no endpoint returns it. Treat it as a password.
+
+```python
+from openalgo import Strategy
+
+strategy = Strategy(
+    host_url="http://127.0.0.1:5000",
+    webhook_token="oaws_your_webhook_token_here"
+)
+
+# Batch strategy: mode is required on start and never defaulted
+print(strategy.start("sandbox"))
+print(strategy.stop())
+```
+
+Webhook Start Response:
+
+```json
+{
+  "status": "success",
+  "result": "ok",
+  "message": "Strategy start accepted",
+  "strategy_id": 7,
+  "run_id": 42
+}
+```
+
+```python
+# Signal strategy: one alert moves one leg. Name the leg by id, or by symbol
+# and exchange. leg_id wins when both are given.
+strategy.long_entry(leg_id=1)
+strategy.long_exit(leg_id=1)
+strategy.short_entry(symbol="RELIANCE", exchange="NSE")
+strategy.short_exit(symbol="RELIANCE", exchange="NSE")
+```
+
+Every documented outcome is **returned, not raised**, because the `result` label is
+the contract:
+
+```python
+response = strategy.start("sandbox")
+result = response.get("result")
+
+if result == "ok":
+    print(f"accepted, run {response['run_id']}")
+elif result == "rejected_dedupe":
+    print("duplicate delivery within 60s, already handled")   # HTTP 200
+elif result == "rejected_cooling_off":
+    print("stopped within the last 30s, try again shortly")   # HTTP 409
+elif result == "rejected_live_disabled":
+    print("enable live trading on the strategy page first")   # HTTP 403
+```
+
+A signal that does nothing is a **success with a note**, not a failure:
+`Signal accepted (already_long)`. The notes are `already_long`, `already_short`,
+`no_matching_position`, `outside_entry_window` and `outside_trading_window`. Reporting
+a no-op as a failure invites a retry, and a retry on an order path is how one alert
+becomes two positions. Being *refused* is different: a signal blocked by the
+strategy's direction, or naming a leg that does not exist, answers
+`rejected_invalid_action` with the engine's own message.
 
 ### LTP Data (Streaming Websocket)
 

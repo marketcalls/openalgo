@@ -6,31 +6,51 @@ This client handles authentication and provides a simple interface for services.
 import asyncio
 import json
 import os
-import sys
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from queue import Queue
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import websockets
 from dotenv import load_dotenv
 
+# The asyncio event loop needs a real OS thread: eventlet's monkey-patching
+# turns threading.Thread into a green thread, where asyncio.new_event_loop()
+# cannot work. Anything that thread shares with the greenlets has to be real
+# too, which is what this module is for.
+from utils import real_threading as _original_threading
+from utils import stream_registry
 from utils.logging import get_logger
-
-# Import the original threading module to run the asyncio event loop in a real
-# OS thread, bypassing eventlet's monkey-patching which turns threading.Thread
-# into green threads where asyncio.new_event_loop() cannot work.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _original_threading = eventlet.patcher.original("threading")
-else:
-    _original_threading = threading
+from utils.runtime import is_monkey_patched
 
 # Initialize logger
 logger = get_logger(__name__)
+
+_MODE_LABELS = {1: "LTP", 2: "Quote", 3: "Depth"}
+_MODE_VALUES = {label.upper(): label for label in _MODE_LABELS.values()}
+
+
+def _canonical_mode(value: Any) -> str:
+    """Canonical client-side mode label without importing the proxy package.
+
+    Importing ``websocket_proxy.mode_utils`` executes that package's broad
+    ``__init__`` and eagerly imports every broker adapter.  This internal
+    client needs only the three stable public labels, so keep the normalization
+    local and side-effect free.
+    """
+    if isinstance(value, bool):
+        raise TypeError("Mode must be LTP, Quote, or Depth")
+    if isinstance(value, int):
+        if value in _MODE_LABELS:
+            return _MODE_LABELS[value]
+        raise ValueError("Mode must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+    if isinstance(value, str):
+        label = _MODE_VALUES.get(value.strip().upper())
+        if label is not None:
+            return label
+    raise ValueError("Mode must be LTP, Quote, or Depth")
 
 
 class WebSocketClient:
@@ -38,6 +58,45 @@ class WebSocketClient:
     Internal WebSocket client for connecting to OpenAlgo WebSocket server.
     Handles authentication, subscriptions, and data routing.
     """
+
+    #: Bound on callback payloads queued for the hub. The producer is a feed
+    #: that never blocks, so an unbounded queue would grow until the worker is
+    #: OOM-killed if a subscriber stalled. Shedding the newest is the right
+    #: trade for market data: the next tick supersedes it anyway.
+    DISPATCH_QUEUE_MAX = 10000
+
+    #: Idle poll gap for the dispatcher under eventlet. It drains everything
+    #: available before sleeping, so this only bounds latency when the queue is
+    #: empty.
+    DISPATCH_POLL_SECONDS = 0.005
+
+    #: Where nothing is patched (gthread, the development server) the dispatcher
+    #: is a real thread and blocks on the queue instead of polling; this is how
+    #: often it wakes to notice a disconnect.
+    DISPATCH_BLOCK_SECONDS = 0.5
+
+    #: How long connect() waits for the socket, and then again for the proxy to
+    #: accept the API key.
+    CONNECT_TIMEOUT_SECONDS = 10
+
+    #: Reconnect backoff: 2, 4, 8, 16, then this ceiling, for as long as the
+    #: client is running. The count resets once a reconnect authenticates.
+    RECONNECT_MAX_BACKOFF_SECONDS = 30
+
+    #: Consecutive failed reconnects logged with a traceback before the rest of
+    #: the streak is logged as a short warning, now and then.
+    RECONNECT_VERBOSE_FAILURES = 5
+
+    #: Pause after the proxy closes the connection before dialling it again.
+    #: systemd stops every process of the service at once, so on a restart the
+    #: proxy vanishes a moment before this process is told to stop; an instant
+    #: redial raced that signal and logged a refused connection as an error.
+    #: The proxy's own supervisor waits longer than this before restarting it.
+    RECONNECT_AFTER_CLOSE_SECONDS = 1
+
+    #: Consecutive refused connections to the proxy after which it is reported
+    #: as down rather than restarting: about a minute at 5 seconds apart.
+    UNREACHABLE_ERROR_AFTER = 12
 
     def __init__(self, api_key: str, host: str = "localhost", port: int = 8765):
         """
@@ -67,9 +126,34 @@ class WebSocketClient:
             "error": [],
         }
 
-        # Subscription tracking
+        # Callbacks are handed to the hub, never run on the loop thread.
+        # _handle_message() runs on the asyncio loop's real OS thread, and the
+        # callbacks registered here reach SocketIO, the event bus and the
+        # sandbox engine, all of which use eventlet primitives. Touching one
+        # from a foreign thread raises "greenlet.error: Cannot switch to a
+        # different thread" inside the hub and wedges that thread for good
+        # (issues #1402, #1473, #1569). So the loop thread only enqueues, and a
+        # green thread does the calling. Under the gthread worker and the dev
+        # server nothing is patched and the dispatcher is a real thread of its
+        # own, so a slow callback still never holds up the loop.
+        self._dispatch_queue = _original_threading.Queue(maxsize=self.DISPATCH_QUEUE_MAX)
+        self._dispatch_thread = None
+        self._dispatch_dropped = 0
+
+        # Subscription tracking.
+        #
+        # A REAL lock, never eventlet's green semaphore. _handle_message()
+        # takes it on the asyncio loop's OS thread while subscribe(),
+        # unsubscribe() and get_market_data() take it from greenlets.
+        # Contended across that boundary a green semaphore raises
+        # "greenlet.error: Cannot switch to a different thread" inside the
+        # hub and leaves the loop thread blocked forever: acks stop
+        # resolving, ping/pong goes unanswered, and every later subscribe
+        # burns its full timeout. The feed dies silently, and only under
+        # gunicorn+eventlet. Each section this guards is a dict update, so
+        # a real lock costs microseconds.
         self.active_subscriptions = {}
-        self.lock = threading.Lock()
+        self.lock = _original_threading.Lock()
 
         # Market data cache
         self.market_data_cache = {}
@@ -100,14 +184,24 @@ class WebSocketClient:
             self.thread.daemon = True
             self.thread.start()
 
+            # Green thread (threading is monkey-patched under eventlet), so
+            # callbacks run on the hub and never on self.thread.
+            self._dispatch_thread = threading.Thread(
+                target=self._run_dispatch_loop,
+                daemon=True,
+                name="openalgo-ws-dispatch",
+            )
+            self._dispatch_thread.start()
+
             # Wait for connection
-            timeout = 10
+            timeout = self.CONNECT_TIMEOUT_SECONDS
             start_time = time.time()
             while not self.connected and time.time() - start_time < timeout:
                 time.sleep(0.1)
 
             if not self.connected:
                 logger.error("Failed to connect to WebSocket server")
+                self._abandon()
                 return False
 
             # Wait for authentication
@@ -117,6 +211,7 @@ class WebSocketClient:
 
             if not self.authenticated:
                 logger.error("Failed to authenticate with WebSocket server")
+                self._abandon()
                 return False
 
             logger.info("Successfully connected and authenticated")
@@ -124,23 +219,119 @@ class WebSocketClient:
 
         except Exception as e:
             logger.exception(f"Error connecting to WebSocket: {e}")
+            self._abandon()
             return False
+
+    def _abandon(self) -> None:
+        """Stop both threads of a connect that failed. Never raises.
+
+        A failed connect used to return with ``running`` still True, so its
+        loop thread kept reconnecting in the background and its dispatch thread
+        kept waking, for a client nobody holds: every retry while the proxy was
+        still starting leaked one of each.
+        """
+        try:
+            self.disconnect()
+        except Exception:
+            logger.exception("Could not stop a websocket client whose connect failed")
+
+    @property
+    def alive(self) -> bool:
+        """True while this client is running and its loop thread is still up.
+
+        A client that is alive may be between reconnects (``connected`` False
+        for a moment); it will come back on its own. One that is not alive
+        never will, and get_websocket_client replaces it.
+        """
+        thread = self.thread
+        return bool(self.running and thread is not None and thread.is_alive())
+
+    def has_callback(self, event_type: str, callback: Callable) -> bool:
+        """Whether ``callback`` is already registered for ``event_type``."""
+        return callback in self.callbacks.get(event_type, ())
+
+    def adopt_callbacks(self, other: "WebSocketClient") -> None:
+        """Take over every callback registered on ``other``, without duplicates.
+
+        Used when a dead client is replaced, so a consumer that registered its
+        tick and auth callbacks once keeps receiving them from the replacement.
+        """
+        for event_type, callbacks in other.callbacks.items():
+            mine = self.callbacks.setdefault(event_type, [])
+            for callback in list(callbacks):
+                if callback not in mine:
+                    mine.append(callback)
 
     def disconnect(self):
         """Disconnect from the WebSocket server"""
         self.running = False
 
         if self.loop and self.ws:
-            # Schedule the disconnect coroutine
-            asyncio.run_coroutine_threadsafe(self._disconnect(), self.loop)
+            # Scheduled, not awaited: the thread join below is what waits.
+            # call_soon_threadsafe avoids building a concurrent Future whose
+            # condition would belong to the wrong world.
+            coro = self._disconnect()
+            try:
+                self.loop.call_soon_threadsafe(lambda: self.loop.create_task(coro))
+            except RuntimeError:
+                # The loop has already finished (a client that stopped
+                # reconnecting); its socket went with it.
+                coro.close()
 
         # Wait for thread to finish
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+            # Cooperative: this is a real OS thread, and disconnect() is
+            # called from greenlets (scalping teardown, close_all_clients),
+            # where a blocking join would stop the worker for 5s.
+            _original_threading.join(self.thread, timeout=5)
 
         self.connected = False
         self.authenticated = False
+        with self.lock:
+            self.active_subscriptions.clear()
+            self.market_data_cache.clear()
         logger.info("Disconnected from WebSocket server")
+
+    def _run_on_loop(self, coro, timeout: float):
+        """Run a coroutine on the client's asyncio loop and wait for its result.
+
+        ``asyncio.run_coroutine_threadsafe`` hands back a
+        ``concurrent.futures.Future`` whose ``result()`` waits on a
+        ``threading.Condition``. Under eventlet that condition is green while
+        the loop thread resolving it is a real OS thread, and the two cannot
+        pass a waiter between them: the waiting greenlet is simply never woken.
+        Measured, an ack that arrived in 0.3s still cost the caller the whole
+        10s timeout, and when the hub does try to switch into that waiter it
+        raises ``greenlet.error: Cannot switch to a different thread`` instead.
+        That is why a subscribe used to take its full 12 seconds whenever it
+        had to wait at all.
+
+        So nothing is handed across the boundary except one plain boolean: a
+        real Event the loop thread sets, polled here with a sleep that eventlet
+        turns into a yield. ``call_soon_threadsafe`` is used rather than
+        ``run_coroutine_threadsafe`` so no concurrent Future is built at all.
+
+        Raises TimeoutError if the coroutine has not finished in ``timeout``,
+        and re-raises whatever the coroutine raised.
+        """
+        done = _original_threading.Event()
+        box: dict[str, Any] = {}
+
+        async def runner():
+            try:
+                box["value"] = await coro
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                box["error"] = exc
+            finally:
+                done.set()
+
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(runner()))
+
+        if not _original_threading.wait_for(done, timeout):
+            raise TimeoutError("timed out waiting for the websocket proxy")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
     async def _send_and_await_ack(
         self, message: dict, request_id: str, timeout: float
@@ -185,21 +376,25 @@ class WebSocketClient:
             return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
+            canonical_mode = _canonical_mode(mode)
+        except (TypeError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+
+        try:
             request_id = str(uuid.uuid4())
             subscription_msg = {
                 "action": "subscribe",
                 "symbols": symbols,
-                "mode": mode,
+                "mode": canonical_mode,
                 "request_id": request_id,
             }
-            future = asyncio.run_coroutine_threadsafe(
-                self._send_and_await_ack(subscription_msg, request_id, timeout=10),
-                self.loop,
-            )
             # Outer timeout slightly longer than the inner ack timeout so the
             # asyncio.wait_for fires first and produces a clean error.
-            ack = future.result(timeout=12)
-        except (TimeoutError, asyncio.TimeoutError):
+            ack = self._run_on_loop(
+                self._send_and_await_ack(subscription_msg, request_id, timeout=10),
+                timeout=12,
+            )
+        except TimeoutError:
             logger.warning(
                 f"Subscribe timed out waiting for proxy ack (mode={mode}, "
                 f"symbols={len(symbols)})"
@@ -207,7 +402,7 @@ class WebSocketClient:
             return {
                 "status": "error",
                 "message": "Timed out waiting for proxy subscribe response",
-                "mode": mode,
+                "mode": canonical_mode,
             }
         except Exception as e:
             logger.exception(f"Error subscribing to symbols: {e}")
@@ -226,15 +421,61 @@ class WebSocketClient:
                 key = f"{exch}:{sym}"
                 if key not in self.active_subscriptions:
                     self.active_subscriptions[key] = set()
-                self.active_subscriptions[key].add(mode)
+                try:
+                    accepted_mode = _canonical_mode(
+                        entry.get("mode", canonical_mode)
+                    )
+                except (TypeError, ValueError):
+                    continue
+                self.active_subscriptions[key].add(accepted_mode)
 
         return {
             "status": ack.get("status", "success"),
             "message": ack.get("message", f"Subscribed to {len(symbols)} symbols"),
             "subscriptions": per_symbol,
             "broker": ack.get("broker"),
-            "mode": mode,
+            "mode": canonical_mode,
         }
+
+    def _remove_acknowledged_modes(
+        self,
+        successful: list[dict[str, Any]],
+        requested_modes: dict[tuple[str, str], set[str]],
+    ) -> None:
+        """Apply exact successful acks, conservatively supporting old proxies."""
+        removals: list[tuple[str, str, str]] = []
+        missing = object()
+        for entry in successful:
+            sym = entry.get("symbol")
+            exch = entry.get("exchange")
+            if not sym or not exch:
+                continue
+            candidates = requested_modes.get((exch, sym), set())
+            raw_mode = entry.get("mode", missing)
+            if raw_mode is missing:
+                # A legacy proxy did not identify which same-symbol mode it
+                # acknowledged.  One candidate is safe; two are ambiguous.
+                if len(candidates) != 1:
+                    continue
+                acknowledged_mode = next(iter(candidates))
+            else:
+                try:
+                    acknowledged_mode = _canonical_mode(raw_mode)
+                except (TypeError, ValueError):
+                    continue
+                if acknowledged_mode not in candidates:
+                    continue
+            removals.append((exch, sym, acknowledged_mode))
+
+        with self.lock:
+            for exch, sym, acknowledged_mode in removals:
+                key = f"{exch}:{sym}"
+                if key not in self.active_subscriptions:
+                    continue
+                self.active_subscriptions[key].discard(acknowledged_mode)
+                if not self.active_subscriptions[key]:
+                    del self.active_subscriptions[key]
+                    self.market_data_cache.pop(key, None)
 
     def unsubscribe(self, symbols: list[dict[str, str]], mode: str = "Quote") -> dict[str, Any]:
         """
@@ -255,19 +496,37 @@ class WebSocketClient:
             return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
+            canonical_mode = _canonical_mode(mode)
+            wire_symbols = []
+            requested_modes: dict[tuple[str, str], set[str]] = {}
+            for symbol_info in symbols:
+                item_mode = _canonical_mode(
+                    symbol_info["mode"]
+                    if "mode" in symbol_info
+                    else canonical_mode
+                )
+                wire_symbol = {**symbol_info, "mode": item_mode}
+                wire_symbols.append(wire_symbol)
+                sym = wire_symbol.get("symbol")
+                exch = wire_symbol.get("exchange")
+                if sym and exch:
+                    requested_modes.setdefault((exch, sym), set()).add(item_mode)
+        except (TypeError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+
+        try:
             request_id = str(uuid.uuid4())
             unsubscription_msg = {
                 "action": "unsubscribe",
-                "symbols": symbols,
-                "mode": mode,
+                "symbols": wire_symbols,
+                "mode": canonical_mode,
                 "request_id": request_id,
             }
-            future = asyncio.run_coroutine_threadsafe(
+            ack = self._run_on_loop(
                 self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
-                self.loop,
+                timeout=12,
             )
-            ack = future.result(timeout=12)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 f"Unsubscribe timed out waiting for proxy ack (mode={mode}, "
                 f"symbols={len(symbols)})"
@@ -275,7 +534,7 @@ class WebSocketClient:
             return {
                 "status": "error",
                 "message": "Timed out waiting for proxy unsubscribe response",
-                "mode": mode,
+                "mode": canonical_mode,
             }
         except Exception as e:
             logger.exception(f"Error unsubscribing from symbols: {e}")
@@ -283,17 +542,7 @@ class WebSocketClient:
 
         # Update local tracking only for symbols the proxy confirmed.
         successful = ack.get("successful", []) or []
-        with self.lock:
-            for entry in successful:
-                sym = entry.get("symbol")
-                exch = entry.get("exchange")
-                if not sym or not exch:
-                    continue
-                key = f"{exch}:{sym}"
-                if key in self.active_subscriptions:
-                    self.active_subscriptions[key].discard(mode)
-                    if not self.active_subscriptions[key]:
-                        del self.active_subscriptions[key]
+        self._remove_acknowledged_modes(successful, requested_modes)
 
         return {
             "status": ack.get("status", "success"),
@@ -301,35 +550,53 @@ class WebSocketClient:
             "successful": successful,
             "failed": ack.get("failed", []),
             "broker": ack.get("broker"),
-            "mode": mode,
+            "mode": canonical_mode,
         }
 
     def unsubscribe_all(self) -> dict[str, Any]:
-        """Unsubscribe from all symbols"""
+        """Unsubscribe from all symbols, retaining any broker-refused owners."""
         if not self.connected or not self.authenticated:
             return {"status": "error", "message": "Not connected or authenticated"}
+        if not self.loop or not self.ws:
+            return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
-            unsubscription_msg = {"action": "unsubscribe_all"}
+            with self.lock:
+                requested_modes: dict[tuple[str, str], set[str]] = {}
+                for symbol_key, modes in self.active_subscriptions.items():
+                    exchange, symbol = symbol_key.split(":", 1)
+                    canonical_modes = {
+                        _canonical_mode(item_mode) for item_mode in modes
+                    }
+                    requested_modes[(exchange, symbol)] = canonical_modes
 
-            # Send unsubscription request
-            if self.loop and self.ws:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.ws.send(json.dumps(unsubscription_msg)), self.loop
-                )
-                future.result(timeout=5)
-
-                # Clear all subscriptions
-                with self.lock:
-                    self.active_subscriptions.clear()
-
-                return {"status": "success", "message": "Unsubscribed from all symbols"}
-            else:
-                return {"status": "error", "message": "WebSocket connection not available"}
-
+            request_id = str(uuid.uuid4())
+            unsubscription_msg = {
+                "action": "unsubscribe_all",
+                "request_id": request_id,
+            }
+            ack = self._run_on_loop(
+                self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
+                timeout=12,
+            )
+        except TimeoutError:
+            return {
+                "status": "error",
+                "message": "Timed out waiting for proxy unsubscribe response",
+            }
         except Exception as e:
             logger.exception(f"Error unsubscribing from all symbols: {e}")
             return {"status": "error", "message": str(e)}
+
+        successful = ack.get("successful", []) or []
+        self._remove_acknowledged_modes(successful, requested_modes)
+        return {
+            "status": ack.get("status", "success"),
+            "message": ack.get("message", "Unsubscription processing complete"),
+            "successful": successful,
+            "failed": ack.get("failed", []),
+            "broker": ack.get("broker"),
+        }
 
     def get_subscriptions(self) -> dict[str, Any]:
         """Get current active subscriptions"""
@@ -365,6 +632,50 @@ class WebSocketClient:
                 return self.market_data_cache.get(key, {})
             else:
                 return dict(self.market_data_cache)
+
+    def _dispatch(self, event_type: str, data: dict) -> None:
+        """Hand a callback payload to the hub. Runs on the loop thread."""
+        try:
+            self._dispatch_queue.put_nowait((event_type, data))
+        except Exception:
+            self._dispatch_dropped += 1
+            if self._dispatch_dropped == 1 or self._dispatch_dropped % 1000 == 0:
+                logger.warning(
+                    f"WebSocket dispatch queue full ({self.DISPATCH_QUEUE_MAX}); "
+                    f"dropped {self._dispatch_dropped} callback payload(s). A "
+                    f"subscriber is slower than the feed."
+                )
+
+    def _run_dispatch_loop(self) -> None:
+        """Call subscriber callbacks, on the hub rather than the loop thread.
+
+        A plain threading.Thread runs this, which under eventlet is a green
+        thread owned by the hub. That is the whole point: everything a callback
+        touches (SocketIO, the event bus, the sandbox engine, the database) is
+        then reached from the world those primitives belong to.
+
+        The queue is real, so under eventlet get_nowait() plus a yield is the
+        only safe way to read it; a blocking get() from a green thread would
+        freeze the worker. Where nothing is patched (the gthread worker, the
+        development server) this is a real thread, and it blocks on the queue
+        instead of waking two hundred times a second to find it empty.
+        """
+        green = is_monkey_patched("thread")
+        while self.running:
+            try:
+                if green:
+                    event_type, data = self._dispatch_queue.get_nowait()
+                else:
+                    event_type, data = self._dispatch_queue.get(timeout=self.DISPATCH_BLOCK_SECONDS)
+            except _original_threading.Empty:
+                if green:
+                    time.sleep(self.DISPATCH_POLL_SECONDS)
+                continue
+            for callback in list(self.callbacks.get(event_type, ())):
+                try:
+                    callback(data)
+                except Exception as e:
+                    logger.exception(f"Error in {event_type} callback: {e}")
 
     def register_callback(self, event_type: str, callback: Callable):
         """
@@ -402,12 +713,44 @@ class WebSocketClient:
         finally:
             self.loop.close()
 
-    async def _connect_and_run(self):
-        """Connect to WebSocket and handle messages"""
-        retry_count = 0
-        max_retries = 5
+    async def _sleep_while_running(self, seconds: float) -> None:
+        """Back off before a reconnect, returning early once the client stops.
 
-        while self.running and retry_count < max_retries:
+        A plain asyncio.sleep of up to thirty seconds held the loop thread past
+        disconnect(), whose join gives up after five, so a stopped client's
+        thread lingered for the rest of the backoff.
+        """
+        deadline = time.monotonic() + seconds
+        while self.running:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(0.25, remaining))
+
+    async def _connect_and_run(self):
+        """Connect, authenticate and handle messages, reconnecting until stopped.
+
+        The client used to count reconnects for its whole life and stop for
+        good at the fifth, while ``running`` stayed True and the client stayed
+        cached: after the fifth proxy restart in a worker's lifetime every
+        tick-driven stop in the process went quiet until the next restart. The
+        count now covers one streak of failures only, is reset by a reconnect
+        that authenticates, and never ends the loop while the client runs.
+        """
+        failures = 0
+        stopping_noted = False
+
+        while self.running:
+            if self._app_stopping():
+                # The proxy goes down with the app, so there is nothing to
+                # reconnect to and nothing wrong. Wait quietly for disconnect().
+                if not stopping_noted:
+                    logger.info("OpenAlgo is stopping; the market data client will not reconnect")
+                    stopping_noted = True
+                await self._sleep_while_running(0.5)
+                continue
+
+            authenticated_here = False
             try:
                 async with websockets.connect(self.ws_url) as websocket:
                     self.ws = websocket
@@ -422,28 +765,84 @@ class WebSocketClient:
                         if not self.running:
                             break
                         await self._handle_message(message)
+                        if self.authenticated and not authenticated_here:
+                            authenticated_here = True
+                            failures = 0
+
+                # A clean close ends the iteration without raising; the socket
+                # is gone either way, so say so before reconnecting.
+                self.connected = False
+                self.authenticated = False
+                if self.running:
+                    await self._sleep_while_running(self.RECONNECT_AFTER_CLOSE_SECONDS)
 
             except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(f"WebSocket connection closed: {e}")
                 self.connected = False
                 self.authenticated = False
 
-                if self.running:
-                    retry_count += 1
-                    wait_time = min(2**retry_count, 30)  # Exponential backoff
-                    logger.info(
-                        f"Reconnecting in {wait_time} seconds... (attempt {retry_count}/{max_retries})"
+                if self.running and not self._app_stopping():
+                    logger.warning(f"WebSocket connection closed: {e}")
+                    failures += 1
+                    wait_time = min(2**failures, self.RECONNECT_MAX_BACKOFF_SECONDS)
+                    logger.info(f"Reconnecting in {wait_time} seconds... (attempt {failures})")
+                    await self._sleep_while_running(wait_time)
+
+            except OSError as e:
+                # Refused, reset or timed out: the proxy is not listening, which
+                # is what a proxy restart or an app stop looks like from here.
+                # A traceback adds nothing, and on every restart it filled the
+                # error log with a failure that was not one.
+                self.connected = False
+                self.authenticated = False
+
+                if self.running and not self._app_stopping():
+                    failures += 1
+                    wait_time = (
+                        5
+                        if failures <= self.RECONNECT_VERBOSE_FAILURES
+                        else self.RECONNECT_MAX_BACKOFF_SECONDS
                     )
-                    await asyncio.sleep(wait_time)
+                    if failures == self.UNREACHABLE_ERROR_AFTER:
+                        logger.error(
+                            f"The market data server at {self.ws_url} has not accepted a "
+                            f"connection for {failures} attempts. Live prices and "
+                            "tick-driven stops are not updating until it is back."
+                        )
+                    elif failures <= self.RECONNECT_VERBOSE_FAILURES or failures % 10 == 0:
+                        logger.warning(
+                            f"Market data server at {self.ws_url} is not accepting connections "
+                            f"({e}); retrying in {wait_time} seconds (attempt {failures})"
+                        )
+                    await self._sleep_while_running(wait_time)
 
             except Exception as e:
-                logger.exception(f"Error in WebSocket connection: {e}")
                 self.connected = False
                 self.authenticated = False
 
-                if self.running:
-                    retry_count += 1
-                    await asyncio.sleep(5)
+                if self.running and not self._app_stopping():
+                    failures += 1
+                    if failures <= self.RECONNECT_VERBOSE_FAILURES:
+                        logger.exception(f"Error in WebSocket connection: {e}")
+                        wait_time = 5
+                    else:
+                        # A long outage: keep trying, but quietly and less often.
+                        wait_time = self.RECONNECT_MAX_BACKOFF_SECONDS
+                        if failures % 10 == 0:
+                            logger.warning(
+                                "Still cannot reach the market data server after "
+                                f"{failures} attempts; retrying every {wait_time} seconds"
+                            )
+                    await self._sleep_while_running(wait_time)
+                elif self.running:
+                    logger.info(f"Market data connection ended while OpenAlgo is stopping: {e}")
+                else:
+                    # disconnect() closed the socket on purpose.
+                    logger.debug(f"Market data connection ended after disconnect: {e}")
+
+    @staticmethod
+    def _app_stopping() -> bool:
+        """Whether OpenAlgo has begun to stop, so a lost proxy is expected."""
+        return stream_registry.should_stop()
 
     async def _authenticate(self):
         """Send authentication message"""
@@ -472,11 +871,7 @@ class WebSocketClient:
                     logger.error(f"Authentication failed: {data.get('message')}")
 
                 # Trigger auth callbacks
-                for callback in self.callbacks["auth"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in auth callback: {e}")
+                self._dispatch("auth", data)
 
             # Handle market data
             elif msg_type == "market_data":
@@ -484,17 +879,17 @@ class WebSocketClient:
                 exchange = data.get("exchange")
 
                 if symbol and exchange:
-                    # Cache the data
+                    # Subscription cleanup and cache ownership share this
+                    # real OS-thread lock. Whichever wins the race, a frame
+                    # arriving after the final acknowledged unsubscribe cannot
+                    # recreate a cache entry with no remaining owner.
                     with self.lock:
                         key = f"{exchange}:{symbol}"
-                        self.market_data_cache[key] = data
+                        if self.active_subscriptions.get(key):
+                            self.market_data_cache[key] = data
 
                     # Trigger market data callbacks
-                    for callback in self.callbacks["market_data"]:
-                        try:
-                            callback(data)
-                        except Exception as e:
-                            logger.exception(f"Error in market data callback: {e}")
+                    self._dispatch("market_data", data)
 
             # Handle subscription responses
             elif msg_type == "subscribe":
@@ -506,11 +901,7 @@ class WebSocketClient:
                     if fut is not None and not fut.done():
                         fut.set_result(data)
                 # Generic subscribe-event callbacks still fire (backward compat).
-                for callback in self.callbacks["subscribe"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in subscribe callback: {e}")
+                self._dispatch("subscribe", data)
 
             # Handle unsubscription responses
             elif msg_type == "unsubscribe":
@@ -519,20 +910,22 @@ class WebSocketClient:
                     fut = self._pending_acks.get(rid)
                     if fut is not None and not fut.done():
                         fut.set_result(data)
-                for callback in self.callbacks["unsubscribe"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in unsubscribe callback: {e}")
+                self._dispatch("unsubscribe", data)
 
             # Handle errors
             elif data.get("status") == "error":
                 logger.error(f"Error from server: {data.get('message')}")
-                for callback in self.callbacks["error"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in error callback: {e}")
+                # Settle the request this error answers, if it names one.
+                # The proxy refuses a subscribe outright when the user has
+                # no broker adapter; without this the ack future stayed
+                # pending and the caller waited its whole timeout for a
+                # reply that had already arrived.
+                rid = data.get("request_id")
+                if rid:
+                    fut = self._pending_acks.get(rid)
+                    if fut is not None and not fut.done():
+                        fut.set_result(data)
+                self._dispatch("error", data)
 
         except json.JSONDecodeError:
             logger.error(f"Invalid JSON message: {message}")
@@ -541,8 +934,34 @@ class WebSocketClient:
 
 
 # Singleton instance management
-_client_instances = {}
-_client_lock = threading.Lock()
+#
+# One client per API key, shared by every consumer in the process (the
+# scalping risk monitor, the strategy tick feed, the websocket service).
+#
+# _client_lock guards the two dicts below and nothing else: it is never held
+# across a connect, which can take up to twice CONNECT_TIMEOUT_SECONDS. It used
+# to be, and every caller for every key queued behind one slow connect, which
+# under the gthread worker is a request thread per caller. A real lock, because
+# its critical section is dict work only and any thread in any runtime may ask
+# for a client.
+_client_instances: dict[str, WebSocketClient] = {}
+_client_lock = _original_threading.Lock()
+
+
+class _PendingConnect:
+    """One connect in progress for a key, which other callers wait on."""
+
+    __slots__ = ("client", "done")
+
+    def __init__(self) -> None:
+        self.done = _original_threading.Event()
+        self.client: WebSocketClient | None = None
+
+
+_pending_connects: dict[str, _PendingConnect] = {}
+
+#: The message a caller gets when the market data server cannot be reached.
+CONNECT_FAILED_MESSAGE = "Failed to connect to WebSocket server"
 
 
 def get_websocket_client(
@@ -552,6 +971,12 @@ def get_websocket_client(
     Get or create a WebSocket client instance for the given API key.
     Uses singleton pattern to reuse connections.
 
+    Single flight per key: one caller connects while the others for that key
+    wait for its result, and callers for other keys are not held up at all.
+    A cached client that has stopped for good (see ``WebSocketClient.alive``)
+    is replaced, and the replacement takes over its callbacks, so a consumer
+    that registered once keeps receiving ticks.
+
     Args:
         api_key: API key for authentication
         host: WebSocket server host
@@ -559,24 +984,81 @@ def get_websocket_client(
 
     Returns:
         WebSocketClient instance
+
+    Raises:
+        ConnectionError: The server could not be reached or refused the key.
     """
     with _client_lock:
-        if api_key not in _client_instances:
-            client = WebSocketClient(api_key, host, port)
-            if client.connect():
-                _client_instances[api_key] = client
-            else:
-                raise ConnectionError("Failed to connect to WebSocket server")
+        client = _client_instances.get(api_key)
+        if client is not None and client.alive:
+            return client
+        pending = _pending_connects.get(api_key)
+        owner = pending is None
+        if owner:
+            pending = _PendingConnect()
+            _pending_connects[api_key] = pending
 
-        return _client_instances[api_key]
+    if not owner:
+        # Somebody else is connecting this key; share their result.
+        _original_threading.wait_for(pending.done, 2 * WebSocketClient.CONNECT_TIMEOUT_SECONDS + 10)
+        if pending.client is not None:
+            return pending.client
+        raise ConnectionError(CONNECT_FAILED_MESSAGE)
+
+    stale = client
+    try:
+        replacement = WebSocketClient(api_key, host, port)
+        if stale is not None:
+            replacement.adopt_callbacks(stale)
+            try:
+                # Its loop has ended; this stops the dispatch thread it left.
+                stale.disconnect()
+            except Exception:
+                logger.exception("Could not stop a websocket client that had stopped reconnecting")
+        connected = replacement.connect()
+        with _client_lock:
+            # Cached even when the connect failed: a dead client is replaced on
+            # the next call, and it carries the callbacks over to that one.
+            _client_instances[api_key] = replacement
+        if not connected:
+            raise ConnectionError(CONNECT_FAILED_MESSAGE)
+        pending.client = replacement
+        return replacement
+    finally:
+        with _client_lock:
+            if _pending_connects.get(api_key) is pending:
+                del _pending_connects[api_key]
+        pending.done.set()
+
+
+def close_websocket_client(api_key: str) -> bool:
+    """Close and forget the client for one API key, if there is one.
+
+    For when that key stops being valid (rotated or revoked): its client would
+    otherwise stay cached, authenticated with the old key until the proxy
+    restarts. The next get_websocket_client builds a fresh one.
+
+    Returns:
+        True when a client was closed.
+    """
+    with _client_lock:
+        client = _client_instances.pop(api_key, None)
+    if client is None:
+        return False
+    try:
+        client.disconnect()
+    except Exception:
+        logger.exception("Error closing a websocket client")
+    return True
 
 
 def close_all_clients():
     """Close all WebSocket client connections"""
     with _client_lock:
-        for api_key, client in _client_instances.items():
-            try:
-                client.disconnect()
-            except Exception as e:
-                logger.exception(f"Error closing client for API key {api_key}: {e}")
+        clients = list(_client_instances.values())
         _client_instances.clear()
+    for client in clients:
+        try:
+            client.disconnect()
+        except Exception as e:
+            logger.exception(f"Error closing client: {e}")

@@ -2,6 +2,21 @@
 Flattrade order-update adapter — order-update subscription on a second
 PiConnectWSAPI connection.
 
+*** NOT USED BY DEFAULT — see create_flattrade_order_adapter() below. ***
+PiConnect permits one WebSocket session per {uid, accesstoken}. Opening this
+socket makes the broker evict flattrade_adapter.py's market-data socket with
+close code 1000, that adapter reconnects and evicts this one back, and the two
+flap forever (verified live 2026-09-01 — 13/13 market-data closes within
+100-190ms of this adapter's connect; GitHub issue #1806). The factory therefore
+returns a PollingOrderUpdateAdapter unless FLATTRADE_ORDER_WS=TRUE, and this
+class is retained for its normalize() and for that opt-in.
+
+Multiplexing t="o" onto the market-data socket is the real fix, but it needs a
+websocket_proxy -> Flask event channel that does not exist yet: the market-data
+adapter runs in the websocket_proxy subprocess under gunicorn+eventlet, so an
+OrderUpdateEvent published there would land on the wrong process's event bus.
+Solve that before making this class the default again.
+
 Docs: broker-api-docs/flattrade-api-docs/09-websocket.md ("Subscribe Order
 Update" / "Unsubscribe Order Update", plus the shared Connect and Heartbeat
 sections). Endpoint: wss://piconnect.flattrade.in/PiConnectWSAPI/
@@ -25,7 +40,8 @@ Two Flattrade-specific quirks the sibling Noren adapters do not have:
 Like Definedge and Shoonya, this opens its own connection rather than
 multiplexing the market-data socket: BaseOrderUpdateAdapter owns its ws, and a
 dedicated session keeps order updates independent of market-data
-subscribe/reconnect churn.
+subscribe/reconnect churn. For Flattrade that assumption turned out to be
+false — see the single-session warning at the top of this docstring.
 
 Credentials: accesstoken = get_auth_token(user_id) (Flattrade's jKey session
 token); uid/actid = the trading user id from BROKER_API_KEY, which is always
@@ -218,8 +234,65 @@ class FlattradeOrderUpdateAdapter(BaseOrderUpdateAdapter):
         }
 
 
-def create_flattrade_order_adapter(user_id: str) -> "FlattradeOrderUpdateAdapter | None":
-    """Factory: build a FlattradeOrderUpdateAdapter for user_id."""
+# Opt back into the dedicated order socket (not recommended — see
+# FLATTRADE_ORDER_WS below and the warning at the top of this module).
+def _dedicated_socket_requested() -> bool:
+    return os.getenv("FLATTRADE_ORDER_WS", "FALSE").strip().upper() == "TRUE"
+
+
+def create_flattrade_order_adapter(user_id: str):
+    """Factory: build the order-update adapter for user_id.
+
+    Returns a PollingOrderUpdateAdapter, NOT a FlattradeOrderUpdateAdapter.
+
+    PiConnect permits one WebSocket session per {uid, accesstoken}. Opening a
+    dedicated order socket makes the broker evict flattrade_adapter.py's
+    market-data socket with close code 1000, that adapter reconnects and evicts
+    the order socket back, and because both own independent reconnect loops the
+    churn never settles. Verified live 2026-09-01: 13/13 market-data closes
+    landed 100-190ms after this adapter's connect, 19 order-socket connects and
+    26 market-data reconnects in 5m56s, the depth book resubscribed 12 times.
+
+    This mirrors what broker/fivepaisa is already doing for the identical
+    single-session constraint (services/order_update_service.py::_POLLING_BROKERS
+    documents that case). The decision is made here rather than in that shared
+    registry so it stays inside the Flattrade plugin: the service just calls this
+    factory and connect()s whatever it returns, and PollingOrderUpdateAdapter
+    offers the same connect()/disconnect()/connected surface.
+
+    Cost: order updates arrive on the ORDER_POLL_INTERVAL cycle (default 5s)
+    instead of instantly. That is strictly better than a market-data feed that
+    dies every ten seconds, and the poll is paced by the shared limiter in
+    broker/flattrade/api/rate_limit.py.
+
+    Set FLATTRADE_ORDER_WS=TRUE to force the dedicated socket back on. It is
+    left reachable for whoever implements the real fix (multiplex t="o" onto the
+    market-data socket and relay t="om" frames across the process boundary), not
+    because it is safe to run.
+
+    See GitHub issue #1806.
+    """
+    from websocket_proxy.order_adapter import PollingOrderUpdateAdapter
+
+    if not _dedicated_socket_requested():
+        logger.info(
+            "Flattrade order updates use REST polling: PiConnect allows one "
+            "WebSocket session per uid, so a dedicated order socket would evict "
+            "the market-data feed (issue #1806). Set FLATTRADE_ORDER_WS=TRUE to "
+            "override."
+        )
+        return PollingOrderUpdateAdapter(broker_name="flattrade", user_id=user_id)
+
+    logger.warning(
+        "FLATTRADE_ORDER_WS=TRUE: opening a dedicated Flattrade order socket. "
+        "PiConnect allows one session per uid, so this is expected to evict the "
+        "market-data feed and flap (issue #1806)."
+    )
+    return _create_dedicated_ws_adapter(user_id)
+
+
+def _create_dedicated_ws_adapter(user_id: str) -> "FlattradeOrderUpdateAdapter | None":
+    """Build the dedicated-socket adapter. Only reachable via FLATTRADE_ORDER_WS."""
     accesstoken = get_auth_token(user_id, bypass_cache=True)
     if not accesstoken:
         logger.warning(

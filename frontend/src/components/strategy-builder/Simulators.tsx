@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 interface SliderRowProps {
   icon: ReactNode
   label: string
+  accessibleLabel: string
   sublabel: string
   value: number
   min: number
@@ -13,6 +14,7 @@ interface SliderRowProps {
   step: number
   formatter: (v: number) => string
   onChange: (v: number) => void
+  disabled?: boolean
   accent?: 'pink' | 'violet' | 'blue'
   centered?: boolean
 }
@@ -20,6 +22,7 @@ interface SliderRowProps {
 function SliderRow({
   icon,
   label,
+  accessibleLabel,
   sublabel,
   value,
   min,
@@ -27,6 +30,7 @@ function SliderRow({
   step,
   formatter,
   onChange,
+  disabled = false,
   accent = 'violet',
   centered = false,
 }: SliderRowProps) {
@@ -77,14 +81,18 @@ function SliderRow({
       <div className="relative px-1">
         <input
           type="range"
+          aria-label={accessibleLabel}
+          aria-valuetext={formatter(value)}
           min={min}
           max={max}
           step={step}
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(Number(e.target.value))}
           className={cn(
             'h-2 w-full cursor-pointer rounded-full bg-muted outline-none',
-            accentTrack
+            accentTrack,
+            disabled && 'cursor-not-allowed opacity-50'
           )}
         />
         {/* Center tick for bipolar sliders */}
@@ -125,7 +133,41 @@ export function Simulators({
   onDaysElapsedChange,
   onReset,
 }: SimulatorsProps) {
-  const maxShiftedDays = Math.max(1, Math.floor(maxDays))
+  const maxShiftedDays = Math.max(0, maxDays)
+  const hasTimeRemaining = maxShiftedDays > 0
+  const isSubDay = maxShiftedDays < 1
+  const maxHourlyStep = 1 / 24
+  const timePartitions =
+    isSubDay && maxShiftedDays > 0 ? Math.ceil(maxShiftedDays / maxHourlyStep) : 0
+  const timeSliderValue =
+    isSubDay && timePartitions > 0
+      ? Math.round((Math.min(daysElapsed, maxShiftedDays) / maxShiftedDays) * timePartitions)
+      : daysElapsed
+  const timeSliderMax = isSubDay ? timePartitions : maxShiftedDays
+  const timeStep = isSubDay ? 1 : 0.25
+  const sliderValueToDays = (value: number) => {
+    if (!isSubDay || timePartitions === 0) return isSubDay ? 0 : value
+    if (value >= timePartitions) return maxShiftedDays
+    return (value * maxShiftedDays) / timePartitions
+  }
+  const formatTime = (value: number) => {
+    const totalSeconds = Math.max(0, Math.round(value * 24 * 60 * 60))
+    const totalHours = Math.round((totalSeconds / (60 * 60)) * 10) / 10
+    if (isSubDay) {
+      if (totalSeconds < 60) return `+${totalSeconds}s`
+      if (totalSeconds < 60 * 60) {
+        const minutes = Math.floor(totalSeconds / 60)
+        const seconds = totalSeconds % 60
+        return seconds === 0 ? `+${minutes}m` : `+${minutes}m ${seconds}s`
+      }
+      return `+${totalHours.toLocaleString()}h`
+    }
+    const wholeDays = Math.floor(totalHours / 24)
+    const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
+    if (hours === 0) return `+${wholeDays}d`
+    if (wholeDays === 0) return `+${hours.toLocaleString()}h`
+    return `+${wholeDays}d ${hours.toLocaleString()}h`
+  }
   const isDirty = spotShiftPct !== 0 || ivShiftPct !== 0 || daysElapsed !== 0
 
   return (
@@ -157,6 +199,7 @@ export function Simulators({
         <SliderRow
           icon={<TrendingUp className="h-3.5 w-3.5" />}
           label="Spot Price"
+          accessibleLabel="Spot price shift"
           sublabel="Move underlying up or down"
           value={spotShiftPct}
           min={-10}
@@ -170,6 +213,7 @@ export function Simulators({
         <SliderRow
           icon={<Waves className="h-3.5 w-3.5" />}
           label="Implied Volatility"
+          accessibleLabel="Implied volatility shift"
           sublabel="Vol expansion or crush"
           value={ivShiftPct}
           min={-50}
@@ -182,15 +226,17 @@ export function Simulators({
         />
         <SliderRow
           icon={<Clock className="h-3.5 w-3.5" />}
-          label="Days Forward"
+          label={isSubDay ? 'Hours Forward' : 'Days Forward'}
+          accessibleLabel="Time forward"
           sublabel="Advance time toward expiry"
-          value={daysElapsed}
+          value={timeSliderValue}
           min={0}
-          max={maxShiftedDays}
-          step={1}
+          max={timeSliderMax}
+          step={timeStep}
+          disabled={!hasTimeRemaining}
           accent="blue"
-          formatter={(v) => `+${v}d`}
-          onChange={onDaysElapsedChange}
+          formatter={(value) => formatTime(sliderValueToDays(value))}
+          onChange={(value) => onDaysElapsedChange(sliderValueToDays(value))}
         />
       </div>
     </div>

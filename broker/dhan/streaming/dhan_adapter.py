@@ -4,7 +4,6 @@ Manages both 5-level and 20-level depth connections
 """
 
 import json
-import logging
 import os
 import sys
 import threading
@@ -16,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -32,7 +32,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("dhan_websocket")
+        self.logger = get_logger("dhan_websocket")
         self.user_id = None
         self.broker_name = "dhan"
 
@@ -518,8 +518,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             # Drop any pending queued subscribes for this instrument so a
             # quick subscribe -> unsubscribe before the batch timer fires
-            # does not leave a ghost upstream subscription on Dhan
-            # (Dhan has no real unsubscribe — once SUBSCRIBE is sent, it sticks).
+            # does not send a subscribe we would immediately have to cancel.
+            # Dhan does support unsubscribe (codes 16/18/22/24 - see
+            # DhanWebSocket.REQUEST_CODES), so this is an optimisation rather
+            # than the only defence it used to be.
             self.subscription_queue = [
                 item for item in self.subscription_queue
                 if not (

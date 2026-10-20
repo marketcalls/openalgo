@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
+import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -260,7 +261,13 @@ const brokerFields: Record<string, BrokerConfig> = {
   },
   tradejini: {
     fields: [
-      { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
+      {
+        name: 'password',
+        label: 'PIN',
+        type: 'password',
+        placeholder: 'Enter your login PIN',
+        hint: 'The PIN you use to log in to CubePlus, not your account password',
+      },
       {
         name: 'twofa',
         label: '2FA Code / TOTP',
@@ -537,6 +544,7 @@ export default function BrokerTOTP() {
                   Documentation
                   <ExternalLink className="h-3 w-3" />
                 </a>
+                <BrokerAuthSignOut />
               </div>
             </div>
           </CardContent>

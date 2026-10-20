@@ -36,3 +36,15 @@
 
 * BUY: Buy
 * SELL: Sell
+
+### Strategy Module Interpretation
+
+The `/strategy` module uses the platform constants with two narrower rules:
+
+* The configured product is **intent**, not necessarily the literal value sent
+  to every venue. `MIS` stays `MIS`; either carry product is sent as `NRML` on
+  derivatives exchanges and `CNC` on cash exchanges. The actual product sent is
+  persisted on each strategy order row.
+* Strategy entries and every exit are `MARKET` only. OpenAlgo supports `LIMIT`,
+  `SL` and `SL-M` elsewhere, but a strategy/leg carries no price to send for
+  those types, so the module refuses to pretend they are supported.

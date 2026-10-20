@@ -23,7 +23,6 @@
 #     get_history -> chart-data candles, resampled for the intervals HDFC does
 #                    not serve natively (it only has 1-minute and daily).
 
-import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -50,12 +49,13 @@ logger = get_logger(__name__)
 # client uses eventlet-original threads), so the OI dict it writes must be
 # guarded with a REAL lock -- a green (monkey-patched) lock shared across the
 # real/green boundary can deadlock under eventlet. Mirror the streaming client.
-if "eventlet" in sys.modules:
-    import eventlet
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
 
-    _real_threading = eventlet.patcher.original("threading")
-else:
-    _real_threading = threading
+_real_threading = _runtime.original("threading")
 
 
 class HDFCSkyAPIError(Exception):

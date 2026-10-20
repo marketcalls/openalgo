@@ -321,3 +321,38 @@ class TestISTTimestamps:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestApprovedAge:
+    """The page tells a send still under way from one a restart cut off by this."""
+
+    def test_an_approved_order_reports_how_long_ago_it_was_approved(self):
+        from datetime import UTC, datetime, timedelta
+
+        from services.action_center_service import parse_pending_order
+
+        order_id = create_pending_order(
+            "age_user", "placeorder", {"symbol": "SBIN", "action": "BUY"}
+        )
+        assert approve_pending_order(order_id, "age_user", "age_user")
+        order = get_pending_order_by_id(order_id)
+
+        fresh = parse_pending_order(order)["approved_age_seconds"]
+        assert fresh is not None and 0 <= fresh < 60
+
+        order.approved_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=5)
+        assert 290 <= parse_pending_order(order)["approved_age_seconds"] <= 360
+
+        order.approved_at = datetime.now(UTC) - timedelta(minutes=5)
+        assert 290 <= parse_pending_order(order)["approved_age_seconds"] <= 360
+
+    def test_a_pending_order_has_no_approved_age(self):
+        from services.action_center_service import parse_pending_order
+
+        order_id = create_pending_order(
+            "age_user", "placeorder", {"symbol": "SBIN", "action": "BUY"}
+        )
+
+        assert (
+            parse_pending_order(get_pending_order_by_id(order_id))["approved_age_seconds"] is None
+        )

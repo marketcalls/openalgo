@@ -81,7 +81,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/quotes \
 ## Notes
 
 - Quotes are **real-time** and refresh with each trade
-- For **F&O symbols**, use the OpenAlgo standard format (e.g., NIFTY30JAN25FUT)
+- For **F&O symbols**, use the OpenAlgo standard format (e.g., NIFTY25AUG26FUT)
 - For **multiple symbols**, use the [MultiQuotes](./multiquotes.md) endpoint
 - The **bid/ask** spread indicates liquidity
 
@@ -90,7 +90,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/quotes \
 ```json
 {
   "apikey": "<your_app_apikey>",
-  "symbol": "NIFTY30JAN25FUT",
+  "symbol": "NIFTY25AUG26FUT",
   "exchange": "NFO"
 }
 ```

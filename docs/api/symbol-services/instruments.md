@@ -31,13 +31,13 @@ curl --get 'http://127.0.0.1:5000/api/v1/instruments' \
   "message": "Found 1 instruments",
   "data": [
     {
-      "symbol": "NIFTY30JUL2625000CE",
-      "brsymbol": "NIFTY26JUL25000CE",
+      "symbol": "NIFTY25AUG2625000CE",
+      "brsymbol": "NIFTY26AUG25000CE",
       "name": "NIFTY",
       "exchange": "NFO",
       "brexchange": "NFO",
       "token": "12345",
-      "expiry": "30-JUL-26",
+      "expiry": "25-AUG-26",
       "strike": 25000,
       "lotsize": 65,
       "instrumenttype": "CE",

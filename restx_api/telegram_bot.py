@@ -1,6 +1,4 @@
-import asyncio
 import os
-from concurrent.futures import ThreadPoolExecutor
 
 from flask import jsonify, make_response, request
 from flask_restx import Namespace, Resource, fields
@@ -26,9 +24,6 @@ logger = get_logger(__name__)
 TELEGRAM_RATE_LIMIT = os.getenv("TELEGRAM_RATE_LIMIT", "30 per minute")
 
 api = Namespace("telegram", description="Telegram Bot API")
-
-# Thread pool for async operations
-executor = ThreadPoolExecutor(max_workers=2)
 
 # Initialize telegram alert service
 telegram_alert = TelegramAlertService()
@@ -93,16 +88,6 @@ preferences_model = api.model(
 )
 
 
-def run_async(coro):
-    """Helper to run async coroutine in sync context"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
 @api.route("/config", strict_slashes=False)
 class TelegramBotConfig(Resource):
     @limiter.limit(TELEGRAM_RATE_LIMIT)
@@ -164,12 +149,24 @@ class TelegramBotConfig(Resource):
                     rate_limit = int(data["rate_limit_per_minute"])
                     if not 1 <= rate_limit <= 120:
                         return make_response(
-                            jsonify({"status": "error", "message": "rate_limit_per_minute must be between 1 and 120"}), 400
+                            jsonify(
+                                {
+                                    "status": "error",
+                                    "message": "rate_limit_per_minute must be between 1 and 120",
+                                }
+                            ),
+                            400,
                         )
                     config_update["rate_limit_per_minute"] = rate_limit
                 except (TypeError, ValueError):
                     return make_response(
-                        jsonify({"status": "error", "message": "rate_limit_per_minute must be an integer"}), 400
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "rate_limit_per_minute must be an integer",
+                            }
+                        ),
+                        400,
                     )
 
             success = update_bot_config(config_update)
@@ -214,19 +211,18 @@ class StartBot(Resource):
                     jsonify({"status": "error", "message": "Bot token not configured"}), 400
                 )
 
-            # Initialize bot
-            success, message = run_async(
-                telegram_bot_service.initialize_bot(
-                    token=config["bot_token"], webhook_url=config.get("webhook_url")
-                )
-            )
+            # Validate and store the token: one bounded getMe request, the same
+            # in every runtime and the same call the /telegram UI makes. It
+            # leaves a running bot running, and start_bot below refuses a
+            # second one.
+            success, message = telegram_bot_service.initialize_bot_sync(token=config["bot_token"])
 
             if not success:
                 return make_response(jsonify({"status": "error", "message": message}), 500)
 
             # Start bot
             if config.get("polling_mode", True):
-                success, message = run_async(bot.start_polling())
+                success, message = telegram_bot_service.start_bot()
             else:
                 # Webhook mode would be configured separately
                 success = True
@@ -260,7 +256,7 @@ class StopBot(Resource):
                 )
 
             # Stop bot
-            success, message = run_async(telegram_bot_service.stop_bot())
+            success, message = telegram_bot_service.stop_bot()
 
             if success:
                 return make_response(jsonify({"status": "success", "message": message}), 200)
@@ -275,9 +271,31 @@ class StopBot(Resource):
 
 
 def get_webhook_secret():
-    """
-    Get or generate webhook secret for Telegram webhook verification.
-    Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+    """Return the shared secret used to verify inbound Telegram webhook calls.
+
+    Telegram echoes this value back in the ``X-Telegram-Bot-Api-Secret-Token``
+    header of every webhook delivery, which is how the webhook route tells a
+    genuine Telegram callback from an arbitrary POST to a public URL.
+
+    The value is resolved in two steps:
+
+    1. ``TELEGRAM_WEBHOOK_SECRET`` from the environment, if it is set. Prefer
+       this in production, so rotating the bot token does not silently change
+       the webhook secret.
+    2. Otherwise a value derived from the configured bot token, as the first 32
+       characters of its SHA-256 digest. The digest keeps the raw token out of
+       request headers while still giving a stable, deployment-specific secret
+       with no extra configuration.
+
+    Returns:
+        str | None: The webhook secret, or None when neither the environment
+        variable nor a bot token is configured. A None result means webhook
+        verification cannot be performed and the caller must reject the
+        request rather than treat it as verified.
+
+    Example:
+        >>> get_webhook_secret()
+        '9f2c1d4ab6e83705c1f0d2ab4e7c9351'
     """
     # First check for explicit webhook secret
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -399,7 +417,6 @@ class BroadcastMessage(Resource):
                 )
 
             message = data.get("message")
-            filters = data.get("filters", {})
 
             if not message or not isinstance(message, str):
                 return make_response(
@@ -408,7 +425,10 @@ class BroadcastMessage(Resource):
 
             if len(message) > 4096:
                 return make_response(
-                    jsonify({"status": "error", "message": "Message must not exceed 4096 characters"}), 400
+                    jsonify(
+                        {"status": "error", "message": "Message must not exceed 4096 characters"}
+                    ),
+                    400,
                 )
 
             # Check if broadcast is enabled
@@ -456,6 +476,22 @@ class SendNotification(Resource):
             if not api_key or not verify_api_key(api_key):
                 return make_response(
                     jsonify({"status": "error", "message": "Invalid or missing API key"}), 401
+                )
+
+            # Stopping the bot must stop automated messages too (GitHub issue
+            # #1577). /notify is the programmatic surface strategies call, so it
+            # follows the same gate as order alerts. The admin test-message and
+            # broadcast buttons in the /telegram UI stay available by design.
+            if not telegram_alert.is_bot_active():
+                logger.info("Telegram bot is stopped; rejecting /notify request")
+                return make_response(
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "Telegram bot is stopped. Start the bot to send notifications.",
+                        }
+                    ),
+                    409,
                 )
 
             username = data.get("username")
@@ -517,9 +553,7 @@ class SendNotification(Resource):
             else:
                 # Async: fire-and-forget (default, fast path)
                 alert_executor.submit(telegram_alert.send_alert_sync, telegram_id, message)
-                logger.info(
-                    f"Telegram notification queued for user {username} (ID: {telegram_id})"
-                )
+                logger.info(f"Telegram notification queued for user {username} (ID: {telegram_id})")
                 return make_response(
                     jsonify({"status": "success", "message": "Notification queued for delivery"}),
                     200,

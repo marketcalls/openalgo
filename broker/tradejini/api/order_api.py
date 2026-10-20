@@ -1,17 +1,31 @@
 import json
 import logging
-import os
 import threading
 import time
 
 import httpx
 
+from broker.tradejini.api.auth_api import API_KEY_MISSING_ERROR, get_api_key
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.position_read import (
+    PositionReadError,
+    read_position_book,
+    refuse_smart_order_on_read_failure,
+)
+from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
-from ..mapping.order_data import map_trade_data, transform_holdings_data, transform_tradebook_data
+from ..mapping.order_data import (
+    map_trade_data,
+    sym_base_symbol,
+    sym_exchange,
+    sym_id,
+    sym_trading_symbol,
+    transform_holdings_data,
+    transform_tradebook_data,
+)
 from ..mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -25,6 +39,27 @@ logger = get_logger(__name__)
 # Configure logging
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def _envelope_error(response_data, default="Unknown error"):
+    """
+    Pull the error text out of a Tradejini response envelope.
+
+    Errors and no-data responses carry the message at the top level as 'msg';
+    successful payloads may carry an informational 'msg' inside 'd'.
+    """
+    if not isinstance(response_data, dict):
+        return default
+
+    msg = response_data.get("msg")
+    if msg:
+        return msg
+
+    payload = response_data.get("d")
+    if isinstance(payload, dict) and payload.get("msg"):
+        return payload["msg"]
+
+    return default
 
 
 def get_api_response(endpoint, auth, method="GET", data=None, params=None):
@@ -43,13 +78,13 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
     """
     try:
         # Get API key from environment
-        api_key = os.getenv("BROKER_API_SECRET")
+        api_key = get_api_key()
         if not api_key:
-            raise ValueError("Error: BROKER_API_SECRET not set")
+            raise ValueError(API_KEY_MISSING_ERROR)
 
         # Create auth header
         auth_header = f"{api_key}:{auth}"
-        logger.debug(f"get_api_response - Using auth header: {auth_header}")
+        logger.debug("get_api_response - Authorization header built from api_key:access_token")
 
         headers = {
             "Authorization": f"Bearer {auth_header}",
@@ -71,43 +106,26 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
                 f"https://api.tradejini.com/v2{endpoint}", headers=headers, params=params
             )
         else:  # POST/PUT
-            # Convert data to x-www-form-urlencoded format
-            if data:
-                data_str = "&".join([f"{k}={v}" for k, v in data.items()])
-                logger.debug(f"get_api_response - Sending data: {data_str}")
+            # httpx form-encodes the dict for us (Content-Type is already set to
+            # x-www-form-urlencoded above), so values are escaped correctly.
+            logger.debug(f"get_api_response - Sending data: {data}")
 
-            response = client.put(
+            request_method = client.post if method == "POST" else client.put
+            response = request_method(
                 f"https://api.tradejini.com/v2{endpoint}",
                 headers=headers,
-                data=data_str if data else None,
+                data=data if data else None,
             )
 
         logger.debug(f"get_api_response - Response status: {response.status_code}")
-        logger.debug(f"get_api_response - Response headers: {dict(response.headers)}")
+        logger.debug(f"get_api_response - Response header fields: {list(response.headers)}")
         logger.debug(f"get_api_response - Response body: {response.text}")
 
-        # Handle 404 differently since it's a common error
+        # Every documented path is relative to the /v2 base URL, so a 404 means
+        # the endpoint or its parameters are wrong - surface it instead of
+        # retrying against an undocumented base.
         if response.status_code == 404:
-            logger.warning("get_api_response - API endpoint not found. Trying without /v2 prefix")
-            if method == "GET":
-                response = client.get(
-                    f"https://api.tradejini.com{endpoint}",
-                    headers=headers,
-                    params=params if params else data,
-                )
-            elif method == "DELETE":
-                response = client.delete(
-                    f"https://api.tradejini.com{endpoint}", headers=headers, params=params
-                )
-            else:
-                response = client.put(
-                    f"https://api.tradejini.com{endpoint}",
-                    headers=headers,
-                    data=data_str if data else None,
-                )
-
-            logger.debug(f"get_api_response - Second attempt status: {response.status_code}")
-            logger.debug(f"get_api_response - Second attempt body: {response.text}")
+            logger.error(f"get_api_response - Endpoint not found: {endpoint}")
 
         response.raise_for_status()  # Raise exception for bad status codes
         return response.json()
@@ -129,9 +147,9 @@ def get_order_book(auth):
     """
     try:
         # Get API key from environment
-        api_key = os.getenv("BROKER_API_SECRET")
+        api_key = get_api_key()
         if not api_key:
-            raise ValueError("Error: BROKER_API_SECRET not set")
+            raise ValueError(API_KEY_MISSING_ERROR)
 
         # Get the shared httpx client
         client = get_httpx_client()
@@ -163,59 +181,63 @@ def get_order_book(auth):
         response_data = response.json()
         logger.debug(f"get_order_book - Raw response data: {response_data}")
 
-        if response_data["s"] == "ok":
+        if response_data.get("s") == "ok":
             # print(f"[DEBUG] get_order_book - Found {len(response_data['d'])} orders")
             # Transform each order to OpenAlgo format
             transformed_orders = []
-            for order in response_data["d"]:
+            for order in response_data.get("d") or []:
                 # logger.debug(f"[DEBUG] get_order_book - Processing order: {order}")
                 try:
-                    # Get OpenAlgo symbol using symbol and exchange
-                    openalgo_symbol = get_oa_symbol(order["sym"]["id"], order["sym"]["exch"])
-                    # print(f"[DEBUG] get_order_book - OpenAlgo symbol lookup for symbol {order['sym']['sym']}: {openalgo_symbol}")
+                    sym = order.get("sym", {}) or {}
+                    exchange = sym_exchange(sym)
+                    symbol_id = sym_id(sym) or order.get("symId", "")
+
+                    # Get OpenAlgo symbol using the broker symbol id and exchange
+                    openalgo_symbol = get_oa_symbol(symbol_id, exchange)
+                    if not openalgo_symbol:
+                        # Fallback to the broker symbol if the lookup misses
+                        openalgo_symbol = sym_trading_symbol(sym) or sym_base_symbol(sym)
 
                     transformed_order = {
                         "stat": "Ok",  # OpenAlgo expects 'stat' field
                         "data": {
-                            "tradingsymbol": openalgo_symbol
-                            if openalgo_symbol
-                            else order["sym"][
-                                "sym"
-                            ],  # Fallback to Tradejini symbol if OpenAlgo not found
-                            "exchange": order["sym"]["exch"],
-                            "token": order["symId"],
-                            "exch": order["sym"]["exch"],
-                            "quantity": order["qty"],
-                            "side": order["side"],
-                            "type": order["type"],
-                            "product": order["product"],
-                            "order_id": order["orderId"],
-                            "order_time": order["orderTime"],
-                            "status": order["status"],
-                            "avg_price": order["avgPrice"],
-                            "limit_price": order["limitPrice"],
-                            "fill_quantity": order["fillQty"],
-                            "pending_quantity": order["pendingQty"],
-                            "validity": order["validity"],
-                            "valid_till": order["validTill"],
+                            "tradingsymbol": openalgo_symbol,
+                            "exchange": exchange,
+                            "token": order.get("symId", symbol_id),
+                            "exch": exchange,
+                            "quantity": order.get("qty", 0),
+                            "side": order.get("side", ""),
+                            "type": order.get("type", ""),
+                            "product": order.get("product", ""),
+                            "order_id": order.get("orderId", ""),
+                            "order_time": order.get("orderTime", ""),
+                            "status": order.get("status", ""),
+                            "avg_price": order.get("avgPrice", 0),
+                            "limit_price": order.get("limitPrice", 0),
+                            "trigger_price": order.get("trigPrice", 0),
+                            "fill_quantity": order.get("fillQty", 0),
+                            "pending_quantity": order.get("pendingQty", 0),
+                            "validity": order.get("validity", ""),
+                            "valid_till": order.get("validTill", ""),
+                            "reason": order.get("reason", ""),
                         },
                     }
                     # logger.debug(f"[DEBUG] get_order_book - Transformed order: {transformed_order}")
                     transformed_orders.append(transformed_order)
-                except KeyError as e:
-                    logger.error(f"get_order_book - Missing field in order: {str(e)}")
+                except Exception as e:
+                    logger.error(f"get_order_book - Could not transform order: {str(e)}")
                     logger.error(f"get_order_book - Order data: {order}")
                     continue
 
             return {"stat": "Ok", "data": transformed_orders}
+        elif response_data.get("s") == "no-data":
+            # An empty order book is not an error
+            logger.debug("get_order_book - No orders for the session")
+            return {"stat": "Ok", "data": []}
         else:
-            logger.debug(
-                f"get_order_book - API error: {response_data.get('d', {}).get('msg', 'Unknown error')}"
-            )
-            return {
-                "stat": "Not_Ok",
-                "data": {"msg": response_data.get("d", {}).get("msg", "Unknown error")},
-            }
+            error_msg = _envelope_error(response_data)
+            logger.debug(f"get_order_book - API error: {error_msg}")
+            return {"stat": "Not_Ok", "data": {"msg": error_msg}}
 
     except Exception as e:
         logger.exception(f"get_order_book - Exception occurred: {str(e)}")
@@ -234,9 +256,9 @@ def get_trade_book(auth):
     """
     try:
         # Get API key from environment
-        api_key = os.getenv("BROKER_API_SECRET")
+        api_key = get_api_key()
         if not api_key:
-            raise ValueError("Error: BROKER_API_SECRET not set")
+            raise ValueError(API_KEY_MISSING_ERROR)
 
         # Get the shared httpx client
         client = get_httpx_client()
@@ -267,9 +289,14 @@ def get_trade_book(auth):
             logger.error(f"get_trade_book - Invalid API response format: {response_data}")
             return {"status": "error", "data": [], "message": "Invalid API response format"}
 
+        # An empty trade book comes back as 'no-data' - not an error
+        if response_data.get("s") == "no-data":
+            logger.debug("get_trade_book - No trades for the session")
+            return []
+
         # Check response status
-        if response_data["s"] != "ok":
-            error_msg = f"API error: {response_data.get('d', {}).get('msg', 'Unknown error')}"
+        if response_data.get("s") != "ok":
+            error_msg = f"API error: {_envelope_error(response_data)}"
             logger.error(f"get_trade_book - {error_msg}")
             return {"status": "error", "data": [], "message": error_msg}
 
@@ -282,27 +309,20 @@ def get_trade_book(auth):
         for trade in trades_data:
             try:
                 # Get symbol details
-                symbol = trade.get("sym", {})
+                symbol = trade.get("sym", {}) or {}
+                exchange = sym_exchange(symbol)
 
                 # Get OpenAlgo symbol
                 openalgo_symbol = None
                 try:
-                    openalgo_symbol = get_oa_symbol(symbol.get("id", ""), symbol.get("exch", ""))
+                    openalgo_symbol = get_oa_symbol(
+                        sym_id(symbol) or trade.get("symId", ""), exchange
+                    )
                 except Exception as e:
                     logger.warning(f"get_trade_book - Symbol lookup failed: {str(e)}")
 
                 # Map product type
-                product = trade.get("product", "").lower()
-                if product == "intraday":
-                    product = "MIS"
-                elif product == "delivery":
-                    product = "CNC"
-                elif product == "coverorder":
-                    product = "CO"
-                elif product == "bracketorder":
-                    product = "BO"
-                else:
-                    product = "NRML"
+                product = reverse_map_product_type(trade.get("product", "")) or "NRML"
 
                 # Map side to action
                 side = trade.get("side", "").lower()
@@ -315,12 +335,12 @@ def get_trade_book(auth):
                     final_symbol = openalgo_symbol
                 else:
                     # Fallback to exchange symbol if OpenAlgo symbol isn't available
-                    final_symbol = symbol.get("sym", symbol.get("trdSym", ""))
+                    final_symbol = sym_base_symbol(symbol) or sym_trading_symbol(symbol)
 
                 transformed_trade = {
                     "action": action,
                     "average_price": float(trade.get("fillPrice", 0.0)),
-                    "exchange": symbol.get("exch", "").upper(),
+                    "exchange": str(exchange).upper(),
                     "orderid": str(trade.get("orderId", "")),
                     "product": product,
                     "quantity": int(trade.get("fillQty", 0)),
@@ -350,21 +370,24 @@ def get_trade_book(auth):
         return []
 
 
-def get_positions(auth):
+def get_positions(auth, strict=False):
     """
     Get list of positions using Tradejini API.
 
     Args:
         auth (str): Authentication token
+        strict (bool): Fail the whole read when a row cannot be transformed,
+            instead of leaving that row out. The smart order passes True,
+            because a row left out reads as a flat position.
 
     Returns:
         dict: Positions data in OpenAlgo format
     """
     try:
         # Get API key from environment
-        api_key = os.getenv("BROKER_API_SECRET")
+        api_key = get_api_key()
         if not api_key:
-            raise ValueError("Error: BROKER_API_SECRET not set")
+            raise ValueError(API_KEY_MISSING_ERROR)
 
         # Get the shared httpx client
         client = get_httpx_client()
@@ -402,10 +425,10 @@ def get_positions(auth):
                     net_qty = position.get("netQty", 0)
 
                     # Get symbol info from the nested sym object
-                    sym = position.get("sym", {})
-                    exchange_symbol = sym.get("sym", "")
-                    tradingsymbol = sym.get("trdSym", "")
-                    exchange = sym.get("exch", "")
+                    sym = position.get("sym", {}) or {}
+                    exchange_symbol = sym_base_symbol(sym)
+                    tradingsymbol = sym_trading_symbol(sym)
+                    exchange = sym_exchange(sym)
 
                     # Get symbol ID and details from the position data
                     symbol_id = position.get("symId", "")
@@ -419,7 +442,7 @@ def get_positions(auth):
                     openalgo_symbol = None
                     try:
                         # First try with the symbol ID from sym object
-                        symid_from_object = sym.get("id", "")
+                        symid_from_object = sym_id(sym)
                         if symid_from_object:
                             openalgo_symbol = get_oa_symbol(symid_from_object, exchange)
                             logger.debug(
@@ -454,16 +477,8 @@ def get_positions(auth):
                         final_symbol = exchange_symbol
                         logger.debug(f"Fallback to exchange symbol: {final_symbol}")
 
-                    # Map product type
-                    product = position.get("product", "").lower()
-                    if product == "delivery":
-                        mapped_product = "CNC"
-                    elif product == "intraday":
-                        mapped_product = "MIS"
-                    elif product == "margin":
-                        mapped_product = "NRML"
-                    else:
-                        mapped_product = "MIS"  # Default
+                    # Map product type (delivery/intraday/normal/cover/bracket)
+                    mapped_product = reverse_map_product_type(position.get("product", "")) or "MIS"
 
                     # Format the position data according to OpenAlgo format
                     # Removing tradingsymbol field as requested
@@ -482,12 +497,21 @@ def get_positions(auth):
 
                 except Exception as e:
                     logger.error(f"Error transforming position: {str(e)}", exc_info=True)
+                    if strict:
+                        return {
+                            "status": "error",
+                            "message": f"A position row could not be read: {e}",
+                        }
                     continue
 
             # Return in OpenAlgo format - same pattern as orderbook and tradebook
             return {"status": "success", "data": positions_list}
+        elif response_data.get("s") == "no-data":
+            # No open positions is a normal, empty result
+            logger.debug("No open positions for the session")
+            return {"status": "success", "data": []}
         else:
-            error_msg = response_data.get("d", {}).get("message", "Unknown error")
+            error_msg = _envelope_error(response_data)
             logger.error(f"Failed to fetch positions: {error_msg}")
             return {"status": "error", "message": error_msg}
 
@@ -650,46 +674,51 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
-_symbol_locks_lock = threading.Lock()
+# The registry forgets a symbol once nobody holds or waits on it, and under the
+# gthread worker a wait is bounded (utils/smart_order_guard.py).
+_SMART_ORDER_LOCKS = SymbolLocks()
 
 # --- Position Book Cache ---
 # Caches get_positions() for 1 second. Invalidated after each smart order placement.
-_position_cache = {}        # {auth_token: {"data": ..., "timestamp": ...}}
-_position_cache_lock = threading.Lock()
-_POSITION_CACHE_TTL = 1.0   # seconds
+# A fetch still in flight when an order invalidates the cache is returned to its
+# own caller but never cached, so the next order cannot read the book from
+# before the previous fill (utils/smart_order_guard.py).
+_POSITION_BOOK = PositionBookCache()
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
-    key = f"{symbol}:{exchange}:{product}"
-    with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+    """Hold the smart order lock for one symbol, as a context manager.
+
+    Yields True while holding it. Yields False when the wait ran out, which
+    happens only under the gthread worker; the caller must then return
+    ``SymbolLocks.busy(symbol)`` without placing an order.
+    """
+    return _SMART_ORDER_LOCKS.hold(symbol, exchange, product)
+
+
+def _position_book_ok(positions_data):
+    """get_positions answers {"status": "success", "data": [...]} for a book it
+    read, "no-data" included, and {"status": "error"} for every failure."""
+    return isinstance(positions_data, dict) and positions_data.get("status") == "success"
 
 
 def _get_cached_positions(auth):
     """Get positions from cache if fresh, otherwise fetch from broker API."""
-    with _position_cache_lock:
-        now = time.monotonic()
-        cached = _position_cache.get(auth)
-        if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            return cached["data"]
-
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
-
-    with _position_cache_lock:
-        _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
-
-    return positions_data
+    return _POSITION_BOOK.get(
+        auth,
+        lambda: read_position_book(
+            "tradejini", lambda: get_positions(auth, strict=True), _position_book_ok
+        ),
+    )
 
 
 def _invalidate_position_cache(auth):
-    """Invalidate the position cache so the next queued order fetches fresh data."""
-    with _position_cache_lock:
-        _position_cache.pop(auth, None)
+    """Invalidate the position cache so the next queued order fetches fresh data.
+
+    Also stops a fetch that started before this order from caching the book
+    it read.
+    """
+    _POSITION_BOOK.invalidate(auth)
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
@@ -736,7 +765,21 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
                 pos_symbol = str(position.get("symbol", "")).upper().strip()
                 pos_exch = str(position.get("exchange", "")).upper().strip()
-                pos_qty = int(float(position.get("quantity", 0)))
+                try:
+                    pos_qty = int(float(position.get("quantity", 0)))
+                except (TypeError, ValueError) as exc:
+                    if pos_exch == exchange and pos_symbol == tradingsymbol:
+                        # The row for this very symbol cannot be read, so its
+                        # position is unknown, not flat.
+                        raise PositionReadError(
+                            "tradejini",
+                            f"quantity {position.get('quantity')!r} of {pos_symbol}: {exc}",
+                        ) from exc
+                    logger.warning(
+                        f"get_open_position - Skipping {pos_symbol} on {pos_exch}: "
+                        f"quantity {position.get('quantity')!r} is not a number"
+                    )
+                    continue
 
                 logger.debug(
                     f"get_open_position - Checking OpenAlgo position: {pos_symbol} on {pos_exch}, qty: {pos_qty}"
@@ -772,9 +815,9 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
                 sym_data = position.get("sym", {}) or {}
 
                 # Get all possible symbol identifiers
-                pos_trd_sym = str(sym_data.get("trdSym", "")).upper().strip()  # e.g., 'YESBANK-EQ'
-                pos_sym = str(sym_data.get("sym", "")).upper().strip()  # e.g., 'YESBANK'
-                pos_exch = str(sym_data.get("exch", "")).upper().strip()  # e.g., 'NSE'
+                pos_trd_sym = str(sym_trading_symbol(sym_data)).upper().strip()  # 'YESBANK-EQ'
+                pos_sym = str(sym_base_symbol(sym_data)).upper().strip()  # 'YESBANK'
+                pos_exch = str(sym_exchange(sym_data)).upper().strip()  # 'NSE'
                 pos_id = (
                     str(position.get("symId", "")).upper().strip()
                 )  # e.g., 'EQT_YESBANK_EQ_NSE'
@@ -847,9 +890,14 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         )
         return "0"
 
+    except PositionReadError:
+        raise
     except Exception as e:
+        # The book was read, but something in it could not be: the position
+        # is unknown, and reading it as flat would size the order against
+        # nothing.
         logger.exception(f"get_open_position - Exception: {str(e)}")
-        return "0"
+        raise PositionReadError("tradejini", f"{type(e).__name__}: {e}") from e
 
 
 def place_order_api(data, auth):
@@ -896,26 +944,22 @@ def place_order_api(data, auth):
             logger.exception(error_msg)
             return None, {"status": "error", "message": error_msg}, None
 
-        # Convert transformed data to x-www-form-urlencoded format
-        try:
-            payload = "&".join([f"{k}={v}" for k, v in transformed_data.items()])
-            logger.debug(f"place_order_api - Payload: {payload}")
-        except Exception as e:
-            error_msg = f"Error creating payload: {str(e)}"
-            logger.error(error_msg)
-            return None, {"status": "error", "message": error_msg}, None
+        # httpx form-encodes the dict, so values containing spaces or '&'
+        # (remarks, for instance) are escaped correctly.
+        payload = transformed_data
+        logger.debug(f"place_order_api - Payload: {payload}")
 
         # Get API key from environment
-        api_key = os.getenv("BROKER_API_SECRET")
+        api_key = get_api_key()
         if not api_key:
-            error_msg = "BROKER_API_SECRET not set in environment"
-            logger.error(error_msg)
-            return None, {"status": "error", "message": error_msg}, None
+            logger.error(API_KEY_MISSING_ERROR)
+            return None, {"status": "error", "message": API_KEY_MISSING_ERROR}, None
 
         # Prepare authorization
         auth_header = f"{api_key}:{AUTH_TOKEN}"
         logger.debug(
-            f"place_order_api - Using auth header: {api_key[:4]}...:{AUTH_TOKEN[-4:] if AUTH_TOKEN else 'None'}"
+            f"place_order_api - Authorization header built from api_key:access_token "
+            f"(access_token present: {bool(AUTH_TOKEN)})"
         )
 
         headers = {
@@ -926,10 +970,10 @@ def place_order_api(data, auth):
         # Make API request
         try:
             client = get_httpx_client()
-            url = "https://api.tradejini.com/v2/oms/place-order"
+            url = "https://api.tradejini.com/v2/api/oms/place-order"
 
             logger.debug(f"place_order_api - Sending request to {url}")
-            logger.debug(f"place_order_api - Headers: {headers}")
+            logger.debug(f"place_order_api - Header keys: {list(headers)}")
 
             response = client.post(
                 url,
@@ -940,7 +984,7 @@ def place_order_api(data, auth):
 
             # Log response details
             logger.debug(f"place_order_api - Response status: {response.status_code}")
-            logger.debug(f"place_order_api - Response headers: {dict(response.headers)}")
+            logger.debug(f"place_order_api - Response header fields: {list(response.headers)}")
 
             response.raise_for_status()
             response_data = response.json()
@@ -973,7 +1017,8 @@ def place_order_api(data, auth):
                     str(order_id),
                 )
             else:
-                error_msg = response_data.get("d", {}).get("msg", "Unknown error from broker")
+                # Error envelope carries the message at the top level as 'msg'
+                error_msg = _envelope_error(response_data)
                 logger.error(f"place_order_api - Order placement failed: {error_msg}")
                 return response_obj, {"status": "error", "message": error_msg}, None
 
@@ -981,8 +1026,7 @@ def place_order_api(data, auth):
             error_msg = f"HTTP error: {str(e)}"
             if e.response is not None:
                 try:
-                    error_data = e.response.json()
-                    error_msg = error_data.get("d", {}).get("msg", error_msg)
+                    error_msg = _envelope_error(e.response.json())
                 except Exception:
                     error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
             logger.error(f"place_order_api - {error_msg}")
@@ -999,6 +1043,7 @@ def place_order_api(data, auth):
         return None, {"status": "error", "message": error_msg}, None
 
 
+@refuse_smart_order_on_read_failure
 def place_smartorder_api(data, auth):
     """
     Place a smart order using Tradejini API.
@@ -1029,9 +1074,9 @@ def place_smartorder_api(data, auth):
         product = data.get("product", "MIS")
 
         # Per-symbol lock: serialize smart orders per symbol
-        symbol_lock = _get_symbol_lock(symbol, exchange, product)
-
-        with symbol_lock:
+        with _get_symbol_lock(symbol, exchange, product) as symbol_lock:
+            if not symbol_lock:
+                return SymbolLocks.busy(symbol)
             # Target position size - this is the key parameter for SmartOrder
             try:
                 position_size = int(float(data.get("position_size", "0")))
@@ -1053,6 +1098,8 @@ def place_smartorder_api(data, auth):
                     f"(from get_open_position)"
                 )
 
+            except PositionReadError:
+                raise
             except Exception as e:
                 logger.exception(f"place_smartorder_api - Error getting position: {str(e)}")
                 return None, {"status": "error", "message": f"Failed to get position: {str(e)}"}, ""
@@ -1089,7 +1136,9 @@ def place_smartorder_api(data, auth):
                     original_qty = int(float(data.get("quantity", "0")))
                     if original_qty != 0:
                         original_action = data.get("action", "").upper()
-                        logger.debug(f"place_smartorder_api - No position, pos_size=0: {original_action} {original_qty}")
+                        logger.debug(
+                            f"place_smartorder_api - No position, pos_size=0: {original_action} {original_qty}"
+                        )
                         final_action = original_action
                         final_quantity = original_qty
                     else:
@@ -1172,7 +1221,9 @@ def place_smartorder_api(data, auth):
                     and orderid
                 ):
                     wrapped_response = {"status": "success", "orderid": str(orderid)}
-                    logger.debug(f"place_smartorder_api - Order placed successfully: {wrapped_response}")
+                    logger.debug(
+                        f"place_smartorder_api - Order placed successfully: {wrapped_response}"
+                    )
                     return res, wrapped_response, orderid
                 else:
                     error_msg = "Unknown error in order placement"
@@ -1195,6 +1246,8 @@ def place_smartorder_api(data, auth):
                 logger.exception(error_msg)
                 return None, {"status": "error", "message": error_msg}, None
 
+    except PositionReadError:
+        raise
     except Exception as e:
         error_msg = f"Smart order placement failed: {str(e)}"
         logger.exception(f"place_smartorder_api - Exception occurred: {error_msg}")
@@ -1360,21 +1413,17 @@ def cancel_order(orderid, auth):
         logger.debug(f"cancel_order - API response: {response}")
 
         # Handle response
-        if response["s"] == "ok":
+        if response.get("s") == "ok":
             logger.debug("cancel_order - Order cancelled successfully")
             return {
                 "stat": "Ok",
                 "data": {
                     "msg": "Order cancelled successfully",
-                    "order_id": response["d"]["orderId"],
+                    "order_id": (response.get("d") or {}).get("orderId", orderid),
                 },
             }, 200
-        elif response["s"] == "no-data":
-            error_msg = f"Order cancellation failed: {response['msg']}"
-            logger.error(f"cancel_order - {error_msg}")
-            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         else:
-            error_msg = f"Order cancellation failed: {response.get('msg', 'Unknown error')}"
+            error_msg = f"Order cancellation failed: {_envelope_error(response)}"
             logger.error(f"cancel_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
 
@@ -1555,21 +1604,17 @@ def modify_order(data, auth):
         logger.debug(f"modify_order - API response: {response}")
 
         # Handle different response formats
-        if response["s"] == "ok":
+        if response.get("s") == "ok":
             logger.debug("modify_order - Order modified successfully")
             return {
                 "stat": "Ok",
                 "data": {
                     "msg": "Order modified successfully",
-                    "order_id": response["d"]["orderId"],
+                    "order_id": (response.get("d") or {}).get("orderId", data.get("orderid", "")),
                 },
             }, 200
-        elif response["s"] == "no-data":
-            error_msg = f"Order modification failed: {response['msg']}"
-            logger.error(f"modify_order - {error_msg}")
-            return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
         else:
-            error_msg = f"Order modification failed: {response.get('msg', 'Unknown error')}"
+            error_msg = f"Order modification failed: {_envelope_error(response)}"
             logger.error(f"modify_order - {error_msg}")
             return {"stat": "Not_Ok", "data": {"msg": error_msg}}, 400
 

@@ -1,31 +1,56 @@
 import importlib
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import pandas as pd
 
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
+from services.broker_busy import BrokerBusyError, broker_busy_result
+from utils import real_threading
+from utils.broker_backpressure import check_queue_wait
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
 
-# Rate limiter: max 3 broker history API requests per second
-# Uses minimum interval between calls to prevent burst requests
-_last_history_call: float = 0.0
+# Rate limiter: max 3 broker history API requests per second, evenly spaced.
+#
+# Each caller books the next free start time under a lock and then sleeps until
+# it arrives, so concurrent callers are spaced one interval apart. The previous
+# version read the time of the last call, slept, and wrote it back, all
+# unlocked: callers arriving together computed their sleep from the same stale
+# value, woke together, and reached the broker as a burst it rejects.
+#
+# The lock is a real one because the agent's tools reach this from a real OS
+# thread. It guards two float operations; the sleep happens after it is released.
 _MIN_HISTORY_INTERVAL = 0.35  # 350ms between calls (~3 req/sec, evenly spaced)
+_next_history_slot: float = 0.0
+_history_slot_lock = real_threading.Lock()
 
 
-def _enforce_rate_limit():
-    """Block until enough time has passed since the last request (~3 per second)."""
-    global _last_history_call
-    now = time.monotonic()
-    elapsed = now - _last_history_call
-    if elapsed < _MIN_HISTORY_INTERVAL:
-        time.sleep(_MIN_HISTORY_INTERVAL - elapsed)
-    _last_history_call = time.monotonic()
+def _enforce_rate_limit(*, background: bool = False):
+    """Wait for this request's turn (~3 per second).
+
+    Raises:
+        BrokerBusyError: Only under the gthread worker, when the turn would
+            come later than the market-data queue ceiling. The check runs
+            before the slot is booked, so a refused request delays nobody.
+    """
+    global _next_history_slot
+    with _history_slot_lock:
+        now = time.monotonic()
+        slot = max(now, _next_history_slot)
+        wait = slot - now
+        # Historify workers are not Gunicorn request threads.  They must share
+        # the booking queue (and therefore the broker's 3 req/s limit), but a
+        # queued background download must be allowed to wait for its turn.
+        if not background:
+            check_queue_wait(wait, kind="data")
+        _next_history_slot = slot + _MIN_HISTORY_INTERVAL
+    if wait > 0:
+        time.sleep(wait)
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
@@ -136,6 +161,8 @@ def get_history_with_auth(
             df["oi"] = 0
 
         return True, {"status": "success", "data": df.to_dict(orient="records")}, 200
+    except BrokerBusyError as e:
+        return broker_busy_result(e, f"History request for {exchange}:{symbol}")
     except Exception as e:
         logger.exception(f"Error in broker_module.get_history: {e}")
         return False, {"status": "error", "message": str(e)}, 500
@@ -227,6 +254,7 @@ def get_history(
     feed_token: str | None = None,
     broker: str | None = None,
     source: str = "api",
+    background: bool = False,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get historical data for a symbol.
@@ -242,14 +270,24 @@ def get_history(
         auth_token: Direct broker authentication token (for internal calls)
         feed_token: Direct broker feed token (for internal calls)
         broker: Direct broker name (for internal calls)
-        source: Data source - 'api' (broker, default) or 'db' (DuckDB/Historify)
+        source: Data source - 'api' (broker, default) or 'db' (DuckDB/Historify).
+            Unsupported values return 400 before a provider is called.
 
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
+
+        Unsupported source values return a 400 error before either provider is called.
     """
+    if not isinstance(source, str) or source not in {"api", "db"}:
+        return (
+            False,
+            {"status": "error", "message": "Source must be either 'api' or 'db'."},
+            400,
+        )
+
     # Source: 'db' - Fetch from DuckDB/Historify database
     if source == "db":
         return get_history_from_db(
@@ -262,7 +300,13 @@ def get_history(
 
     # Source: 'api' (default) - Fetch from broker API
     # Enforce 3 requests/second rate limit for broker history calls
-    _enforce_rate_limit()
+    try:
+        if background:
+            _enforce_rate_limit(background=True)
+        else:
+            _enforce_rate_limit()
+    except BrokerBusyError as e:
+        return broker_busy_result(e, f"History request for {exchange}:{symbol}")
 
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):

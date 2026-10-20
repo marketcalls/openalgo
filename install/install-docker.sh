@@ -42,7 +42,7 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
@@ -114,9 +114,9 @@ done
 while true; do
     log "\nValid brokers:" "$BLUE"
     echo "fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange,"
-    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, hdfcsky, ibulls, iifl, iiflcapital,"
+    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital,"
     echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
-    echo "rmoney, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha,"
+    echo "rmoney, rupeezy, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha,"
     echo ""
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
@@ -249,7 +249,15 @@ if [ -d "$INSTALL_PATH" ]; then
     fi
 fi
 
-$SUDO git clone https://github.com/marketcalls/openalgo.git $INSTALL_PATH
+# --filter=blob:none makes this a partial clone: the server sends every
+# commit and tree but no file contents, so it pulls ~20 MB instead of
+# ~280 MB. Blobs outside the current checkout are fetched on demand, so
+# the full history stays usable -- all 4,824 commits, 62 tags, every
+# branch -- which keeps `git reset --hard HEAD~n`, tag checkouts and
+# branch switching working. Nearly all of that 280 MB is superseded
+# frontend/dist bundles that a server never reads. A host without filter
+# support just full-clones, so this is never worse than no flag at all.
+$SUDO git clone --filter=blob:none https://github.com/marketcalls/openalgo.git $INSTALL_PATH
 check_status "Git clone failed"
 
 cd $INSTALL_PATH
@@ -466,6 +474,13 @@ server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
     
     location /.well-known/acme-challenge/ {
         root /var/www/html;
@@ -516,6 +531,13 @@ server {
     listen [::]:80;
     server_name $DOMAIN;
 
+    # OPENALGO_WEBHOOK_LOG_GUARD: suppress URL-secret routes before redirect logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
+
     # Allow Certbot renewals
     location /.well-known/acme-challenge/ {
         root /var/www/html;
@@ -542,6 +564,12 @@ server {
     listen [::]:443 ssl http2;
     
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
     
     # SSL Configuration
     ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
@@ -561,7 +589,7 @@ server {
     client_body_timeout 300s;
     
     # Logging
-    access_log /var/log/nginx/${DOMAIN}_access.log;
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
     error_log /var/log/nginx/${DOMAIN}_error.log;
 
     # WebSocket Proxy Server (Port 8765)
@@ -670,8 +698,12 @@ server {
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
 
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        # Plain HTTP only: /ws, /ws/ and /socket.io/ have their own blocks.
+        # Forcing "Connection: upgrade" here sent every ordinary request
+        # upstream with a bogus upgrade header and an empty Upgrade:, which
+        # breaks HTTP/1.1 keep-alive to gunicorn and shows up as intermittent
+        # truncated asset responses and 5xx (GitHub issue #1807).
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;

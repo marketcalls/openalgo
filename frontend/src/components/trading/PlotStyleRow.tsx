@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { IndicatorField } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { TickBox } from './TickBox'
 
 /** 10x10 palette: a greyscale row, then hue columns light→dark. */
 const HUES = [
@@ -113,13 +114,7 @@ export function PlotStyleRow({ title, fields, values, onChange }: Props) {
 
   return (
     <div className="flex items-center gap-2.5" ref={ref}>
-      <input
-        type="checkbox"
-        checked={enabled}
-        onChange={toggle}
-        aria-label={`${title} visible`}
-        className="h-3.5 w-3.5 accent-[hsl(var(--primary))]"
-      />
+      <TickBox checked={enabled} onChange={toggle} label={`${title} visible`} />
       <span className="flex-1 truncate text-[13px]">{title}</span>
 
       <div className="relative">
@@ -194,7 +189,7 @@ export function PlotStyleRow({ title, fields, values, onChange }: Props) {
                     value={opacity}
                     onChange={(e) => onChange(opacityF.key, Number(e.target.value))}
                     aria-label="Opacity"
-                    className="h-1 flex-1 accent-[hsl(var(--primary))]"
+                    className="h-1 flex-1 accent-primary"
                     style={{
                       background: `linear-gradient(to right, transparent, ${color})`,
                       borderRadius: 999,

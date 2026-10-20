@@ -1,0 +1,29 @@
+version 1
+
+// LONG ONLY: in the market or flat, never short.
+//
+// The shape is two calls that cannot both fire on one bar, and a guard on each
+// so neither repeats. `buy` opens; `close` flattens. Nothing here can take the
+// position past zero, which is what makes it long only rather than a reversal
+// that happens not to have reversed yet.
+
+fastLen = input(10, "Fast length", min = 1, max = 200)
+slowLen = input(30, "Slow length", min = 1, max = 500)
+lots = input(1, "Quantity", min = 1)
+
+strategy("Long only cross", overlay = true, qty = lots)
+
+fast = ema(close, fastLen)
+slow = ema(close, slowLen)
+
+plot(fast, "Fast", aqua, width = 2)
+plot(slow, "Slow", orange, width = 2)
+
+// `pos.isFlat` is the guard that makes this idempotent. Without it a second
+// crossing while already long would add to the position, and the strategy would
+// pyramid by accident rather than by declaration.
+if crossUp(fast, slow) and pos.isFlat
+    buy(qty = lots, tag = "Long")
+
+if crossDown(fast, slow) and pos.isLong
+    close(tag = "Long")

@@ -101,7 +101,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/placeorder \
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
 | strategy | Strategy identifier for tracking | Mandatory | - |
-| symbol | Trading symbol (e.g., RELIANCE, NIFTY30JAN25FUT) | Mandatory | - |
+| symbol | Trading symbol (e.g., RELIANCE, NIFTY25AUG26FUT) | Mandatory | - |
 | action | Order action: BUY or SELL | Mandatory | - |
 | exchange | Exchange code accepted by the shared validation constants | Mandatory | - |
 | pricetype | Price type: MARKET, LIMIT, SL, SL-M | Optional | MARKET |
@@ -128,8 +128,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/placeorder \
 - For **SL-M** (Stop-Loss Market) orders, only trigger_price is required
 - The **symbol** must be in OpenAlgo standard format:
   - Equity: `RELIANCE`
-  - Futures: `NIFTY30JAN25FUT`
-  - Options: `NIFTY30JAN2525000CE`
+  - Futures: `NIFTY25AUG26FUT`
+  - Options: `NIFTY25AUG2625000CE`
 - Use **MIS** for intraday, **CNC** for equity delivery, **NRML** for F&O overnight positions
 - Fractional quantities are accepted only when `exchange` is `CRYPTO`. Other exchanges reject fractional values during schema validation.
 

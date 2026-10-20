@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, BasketCompletedEvent, OrderFailedEvent
+from utils.broker_backpressure import BrokerBusyError
 from utils.constants import (
     REQUIRED_ORDER_FIELDS,
     VALID_ACTIONS,
@@ -156,6 +157,16 @@ def place_single_order(
             )
             return {"symbol": order_data["symbol"], "status": "error", "message": message}
 
+    except BrokerBusyError as e:
+        # Refused before it was sent: the broker's request queue was longer
+        # than a caller may wait under the gthread worker. Never raised under
+        # eventlet or the development server.
+        logger.warning(f"Basket leg {order_data.get('symbol', 'Unknown')} not sent: {e}")
+        return {
+            "symbol": order_data.get("symbol", "Unknown"),
+            "status": "error",
+            "message": str(e),
+        }
     except Exception as e:
         logger.exception(f"Error placing order for {order_data.get('symbol', 'Unknown')}: {e}")
         return {

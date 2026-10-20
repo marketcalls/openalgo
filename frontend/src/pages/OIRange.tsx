@@ -25,6 +25,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import Plot from '@/lib/Plot2D'
+import { serverSentence } from '@/lib/serverSentence'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
@@ -174,9 +175,9 @@ export default function OIRange() {
       } else {
         showToast.error(response.message || 'Failed to fetch OI data')
       }
-    } catch {
+    } catch (error) {
       if (requestIdRef.current !== requestId) return
-      showToast.error('Failed to fetch OI data')
+      showToast.error(serverSentence(error, 'Failed to fetch OI data'))
     } finally {
       if (requestIdRef.current === requestId) setIsLoading(false)
     }
@@ -323,8 +324,8 @@ export default function OIRange() {
           ? 'rgba(180,160,255,0.1)'
           : 'rgba(255,255,255,0.1)'
         : 'rgba(0,0,0,0.08)',
-      ceBar: '#ef4444',
-      peBar: '#22c55e',
+      ceBar: '#22c55e',
+      peBar: '#ef4444',
       atmLine: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',
       hoverBg: isDark ? (isAnalyzer ? '#2d2545' : '#1e293b') : '#ffffff',
       hoverFont: isDark ? '#e0e0e0' : '#333333',

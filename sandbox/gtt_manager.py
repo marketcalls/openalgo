@@ -32,14 +32,17 @@ from decimal import Decimal
 from sqlalchemy import select, update
 
 from database.sandbox_db import (
+    IST,
     SandboxGTT,
     SandboxGTTLeg,
     SandboxOrders,
     db_session,
     get_config,
+    ist_now,
 )
 from sandbox.fund_manager import FundManager
 from sandbox.order_manager import OrderManager
+from sandbox.position_locks import try_position_lock
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -53,7 +56,8 @@ DEFAULT_CLAIM_TIMEOUT_SEC = 60
 
 
 def _now() -> datetime:
-    return datetime.now()
+    # Naive IST, the sandbox's one clock (see database.sandbox_db.ist_now).
+    return ist_now()
 
 
 def _generate_gtt_id() -> str:
@@ -95,12 +99,12 @@ def _resolve_expiry(supplied) -> datetime:
             except (TypeError, ValueError):
                 continue
             if parsed.tzinfo is not None:
-                # The column is a naive DateTime compared against
-                # datetime.now(), so an offset-carrying value must be converted
-                # to local time first. Storing the wall-clock digits unchanged
-                # would treat 13:00Z and 13:00+05:30 as the same instant when
-                # they are five and a half hours apart.
-                parsed = parsed.astimezone().replace(tzinfo=None)
+                # The column is naive IST compared against _now(), so an
+                # offset-carrying value must be converted to IST first. Storing
+                # the wall-clock digits unchanged would treat 13:00Z and
+                # 13:00+05:30 as the same instant when they are five and a
+                # half hours apart.
+                parsed = parsed.astimezone(IST).replace(tzinfo=None)
             return parsed
         logger.warning(f"Unparseable GTT expires_at {supplied!r}; using the default")
     return _now() + timedelta(days=DEFAULT_EXPIRY_DAYS)
@@ -441,9 +445,7 @@ class GTTManager:
             if claimed.rowcount != 1:
                 db_session.rollback()
                 db_session.expire_all()
-                logger.info(
-                    f"GTT {trigger_id}: no longer active when the modify was applied"
-                )
+                logger.info(f"GTT {trigger_id}: no longer active when the modify was applied")
                 return self._not_found(trigger_id)
 
             staged, message = self.fund_manager.stage_margin_delta(
@@ -684,6 +686,9 @@ class GTTManager:
                     "price": float(leg.price or 0),
                     "pricetype": leg.pricetype,
                     "product": leg.product,
+                    # The sandbox order this leg placed when it fired; null
+                    # until then. Lets the GTT tab show what a trigger produced.
+                    "triggered_order_id": leg.triggered_order_id,
                 }
                 for leg in gtt.legs
             ],
@@ -758,7 +763,7 @@ def try_claim_trigger(leg_id: int) -> bool:
                 ~sibling_busy,
                 parent_active,
             )
-            .values(leg_status="triggering", claimed_at=datetime.now())
+            .values(leg_status="triggering", claimed_at=_now())
         )
         db_session.commit()
         won = result.rowcount == 1
@@ -931,6 +936,26 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         logger.info(f"GTT leg {leg_id} is '{leg.leg_status}', not 'triggering' - not firing")
         return False
 
+    # A leg fires on a market-data tick, on the one thread that delivers ticks
+    # to every subscriber. Waiting there for another order on the same
+    # position (a smart order reading the position book, say) stopped every
+    # tick for as long as that order took. So the position's lock is only
+    # tried: when it is busy the claim is handed back before anything moved,
+    # and the next tick fires the leg. The lock is held from here through the
+    # order, which takes it again (it is reentrant).
+    with try_position_lock(gtt.user_id, gtt.exchange, gtt.symbol, leg.product) as held:
+        if not held:
+            logger.info(
+                f"GTT leg {leg_id}: another order on {gtt.symbol} is in progress; "
+                "firing on the next tick"
+            )
+            _revert_claim(leg_id)
+            return False
+        return _fire_claimed_leg(leg, gtt, leg_id, execution_price)
+
+
+def _fire_claimed_leg(leg, gtt, leg_id: int, execution_price) -> bool:
+    """The body of :func:`fire_leg`, run holding the position's lock."""
     # Take the parent atomically, before any irreversible step. Reading
     # gtt_status here would be check-then-act: a cancel landing between the read
     # and place_order returns success while the order still goes in, and both
@@ -946,8 +971,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
     if claimed_parent.rowcount != 1:
         db_session.refresh(gtt)
         logger.info(
-            f"GTT {gtt.gtt_id} is no longer active ('{gtt.gtt_status}') - "
-            f"not firing leg {leg_id}"
+            f"GTT {gtt.gtt_id} is no longer active ('{gtt.gtt_status}') - not firing leg {leg_id}"
         )
         _revert_claim(leg_id)
         return False
@@ -1021,7 +1045,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
             message = response.get("message") if isinstance(response, dict) else response
             logger.error(f"GTT leg {leg_id} order rejected: {message}")
             _compensate_failed_fire(
-                gtt, leg_id, released if released_ok else Decimal('0.00'), order_committed=False
+                gtt, leg_id, released if released_ok else Decimal("0.00"), order_committed=False
             )
             return False
 
@@ -1080,13 +1104,14 @@ def _notify_websocket_engine(gtt: SandboxGTT) -> None:
     """
     try:
         from sandbox.websocket_execution_engine import (
-            get_websocket_execution_engine,
             is_websocket_execution_engine_running,
+            peek_websocket_execution_engine,
         )
 
         if not is_websocket_execution_engine_running():
             return
-        engine = get_websocket_execution_engine()
+        # peek: an engine stopped since the check is not recreated for this.
+        engine = peek_websocket_execution_engine()
         if engine is not None:
             engine.notify_gtt_placed(gtt)
     except Exception as e:
@@ -1203,7 +1228,7 @@ def reclaim_stranded_legs() -> int:
         How many legs were reverted.
     """
     try:
-        cutoff = datetime.now() - timedelta(seconds=_claim_timeout_seconds())
+        cutoff = _now() - timedelta(seconds=_claim_timeout_seconds())
         result = db_session.execute(
             update(SandboxGTTLeg)
             .where(
@@ -1254,9 +1279,7 @@ def reclaim_stranded_parents() -> int:
     """
     recovered = 0
     try:
-        stranded = (
-            SandboxGTT.query.filter(SandboxGTT.gtt_status == "triggered").all()
-        )
+        stranded = SandboxGTT.query.filter(SandboxGTT.gtt_status == "triggered").all()
         for gtt in stranded:
             legs = gtt.legs or []
             if any(leg.triggered_order_id for leg in legs):
@@ -1393,7 +1416,7 @@ def expire_due_gtts() -> int:
         due = SandboxGTT.query.filter(
             SandboxGTT.gtt_status == "active",
             SandboxGTT.expires_at.isnot(None),
-            SandboxGTT.expires_at < datetime.now(),
+            SandboxGTT.expires_at < _now(),
         ).all()
         for gtt in due:
             released = Decimal(str(gtt.margin_blocked or 0))
@@ -1413,9 +1436,7 @@ def expire_due_gtts() -> int:
             )
             if claimed.rowcount != 1:
                 db_session.rollback()
-                logger.debug(
-                    f"GTT {gtt.gtt_id}: resolved by another path before it expired"
-                )
+                logger.debug(f"GTT {gtt.gtt_id}: resolved by another path before it expired")
                 continue
 
             db_session.execute(
@@ -1445,9 +1466,7 @@ def expire_due_gtts() -> int:
                 db_session.commit()
             except Exception:
                 db_session.rollback()
-                logger.exception(
-                    f"GTT {gtt.gtt_id}: expiry commit failed; nothing was applied"
-                )
+                logger.exception(f"GTT {gtt.gtt_id}: expiry commit failed; nothing was applied")
                 continue
 
             expired += 1

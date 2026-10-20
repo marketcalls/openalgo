@@ -32,7 +32,7 @@ Always read the current status before starting an automated test. Turning Analyz
 - MARKET orders can complete from current prices; LIMIT, SL, and SL-M orders can remain pending until their conditions are met.
 - The execution engine uses WebSocket prices when available and can fall back to polling.
 - Position book, holdings, funds, order book, trade book, status, modify, cancel, close, and P&L services read or update sandbox state where their analyzer branches exist.
-- Analyzer GTT place, modify, cancel, and order-book services currently return HTTP 501 and must not be presented as supported sandbox behavior.
+- GTT orders work in analyzer mode: place, modify, cancel and the GTT order book are served by the sandbox. A trigger fires against live LTP and places a sandbox order; the Orderbook page's GTT tab lists active triggers first, followed by triggered and cancelled history.
 
 Broker and exchange behavior is only approximated by the local managers. Broker-specific RMS checks, queue priority, slippage, partial fills, outages, and exchange microstructure can differ from Analyzer results.
 

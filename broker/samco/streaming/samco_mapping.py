@@ -4,13 +4,17 @@ import logging
 class SamcoExchangeMapper:
     """Maps OpenAlgo exchange codes to Samco-specific exchange types"""
 
-    # Exchange type mapping for Samco broker
+    # Exchange type mapping for Samco broker.
+    # Keys are broker exchange codes (brexchange), which is what the master
+    # contract stores and what the streaming symbol suffix must use - Samco
+    # streams MCX derivatives as "<scripCode>_MFO", not "_MCX".
     EXCHANGE_TYPES = {
         "NSE": "NSE",  # NSE Cash Market
         "NFO": "NFO",  # NSE Futures & Options
         "BSE": "BSE",  # BSE Cash Market
         "BFO": "BFO",  # BSE F&O
-        "MCX": "MCX",  # MCX
+        "MCX": "MCX",  # MCX Cash
+        "MFO": "MFO",  # MCX Futures & Options
         "CDS": "CDS",  # Currency derivatives
         "NSE_INDEX": "NSE",  # NSE Index
         "BSE_INDEX": "BSE",  # BSE Index
@@ -37,7 +41,7 @@ class SamcoCapabilityRegistry:
     """
 
     # Samco broker capabilities
-    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "MFO", "CDS"]
     subscription_modes = [1, 2, 3]  # 1: LTP, 2: Quote, 3: Snap Quote (Depth)
 
     # Depth support per exchange
@@ -47,6 +51,7 @@ class SamcoCapabilityRegistry:
         "NFO": [5],  # NFO supports 5 levels
         "BFO": [5],  # BFO supports 5 levels
         "MCX": [5],  # MCX supports 5 levels
+        "MFO": [5],  # MCX F&O supports 5 levels
         "CDS": [5],  # CDS supports 5 levels
     }
 

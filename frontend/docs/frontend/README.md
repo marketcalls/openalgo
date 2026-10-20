@@ -46,7 +46,7 @@ OpenAlgo frontend is a single-page application (SPA) that provides:
 
 - **Dashboard** - Real-time trading overview
 - **Order Management** - Orderbook, tradebook, positions
-- **Strategy Management** - Webhook strategies, Python strategies, Chartink
+- **Strategy Management** - Flow workflows, Python strategies, Chartink
 - **Platform Integration** - TradingView, GoCharting webhooks
 - **Admin Tools** - System configuration, monitoring, logs
 - **Responsive Design** - Mobile-first with bottom navigation

@@ -31,7 +31,12 @@ interface WorkflowState {
   setName: (name: string) => void
   setDescription: (description: string) => void
   resetWorkflow: () => void
-  markSaved: () => void
+  /**
+   * A cheap identity for the current graph, captured when a save is issued and
+   * handed back to markSaved when it resolves.
+   */
+  revision: () => string
+  markSaved: (revision?: string) => void
 
   // Actions - Nodes
   setNodes: (nodes: Node[]) => void
@@ -63,6 +68,19 @@ const initialState = {
   isModified: false,
 }
 
+/**
+ * Whether a batch of ReactFlow changes represents an actual edit.
+ *
+ * ReactFlow emits `dimensions` changes when it first measures a node, and
+ * `select` changes when one is merely clicked. Counting those as edits marked a
+ * freshly opened or imported graph dirty before the user touched anything --
+ * which matters now that Run Now and Activate save the canvas first, since it
+ * turned a read-only glance into a write.
+ */
+function isRealEdit(changes: Array<{ type: string }>): boolean {
+  return changes.some((change) => change.type !== 'dimensions' && change.type !== 'select')
+}
+
 export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
   ...initialState,
 
@@ -88,7 +106,23 @@ export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
 
   resetWorkflow: () => set(initialState),
 
-  markSaved: () => set({ isModified: false }),
+  revision: () => {
+    const { name, nodes, edges } = get()
+    return JSON.stringify([name, nodes, edges])
+  },
+
+  markSaved: (revision) => {
+    // Only clear the dirty flag when the graph still matches what was actually
+    // sent. The save PUTs the graph as it stood when it was issued; edits made
+    // while that request is in flight are not in it, and clearing the flag
+    // unconditionally left the canvas showing B, the server holding A, and the
+    // editor insisting there was nothing unsaved -- so Run Now and Activate
+    // then ran A.
+    if (revision !== undefined && revision !== get().revision()) {
+      return
+    }
+    set({ isModified: false })
+  },
 
   // =============================================================================
   // Node Actions
@@ -99,7 +133,7 @@ export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
   onNodesChange: (changes) => {
     set({
       nodes: applyNodeChanges(changes, get().nodes),
-      isModified: true,
+      isModified: get().isModified || isRealEdit(changes),
     })
   },
 
@@ -134,7 +168,7 @@ export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
   onEdgesChange: (changes) => {
     set({
       edges: applyEdgeChanges(changes, get().edges),
-      isModified: true,
+      isModified: get().isModified || isRealEdit(changes),
     })
   },
 

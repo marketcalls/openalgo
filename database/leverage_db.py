@@ -4,17 +4,17 @@
 
 import os
 
-from cachetools import TTLCache
 from sqlalchemy import Column, DateTime, Float, Integer, create_engine, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import MISSING, LockedTTLCache
 
 logger = get_logger(__name__)
 
-_leverage_cache = TTLCache(maxsize=1, ttl=3600)
+_leverage_cache = LockedTTLCache(maxsize=1, ttl=3600)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -57,13 +57,17 @@ def get_leverage():
     """Get the common leverage value (cached)."""
     cache_key = "leverage"
 
-    if cache_key in _leverage_cache:
-        return _leverage_cache[cache_key]
+    cached = _leverage_cache.get(cache_key, MISSING)
+    if cached is not MISSING:
+        return cached
+    # Read before the query, so a write that commits while this
+    # read is in flight keeps its invalidation (see LockedTTLCache).
+    generation = _leverage_cache.generation
 
     config = LeverageConfig.query.first()
     value = config.leverage if config else 0.0
 
-    _leverage_cache[cache_key] = value
+    _leverage_cache.fill(cache_key, value, generation)
     return value
 
 
@@ -85,5 +89,8 @@ def set_leverage(leverage):
         db_session.add(config)
     db_session.commit()
 
+    # Invalidate first, so a read that loaded the old value before this commit
+    # cannot store it over the new one, then write the new value through.
+    _leverage_cache.invalidate("leverage")
     _leverage_cache["leverage"] = leverage
     logger.info(f"Leverage set to {leverage}")
