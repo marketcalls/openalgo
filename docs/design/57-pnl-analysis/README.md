@@ -15,7 +15,7 @@ Brokers expose only today's tradebook, so history is kept by OpenAlgo itself.
   the way the intraday PnL Tracker derives its numbers.
 - Fills enter the ledger two ways:
   - **Capture** (opt-in): with `PNL_CAPTURE_ENABLED=true`, `services/pnl_capture_service.py`
-    stores the day's tradebook at 16:00 IST on trading days. Off by default.
+    stores the day's tradebook at 15:40 IST on trading days. Off by default.
   - **CSV import**: `POST /api/v1/pnl/import` backfills history from a Zerodha Console
     tradebook CSV or a Kotak transaction statement. Re-importing an overlapping file is a no-op.
 - The dedup key is date + exchange family + the broker's trade id (Zerodha re-uses trade ids

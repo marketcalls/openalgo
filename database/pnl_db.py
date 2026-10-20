@@ -276,7 +276,7 @@ class PnlCaptureRun(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD, IST trading date
-    status = Column(String(20), nullable=False)  # success, failed, partial
+    status = Column(String(20), nullable=False)  # success, failed, partial, skipped
     trades_fetched = Column(Integer, nullable=False, default=0)
     trades_new = Column(Integer, nullable=False, default=0)
     error = Column(Text, nullable=True)

@@ -217,7 +217,7 @@ export default function TradeBook() {
   // by default and fetchTrades starts on the ledger-backed
   // GET /api/v1/pnl/trades. Narrowing the range to today only switches back
   // to the existing live broker call, since today's trades aren't captured
-  // into the ledger until the 16:00 IST daily job runs.
+  // into the ledger until the 15:40 IST daily job runs.
   const [segment, setSegment] = useState<'all' | Segment>('all')
   const [symbolFilter, setSymbolFilter] = useState('')
   // Strategy is only ever present on historical (GET /pnl/trades) rows -

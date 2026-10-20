@@ -376,7 +376,7 @@ def get_pnl_trades(
     the selected date range isn't "today"; the live view keeps using the
     broker's own tradebook API via services/tradebook_service.py, since
     today's trades aren't in the ledger yet - the daily capture job runs
-    at 16:00 IST, after close).
+    at 15:40 IST, after close).
 
     Returns each row in the same shape frontend/src/types/trading.ts's
     Trade interface expects, so the existing Trade Book table needs no
