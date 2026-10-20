@@ -47,7 +47,7 @@ def transform_data(data, token):
     order after the first one from the same strategy into a silent duplicate.
     """
     return {
-        "transactionType": data["action"].upper(),          # BUY | SELL
+        "transactionType": data["action"].upper(),  # BUY | SELL
         "exchangeSegment": map_exchange_type(data["exchange"]),
         "productType": map_product_type(data.get("product", "MIS")),
         "orderType": map_order_type(data.get("pricetype", "MARKET")),

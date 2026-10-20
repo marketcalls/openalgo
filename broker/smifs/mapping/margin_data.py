@@ -1,7 +1,7 @@
 """Map OpenAlgo margin requests to SMIFS /v1/funds/margin/multi and back."""
-from database.token_db import get_token
 
 from broker.smifs.mapping.transform_data import map_exchange_type, map_product_type
+from database.token_db import get_token
 
 # SMIFS accepts between 1 and 20 legs in one multi-margin call.
 MAX_LEGS = 20

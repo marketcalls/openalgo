@@ -4,15 +4,17 @@ Uses POST /v1/funds/margin/multi, which estimates the margin of up to twenty
 legs together and reports the hedge benefit. The figures come from the
 platform's own model and are an estimate, not a broker margin statement.
 """
-from types import SimpleNamespace
 
-from utils.httpx_client import get_httpx_client
-from utils.logging import get_logger
+from types import SimpleNamespace
 
 from broker.smifs.api.baseurl import get_url
 from broker.smifs.mapping.margin_data import (
-    MAX_LEGS, parse_margin_response, transform_margin_positions,
+    MAX_LEGS,
+    parse_margin_response,
+    transform_margin_positions,
 )
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -26,8 +28,11 @@ def _ltp_lookup(auth):
 
     def lookup(segment, security_id):
         try:
-            r = client.post(get_url("/v1/marketfeed/ltp"), headers=_headers(auth),
-                            json={segment: [int(security_id)]})
+            r = client.post(
+                get_url("/v1/marketfeed/ltp"),
+                headers=_headers(auth),
+                json={segment: [int(security_id)]},
+            )
             if r.status_code != 200:
                 return 0
             row = (r.json().get("data", {}).get(segment, {}) or {}).get(str(security_id), {})
@@ -35,6 +40,7 @@ def _ltp_lookup(auth):
         except Exception as e:  # noqa: BLE001
             logger.warning(f"SMIFS LTP lookup for margin failed: {e}")
             return 0
+
     return lookup
 
 
@@ -50,19 +56,24 @@ def calculate_margin_api(positions, auth):
         message = "; ".join(skipped) or "no positions were given"
         return _reply(400), {"status": "error", "message": message}
     if len(scrips) > MAX_LEGS:
-        return _reply(400), {"status": "error",
-                             "message": f"SMIFS accepts at most {MAX_LEGS} legs in one margin call"}
+        return _reply(400), {
+            "status": "error",
+            "message": f"SMIFS accepts at most {MAX_LEGS} legs in one margin call",
+        }
     client = get_httpx_client()
-    r = client.post(get_url("/v1/funds/margin/multi"), headers=_headers(auth),
-                    json={"scrips": scrips})
+    r = client.post(
+        get_url("/v1/funds/margin/multi"), headers=_headers(auth), json={"scrips": scrips}
+    )
     try:
         body = r.json()
     except Exception:  # noqa: BLE001
         body = {}
     if r.status_code != 200:
         message = body.get("errorMessage") if isinstance(body, dict) else None
-        return _reply(r.status_code), {"status": "error",
-                                       "message": message or f"HTTP {r.status_code}"}
+        return _reply(r.status_code), {
+            "status": "error",
+            "message": message or f"HTTP {r.status_code}",
+        }
     result = parse_margin_response(body)
     if skipped:
         result["data"]["skipped_legs"] = skipped

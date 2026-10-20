@@ -4,15 +4,16 @@ Quotes and five-level depth come from POST /v1/marketfeed/quote, and history
 from POST /v1/charts/intraday (1, 5, 15 and 60 minute candles) and
 POST /v1/charts/historical (daily candles).
 """
+
 import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
-from utils.httpx_client import get_httpx_client
 
 from broker.smifs.api.baseurl import get_url
 from broker.smifs.mapping.transform_data import map_exchange_type
 from database.token_db import get_token
+from utils.httpx_client import get_httpx_client
 
 _COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "oi"]
 
@@ -89,8 +90,10 @@ class BrokerData:
         depth = rec.get("depth") or {}
 
         def levels(side):
-            rows = [{"price": lv.get("price", 0), "quantity": lv.get("quantity", 0)}
-                    for lv in (depth.get(side) or [])[:5]]
+            rows = [
+                {"price": lv.get("price", 0), "quantity": lv.get("quantity", 0)}
+                for lv in (depth.get(side) or [])[:5]
+            ]
             return rows + [{"price": 0, "quantity": 0}] * (5 - len(rows))
 
         return {
@@ -110,27 +113,38 @@ class BrokerData:
 
     def get_history(self, symbol, exchange, interval, start_date, end_date):
         if interval not in self.timeframe_map:
-            raise Exception(f"interval {interval} is not supported; use one of {list(self.timeframe_map)}")
+            raise Exception(
+                f"interval {interval} is not supported; use one of {list(self.timeframe_map)}"
+            )
         token, seg = self._instrument(symbol, exchange)
         daily = interval == "D"
         path = "/v1/charts/historical" if daily else "/v1/charts/intraday"
         span = _MAX_DAILY_SPAN if daily else _MAX_INTRADAY_SPAN
         frames = []
         for start, end in _windows(_as_date(start_date), _as_date(end_date), span):
-            body = {"securityId": token, "exchangeSegment": seg,
-                    "fromDate": start.isoformat(), "toDate": end.isoformat()}
+            body = {
+                "securityId": token,
+                "exchangeSegment": seg,
+                "fromDate": start.isoformat(),
+                "toDate": end.isoformat(),
+            }
             if not daily:
                 body["interval"] = int(self.timeframe_map[interval])
             payload = self._post(path, body)
-            frames.append(pd.DataFrame({
-                "timestamp": payload.get("timestamp", []),
-                "open": payload.get("open", []),
-                "high": payload.get("high", []),
-                "low": payload.get("low", []),
-                "close": payload.get("close", []),
-                "volume": payload.get("volume", []),
-                "oi": payload.get("openInterest", []),
-            }, columns=_COLUMNS))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "timestamp": payload.get("timestamp", []),
+                        "open": payload.get("open", []),
+                        "high": payload.get("high", []),
+                        "low": payload.get("low", []),
+                        "close": payload.get("close", []),
+                        "volume": payload.get("volume", []),
+                        "oi": payload.get("openInterest", []),
+                    },
+                    columns=_COLUMNS,
+                )
+            )
         df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=_COLUMNS)
         df = df.drop_duplicates(subset="timestamp")
         return df.sort_values("timestamp").reset_index(drop=True)

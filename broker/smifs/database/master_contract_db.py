@@ -18,15 +18,15 @@ The full master carries no lot size or tick size. The compact list does for
 the instruments the platform trades, so its values are merged in by security
 id; any other contract falls back to a lot size of 1 and a tick of 0.05.
 """
+
 import csv
 import io
 import re
 from datetime import date
 
+from broker.smifs.api.baseurl import get_url
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-
-from broker.smifs.api.baseurl import get_url
 
 logger = get_logger(__name__)
 
@@ -38,17 +38,30 @@ except Exception:  # noqa: BLE001 (importable standalone for review and tests)
 
 # SMIFS segment -> OpenAlgo exchange. IDX_I is split into NSE_INDEX and
 # BSE_INDEX per row in _index_exchange.
-_EXCH = {"NSE_EQ": "NSE", "NSE_FNO": "NFO", "NSE_CURRENCY": "CDS",
-         "BSE_EQ": "BSE", "BSE_FNO": "BFO", "BSE_CURRENCY": "BCD",
-         "MCX_COMM": "MCX", "IDX_I": "NSE_INDEX"}
+_EXCH = {
+    "NSE_EQ": "NSE",
+    "NSE_FNO": "NFO",
+    "NSE_CURRENCY": "CDS",
+    "BSE_EQ": "BSE",
+    "BSE_FNO": "BFO",
+    "BSE_CURRENCY": "BCD",
+    "MCX_COMM": "MCX",
+    "IDX_I": "NSE_INDEX",
+}
 
 SEGMENTS = list(_EXCH)
 
 # Exchange index names -> the short names OpenAlgo uses for the common ones.
 _INDEX_NAMES = {
-    "NIFTY 50": "NIFTY", "NIFTY BANK": "BANKNIFTY", "NIFTY FIN SERVICE": "FINNIFTY",
-    "NIFTY MID SELECT": "MIDCPNIFTY", "NIFTY NEXT 50": "NIFTYNXT50", "INDIA VIX": "INDIAVIX",
-    "SENSEX": "SENSEX", "BANKEX": "BANKEX", "SNSX50": "SENSEX50",
+    "NIFTY 50": "NIFTY",
+    "NIFTY BANK": "BANKNIFTY",
+    "NIFTY FIN SERVICE": "FINNIFTY",
+    "NIFTY MID SELECT": "MIDCPNIFTY",
+    "NIFTY NEXT 50": "NIFTYNXT50",
+    "INDIA VIX": "INDIAVIX",
+    "SENSEX": "SENSEX",
+    "BANKEX": "BANKEX",
+    "SNSX50": "SENSEX50",
 }
 _BSE_INDICES = {"SENSEX", "BANKEX", "SENSEX50", "BSE100", "SNXN30", "FOCIT", "FOCMID"}
 
@@ -68,8 +81,7 @@ _BSE_COPY_OFFSET = 100_000_000
 # Cash symbols repeat across series (EQ, BE, BL, ...). Keep the tradeable one.
 _SERIES_RANK = {"EQ": 0, "A": 0, "B": 1, "BE": 2, "BZ": 3, "SM": 4, "ST": 4}
 
-_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-           "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
 
 def _fetch(path):
@@ -115,7 +127,9 @@ def to_openalgo(row, bse_copies=None):
     """One master row (any of the three layouts) -> a symtoken dict, or None to skip."""
     seg = row.get("exchangeSegment") or row.get("exchange_segment")
     token = row.get("securityId") or row.get("security_id")
-    base = (row.get("symbol") or row.get("tradingSymbol") or row.get("trading_symbol") or "").strip()
+    base = (
+        row.get("symbol") or row.get("tradingSymbol") or row.get("trading_symbol") or ""
+    ).strip()
     if seg not in _EXCH or not token or not base:
         return None
     if seg == "NSE_FNO" and str(token).isdigit() and int(token) >= _BSE_COPY_OFFSET:
@@ -161,10 +175,14 @@ def to_openalgo(row, bse_copies=None):
         symbol = compact
         instrumenttype = "EQ"
     return {
-        "symbol": symbol, "brsymbol": base, "token": str(token),
-        "exchange": exchange, "brexchange": seg,
+        "symbol": symbol,
+        "brsymbol": base,
+        "token": str(token),
+        "exchange": exchange,
+        "brexchange": seg,
         "name": row.get("name") or base,
-        "expiry": expiry_text, "strike": strike,
+        "expiry": expiry_text,
+        "strike": strike,
         "lotsize": max(1, int(float(row.get("lotSize") or row.get("lot_size") or 1))),
         "tick_size": float(row.get("tickSize") or row.get("tick_size") or 0.05),
         "instrumenttype": instrumenttype,
@@ -239,8 +257,9 @@ def master_contract_download():
     db_session.commit()
     logger.info(f"SMIFS master contract loaded: {len(records)} symbols")
     if socketio:
-        socketio.emit("master_contract_download",
-                      {"status": "success", "message": "Successfully Downloaded"})
+        socketio.emit(
+            "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
+        )
     return {"status": "success", "count": len(records)}
 
 
@@ -248,4 +267,5 @@ def search_symbols(symbol, exchange):
     if SymToken is None:
         return []
     return SymToken.query.filter(
-        SymToken.symbol.like(f"%{symbol}%"), SymToken.exchange == exchange).all()
+        SymToken.symbol.like(f"%{symbol}%"), SymToken.exchange == exchange
+    ).all()

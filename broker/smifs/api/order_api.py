@@ -4,18 +4,22 @@ Every function receives the decrypted SMIFS access token as `auth` and puts
 it in the `access-token` header. Symbol/token translation uses OpenAlgo's
 shared master-contract helpers (get_token / get_symbol).
 """
+
 import json
 import time
 
-from utils.httpx_client import get_httpx_client
-from utils.logging import get_logger
-
 from broker.smifs.api.baseurl import get_url
 from broker.smifs.mapping.transform_data import (
-    transform_data, transform_modify_order_data, map_exchange, map_exchange_type,
-    map_product_type, reverse_map_product_type,
+    map_exchange,
+    map_exchange_type,
+    map_product_type,
+    reverse_map_product_type,
+    transform_data,
+    transform_modify_order_data,
 )
 from database.token_db import get_token
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -100,9 +104,11 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     segment = map_exchange_type(exchange)
     wanted_product = map_product_type(product)
     for p in _rows(get_positions(auth)):
-        if (str(p.get("securityId")) == token
-                and p.get("exchangeSegment") == segment
-                and p.get("productType") == wanted_product):
+        if (
+            str(p.get("securityId")) == token
+            and p.get("exchangeSegment") == segment
+            and p.get("productType") == wanted_product
+        ):
             return str(p.get("netQty", 0))
     return "0"
 
@@ -122,12 +128,24 @@ def _post_order(payload, auth):
 
 def place_order_api(data, auth):
     if data.get("exchange") in ("NSE_INDEX", "BSE_INDEX"):
-        return None, {"status": "error",
-                      "message": "an index cannot be traded; trade its futures or options instead"}, None
+        return (
+            None,
+            {
+                "status": "error",
+                "message": "an index cannot be traded; trade its futures or options instead",
+            },
+            None,
+        )
     token = get_token(data["symbol"], data["exchange"])
     if token is None:
-        return None, {"status": "error",
-                      "message": f"{data['symbol']} is not in the SMIFS master contract for {data['exchange']}"}, None
+        return (
+            None,
+            {
+                "status": "error",
+                "message": f"{data['symbol']} is not in the SMIFS master contract for {data['exchange']}",
+            },
+            None,
+        )
     return _post_order(transform_data(data, token), auth)
 
 
@@ -140,14 +158,18 @@ def place_smartorder_api(data, auth):
     """
     target = int(data.get("position_size", 0) or 0)
     quantity = int(data.get("quantity", 0) or 0)
-    current = int(get_open_position(data["symbol"], data["exchange"],
-                                    data.get("product", "MIS"), auth) or 0)
+    current = int(
+        get_open_position(data["symbol"], data["exchange"], data.get("product", "MIS"), auth) or 0
+    )
     if target == 0 and current == 0 and quantity != 0:
         return place_order_api(data, auth)
     delta = target - current
     if delta == 0:
-        message = ("No OpenPosition Found. Not placing Exit order." if quantity == 0
-                   else "No action needed. Position size matches current position")
+        message = (
+            "No OpenPosition Found. Not placing Exit order."
+            if quantity == 0
+            else "No action needed. Position size matches current position"
+        )
         return None, {"status": "success", "message": message}, None
     order = dict(data)
     order["action"] = "BUY" if delta > 0 else "SELL"

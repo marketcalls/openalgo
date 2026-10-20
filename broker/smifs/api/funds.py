@@ -1,7 +1,8 @@
 """SMIFS God Quant funds for OpenAlgo."""
+
+from broker.smifs.api.baseurl import get_url
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-from broker.smifs.api.baseurl import get_url
 
 logger = get_logger(__name__)
 
