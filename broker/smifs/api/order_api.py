@@ -8,7 +8,7 @@ shared master-contract helpers (get_token / get_symbol).
 import json
 import time
 
-from broker.smifs.api.baseurl import get_url
+from broker.smifs.api.baseurl import REQUEST_TIMEOUT, get_url
 from broker.smifs.mapping.transform_data import (
     map_exchange,
     map_exchange_type,
@@ -52,7 +52,7 @@ _MAX_WAIT_SEC = 2.0
 def _send(method, path, auth, payload=None):
     """One HTTP call to SMIFS, retried briefly when the rate limit answers 429."""
     client = get_httpx_client()
-    kwargs = {"headers": _headers(auth)}
+    kwargs = {"headers": _headers(auth), "timeout": REQUEST_TIMEOUT}
     if payload is not None:
         kwargs["content"] = json.dumps(payload)
     for attempt in range(_RETRIES_ON_429 + 1):
@@ -261,8 +261,18 @@ def close_all_positions(current_api_key, auth):
     contract (derivative symbols on the position record are not in OpenAlgo
     format).
     """
+    positions = get_positions(auth)
+    if not _position_book_ok(positions):
+        # The book could not be read, so the open positions are unknown.
+        # Reporting success here would claim a square-off that never happened.
+        message = positions.get("message") if isinstance(positions, dict) else None
+        return {
+            "status": "error",
+            "message": "could not read the position book, so nothing was squared off"
+            + (f": {message}" if message else ""),
+        }, 500
     failed = []
-    for p in _rows(get_positions(auth)):
+    for p in positions:
         net = int(p.get("netQty", 0) or 0)
         if net == 0:
             continue

@@ -252,9 +252,21 @@ def master_contract_download():
         return {"status": "error", "message": str(e)}
     if SymToken is None:
         return records  # review/standalone mode
-    db_session.query(SymToken).delete()
-    db_session.bulk_insert_mappings(SymToken, records)
-    db_session.commit()
+    try:
+        db_session.query(SymToken).delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+    except Exception as e:  # noqa: BLE001
+        # Roll back so the delete is undone and the previous symbols remain,
+        # rather than leaving an empty table or an open transaction behind.
+        db_session.rollback()
+        logger.error(f"SMIFS master contract could not be saved: {e}")
+        if socketio:
+            socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        return {"status": "error", "message": str(e)}
+    finally:
+        # Release the scoped session this background worker used.
+        db_session.remove()
     logger.info(f"SMIFS master contract loaded: {len(records)} symbols")
     if socketio:
         socketio.emit(
