@@ -5,144 +5,210 @@ it in the `access-token` header. Symbol/token translation uses OpenAlgo's
 shared master-contract helpers (get_token / get_symbol).
 """
 import json
+import time
 
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 from broker.smifs.api.baseurl import get_url
 from broker.smifs.mapping.transform_data import (
-    transform_data, transform_modify_order_data, map_exchange, reverse_map_product_type,
+    transform_data, transform_modify_order_data, map_exchange, map_exchange_type,
+    map_product_type, reverse_map_product_type,
 )
 from database.token_db import get_token
 
 logger = get_logger(__name__)
+
+# Order states from which SMIFS still accepts a cancel.
+_CANCELLABLE = ("TRANSIT", "PENDING", "PARTIALLY_FILLED")
 
 
 def _headers(auth):
     return {"access-token": auth, "Content-Type": "application/json"}
 
 
-def _get(path, auth):
+def _error(r, body):
+    """SMIFS errors carry errorCode/errorMessage; OpenAlgo expects status=error."""
+    message = body.get("errorMessage") if isinstance(body, dict) else None
+    code = body.get("errorCode") if isinstance(body, dict) else None
+    if message and code:
+        message = f"{code}: {message}"
+    return {"status": "error", "message": message or f"HTTP {r.status_code}"}
+
+
+# SMIFS answers 429 before it processes a call, so a retry can never place
+# an order twice. Demo tokens allow 5 order calls a second and registered
+# tokens 10, so a loop such as cancel-all or close-all can reach the limit.
+_RETRIES_ON_429 = 2
+_MAX_WAIT_SEC = 2.0
+
+
+def _send(method, path, auth, payload=None):
+    """One HTTP call to SMIFS, retried briefly when the rate limit answers 429."""
     client = get_httpx_client()
-    r = client.get(get_url(path), headers=_headers(auth))
-    r.status = r.status_code
+    kwargs = {"headers": _headers(auth)}
+    if payload is not None:
+        kwargs["content"] = json.dumps(payload)
+    for attempt in range(_RETRIES_ON_429 + 1):
+        r = client.request(method, get_url(path), **kwargs)
+        if r.status_code != 429 or attempt == _RETRIES_ON_429:
+            return r
+        try:
+            wait = float(r.headers.get("Retry-After", "1"))
+        except ValueError:
+            wait = 1.0
+        time.sleep(min(max(wait, 0.2), _MAX_WAIT_SEC))
+    return r
+
+
+def _get(path, auth):
+    """GET a list endpoint. Returns the list, or an OpenAlgo error dict."""
+    r = _send("GET", path, auth)
     try:
-        return r, r.json()
+        body = r.json()
     except Exception:  # noqa: BLE001
-        return r, {}
+        body = {}
+    if r.status_code != 200:
+        return _error(r, body)
+    return body
+
+
+def _rows(data):
+    """A list response, or an empty list when the call failed."""
+    return data if isinstance(data, list) else []
 
 
 def get_order_book(auth):
-    _, data = _get("/v1/orders", auth)
-    return data
+    return _get("/v1/orders", auth)
 
 
 def get_trade_book(auth):
-    _, data = _get("/v1/orders/trades", auth)
-    return data
+    return _get("/v1/trades", auth)
 
 
 def get_positions(auth):
-    _, data = _get("/v1/positions", auth)
-    return data
+    return _get("/v1/positions", auth)
 
 
 def get_holdings(auth):
-    _, data = _get("/v1/holdings", auth)
-    return data
+    return _get("/v1/holdings", auth)
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
-    token = get_token(tradingsymbol, exchange)
-    positions = get_positions(auth)
-    for p in (positions or []):
-        if str(p.get("securityId")) == str(token) and p.get("productType") == product:
-            return str(p.get("netQty", "0"))
+    """Net quantity of one position, as a string. `product` is OpenAlgo's code (CNC/MIS/NRML)."""
+    token = str(get_token(tradingsymbol, exchange))
+    segment = map_exchange_type(exchange)
+    wanted_product = map_product_type(product)
+    for p in _rows(get_positions(auth)):
+        if (str(p.get("securityId")) == token
+                and p.get("exchangeSegment") == segment
+                and p.get("productType") == wanted_product):
+            return str(p.get("netQty", 0))
     return "0"
 
 
-def place_order_api(data, auth):
-    token = get_token(data["symbol"], data["exchange"])
-    payload = transform_data(data, token)
-    client = get_httpx_client()
-    r = client.post(get_url("/v1/orders"), headers=_headers(auth), content=json.dumps(payload))
+def _post_order(payload, auth):
+    r = _send("POST", "/v1/orders", auth, payload)
     r.status = r.status_code
     try:
         response = r.json()
     except Exception:  # noqa: BLE001
         response = {}
-    orderid = response.get("orderId")
+    orderid = response.get("orderId") if r.status_code == 200 else None
+    if r.status_code != 200:
+        response = _error(r, response)
     return r, response, orderid
 
 
+def place_order_api(data, auth):
+    if data.get("exchange") in ("NSE_INDEX", "BSE_INDEX"):
+        return None, {"status": "error",
+                      "message": "an index cannot be traded; trade its futures or options instead"}, None
+    token = get_token(data["symbol"], data["exchange"])
+    if token is None:
+        return None, {"status": "error",
+                      "message": f"{data['symbol']} is not in the SMIFS master contract for {data['exchange']}"}, None
+    return _post_order(transform_data(data, token), auth)
+
+
 def place_smartorder_api(data, auth):
-    """Position-delta order: reduce to a target quantity, then place the difference."""
-    target = int(data.get("position_size", 0))
+    """Position-sizing order: move the net position to `position_size`.
+
+    Follows OpenAlgo's convention: when both the target and the current
+    position are zero, the request is a plain order for `quantity`; when the
+    position already matches, nothing is placed and `res` is None.
+    """
+    target = int(data.get("position_size", 0) or 0)
+    quantity = int(data.get("quantity", 0) or 0)
     current = int(get_open_position(data["symbol"], data["exchange"],
-                                    map_product_delta(data.get("product", "MIS")), auth) or 0)
+                                    data.get("product", "MIS"), auth) or 0)
+    if target == 0 and current == 0 and quantity != 0:
+        return place_order_api(data, auth)
     delta = target - current
     if delta == 0:
-        class _R:  # minimal shim so callers can read .status
-            status = 200
-        return _R(), {"status": "success", "message": "no change"}, None
+        message = ("No OpenPosition Found. Not placing Exit order." if quantity == 0
+                   else "No action needed. Position size matches current position")
+        return None, {"status": "success", "message": message}, None
     order = dict(data)
     order["action"] = "BUY" if delta > 0 else "SELL"
     order["quantity"] = abs(delta)
     return place_order_api(order, auth)
 
 
-def map_product_delta(product):
-    return {"CNC": "CNC", "MIS": "INTRADAY", "NRML": "MARGIN"}.get((product or "MIS").upper(), "INTRADAY")
-
-
 def modify_order(data, auth):
     payload = transform_modify_order_data(data)
     orderid = data["orderid"]
-    client = get_httpx_client()
-    r = client.put(get_url(f"/v1/orders/{orderid}"), headers=_headers(auth), content=json.dumps(payload))
+    r = _send("PUT", f"/v1/orders/{orderid}", auth, payload)
     if r.status_code == 200:
         return {"status": "success", "orderid": orderid}, 200
     return {"status": "error", "message": _msg(r)}, r.status_code
 
 
 def cancel_order(orderid, auth):
-    client = get_httpx_client()
-    r = client.delete(get_url(f"/v1/orders/{orderid}"), headers=_headers(auth))
+    r = _send("DELETE", f"/v1/orders/{orderid}", auth)
     if r.status_code == 200:
         return {"status": "success", "orderid": orderid}, 200
     return {"status": "error", "message": _msg(r)}, r.status_code
 
 
 def cancel_all_orders_api(data, auth):
-    orders = get_order_book(auth) or []
     canceled, failed = [], []
-    for o in orders:
-        status = str(o.get("orderStatus", "")).upper()
-        if status in ("TRANSIT", "PENDING", "PARTIALLY_FILLED"):
+    for o in _rows(get_order_book(auth)):
+        if str(o.get("orderStatus", "")).upper() in _CANCELLABLE:
             oid = o.get("orderId")
-            res, code = cancel_order(oid, auth)
+            _, code = cancel_order(oid, auth)
             (canceled if code == 200 else failed).append(oid)
     return canceled, failed
 
 
 def close_all_positions(current_api_key, auth):
-    positions = get_positions(auth) or []
-    for p in positions:
+    """Square off every open position in the product it is held in.
+
+    The order is built from the position's own securityId and segment, so it
+    does not depend on the trading symbol round-tripping through the master
+    contract (derivative symbols on the position record are not in OpenAlgo
+    format).
+    """
+    failed = []
+    for p in _rows(get_positions(auth)):
         net = int(p.get("netQty", 0) or 0)
         if net == 0:
             continue
         order = {
-            "symbol": p.get("tradingSymbol"),
-            "exchange": map_exchange(p.get("exchangeSegment")),
             "action": "SELL" if net > 0 else "BUY",
+            "exchange": map_exchange(p.get("exchangeSegment")),
             "quantity": abs(net),
             "pricetype": "MARKET",
             # close in the SAME product the position is held in, else an
             # intraday offset is placed while the real position stays open
             "product": reverse_map_product_type(p.get("productType")),
         }
-        place_order_api(order, auth)
-    return {"status": "success", "message": "positions squared off"}, 200
+        r, response, _ = _post_order(transform_data(order, p.get("securityId")), auth)
+        if r.status_code != 200:
+            failed.append(f"{p.get('tradingSymbol')}: {response.get('message')}")
+    if failed:
+        return {"status": "error", "message": "could not square off " + "; ".join(failed)}, 500
+    return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
 
 def _msg(r):
