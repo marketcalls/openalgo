@@ -7,7 +7,7 @@ platform's own model and are an estimate, not a broker margin statement.
 
 from types import SimpleNamespace
 
-from broker.smifs.api.baseurl import get_url
+from broker.smifs.api.baseurl import REQUEST_TIMEOUT, get_url
 from broker.smifs.mapping.margin_data import (
     MAX_LEGS,
     parse_margin_response,
@@ -32,6 +32,7 @@ def _ltp_lookup(auth):
                 get_url("/v1/marketfeed/ltp"),
                 headers=_headers(auth),
                 json={segment: [int(security_id)]},
+                timeout=REQUEST_TIMEOUT,
             )
             if r.status_code != 200:
                 return 0
@@ -62,7 +63,10 @@ def calculate_margin_api(positions, auth):
         }
     client = get_httpx_client()
     r = client.post(
-        get_url("/v1/funds/margin/multi"), headers=_headers(auth), json={"scrips": scrips}
+        get_url("/v1/funds/margin/multi"),
+        headers=_headers(auth),
+        json={"scrips": scrips},
+        timeout=REQUEST_TIMEOUT,
     )
     try:
         body = r.json()

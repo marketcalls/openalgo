@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
-from broker.smifs.api.baseurl import get_url
+from broker.smifs.api.baseurl import REQUEST_TIMEOUT, get_url
 from broker.smifs.mapping.transform_data import map_exchange_type
 from database.token_db import get_token
 from utils.httpx_client import get_httpx_client
@@ -34,7 +34,9 @@ class BrokerData:
         # call is processed, so waiting and retrying is always safe; this
         # matters when a long history range is fetched in several windows.
         for attempt in range(4):
-            r = client.post(get_url(path), headers=self._headers(), json=body)
+            r = client.post(
+                get_url(path), headers=self._headers(), json=body, timeout=REQUEST_TIMEOUT
+            )
             if r.status_code != 429 or attempt == 3:
                 break
             try:
