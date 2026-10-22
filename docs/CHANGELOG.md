@@ -8,6 +8,14 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Sandbox orders could occasionally fail to place with an error, and when
+  they did, the order's margin stayed blocked with no order to show for it.
+  Two orders on the same day could be given the same order id, more likely the
+  more orders an account placed that day. Every order now gets an id no other
+  order has. The id keeps its format, the date followed by eight digits.
+
 ### Dependencies
 
 Security updates. No behaviour change is expected. Two actions sit outside

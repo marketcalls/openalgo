@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -38,6 +39,15 @@ logger = get_logger(__name__)
 #: conditional UPDATEs on this set, as the engine's fill claim is, so a fill,
 #: a cancel and a modify can never all act on the same resting order.
 _PENDING_STATUSES = ("open", "trigger pending")
+
+# The last order id this process issued, as its IST day and eight-digit
+# sequence. Process-wide, not per OrderManager: every request builds its own
+# manager, and the id has to be unique across all of them. The lock covers
+# only this bookkeeping; like the other sandbox locks it is green under
+# eventlet, where real threads reach sandbox code through run_on_hub.
+_order_id_lock = threading.Lock()
+_last_order_day = None
+_last_order_seq = -1
 
 
 def _order_position(manager, order_data, *args, **kwargs):
@@ -1444,26 +1454,43 @@ class OrderManager:
 
     def _generate_order_id(self):
         """
-        Generate unique order ID in format: YYMMDD + 8-digit unique sequence
-        Example: 25100112345678 (Year 2025, Oct 1st, unique sequence)
+        Generate unique order ID in format: YYMMDD + 8-digit sequence
+        Example: 26101250400000 (Year 2026, Oct 12th, 14:00:00.000 IST)
 
-        Uses microsecond timestamp + random component to avoid race conditions
-        when multiple orders are placed in parallel.
+        The sequence is the millisecond of the IST day (at most 86,399,999, so
+        it fits in eight digits), raised to one past the last id this process
+        issued, so two orders in the same millisecond still differ. An id
+        already stored is skipped, which covers a restart and the random ids
+        the previous scheme issued earlier the same day.
+
+        The previous scheme combined the microsecond field with a random number
+        from 0 to 99. The hour, minute and second never reached the id, so every
+        order on a day drew from the same hundred million values, and a clash
+        failed the insert after the order's margin was already blocked.
         """
-        import random
+        global _last_order_day, _last_order_seq
 
         now = datetime.now(pytz.timezone("Asia/Kolkata"))
         date_prefix = now.strftime("%y%m%d")  # YYMMDD format
+        ms_of_day = (
+            now.hour * 3600 + now.minute * 60 + now.second
+        ) * 1000 + now.microsecond // 1000
 
-        # Use microseconds (0-999999) + random (0-99) for 8-digit unique sequence
-        # This avoids race conditions when parallel orders query count simultaneously
-        micro = now.microsecond
-        rand_suffix = random.randint(0, 99)
+        while True:
+            with _order_id_lock:
+                if _last_order_day != date_prefix:
+                    _last_order_day = date_prefix
+                    _last_order_seq = -1
+                _last_order_seq = max(ms_of_day, _last_order_seq + 1)
+                orderid = f"{date_prefix}{_last_order_seq:08d}"
 
-        # Combine: first 6 digits from microseconds, last 2 from random
-        sequence = f"{micro:06d}{rand_suffix:02d}"
-
-        return f"{date_prefix}{sequence}"
+            # Outside the lock: no other thread can be handed this id, and the
+            # lookup is the only I/O. The orderid column is uniquely indexed.
+            taken = (
+                db_session.query(SandboxOrders.id).filter(SandboxOrders.orderid == orderid).first()
+            )
+            if taken is None:
+                return orderid
 
     def _calculate_order_statistics(self, orders):
         """Calculate order statistics matching broker API format"""
