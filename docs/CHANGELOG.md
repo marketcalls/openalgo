@@ -10,9 +10,38 @@ fix, live in [docs/releases](releases/).
 
 ### Dependencies
 
-Security updates. Nothing to do beyond the usual update; no behaviour change
-is expected.
+Security updates. No behaviour change is expected. Two actions sit outside
+OpenAlgo itself: install your operating system's certificate update when it is
+published, and if you build the frontend yourself, use a patched Node.js. Both
+are explained below.
 
+- `certifi` 2026.7.22 to 2026.10.19 (GHSA-6q48-6c7w-9gw2, critical). Several
+  eMudhra intermediate certificates were created with private keys that can be
+  recovered, so whoever recovers one could issue a certificate that passes for
+  any website. The new bundle removes `emSign ECC Root CA - G3`, the root that
+  signed them; the other emSign roots stay trusted. Every broker and service
+  address named in OpenAlgo's code was tested against the new bundle before
+  this change, and none stopped working. Nubra uses a different emSign root
+  (G1), which remains trusted.
+- Broker live-data feeds connect through the operating system's certificate
+  store, not certifi, so they are covered by your operating system's own
+  `ca-certificates` update rather than by this release. Install it when it is
+  published (on Ubuntu: `sudo apt update && sudo apt upgrade`). Docker images
+  include it from the first build after it is published.
+- `Pillow` 12.3.0 to 13.0.0 (28 advisories, three critical, including heap
+  overflows in JPEG and TIFF decoding and argument injection into
+  Ghostscript). OpenAlgo's own code does not open images with Pillow; it draws
+  the TOTP QR code at account setup, which was tested on 13.0.0. Pillow 13 is
+  a major release, and nothing it removed is used here. The optional
+  `analysis` group moves to `streamlit` 1.66.1, the first release that accepts
+  Pillow 13.
+- Node.js for frontend builds: 22.23.4 or later on 22, 24.22.1 or later on 24,
+  or 26.12.1 or later, from the October 21 security release (ten advisories,
+  including remote code execution in the Brotli decoder). Node 20 is end of
+  life and gets no fix, so it is dropped from CI and from `engines`, and npm
+  now warns on an unpatched version. Installed servers do not run Node.js: the
+  frontend arrives prebuilt, and the Docker image uses Node only to build the
+  frontend, on 22.23.4.
 - `aiohttp` 3.14.3 to 3.14.5, which also moves `yarl` to 1.25.1. The update
   closes seven advisories: request smuggling, scheme spoofing, a missing
   header timeout and unbounded memory and CPU use on the server side, and
