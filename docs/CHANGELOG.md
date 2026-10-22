@@ -15,6 +15,11 @@ fix, live in [docs/releases](releases/).
   Two orders on the same day could be given the same order id, more likely the
   more orders an account placed that day. Every order now gets an id no other
   order has. The id keeps its format, the date followed by eight digits.
+- A sandbox order that failed to place for any other reason could also leave
+  its margin blocked, because the margin was taken before the order was
+  saved. The margin is now taken together with the order: either both are
+  recorded or neither is, so a failed order never reduces your available
+  funds.
 
 ### Dependencies
 

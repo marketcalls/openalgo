@@ -584,11 +584,17 @@ class OrderManager:
                             400,
                         )
 
-                    # Block margin
-                    success, block_msg = self.fund_manager.block_margin(
+                    # Staged, not committed: the margin lands in the order's own
+                    # commit below, or not at all. block_margin committed here,
+                    # so anything failing before the order row was written (an
+                    # id clash on the insert, a database error) was rolled back
+                    # by the handler while the margin stayed blocked, with no
+                    # order to release it. The GTT paths stage the same way.
+                    success, block_msg = self.fund_manager.stage_margin_delta(
                         actual_margin_to_block, f"Order: {symbol} {action} {quantity}"
                     )
                     if not success:
+                        db_session.rollback()
                         return (
                             False,
                             {"status": "error", "message": block_msg, "mode": "analyze"},
