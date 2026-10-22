@@ -6,6 +6,33 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Dependencies
+
+Security updates. Nothing to do beyond the usual update; no behaviour change
+is expected.
+
+- `aiohttp` 3.14.3 to 3.14.5, which also moves `yarl` to 1.25.1. The update
+  closes seven advisories: request smuggling, scheme spoofing, a missing
+  header timeout and unbounded memory and CPU use on the server side, and
+  three in cookie handling on the client side.
+  OpenAlgo does not import aiohttp itself; it is used only by the Agent,
+  through LiteLLM, when it calls an AI provider. It is now pinned in the
+  requirements files, so an existing install upgrades it on its next update
+  instead of keeping the old version.
+- `follow-redirects` 1.16.0 to 1.16.1 in the frontend lockfile: credential
+  headers could survive a redirect to another site. It is not part of the
+  built frontend, because browsers follow redirects themselves.
+- Frontend development tools: `vite` 8.0.16 to 8.1.6, for three advisories in
+  the development server's open-in-editor feature, and `vitest` 4.1.11 to
+  4.1.12, for two advisories in its mock handling. The 8.0 line has no patched
+  release. Both run only when a developer builds or tests the frontend, never
+  on an installed server.
+- **Not fixed:** `braces`, used only by the frontend test tools, still has no
+  patched release for GHSA-vfj7-8cjw-p6xm. It never reaches a browser or the
+  server.
+
 ## [2.0.2.9] - 2026-10-17
 
 ### Custom Intervals and Independent Indicator History Release
