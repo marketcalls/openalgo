@@ -254,6 +254,69 @@ describe('SymbolSearchDialog', () => {
 })
 
 /**
+ * Derivative contracts list nearest expiry first within one underlying (#1754).
+ *
+ * The rows arrive in the order the old tie-break produced: alphabetical on the
+ * day digits, so 23NOV26 came before 27OCT26 and 29SEP26.
+ */
+describe('derivative expiry ordering', () => {
+  const CONTRACTS: SearchRow[] = [
+    { symbol: 'MIDCPNIFTY29SEP26FUT', exchange: 'NFO', name: 'MIDCPNIFTY' },
+    { symbol: 'NIFTY23NOV26FUT', exchange: 'NFO', name: 'NIFTY' },
+    { symbol: 'BANKNIFTY27OCT26FUT', exchange: 'NFO', name: 'BANKNIFTY' },
+    { symbol: 'NIFTY27OCT26FUT', exchange: 'NFO', name: 'NIFTY' },
+    { symbol: 'FINNIFTY29SEP26FUT', exchange: 'NFO', name: 'FINNIFTY' },
+    { symbol: 'BANKNIFTY29SEP26FUT', exchange: 'NFO', name: 'BANKNIFTY' },
+    { symbol: 'NIFTY29SEP26FUT', exchange: 'NFO', name: 'NIFTY' },
+  ]
+
+  beforeEach(() => {
+    useBrokerStore.setState({
+      capabilities: {
+        broker_name: 'test',
+        broker_type: 'IN_stock',
+        supported_exchanges: ['NSE', 'NFO'],
+        leverage_config: false,
+      },
+      isLoaded: true,
+    })
+  })
+
+  async function resultsFor(query: string) {
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async () => CONTRACTS}
+        onPick={() => {}}
+      />
+    )
+    await userEvent.type(await focusedBox(), query)
+    await waitFor(() => expect(screen.getByText('MIDCPNIFTY29SEP26FUT')).toBeInTheDocument())
+    return Array.from(document.body.querySelectorAll('button[data-idx]')).map(
+      (btn) => btn.querySelector('span:first-child')?.textContent
+    )
+  }
+
+  it('lists the nearest expiry first within one underlying', async () => {
+    const symbols = await resultsFor('NIFTY')
+    expect(symbols.slice(0, 3)).toEqual(['NIFTY29SEP26FUT', 'NIFTY27OCT26FUT', 'NIFTY23NOV26FUT'])
+  })
+
+  it('keeps each underlying together on a broad search such as NIFTY FUT', async () => {
+    expect(await resultsFor('NIFTY FUT')).toEqual([
+      'NIFTY29SEP26FUT',
+      'NIFTY27OCT26FUT',
+      'NIFTY23NOV26FUT',
+      'FINNIFTY29SEP26FUT',
+      'BANKNIFTY29SEP26FUT',
+      'BANKNIFTY27OCT26FUT',
+      'MIDCPNIFTY29SEP26FUT',
+    ])
+  })
+})
+
+/**
  * A hyphen is both an operator and a character instruments are named with.
  *
  * The box splits on operators so that a half-typed expression can still look up
