@@ -17,6 +17,8 @@ dependencies = [
   "bidict==0.24.1",
   "blinker==1.9.0",
   "cachetools==7.1.7",
+  # Not below 2026.10.19: older bundles still trust the emSign ECC Root CA - G3,
+  # removed after a CA key beneath it was compromised (GHSA-6q48-6c7w-9gw2).
   "certifi==2026.10.19",
   "cffi==2.1.1",
   "charset-normalizer==3.5.1",
@@ -101,6 +103,8 @@ dependencies = [
   "fastparquet==2025.12.0",
   "parso==0.8.7",
   "pexpect==4.9.0",
+  # Not below 13.0.0: 12.3.0, the previous pin, is affected by 28 advisories
+  # (three critical) that only 13.0.0 fixes.
   "pillow>=13.0.0",
   "platformdirs==4.11.5",
   "plotly==6.8.0",
