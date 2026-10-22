@@ -146,7 +146,7 @@ exposure.
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 
-Strategy risk: `overall_sl_hit`, `overall_target_hit`, `lock_profit_armed`, `lock_profit_floor_advanced`, `lock_profit_triggered`, `trail_to_entry_activated`, `eod_squareoff`, `expiry_squareoff`
+Strategy risk: `overall_sl_hit`, `overall_target_hit`, `lock_profit_armed`, `lock_profit_floor_advanced`, `lock_profit_triggered`, `trail_to_entry_activated`, `sl_moved_to_cost`, `eod_squareoff`, `expiry_squareoff`
 
 For a synchronous combined-target exit, lifecycle order is meaningful:
 `overall_target_hit` records the marked breach, every accepted

@@ -1130,6 +1130,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
     editing?.overall_target_mtm != null ? String(editing.overall_target_mtm) : ''
   )
   const [trailToEntry, setTrailToEntry] = useState(editing?.trail_sl_to_entry ?? false)
+  const [moveSlToCost, setMoveSlToCost] = useState(editing?.move_sl_to_cost ?? false)
   const [lockEnabled, setLockEnabled] = useState(editing?.lock_profit != null)
   const [lockMode, setLockMode] = useState<LockProfitMode>(editing?.lock_profit?.mode ?? 'lock')
   const [lockProfitReaches, setLockProfitReaches] = useState(
@@ -1419,6 +1420,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       overall_sl_mtm: overallSl ? Number(overallSl) : null,
       overall_target_mtm: overallTarget ? Number(overallTarget) : null,
       trail_sl_to_entry: trailToEntry,
+      move_sl_to_cost: moveSlToCost,
       daily_loss_limit_inr: dailyLossLimit ? Number(dailyLossLimit) : null,
       lock_profit: lockEnabled
         ? {
@@ -1766,6 +1768,23 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
               />
             )
           )}
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={moveSlToCost}
+              disabled={trailToEntry}
+              onChange={(event) => setMoveSlToCost(event.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium">Move SL to Cost</span>
+              <span className="ml-2 text-xs text-muted-foreground">
+                When a CE or PE leg's SL fires, open legs of the opposite side move their SL to
+                their entry.
+              </span>
+            </span>
+          </label>
         </CardContent>
       </Card>
 
@@ -1893,6 +1912,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
             <input
               type="checkbox"
               checked={trailToEntry}
+              disabled={moveSlToCost}
               onChange={(event) => setTrailToEntry(event.target.checked)}
               className="mt-0.5"
             />

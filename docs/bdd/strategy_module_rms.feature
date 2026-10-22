@@ -146,7 +146,7 @@ Feature: Strategy module and risk management
     Then the adapter translates both levels into the shared risk types
     And the shared position and aggregate evaluators make the decisions
 
-  # Source: test/test_strategy_module_qa_edges.py:812, frontend/src/pages/strategy/Detail.test.tsx:524
+  # Source: test/test_strategy_module_qa_edges.py:812, frontend/src/pages/strategy/Detail.test.tsx:525
   Scenario: An overall target preserves trigger, execution and terminal truth
     Given a multi-leg basket is marked from rolling latest-known one-symbol ticks
     And those marks reach its overall target without promising a simultaneous snapshot
@@ -228,21 +228,21 @@ Feature: Strategy module and risk management
     Then a live run reads the broker and a sandbox run reads sandbox
     And account rows are narrowed to the strategy's durable orders or contracts
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:364
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:365
   Scenario: No run means broker truth was not requested
     Given a strategy has no current or historical run
     When an operator opens a broker-backed tab
     Then no broker request is made
     And the page labels recorded rows as strategy audit rather than broker-empty truth
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:165
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:166
   Scenario: Broker numerics preserve zero and expose unavailable values
     Given a broker row contains zero, missing, malformed and non-finite numerics
     When the Detail page normalizes it
     Then real zero remains zero
     And every unusable quantity, price and P&L value renders unavailable
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:133
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:1086, frontend/src/pages/strategy/strategy_module.test.ts:133
   Scenario: Broker order and trade truth keeps local reconciliation context
     Given broker rows and recorded strategy orders can match, differ or be ambiguous
     When the page reconciles them by broker order id
@@ -250,7 +250,7 @@ Feature: Strategy module and risk management
     And multiple trade fills aggregate quantity and weighted price before comparison
     And local-only, ambiguous, mismatch and rejection context remain visible
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:412, test/test_strategy_module_views.py:441
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:788, frontend/src/pages/strategy/Detail.test.tsx:876, frontend/src/pages/strategy/strategy_module.test.ts:412, test/test_strategy_module_views.py:441
   Scenario: Position fallback preserves exposure without inventing valuation
     Given local audit has explicit positive fills in working or terminal statuses
     When the broker positionbook is unavailable
