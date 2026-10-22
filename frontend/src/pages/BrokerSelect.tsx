@@ -46,6 +46,7 @@ const allBrokers = [
   { id: 'rmoney', name: 'RMoney', authType: 'oauth' },
   { id: 'rupeezy', name: 'Rupeezy', authType: 'oauth' },
   { id: 'samco', name: 'Samco', authType: 'totp' },
+  { id: 'smifs', name: 'SMIFS God Quant', authType: 'totp' },
   { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
   { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
   { id: 'tradesmart', name: 'TradeSmart', authType: 'oauth' },
@@ -153,6 +154,7 @@ export default function BrokerSelect() {
       case 'kotak':
       case 'rmoney':
       case 'shoonya':
+      case 'smifs':
       case 'tradejini':
       case 'tradesmart':
       case 'wisdom':

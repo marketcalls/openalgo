@@ -523,6 +523,7 @@ sudo rm -rf /var/lib/docker
 | Rupeezy | `rupeezy` | No |
 | Samco | `samco` | No |
 | Shoonya | `shoonya` | No |
+| SMIFS God Quant | `smifs` | No |
 | Tradejini | `tradejini` | No |
 | TradeSmart | `tradesmart` | No |
 | Upstox | `upstox` | No |
