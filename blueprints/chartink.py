@@ -90,6 +90,7 @@ smart_order_queue = queue.Queue()  # For placesmartorder (1/sec)
 # Order processor state
 order_processor_running = False
 order_processor_lock = threading.Lock()
+_order_processor_thread = None
 
 # Rate limiting state for regular orders
 last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
@@ -225,13 +226,16 @@ def process_orders():
 
 def ensure_order_processor():
     """Ensure order processor is running"""
-    global order_processor_running
+    global order_processor_running, _order_processor_thread
 
     with order_processor_lock:
-        if not order_processor_running:
+        # The flag is only cleared on a normal exit, so a thread that died any
+        # other way would leave it set and every later order unprocessed.
+        thread = _order_processor_thread
+        if not order_processor_running or thread is None or not thread.is_alive():
             order_processor_running = True
-            thread = threading.Thread(target=process_orders, daemon=True)
-            thread.start()
+            _order_processor_thread = threading.Thread(target=process_orders, daemon=True)
+            _order_processor_thread.start()
 
 
 def queue_order(endpoint, payload):
