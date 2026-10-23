@@ -288,6 +288,13 @@ export function useLivePrice<T extends PriceableItem>(
         // Total P&L = today's realized (from partial closes) + current unrealized
         calculatedPnl = todayRealizedPnl + unrealizedPnl
 
+        // Brokers report total P&L without splitting out the realized part of a
+        // partial exit, so move their figure by the LTP change instead (#1631).
+        const snapshotLtp = Number(item.ltp) || 0
+        if (item.today_realized_pnl === undefined && item.pnl != null && snapshotLtp > 0) {
+          calculatedPnl = Number(item.pnl) + (currentLtp - snapshotLtp) * qty * lotSize
+        }
+
         // P&L% based on total P&L and investment
         const investment = Math.abs(avgPrice * qty)
         calculatedPnlPercent = investment > 0 ? (calculatedPnl / investment) * 100 : 0
