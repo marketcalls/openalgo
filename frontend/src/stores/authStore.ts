@@ -16,6 +16,7 @@ interface AuthStore {
 
   setUser: (user: User) => void
   setApiKey: (apiKey: string | null) => void
+  syncApiKey: () => Promise<void>
   login: (username: string, broker: string) => void
   logout: () => void
   checkSession: () => boolean
@@ -31,6 +32,21 @@ export const useAuthStore = create<AuthStore>()(
       setUser: (user) => set({ user, isAuthenticated: user.isLoggedIn }),
 
       setApiKey: (apiKey) => set({ apiKey }),
+
+      // AuthSync reads the key once, on page load. A broker login made inside
+      // the SPA (TOTP brokers, Samco) lands on the dashboard without a reload,
+      // so it re-reads the key here; otherwise every screen that trades with
+      // the store's key is left holding none until the page is refreshed.
+      syncApiKey: async () => {
+        try {
+          const response = await fetch('/auth/session-status', { credentials: 'include' })
+          if (!response.ok) return
+          const data = await response.json()
+          if (data.api_key) set({ apiKey: data.api_key })
+        } catch {
+          // Keep the current key; AuthSync reads it again on the next load.
+        }
+      },
 
       login: (username, broker) => {
         const user: User = {

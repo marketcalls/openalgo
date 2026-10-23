@@ -31,7 +31,7 @@ interface IpStatus {
 
 export default function SamcoAuth() {
   const navigate = useNavigate()
-  const { login } = useAuthStore()
+  const { login, syncApiKey } = useAuthStore()
 
   const [isConnecting, setIsConnecting] = useState(false)
   const [isCheckingIp, setIsCheckingIp] = useState(false)
@@ -59,6 +59,7 @@ export default function SamcoAuth() {
 
       if (data.status === 'success') {
         login('', 'samco')
+        await syncApiKey()
         setConnected(true)
         showToast.success('Connected to Samco')
         await checkIpStatus()
