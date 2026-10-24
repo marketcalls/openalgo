@@ -50,6 +50,7 @@ import { prefillComposer } from '@/lib/agent/composer'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { useAgentStream } from '@/lib/agent/useAgentStream'
 import { useModelChoice } from '@/lib/agent/useModelChoice'
+import { useRestoredConversation } from '@/lib/agent/useRestoredConversation'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
 import type { ChartContext } from '@/lib/trading/chartContract'
 import { cn } from '@/lib/utils'
@@ -125,16 +126,26 @@ export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: 
   })
   const tradingEnabled = settings.data?.data.trading_enabled ?? false
 
-  const { messages, running, error, send, stop, confirm, reset } = useAgentStream({
-    surface: 'chart',
-    modelId,
-    reasoningEffort: effort === 'off' ? null : effort,
-    // Asking is not the same as getting: the backend ANDs this with the
-    // operator's own trading setting, and every order tool pauses the run for
-    // the approval card below before anything reaches the broker.
-    tradingEnabled,
-    getChartContext,
-    onChartCommand,
+  const { messages, running, error, conversationId, send, stop, confirm, reset, setConversation } =
+    useAgentStream({
+      surface: 'chart',
+      modelId,
+      reasoningEffort: effort === 'off' ? null : effort,
+      // Asking is not the same as getting: the backend ANDs this with the
+      // operator's own trading setting, and every order tool pauses the run for
+      // the approval card below before anything reaches the broker.
+      tradingEnabled,
+      getChartContext,
+      onChartCommand,
+    })
+
+  // A refresh reopens the panel's thread. Its own key: the /agent page keeps
+  // a separate one, so neither surface reopens the other's conversation.
+  useRestoredConversation({
+    storageKey: 'oa-trading-agent-active-conversation',
+    conversationId,
+    messages,
+    setConversation,
   })
 
   usePinNewestQuestion(threadRef, messages)
