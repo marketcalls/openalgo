@@ -1,11 +1,13 @@
 import os
 import secrets
 from pathlib import Path
+from functools import wraps
 
 from argon2 import PasswordHasher
 from flask import (
     Blueprint,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -42,8 +44,22 @@ def generate_api_key():
     return secrets.token_hex(32)
 
 
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses."""
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = make_response(f(*args, **kwargs))
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
+
+
 @api_key_bp.route("/apikey", methods=["GET", "POST"])
 @check_session_validity
+@no_store_headers
 def manage_api_key():
     if request.method == "GET":
         login_username = session["user"]
@@ -102,6 +118,7 @@ def manage_api_key():
 
 @api_key_bp.route("/apikey/mode", methods=["POST"])
 @check_session_validity
+@no_store_headers
 def update_api_key_mode():
     """Update order mode (auto/semi_auto) for a user"""
     try:
