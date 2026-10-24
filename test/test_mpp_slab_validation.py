@@ -1,6 +1,10 @@
 import pytest
 
-from utils.mpp_slab import calculate_protected_price, get_mpp_percentage
+from utils.mpp_slab import (
+    calculate_protected_price,
+    get_instrument_type_from_symbol,
+    get_mpp_percentage,
+)
 
 
 class TestGetMppPercentageSlabs:
@@ -26,6 +30,20 @@ class TestGetMppPercentageSlabs:
     )
     def test_boundary_slabs_unchanged(self, price, instrument_type, expected):
         assert get_mpp_percentage(price, instrument_type) == expected
+
+
+@pytest.mark.parametrize(
+    "symbol, expected",
+    [
+        ("RELIANCE", "EQ"),
+        ("BAJFINANCE", "EQ"),
+        ("NIFTY28MAR2420800CE", "CE"),
+        ("USDINR19APR2482.5PE", "PE"),
+        ("NIFTY28MAR24FUT", "FUT"),
+    ],
+)
+def test_instrument_type_from_symbol(symbol, expected):
+    assert get_instrument_type_from_symbol(symbol) == expected
 
 
 class TestGetMppPercentageValidation:
