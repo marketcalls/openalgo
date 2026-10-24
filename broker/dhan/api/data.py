@@ -157,6 +157,11 @@ def get_api_response(endpoint, auth, method="POST", payload="", retry_count=0):
     return response
 
 
+#: Largest number of instruments Dhan quotes in one upstream request. Shared
+#: services read this to decide whether a combined request is a single call.
+SINGLE_REQUEST_MULTIQUOTE_LIMIT = 1000
+
+
 class BrokerData:
     def __init__(self, auth_token):
         """Initialize Dhan data handler with authentication token"""
@@ -870,7 +875,7 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 1000  # Dhan API supports up to 1000 per request
+            BATCH_SIZE = SINGLE_REQUEST_MULTIQUOTE_LIMIT
             RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 1000 symbols/sec
 
             # If symbols exceed batch size, process in batches
