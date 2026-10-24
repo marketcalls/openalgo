@@ -242,10 +242,12 @@ filterwarnings = [
 analysis = [
     "dash>=4.4.1",
     "dash-bootstrap-components>=2.0.4",
-    # Pulled in transitively via streamlit; pinned here to satisfy Dependabot's
-    # advisories on the lockfile (GitPython <=3.1.58 -> >=3.1.59). Nothing in the
-    # main dependency list uses it, so this never reaches a production install.
-    "gitpython>=3.1.59",
+    # Added to floor the copy streamlit pulled in; streamlit dropped it in 1.61.0
+    # and now runs the git CLI, so nothing here requires it any more. The floor
+    # tracks the GitPython advisories (<=3.2.0 -> >=3.2.1, GHSA-83vg-56qc-22m7).
+    # Nothing in the main dependency list uses it, so this never reaches a
+    # production install.
+    "gitpython>=3.2.1",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.11.1",
     "scipy>=1.18.0",

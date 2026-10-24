@@ -71,6 +71,10 @@ are explained below.
   4.1.12, for two advisories in its mock handling. The 8.0 line has no patched
   release. Both run only when a developer builds or tests the frontend, never
   on an installed server.
+- `GitPython` 3.1.62 to 3.2.1 in the optional `analysis` group
+  (GHSA-83vg-56qc-22m7, high): creating a submodule could plant a git hook,
+  which then runs code on the next checkout. OpenAlgo never uses GitPython
+  itself, and it is not part of a server install.
 - **Not fixed:** `braces`, used only by the frontend test tools, still has no
   patched release for GHSA-vfj7-8cjw-p6xm. It never reaches a browser or the
   server.
