@@ -48,6 +48,8 @@ def transform_modify_order_data(data, token):
         "exchange": data["exchange"],
         "disclosedquantity": data.get("disclosed_quantity", "0"),
         "stoploss": data.get("trigger_price", "0"),
+        # Angel reads an SL/SL-M order's trigger from triggerprice; stoploss alone leaves the trigger unchanged.
+        "triggerprice": data.get("trigger_price", "0"),
     }
 
 
