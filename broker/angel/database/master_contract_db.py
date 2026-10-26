@@ -385,6 +385,10 @@ def process_angel_json(path):
     df.loc[df["instrumenttype"] == "FUTIRC", "instrumenttype"] = "FUT"
     df.loc[df["instrumenttype"] == "FUTIRT", "instrumenttype"] = "FUT"
 
+    # Indices are typed EQ, as Kite types its INDICES segment; the *_INDEX
+    # exchange is what says the row is an index (QA MC-04).
+    df.loc[df["exchange"].isin(["NSE_INDEX", "BSE_INDEX", "MCX_INDEX"]), "instrumenttype"] = "EQ"
+
     # Return the processed DataFrame
     return df
 
