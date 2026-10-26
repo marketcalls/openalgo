@@ -159,6 +159,19 @@ def process_angel_json(path):
     df["brsymbol"] = df["symbol"]
     df["brexchange"] = df["exchange"]
 
+    # Drop rows that are not tradable contracts and have nowhere to go (QA
+    # MC-03); Kite's and Dhan's masters carry neither.
+    # - CDS UNDIRC: the government bonds under the interest-rate derivatives.
+    #   Angel names some R-series rows without their R- prefix, so token 108
+    #   (R636GS2031) repeats token 107's symbol GOI6.36%2031. The bonds trade
+    #   on NSE as -GS rows, which stay.
+    # - NCDEX AMXIDX: indices, but OpenAlgo has no NCDEX index exchange, so
+    #   they would sit on NCDEX and AGRIDEX would clash with the spot row.
+    not_tradable = ((df["instrumenttype"] == "UNDIRC") & (df["exchange"] == "CDS")) | (
+        (df["instrumenttype"] == "AMXIDX") & (df["exchange"] == "NCDEX")
+    )
+    df = df[~not_tradable].copy()
+
     # Update exchange names based on the instrument type
     df.loc[(df["instrumenttype"] == "AMXIDX") & (df["exchange"] == "NSE"), "exchange"] = "NSE_INDEX"
     df.loc[(df["instrumenttype"] == "AMXIDX") & (df["exchange"] == "BSE"), "exchange"] = "BSE_INDEX"
