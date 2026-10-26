@@ -324,6 +324,8 @@ def process_angel_json(path):
             "NIFTYMIDSELECT": "MIDCPNIFTY",
             "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
             "SNSX50": "SENSEX50",
+            # BSE_INDEX symbols come from the name: "S&P BSE SENSEX 50"
+            "BSESENSEX50": "SENSEX50",
         }
     )
 
