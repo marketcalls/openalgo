@@ -268,9 +268,14 @@ class BrokerData:
             bids = depth.get("buy", [])
             asks = depth.get("sell", [])
 
+            # The size resting at the best bid and ask sits beside the price in
+            # the same depth entry. Without it the option chain reads
+            # .get("bid_qty", 0) and reports nothing on offer, as Zerodha found.
             return {
                 "bid": float(bids[0].get("price", 0)) if bids else 0,
                 "ask": float(asks[0].get("price", 0)) if asks else 0,
+                "bid_qty": int(bids[0].get("quantity", 0)) if bids else 0,
+                "ask_qty": int(asks[0].get("quantity", 0)) if asks else 0,
                 "open": float(quote.get("open", 0)),
                 "high": float(quote.get("high", 0)),
                 "low": float(quote.get("low", 0)),
@@ -456,6 +461,8 @@ class BrokerData:
                 "data": {
                     "bid": float(bids[0].get("price", 0)) if bids else 0,
                     "ask": float(asks[0].get("price", 0)) if asks else 0,
+                    "bid_qty": int(bids[0].get("quantity", 0)) if bids else 0,
+                    "ask_qty": int(asks[0].get("quantity", 0)) if asks else 0,
                     "open": float(quote.get("open", 0)),
                     "high": float(quote.get("high", 0)),
                     "low": float(quote.get("low", 0)),
