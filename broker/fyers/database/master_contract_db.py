@@ -257,6 +257,14 @@ def reformat_symbol_detail(s):
     return f"{parts[0]}{parts[1]}{parts[2].upper()}{parts[3]}{parts[4]}"
 
 
+# NSE_CM instrument types that trade as a series of an underlying rather than
+# as the underlying itself: 2 = NCDs and bonds (-N0..-NM, -GB), 3 = warrants
+# (-W1), 4 = InvITs and similar units (-IV, -SF, -D1), 5 = state loans (-SG),
+# 6 = government loans (-GS), 7 = treasury bills (-TB). Type 8 (-MF) is left
+# out: Kite does not list those units either.
+NSE_SERIES_INSTRUMENT_TYPES = [2, 3, 4, 5, 6, 7]
+
+
 def process_fyers_nse_csv(path):
     """
     Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
@@ -280,16 +288,11 @@ def process_fyers_nse_csv(path):
     # Filtering the DataFrame based on 'Exchange Instrument type' and assigning values to 'exchange'
     df.loc[df["Exchange Instrument type"].isin([0, 9]), "exchange"] = "NSE"
     df.loc[df["Exchange Instrument type"].isin([0, 9]), "instrumenttype"] = "EQ"
-    df.loc[
-        (df["Exchange Instrument type"] == 2) & (df["Symbol ticker"].str.endswith("-GB")),
-        "exchange",
-    ] = "NSE"
-    # Government bonds are typed EQ, as Kite types its -GS/-TB/-SG debt rows;
-    # GB would be a fifth instrumenttype no consumer knows (QA MC-04).
-    df.loc[
-        (df["Exchange Instrument type"] == 2) & (df["Symbol ticker"].str.endswith("-GB")),
-        "instrumenttype",
-    ] = "EQ"
+    # Typed EQ, as Kite types these rows; a debt or unit type would be a fifth
+    # instrumenttype no consumer knows (QA MC-04).
+    series_mask = df["Exchange Instrument type"].isin(NSE_SERIES_INSTRUMENT_TYPES)
+    df.loc[series_mask, "exchange"] = "NSE"
+    df.loc[series_mask, "instrumenttype"] = "EQ"
     df.loc[df["Exchange Instrument type"] == 10, "exchange"] = "NSE_INDEX"
     # Typed EQ, not INDEX: instrumenttype is the platform's four-value vocabulary
     # -- EQ, FUT, CE, PE -- taken from Kite, which types its INDICES segment EQ.
@@ -300,6 +303,15 @@ def process_fyers_nse_csv(path):
     df_filtered = df[df["exchange"].isin(["NSE", "NSE_INDEX"])].copy()
 
     df_filtered.loc[:, "symbol"] = df_filtered["Underlying symbol"]
+
+    # The underlying cannot name these rows: series share one (IMC1-N1, -N2 and
+    # -N3 are all IMC1), and some share it with the equity itself
+    # (MOTHERSON-D1). Use the ticker without its exchange prefix, which keeps
+    # the series and matches Kite's tradingsymbol (10ISFL26-N3, SGBAPR28I-GB).
+    series_filtered = df_filtered["Exchange Instrument type"].isin(NSE_SERIES_INSTRUMENT_TYPES)
+    df_filtered.loc[series_filtered, "symbol"] = df_filtered.loc[
+        series_filtered, "Symbol ticker"
+    ].str.replace("NSE:", "", n=1, regex=False)
 
     # Normalize NSE_INDEX symbols: remove spaces and hyphens
     nse_idx_mask = df_filtered["exchange"] == "NSE_INDEX"

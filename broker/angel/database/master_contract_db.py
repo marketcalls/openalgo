@@ -159,6 +159,19 @@ def process_angel_json(path):
     df["brsymbol"] = df["symbol"]
     df["brexchange"] = df["exchange"]
 
+    # Drop rows that are not tradable contracts and have nowhere to go (QA
+    # MC-03); Kite's and Dhan's masters carry neither.
+    # - CDS UNDIRC: the government bonds under the interest-rate derivatives.
+    #   Angel names some R-series rows without their R- prefix, so token 108
+    #   (R636GS2031) repeats token 107's symbol GOI6.36%2031. The bonds trade
+    #   on NSE as -GS rows, which stay.
+    # - NCDEX AMXIDX: indices, but OpenAlgo has no NCDEX index exchange, so
+    #   they would sit on NCDEX and AGRIDEX would clash with the spot row.
+    not_tradable = ((df["instrumenttype"] == "UNDIRC") & (df["exchange"] == "CDS")) | (
+        (df["instrumenttype"] == "AMXIDX") & (df["exchange"] == "NCDEX")
+    )
+    df = df[~not_tradable].copy()
+
     # Update exchange names based on the instrument type
     df.loc[(df["instrumenttype"] == "AMXIDX") & (df["exchange"] == "NSE"), "exchange"] = "NSE_INDEX"
     df.loc[(df["instrumenttype"] == "AMXIDX") & (df["exchange"] == "BSE"), "exchange"] = "BSE_INDEX"
@@ -311,6 +324,8 @@ def process_angel_json(path):
             "NIFTYMIDSELECT": "MIDCPNIFTY",
             "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
             "SNSX50": "SENSEX50",
+            # BSE_INDEX symbols come from the name: "S&P BSE SENSEX 50"
+            "BSESENSEX50": "SENSEX50",
         }
     )
 
@@ -371,6 +386,10 @@ def process_angel_json(path):
     df.loc[df["instrumenttype"] == "FUTCUR", "instrumenttype"] = "FUT"
     df.loc[df["instrumenttype"] == "FUTIRC", "instrumenttype"] = "FUT"
     df.loc[df["instrumenttype"] == "FUTIRT", "instrumenttype"] = "FUT"
+
+    # Indices are typed EQ, as Kite types its INDICES segment; the *_INDEX
+    # exchange is what says the row is an index (QA MC-04).
+    df.loc[df["exchange"].isin(["NSE_INDEX", "BSE_INDEX", "MCX_INDEX"]), "instrumenttype"] = "EQ"
 
     # Return the processed DataFrame
     return df
