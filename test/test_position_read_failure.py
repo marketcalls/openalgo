@@ -540,6 +540,27 @@ SPECS = {
         error={"status": "Failure", "statusMessage": "Session Expired"},
     ),
     "shoonya": Spec(path="PositionBook", br_symbol="SBIN-EQ", book=_noren_book, error=NOREN_ERROR),
+    "smifs": Spec(
+        path="/v1/positions",
+        book=lambda q: (
+            []
+            if q is None
+            else [
+                {
+                    "securityId": TOKEN,
+                    "tradingSymbol": "SBIN",
+                    "exchangeSegment": "NSE_EQ",
+                    "productType": "INTRADAY",
+                    "netQty": q,
+                }
+            ]
+        ),
+        error={
+            "errorType": "Auth_Error",
+            "errorCode": "AU-1001",
+            "errorMessage": "missing or invalid access token",
+        },
+    ),
     "tradejini": Spec(
         path="/api/oms/positions",
         book=lambda q: (

@@ -40,6 +40,7 @@ BROKERS = [
     "rupeezy",
     "samco",
     "shoonya",
+    "smifs",
     "tradejini",
     "tradesmart",
     "upstox",
