@@ -56,14 +56,20 @@ def _angel_history_window(start_date: str, end_date: str) -> tuple[pd.Timestamp,
     return from_date, to_date
 
 
-def _angel_timestamps_to_epoch(timestamps: pd.Series) -> pd.Series:
-    """Convert Angel's ISO timestamps (normally carrying +05:30) to UTC epochs."""
+def _angel_timestamps_to_epoch(timestamps: pd.Series, daily: bool = False) -> pd.Series:
+    """Convert Angel's ISO timestamps (normally carrying +05:30) to UTC epochs.
+
+    A daily candle is shifted +5:30 to 00:00 UTC of its session date, as
+    Zerodha does: the SDK reads daily epochs as naive UTC, so 2026-10-21
+    00:00+05:30 would otherwise show as 2026-10-20 18:30 (QA HS-09).
+    """
     parsed = pd.to_datetime(timestamps, format="ISO8601")
     if parsed.dt.tz is None:
         parsed = parsed.dt.tz_localize("Asia/Kolkata")
     else:
         parsed = parsed.dt.tz_convert("UTC")
-    return parsed.astype("int64") // 10**9
+    epochs = parsed.astype("int64") // 10**9
+    return epochs + 19800 if daily else epochs
 
 
 def _apply_rate_limit(category: str) -> None:
@@ -631,7 +637,7 @@ class BrokerData:
             df = pd.concat(dfs, ignore_index=True)
 
             # Angel timestamps carry their IST offset; normalize without host-TZ math.
-            df["timestamp"] = _angel_timestamps_to_epoch(df["timestamp"])
+            df["timestamp"] = _angel_timestamps_to_epoch(df["timestamp"], daily=interval == "D")
 
             # Ensure numeric columns and proper order
             numeric_columns = ["open", "high", "low", "close", "volume"]
@@ -773,7 +779,8 @@ class BrokerData:
             # Combine all chunks
             df = pd.concat(dfs, ignore_index=True)
 
-            df["timestamp"] = _angel_timestamps_to_epoch(df["timestamp"])
+            # Shifted like the candles, or daily OI would not merge onto them.
+            df["timestamp"] = _angel_timestamps_to_epoch(df["timestamp"], daily=interval == "D")
 
             # Ensure oi column is numeric
             df["oi"] = pd.to_numeric(df["oi"])
