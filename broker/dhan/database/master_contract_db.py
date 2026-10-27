@@ -325,24 +325,11 @@ def process_dhan_csv(path):
 
     df["symbol"] = df.apply(reformat_symbol, axis=1)
 
-    # Normalize NSE_INDEX symbols: uppercase, remove spaces, only for symbols in OpenAlgo docs
+    # Normalize every NSE_INDEX symbol: uppercase, no spaces or hyphens. This
+    # once reverted any result missing from a fixed allow-list to Dhan's raw
+    # name, so each index added to docs/prompt/symbol-format.md stayed as
+    # "Nifty100 Alpha 30" instead of NIFTY100ALPHA30 (QA MC-08).
     nse_idx_mask = df["exchange"] == "NSE_INDEX"
-    valid_nse_symbols = {
-        "NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX",
-        "HANGSENGBEESNAV", "NIFTY100", "NIFTY200", "NIFTY500", "NIFTYALPHA50",
-        "NIFTYAUTO", "NIFTYCOMMODITIES", "NIFTYCONSUMPTION", "NIFTYCPSE",
-        "NIFTYDIVOPPS50", "NIFTYENERGY", "NIFTYFMCG", "NIFTYGROWSECT15",
-        "NIFTYGS10YR", "NIFTYGS10YRCLN", "NIFTYGS1115YR", "NIFTYGS15YRPLUS",
-        "NIFTYGS48YR", "NIFTYGS813YR", "NIFTYGSCOMPSITE", "NIFTYINFRA", "NIFTYIT",
-        "NIFTYMEDIA", "NIFTYMETAL", "NIFTYMIDLIQ15", "NIFTYMIDCAP100",
-        "NIFTYMIDCAP150", "NIFTYMIDCAP50", "NIFTYMIDSML400", "NIFTYMNC",
-        "NIFTYPHARMA", "NIFTYPSE", "NIFTYPSUBANK", "NIFTYPVTBANK", "NIFTYREALTY",
-        "NIFTYSERVSECTOR", "NIFTYSMLCAP100", "NIFTYSMLCAP250", "NIFTYSMLCAP50",
-        "NIFTY100EQLWGT", "NIFTY100LIQ15", "NIFTY100LOWVOL30", "NIFTY100QUALTY30",
-        "NIFTY200QUALTY30", "NIFTY50DIVPOINT", "NIFTY50EQLWGT", "NIFTY50PR1XINV",
-        "NIFTY50PR2XLEV", "NIFTY50TR1XINV", "NIFTY50TR2XLEV", "NIFTY50VALUE20",
-    }
-    original_nse = df.loc[nse_idx_mask, "symbol"].copy()
     df.loc[nse_idx_mask, "symbol"] = (
         df.loc[nse_idx_mask, "symbol"]
         .str.upper()
@@ -362,10 +349,6 @@ def process_dhan_csv(path):
             "NIFTYMID100FREE": "NIFTYMIDCAP100",
         }
     )
-    # Revert symbols not in the OpenAlgo standard set
-    not_valid = ~df.loc[nse_idx_mask, "symbol"].isin(valid_nse_symbols)
-    revert_idx = not_valid[not_valid].index
-    df.loc[revert_idx, "symbol"] = original_nse.loc[revert_idx]
 
     # Normalize BSE_INDEX symbols to OpenAlgo standard format
     bse_idx_mask = df["exchange"] == "BSE_INDEX"
@@ -410,6 +393,27 @@ def process_dhan_csv(path):
         "SMEIPO": "BSESMEIPO",
         "TECK": "BSETECK",
         "TELCOM": "BSETELECOM",
+        # Indices in docs/prompt/symbol-format.md that Dhan lists under its
+        # own codes, matched by SEM_CUSTOM_SYMBOL ("BSE Momentum Index") or,
+        # where Dhan gives only the code, by BSE's index code (DSI, LVI, QUI).
+        # Fyers maps the same names from its codes (QA MC-08).
+        "ALLCAP": "BSEALLCAP",
+        "BHRT22": "BSEBHARAT22INDEX",
+        "BSEDSI": "BSEDIVIDENDSTABILITY",
+        "BSEEVI": "BSEENHANCEDVALUE",
+        "BSELVI": "BSELOWVOLATILITY",
+        "BSEMOI": "BSEMOMENTUM",
+        "BSEPBI": "BSEPRIVATEBANKS",
+        "BSEQUI": "BSEQUALITY",
+        "COMDTY": "BSEBASICMATERIALS",
+        "CONDIS": "BSECONSUMERDISCRETIONARYGOODS&SERVICES",
+        "DFRGRI": "BSEDIVERSIFIEDFINANCIALSREVENUEGROWTHINDEX",
+        "ESG100": "BSE100ESG",
+        "FOCIT": "BSEFOCUSEDIT",
+        "LCTMCI": "BSE100LARGECAPTMCINDEX",
+        "MFG": "BSEINDIAMANUFACTURING",
+        "SML250": "BSE250SMALLCAPINDEX",
+        "UTILS": "BSEUTILITIES",
     }
     df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].replace(bse_index_map)
 
