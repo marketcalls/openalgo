@@ -57,6 +57,17 @@ fix, live in [docs/releases](releases/).
   of the chart is replaced by a small mark in its corner, and the series names
   are shown in the legend under the chart rather than beside the price tags.
   The data, the tooltip and the toggles are unchanged.
+- The Straddle PnL Simulator (`/straddlepnl`) chart is now drawn by the same
+  charting engine as the trading terminal. Profit and loss are drawn in the
+  same green and red as the trading terminal's charts, in light, dark and
+  analyzer mode. The time axis reads in IST and marks each new day,
+  and hovering shows the date and time of the bar under the pointer as well as
+  the P&L tooltip. Switching theme, or showing and hiding P&L, Spot and
+  Synthetic Fut, now keeps your zoom instead of redrawing the chart from
+  scratch. The large OpenAlgo watermark in the middle of the chart is replaced
+  by a small mark in its corner, and the series names are shown in the legend
+  under the chart rather than beside the price tags. The simulation, the
+  tooltip, the summary and the trade log are unchanged.
 
 ### Fixed
 
