@@ -274,9 +274,9 @@ def process_dhan_csv(path):
     # NaT values will remain as NaT and can be handled separately if needed
     df["SEM_EXPIRY_DATE"] = df["SEM_EXPIRY_DATE"].dt.strftime("%d-%b-%y")
 
-    # Optionally, handle NaT values by replacing them with a placeholder or removing them
-    # For example, replacing NaT with 'Unknown Date':
-    df["SEM_EXPIRY_DATE"] = df["SEM_EXPIRY_DATE"].fillna("-1")
+    # Rows with no expiry (equity, index) carry an empty string, the platform's
+    # value for "no expiry" (QA MC-05); a "-1" placeholder read as a date.
+    df["SEM_EXPIRY_DATE"] = df["SEM_EXPIRY_DATE"].fillna("")
 
     # Assigning headers to the DataFrame
 
