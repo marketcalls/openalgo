@@ -18,6 +18,46 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Index exchanges share the session of their cash exchange.
+_SESSION_EXCHANGE = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE", "MCX_INDEX": "MCX"}
+
+# Listed under an exchange whose calendar is not theirs. GIFT NIFTY (NSE IFSC)
+# trades about 06:30 to 02:45, so NSE's 15:30 close would cut real bars.
+_OWN_HOURS = {("NSE_INDEX", "GIFTNIFTY")}
+
+
+def _drop_bars_after_close(df: pd.DataFrame, symbol: str, exchange: str) -> pd.DataFrame:
+    """Drop intraday bars that start at or after the session close of their day.
+
+    After the close, Dhan's /v2/charts/intraday appends one flat, zero-volume
+    bar stamped at the request time to NSE and BSE index series (SENSEX 15m:
+    15:15, then 16:00). No session contains it, so the /trading chart's
+    resampler refuses the whole series ("Unknown source candle boundaries")
+    on 30m. Its shape cannot single it out: Dhan sends no index volume, and a
+    quiet GIFT NIFTY bar is flat too. A day with no session in the calendar is
+    left as it is, and special sessions (Muhurat) close when the calendar says.
+    """
+    from datetime import date as _date
+
+    from database.market_calendar_db import get_market_timings_for_date
+
+    if df.empty or (exchange, symbol) in _OWN_HOURS:
+        return df
+    session_exchange = _SESSION_EXCHANGE.get(exchange, exchange)
+    days = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
+    keep = pd.Series(True, index=df.index)
+    for day in days.unique():
+        sessions = get_market_timings_for_date(_date.fromisoformat(str(day)))
+        closes = [s["end_time"] for s in sessions if s.get("exchange") == session_exchange]
+        if closes:
+            on_day = days == day
+            keep &= ~(on_day & (df["timestamp"] * 1000 >= max(closes)))
+    dropped = int((~keep).sum())
+    if dropped:
+        logger.debug(f"Dropped {dropped} Dhan bar(s) after the {session_exchange} close")
+    return df[keep].reset_index(drop=True)
+
+
 # Rate limiters for Dhan API. Dhan enforces different limits per API class:
 #   - Data/History APIs (/v2/charts/*):   5 req/s -> 0.2s spacing
 #   - Quote APIs (/v2/marketfeed/*):       1 req/s -> 1.1s spacing
@@ -748,6 +788,8 @@ class BrokerData:
                     .drop_duplicates(subset=["timestamp"])
                     .reset_index(drop=True)
                 )
+                if interval != "D":
+                    df = _drop_bars_after_close(df, symbol, exchange)
 
             return df
 
