@@ -75,6 +75,11 @@ def watch_for_unanswered_writes():
         _watch.lost = previous
 
 
+def request_may_have_been_sent(error: httpx.TransportError) -> bool:
+    """Whether a failed write may have reached its remote endpoint."""
+    return not isinstance(error, _NOT_SENT_ERRORS)
+
+
 class _BrokerTransport(httpx.HTTPTransport):
     """Retries a broken read once, and records a broken write instead."""
 
@@ -94,12 +99,57 @@ class _BrokerTransport(httpx.HTTPTransport):
 
     @staticmethod
     def _record_unanswered(request: httpx.Request, error: Exception) -> None:
-        if isinstance(error, _NOT_SENT_ERRORS):
+        if isinstance(error, httpx.TransportError) and not request_may_have_been_sent(error):
             return
         logger.error(f"{request.method} to {request.url.host} sent but not answered: {error}")
         lost = getattr(_watch, "lost", None)
         if lost is not None:
             lost.append(f"{request.method} {request.url.host}")
+
+
+class _BrokerClient(httpx.Client):
+    """HTTPX client using the broker transport while retaining env proxy mounts."""
+
+    def _init_transport(
+        self,
+        verify=True,
+        cert=None,
+        trust_env=True,
+        http1=True,
+        http2=False,
+        limits=httpx.Limits(),
+        transport=None,
+    ):
+        if transport is not None:
+            return transport
+        return _BrokerTransport(
+            verify=verify,
+            cert=cert,
+            trust_env=trust_env,
+            http1=http1,
+            http2=http2,
+            limits=limits,
+        )
+
+    def _init_proxy_transport(
+        self,
+        proxy,
+        verify=True,
+        cert=None,
+        trust_env=True,
+        http1=True,
+        http2=False,
+        limits=httpx.Limits(),
+    ):
+        return _BrokerTransport(
+            verify=verify,
+            cert=cert,
+            trust_env=trust_env,
+            http1=http1,
+            http2=http2,
+            limits=limits,
+            proxy=proxy,
+        )
 
 
 def _build_client() -> httpx.Client:
@@ -315,18 +365,13 @@ def _create_http_client() -> httpx.Client:
             keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
         )
 
-        client = httpx.Client(
+        client = _BrokerClient(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=timeout,
             limits=limits,
             # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
-            # httpx ignores the three settings above for a transport passed in,
-            # so it carries its own copy of them.
-            transport=_BrokerTransport(
-                http2=http2_enabled, http1=True, limits=limits, verify=True
-            ),
             # Add event hooks for latency tracking
             event_hooks={"request": [log_request], "response": [log_response]},
         )
