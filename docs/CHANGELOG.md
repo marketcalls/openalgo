@@ -48,6 +48,15 @@ fix, live in [docs/releases](releases/).
   button saves the same picture as before, the cards and the chart together;
   the large faint OpenAlgo text behind the chart is replaced by a small mark in
   its corner.
+- The Straddle Chart (`/straddle`) is now drawn by the same charting engine as
+  the trading terminal. The time axis reads in IST and marks each new day, and
+  hovering shows the date and time of the bar under the pointer as well as the
+  straddle tooltip. Switching between light, dark and analyzer mode, or showing
+  and hiding Straddle, Spot and Synthetic Fut, now keeps your zoom instead of
+  redrawing the chart from scratch. The large OpenAlgo watermark in the middle
+  of the chart is replaced by a small mark in its corner, and the series names
+  are shown in the legend under the chart rather than beside the price tags.
+  The data, the tooltip and the toggles are unchanged.
 
 ### Fixed
 
