@@ -6,6 +6,14 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _first_present(row, *keys, default):
+    """The value of the first of `keys` that `row` has and is not empty."""
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return row[key]
+    return default
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -227,9 +235,18 @@ def transform_tradebook_data(tradebook_data):
         exchange = trade.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
 
-        # Ensure quantity and average price are converted to the correct types
-        quantity = int(trade.get("OrderQuantity", 0))
-        average_price = float(trade.get("OrderAverageTradedPrice", 0.0))
+        # One row per fill (docs/api/account-services/tradebook.md). XTS gives a
+        # fill's own size, price and time in LastTradedQuantity, LastTradedPrice
+        # and ExchangeTransactTime; OrderQuantity and OrderAverageTradedPrice are
+        # the order's, so an order filled in parts showed its full size on every
+        # one of its fills. The order's fields stay as the fallback for a row
+        # without them.
+        quantity = int(
+            float(_first_present(trade, "LastTradedQuantity", "OrderQuantity", default=0))
+        )
+        average_price = float(
+            _first_present(trade, "LastTradedPrice", "OrderAverageTradedPrice", default=0.0)
+        )
 
         transformed_trade = {
             "symbol": trade.get("TradingSymbol", ""),
@@ -240,7 +257,13 @@ def transform_tradebook_data(tradebook_data):
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": str(int(float(trade.get("AppOrderID", 0) or 0))),
-            "timestamp": trade.get("OrderGeneratedDateTime", ""),
+            "timestamp": _first_present(
+                trade,
+                "ExchangeTransactTime",
+                "LastUpdateDateTime",
+                "OrderGeneratedDateTime",
+                default="",
+            ),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
