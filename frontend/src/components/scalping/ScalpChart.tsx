@@ -5,7 +5,8 @@
  * Given a symbol/exchange/interval it:
  *   - loads history from /scalping/api/history (1m=1d, 5m=3d, 15m=9d lookback),
  *   - draws candles + a volume histogram with an OHLC legend,
- *   - streams the forming candle live via the shared useMarketData feed, and
+ *   - streams the forming candle live via the shared useMarketData feed,
+ *   - counts down to the forming candle's close under the last price tag, and
  *   - reconciles completed bars to the broker's official OHLC on a staggered
  *     20-30s timer (so multiple charts never hit the API at the same instant).
  *
@@ -26,6 +27,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { useMarketData } from '@/hooks/useMarketData'
+import { BarCountdown } from '@/lib/scalpingCountdown'
 import { priceDecimals } from '@/lib/scalpingPrice'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -154,6 +156,28 @@ export function ScalpChart({
     candleRef.current = candle
     volRef.current = vol
 
+    // Countdown to the forming candle's close, as /trading shows it. Bar times
+    // carry the IST shift, so the wall clock is shifted by the same amount.
+    const countdown = new BarCountdown({
+      lastBar: () => {
+        const arr = sortedRef.current
+        const bar = arr[arr.length - 1]
+        return bar ? { time: bar.time, close: bar.close, up: bar.close >= bar.open } : null
+      },
+      intervalSec: () => intervalSecRef.current,
+      now: () => Date.now() / 1000 + IST_OFFSET,
+      upColor: UP,
+      downColor: DOWN,
+    })
+    candle.attachPrimitive(countdown)
+    // Repaint on each whole second so the label changes when the clock does.
+    let countdownTimer: ReturnType<typeof setTimeout> | null = null
+    const tickCountdown = () => {
+      countdown.refresh()
+      countdownTimer = setTimeout(tickCountdown, 1000 - (Date.now() % 1000))
+    }
+    tickCountdown()
+
     // OHLC legend overlay: hovered bar, or the last bar when not hovering.
     const renderLegend = (time?: number) => {
       const el = legendRef.current
@@ -188,6 +212,7 @@ export function ScalpChart({
     })
 
     return () => {
+      if (countdownTimer) clearTimeout(countdownTimer)
       chart.remove()
       chartRef.current = null
       candleRef.current = null

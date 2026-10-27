@@ -8,6 +8,16 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Added
+
+- The Scalping Terminal charts now count down to the close of the forming
+  candle, as the /trading chart already does. The time left sits directly
+  under the last price on the price axis, in the candle's colour, and ticks
+  every second, as MM:SS (the longest scalper candle is 15 minutes). It reads
+  your computer's clock, so a clock that is a few seconds out shows a
+  countdown out by the same amount. Like /trading, it keeps counting after the
+  market closes, against the candle that would form next.
+
 ### Fixed
 
 - Sandbox orders could occasionally fail to place with an error, and when
