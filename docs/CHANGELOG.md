@@ -68,6 +68,14 @@ fix, live in [docs/releases](releases/).
   by a small mark in its corner, and the series names are shown in the legend
   under the chart rather than beside the price tags. The simulation, the
   tooltip, the summary and the trade log are unchanged.
+- The File Descriptors and Memory Usage charts on the Health Monitor page
+  (`/health`) are now drawn by the same charting engine as the trading
+  terminal. Times on the axis and under the crosshair still read in IST. The
+  charts now follow a switch between light, dark and analyzer mode straight
+  away; before, their axis text and crosshair kept the colours of the theme the
+  page was opened in until it was reloaded. The crosshair's time label also shows the weekday, for
+  example `Tue 27 Oct '26 13:47:10`, and each chart's current value is still
+  tagged on its axis in the line's own colour.
 
 ### Fixed
 
