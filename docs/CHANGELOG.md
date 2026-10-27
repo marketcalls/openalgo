@@ -76,6 +76,9 @@ fix, live in [docs/releases](releases/).
   page was opened in until it was reloaded. The crosshair's time label also shows the weekday, for
   example `Tue 27 Oct '26 13:47:10`, and each chart's current value is still
   tagged on its axis in the line's own colour.
+- The developer chart test page (`/chart/test`) now draws its candles with the
+  trading terminal's charting engine and colours, and follows the light, dark
+  and analyzer themes.
 
 ### Fixed
 
