@@ -97,6 +97,9 @@
     },
     "@openuidev/react-ui": {
       "zustand": "$zustand"
+    },
+    "@ag-ui/core": {
+      "zod": "^4.6.6"
     }
   },
   "devDependencies": {
