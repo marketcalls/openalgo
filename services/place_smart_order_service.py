@@ -19,6 +19,7 @@ from utils.constants import (
     VALID_PRODUCT_TYPES,
 )
 from utils.event_bus import bus
+from utils.httpx_client import UNANSWERED_ORDER_MESSAGE, watch_for_unanswered_writes
 from utils.logging import get_logger
 
 # Initialize logger
@@ -208,8 +209,12 @@ def place_smart_order_with_auth(
         ))
         return False, error_response, 404
 
+    unanswered: list[str] = []
     try:
-        res, response_data, order_id = broker_module.place_smartorder_api(order_data, auth_token)
+        with watch_for_unanswered_writes() as unanswered:
+            res, response_data, order_id = broker_module.place_smartorder_api(
+                order_data, auth_token
+            )
 
         # Handle case where position size matches current position
         if (
@@ -269,14 +274,16 @@ def place_smart_order_with_auth(
         logger.exception(f"Error in broker_module.place_smartorder_api: {e}")
         error_response = {
             "status": "error",
-            "message": "Failed to place smart order due to internal error",
+            "message": UNANSWERED_ORDER_MESSAGE
+            if unanswered
+            else "Failed to place smart order due to internal error",
         }
         bus.publish(OrderFailedEvent(
             mode="live", api_type="placesmartorder",
             request_data=order_request_data, response_data=error_response,
             api_key=api_key, error_message=str(e),
         ))
-        return False, error_response, 500
+        return False, error_response, 502 if unanswered else 500
 
     if res and res.status == 200:
         return True, order_response_data, 200
@@ -286,6 +293,8 @@ def place_smart_order_with_auth(
             if isinstance(response_data, dict)
             else "Failed to place smart order"
         )
+        if unanswered:
+            message = UNANSWERED_ORDER_MESSAGE
         error_response = {"status": "error", "message": message}
         bus.publish(OrderFailedEvent(
             mode="live", api_type="placesmartorder",
@@ -293,6 +302,8 @@ def place_smart_order_with_auth(
             api_key=api_key, error_message=message,
         ))
         status_code = res.status if res and hasattr(res, "status") else 500
+        if unanswered:
+            status_code = 502
         return False, error_response, status_code
 
 
