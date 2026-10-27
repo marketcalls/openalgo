@@ -509,22 +509,16 @@ function MethodologyDialog() {
         </DialogHeader>
         <div className="space-y-3 text-sm">
           <p>
-            <span className="font-medium">RS-Ratio</span> (horizontal) shows whether the symbol is
-            stronger than the benchmark compared with its own recent history.{' '}
-            <span className="font-medium">RS-Momentum</span> (vertical) shows whether that strength
-            is still building. Both are centred on 100.
+            <span className="font-medium">RS-Ratio</span> (horizontal) shows whether the symbol's
+            recent relative strength against the benchmark is running above its longer trend.{' '}
+            <span className="font-medium">RS-Momentum</span> (vertical) shows whether that relative
+            strength is still accelerating. Both are centred on 100, and recent bars count most.
           </p>
-          <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-            {`RS          = 100 x symbol close / benchmark close
-RS smoothed = EMA(RS, 10)
-RS-Ratio    = 100 + 2 x zscore(RS smoothed, 52 bars)
-RS-Momentum = 100 + 2 x zscore(EMA(change in RS-Ratio, 5), 52 bars)`}
-          </pre>
           <p>
             Bars are daily sessions, or weeks ending Friday built from daily closes. Only sessions
-            both the symbol and the benchmark traded are used. A symbol needs at least 21 such bars
-            before it appears. The Days or Weeks column counts consecutive bars in the current
-            quadrant.
+            both the symbol and the benchmark traded are used, so a newly listed index shows a
+            shorter trail until enough history builds up. The Days or Weeks column counts
+            consecutive bars in the current quadrant.
           </p>
           <ul className="grid grid-cols-2 gap-2 text-xs">
             <li className={`rounded-md p-2 ${QUADRANT_BADGE.leading}`}>

@@ -8,13 +8,8 @@ are centred on 100.
 Follows the standard service contract in ``docs/prompt/services_documentation.md``:
 every entry point returns ``(success, response, status_code)``.
 
-The calculation is the one in the standalone sector-rotation-map project, run
-unchanged on daily bars or on weekly bars resampled from them:
-
-    RS           = 100 * close_sector / close_benchmark
-    RS smoothed  = EMA(RS, 10)
-    RS-Ratio     = 100 + 2 * zscore(RS smoothed, 52 bars)
-    RS-Momentum  = 100 + 2 * zscore(EMA(change in RS-Ratio, 5), 52 bars)
+Positions are computed on daily bars, or on weekly bars resampled from them,
+with the lengths for each timeframe in ``PARAMS``.
 
 Prices come from ``portfolio.data.load_prices``, which already serves both
 sources (Historify with ``source='db'``, the broker history API with
@@ -99,22 +94,35 @@ EXCHANGES = ("NSE", "BSE", "NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX"
 # bounded rather than open-ended.
 MAX_INSTRUMENTS = 40
 
-# Calculation parameters, in bars of the selected timeframe.
-RS_EMA_SPAN = 10
-MOMENTUM_EMA_SPAN = 5
-ZSCORE_WINDOW = 52
-ZSCORE_MIN_BARS = 20
-ZSCORE_SCALE = 2.0
+
+@dataclass(frozen=True)
+class RotationParams:
+    """Lengths, in bars of the timeframe, used by the calculation."""
+
+    fast: int
+    slow: int
+    momentum: int
+
+    @property
+    def min_bars(self) -> int:
+        """Bars needed before the first point exists."""
+        return self.slow + self.momentum
+
+
+PARAMS = {
+    "daily": RotationParams(fast=14, slow=36, momentum=8),
+    "weekly": RotationParams(fast=5, slow=15, momentum=5),
+}
 
 # The longest trail the map can draw. The response carries this many points per
 # sector and the page trims to the slider, so moving the slider is not a
 # round trip.
 MAX_TAIL = 30
 
-# Calendar days of history to read. The z-score needs 52 bars plus the warm-up
-# of both EMAs before its first value is meaningful, and the trail then needs
-# MAX_TAIL more on top.
-LOOKBACK_DAYS = {"daily": 548, "weekly": 1095}
+# Calendar days of history to read. Every window is fixed, so older history
+# does not change any value; the window is sized so the trail and the run
+# length in the current quadrant have room well beyond the minimum.
+LOOKBACK_DAYS = {"daily": 365, "weekly": 730}
 
 # Broker history is rate limited and a default map is nineteen requests, so
 # each symbol's closes are reused for a few minutes.
@@ -180,7 +188,7 @@ def paired_bars(
     side on its own would stamp a week with that side's own last session, so a
     week that ended on a holiday for only one of them (a BSE-only holiday, a
     global index, a day missing from Historify) would match nothing and drop
-    out of both the smoothing and the z-score.
+    out of every average the position is built from.
     """
     pair = pd.concat({"symbol": closes, "benchmark": benchmark}, axis=1, join="inner").dropna()
     symbol, bench = pair["symbol"], pair["benchmark"]
@@ -189,33 +197,37 @@ def paired_bars(
     return symbol, bench
 
 
-def _zscore(series: pd.Series) -> pd.Series:
-    mean = series.rolling(window=ZSCORE_WINDOW, min_periods=ZSCORE_MIN_BARS).mean()
-    std = series.rolling(window=ZSCORE_WINDOW, min_periods=ZSCORE_MIN_BARS).std()
-    # A flat stretch has no spread to scale by; NaN drops the bar rather than
-    # dividing by zero into an infinite reading.
-    std = std.replace(0, np.nan)
-    return 100 + ((series - mean) / std) * ZSCORE_SCALE
+def wma(series: pd.Series, length: int) -> pd.Series:
+    """Linearly weighted moving average: weights 1..length, the newest bar heaviest.
+
+    NaN until ``length`` bars exist, so no value is ever computed from a
+    partial window.
+    """
+    weights = np.arange(1, length + 1, dtype=float)
+    total = weights.sum()
+    return series.rolling(window=length, min_periods=length).apply(
+        lambda window: np.dot(window, weights) / total, raw=True
+    )
 
 
-def rrg_series(sector: pd.Series, benchmark: pd.Series) -> pd.DataFrame:
+def rotation_series(
+    sector: pd.Series, benchmark: pd.Series, timeframe: str = "daily"
+) -> pd.DataFrame:
     """RS-Ratio and RS-Momentum for every bar where both are defined.
 
     Both inputs are closes indexed by date. Only sessions both traded are used:
     a ratio against a forward-filled close would invent relative strength on a
     day one side did not trade.
     """
+    params = PARAMS[timeframe]
     pair = pd.concat({"sector": sector, "benchmark": benchmark}, axis=1, join="inner")
     pair = pair.dropna().sort_index()
     if pair.empty:
         return pd.DataFrame(columns=["rs_ratio", "rs_momentum"])
 
-    raw_rs = (pair["sector"] / pair["benchmark"]) * 100
-    rs_smoothed = raw_rs.ewm(span=RS_EMA_SPAN, adjust=False).mean()
-    rs_ratio = _zscore(rs_smoothed)
-
-    momentum = (rs_ratio - rs_ratio.shift(1)).ewm(span=MOMENTUM_EMA_SPAN, adjust=False).mean()
-    rs_momentum = _zscore(momentum)
+    rs = 100 * pair["sector"] / pair["benchmark"]
+    rs_ratio = 100 * wma(rs, params.fast) / wma(rs, params.slow)
+    rs_momentum = 100 * rs_ratio / rs_ratio.shift(params.momentum)
 
     out = pd.DataFrame({"rs_ratio": rs_ratio, "rs_momentum": rs_momentum})
     return out[out["rs_ratio"].notna() & out["rs_momentum"].notna()]
@@ -458,8 +470,11 @@ def compute_sector_rotation(
             )
             continue
 
-        summary = summarise(rrg_series(*paired_bars(closes, bench_closes, timeframe)))
+        summary = summarise(
+            rotation_series(*paired_bars(closes, bench_closes, timeframe), timeframe)
+        )
         if summary is None:
+            unit = "weeks" if timeframe == "weekly" else "sessions"
             unavailable.append(
                 {
                     "symbol": member.symbol,
@@ -467,8 +482,8 @@ def compute_sector_rotation(
                     "label": member.label,
                     "reason": (
                         f"Not enough {timeframe} history yet. The map needs at "
-                        f"least {ZSCORE_MIN_BARS + 1} bars that this symbol and "
-                        "the benchmark both traded."
+                        f"least {PARAMS[timeframe].min_bars} {unit} that this "
+                        "symbol and the benchmark both traded."
                     ),
                 }
             )

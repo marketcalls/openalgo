@@ -1,9 +1,7 @@
 """Sector rotation map: the calculation, weekly resampling and the service.
 
-The parity test pins the calculation to the standalone sector-rotation-map
-project, whose ``compute_single_rrg`` is copied verbatim below as the
-reference. If the two ever disagree, the map in OpenAlgo has drifted from the
-one traders already know.
+The calculation is checked against a deliberately plain loop written here,
+independently of the vectorised code, and against values worked by hand.
 """
 
 import zlib
@@ -16,35 +14,22 @@ import services.sector_rotation_service as srs
 from portfolio.data import MissingHistory, PriceMatrix
 
 
-def _reference_compute_single_rrg(sector_prices, benchmark_prices, tail_length=8):
-    """compute_single_rrg from sector-rotation-map/api_server.py, unchanged."""
-    raw_rs = (sector_prices / benchmark_prices) * 100
-    rs_smoothed = raw_rs.ewm(span=10, adjust=False).mean()
+def _plain_rotation(sector, benchmark, fast, slow, momentum):
+    """The same positions, one bar at a time, with no pandas rolling machinery."""
+    rs = [100 * s / b for s, b in zip(sector, benchmark, strict=True)]
 
-    rolling_mean = rs_smoothed.rolling(window=52, min_periods=20).mean()
-    rolling_std = rs_smoothed.rolling(window=52, min_periods=20).std()
-    rolling_std = rolling_std.replace(0, np.nan)
-    rs_ratio = 100 + ((rs_smoothed - rolling_mean) / rolling_std) * 2
+    def weighted(values, length, end):
+        window = values[end - length + 1 : end + 1]
+        return sum(w * v for w, v in enumerate(window, start=1)) / sum(range(1, length + 1))
 
-    rs_momentum_raw = rs_ratio - rs_ratio.shift(1)
-    mom_smoothed = rs_momentum_raw.ewm(span=5, adjust=False).mean()
-    mom_mean = mom_smoothed.rolling(window=52, min_periods=20).mean()
-    mom_std = mom_smoothed.rolling(window=52, min_periods=20).std()
-    mom_std = mom_std.replace(0, np.nan)
-    rs_momentum = 100 + ((mom_smoothed - mom_mean) / mom_std) * 2
-
-    valid = rs_ratio.notna() & rs_momentum.notna()
-    rs_r = rs_ratio[valid]
-    rs_m = rs_momentum[valid]
-    n = min(tail_length, len(rs_r))
-    return [
-        (
-            rs_r.index[i].strftime("%Y-%m-%d"),
-            round(float(rs_r.iloc[i]), 2),
-            round(float(rs_m.iloc[i]), 2),
-        )
-        for i in range(-n, 0)
-    ]
+    ratio = [None] * len(rs)
+    for i in range(slow - 1, len(rs)):
+        ratio[i] = 100 * weighted(rs, fast, i) / weighted(rs, slow, i)
+    out = []
+    for i in range(len(rs)):
+        if ratio[i] is not None and i - momentum >= 0 and ratio[i - momentum] is not None:
+            out.append((round(ratio[i], 2), round(100 * ratio[i] / ratio[i - momentum], 2)))
+    return out
 
 
 def _walk(seed: int, n: int = 400, start: float = 100.0) -> pd.Series:
@@ -53,21 +38,56 @@ def _walk(seed: int, n: int = 400, start: float = 100.0) -> pd.Series:
     return pd.Series(start * np.exp(np.cumsum(rng.normal(0, 0.01, n))), index=index)
 
 
-def test_matches_reference_calculation():
+def test_wma_weights_the_newest_bar_most():
+    series = pd.Series([1.0, 2.0, 3.0, 9.0])
+    out = srs.wma(series, 3)
+    assert out.isna().tolist() == [True, True, False, False]
+    assert out.iloc[2] == pytest.approx((1 * 1 + 2 * 2 + 3 * 3) / 6)
+    assert out.iloc[3] == pytest.approx((1 * 2 + 2 * 3 + 3 * 9) / 6)
+
+
+@pytest.mark.parametrize("timeframe", ["daily", "weekly"])
+def test_matches_a_plain_loop(timeframe):
+    params = srs.PARAMS[timeframe]
     sector, bench = _walk(1), _walk(2)
-    expected = _reference_compute_single_rrg(sector, bench, tail_length=30)
-    summary = srs.summarise(srs.rrg_series(sector, bench), tail=30)
-    got = [(p["date"], p["rs_ratio"], p["rs_momentum"]) for p in summary["tail"]]
+    expected = _plain_rotation(
+        sector.tolist(), bench.tolist(), params.fast, params.slow, params.momentum
+    )
+    points = srs.rotation_series(sector, bench, timeframe)
+    got = [
+        (round(r, 2), round(m, 2))
+        for r, m in zip(points["rs_ratio"], points["rs_momentum"], strict=True)
+    ]
+    assert len(got) > 300
     assert got == expected
 
 
-def test_matches_reference_on_weekly_bars():
-    sector, bench = _walk(3, n=800), _walk(4, n=800)
-    weekly_sector, weekly_bench = srs.to_weekly(sector), srs.to_weekly(bench)
-    expected = _reference_compute_single_rrg(weekly_sector, weekly_bench, tail_length=12)
-    summary = srs.summarise(srs.rrg_series(weekly_sector, weekly_bench), tail=12)
-    got = [(p["date"], p["rs_ratio"], p["rs_momentum"]) for p in summary["tail"]]
-    assert got == expected
+def test_lengths_per_timeframe():
+    daily, weekly = srs.PARAMS["daily"], srs.PARAMS["weekly"]
+    assert (daily.fast, daily.slow, daily.momentum) == (14, 36, 8)
+    assert (weekly.fast, weekly.slow, weekly.momentum) == (5, 15, 5)
+
+
+@pytest.mark.parametrize("timeframe", ["daily", "weekly"])
+def test_first_point_needs_exactly_min_bars(timeframe):
+    need = srs.PARAMS[timeframe].min_bars
+    sector, bench = _walk(3, n=need), _walk(4, n=need)
+    assert len(srs.rotation_series(sector.iloc[:-1], bench.iloc[:-1], timeframe)) == 0
+    assert len(srs.rotation_series(sector, bench, timeframe)) == 1
+
+
+def test_a_symbol_moving_with_the_benchmark_sits_at_the_centre():
+    bench = _walk(5)
+    points = srs.rotation_series(bench * 3, bench)
+    assert points["rs_ratio"].round(9).eq(100).all()
+    assert points["rs_momentum"].round(9).eq(100).all()
+
+
+def test_steady_outperformance_reads_strong():
+    bench = _walk(6)
+    drift = pd.Series(np.exp(np.linspace(0, 0.3, len(bench))), index=bench.index)
+    last = srs.rotation_series(bench * drift, bench).iloc[-1]
+    assert last["rs_ratio"] > 100
 
 
 @pytest.mark.parametrize(
@@ -102,10 +122,10 @@ def test_weekly_bar_is_dated_by_its_last_session():
     assert list(weekly) == [2.0, 4.0]
 
 
-def test_rrg_uses_only_sessions_both_traded():
+def test_uses_only_sessions_both_traded():
     sector = _walk(5)
     bench = _walk(6).drop(_walk(6).index[100:110])
-    points = srs.rrg_series(sector, bench)
+    points = srs.rotation_series(sector, bench)
     assert not set(points.index) - set(bench.index)
 
 
