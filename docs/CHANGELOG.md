@@ -30,6 +30,13 @@ fix, live in [docs/releases](releases/).
 - Charts are still off until you turn them on, and the charting engine is now
   only downloaded at that point, so opening the Scalping Terminal with charts
   off loads nothing extra.
+- The Option Greeks charts (`/ivchart`) are now drawn by the same charting
+  engine as the trading terminal. They follow the light, dark and analyzer
+  themes, with the call in the theme's green and the put in its red. Hovering
+  a chart now shows the date and time of the reading under the pointer, and on
+  a multi-day range the time axis marks each new day with its date. Times are
+  in IST, as before. The large faint OpenAlgo text behind each chart is
+  replaced by a small mark in its corner.
 
 ### Fixed
 
