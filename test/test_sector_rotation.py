@@ -158,13 +158,13 @@ def _clear_cache():
 
 
 def test_one_missing_index_does_not_cost_the_map(monkeypatch):
-    monkeypatch.setattr(srs, "load_prices", _fake_loader({"NIFTYINDDEFENCE"}))
+    monkeypatch.setattr(srs, "load_prices", _fake_loader({"NIFTYMEDIA"}))
     ok, payload, status = srs.compute_sector_rotation("NIFTY", "daily", "db")
     assert ok and status == 200
     placed = {s["symbol"] for s in payload["data"]["instruments"]}
     missing = {u["symbol"] for u in payload["data"]["unavailable"]}
-    assert "NIFTYINDDEFENCE" in missing
-    assert "NIFTYINDDEFENCE" not in placed
+    assert "NIFTYMEDIA" in missing
+    assert "NIFTYMEDIA" not in placed
     assert len(placed) == len(srs.SECTORS) - 1
 
 
@@ -285,3 +285,19 @@ def test_loader_cache_flag_reads_historify_fresh(monkeypatch):
     pdata.load_prices(*args, **kw)
     assert len(reads) == 2
     pdata.clear_price_cache()
+
+
+def test_default_map_leaves_off_indices_brokers_rarely_publish():
+    defaults = {s.symbol for s in srs.SECTORS}
+    optional = {s.symbol for s in srs.OPTIONAL_SECTORS}
+    assert optional == {"NIFTYCONSRDURBL", "NIFTYHEALTHCARE", "NIFTYINDDEFENCE", "NIFTYOILANDGAS"}
+    assert not defaults & optional
+
+
+def test_an_optional_sector_added_by_hand_keeps_its_name(monkeypatch):
+    monkeypatch.setattr(srs, "load_prices", _fake_loader(set()))
+    ok, payload, _ = srs.compute_sector_rotation(
+        "NIFTY", "daily", "db", instruments=[{"symbol": "NIFTYHEALTHCARE", "exchange": "NSE_INDEX"}]
+    )
+    assert ok
+    assert payload["data"]["instruments"][0]["label"] == "Healthcare"

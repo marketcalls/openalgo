@@ -50,26 +50,32 @@ class Instrument:
 
 # NSE sector indices in OpenAlgo symbol format (docs/prompt/symbol-format.md).
 # Financial Services is the Nifty Financial Services index, which OpenAlgo
-# names FINNIFTY.
+# names FINNIFTY. The default map holds only indices that brokers commonly
+# publish, so a fresh map does not open with a list of missing sectors.
 SECTORS: tuple[Instrument, ...] = (
     Instrument("NIFTYAUTO", "NSE_INDEX", "Auto"),
     Instrument("NIFTYCOMMODITIES", "NSE_INDEX", "Commodities"),
-    Instrument("NIFTYCONSRDURBL", "NSE_INDEX", "Consumer Durables"),
     Instrument("NIFTYENERGY", "NSE_INDEX", "Energy"),
     Instrument("FINNIFTY", "NSE_INDEX", "Financial Services"),
     Instrument("NIFTYFMCG", "NSE_INDEX", "FMCG"),
-    Instrument("NIFTYHEALTHCARE", "NSE_INDEX", "Healthcare"),
-    Instrument("NIFTYINDDEFENCE", "NSE_INDEX", "India Defence"),
     Instrument("NIFTYINFRA", "NSE_INDEX", "Infra"),
     Instrument("NIFTYIT", "NSE_INDEX", "IT"),
     Instrument("NIFTYMEDIA", "NSE_INDEX", "Media"),
     Instrument("NIFTYMETAL", "NSE_INDEX", "Metal"),
-    Instrument("NIFTYOILANDGAS", "NSE_INDEX", "Oil & Gas"),
     Instrument("NIFTYPHARMA", "NSE_INDEX", "Pharma"),
     Instrument("NIFTYPVTBANK", "NSE_INDEX", "Private Bank"),
     Instrument("NIFTYPSE", "NSE_INDEX", "PSE"),
     Instrument("NIFTYPSUBANK", "NSE_INDEX", "PSU Bank"),
     Instrument("NIFTYREALTY", "NSE_INDEX", "Realty"),
+)
+
+# Sector indices left off the default map because many brokers do not publish
+# them. A trader can still add one from search; it keeps its sector name.
+OPTIONAL_SECTORS: tuple[Instrument, ...] = (
+    Instrument("NIFTYCONSRDURBL", "NSE_INDEX", "Consumer Durables"),
+    Instrument("NIFTYHEALTHCARE", "NSE_INDEX", "Healthcare"),
+    Instrument("NIFTYINDDEFENCE", "NSE_INDEX", "India Defence"),
+    Instrument("NIFTYOILANDGAS", "NSE_INDEX", "Oil & Gas"),
 )
 
 BENCHMARKS: tuple[Instrument, ...] = (
@@ -129,7 +135,7 @@ LOOKBACK_DAYS = {"daily": 365, "weekly": 730}
 _CLOSES_CACHE = LockedTTLCache(maxsize=256, ttl=300)
 
 _BENCHMARKS_BY_SYMBOL = {b.symbol: b for b in BENCHMARKS}
-_SECTORS_BY_KEY = {(s.symbol, s.exchange): s for s in SECTORS}
+_SECTORS_BY_KEY = {(s.symbol, s.exchange): s for s in (*SECTORS, *OPTIONAL_SECTORS)}
 
 
 def _error(message: str, status: int = 400) -> tuple[bool, dict[str, Any], int]:
@@ -152,6 +158,10 @@ def list_options() -> tuple[bool, dict[str, Any], int]:
                 "max_instruments": MAX_INSTRUMENTS,
                 "sectors": [
                     {"symbol": s.symbol, "exchange": s.exchange, "label": s.label} for s in SECTORS
+                ],
+                "optional_sectors": [
+                    {"symbol": s.symbol, "exchange": s.exchange, "label": s.label}
+                    for s in OPTIONAL_SECTORS
                 ],
                 "max_tail": MAX_TAIL,
             },

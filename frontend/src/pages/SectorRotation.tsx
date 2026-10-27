@@ -632,7 +632,9 @@ export default function SectorRotation() {
     // Until the sector list arrives the defaults are unknown, and adding then
     // would save a list without them.
     if (!options || isOnMap(hit) || onMap.length >= maxInstruments) return
-    const known = options?.sectors.find((s) => instrumentKey(s) === instrumentKey(hit))
+    const known = [...options.sectors, ...(options.optional_sectors ?? [])].find(
+      (s) => instrumentKey(s) === instrumentKey(hit)
+    )
     store.setInstruments([
       ...onMap,
       {

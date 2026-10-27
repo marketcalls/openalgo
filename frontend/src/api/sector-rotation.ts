@@ -17,8 +17,10 @@ export interface RotationOptions {
   /** Exchanges a symbol on the map may come from: cash equity and indices. */
   exchanges: string[]
   max_instruments: number
-  /** The default map: every NSE sector index. */
+  /** The default map: the NSE sector indices brokers commonly publish. */
   sectors: RotationInstrument[]
+  /** Sector indices left off the default map; named like sectors when added from search. */
+  optional_sectors: RotationInstrument[]
   max_tail: number
 }
 

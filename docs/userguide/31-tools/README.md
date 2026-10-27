@@ -134,12 +134,12 @@ Futures candlestick with OI profile overlay.
 
 ### 14. Sector Rotation (`/sector-rotation`)
 
-A relative rotation map: every NSE sector index, or any stocks and indices you add, placed on four quadrants against a benchmark, with the trail each took to get there.
+A relative rotation map: the NSE sector indices brokers commonly publish, or any stocks and indices you add, placed on four quadrants against a benchmark, with the trail each took to get there.
 
 - **RS-Ratio** (horizontal) shows whether the symbol's recent relative strength against the benchmark is running above its longer trend. **RS-Momentum** (vertical) shows whether that relative strength is still accelerating. Both are centred on 100, and recent bars count most.
 - The quadrants read clockwise: **Improving** (weak but turning up), **Leading** (strong and rising), **Weakening** (strong but slowing), **Lagging** (weak and falling).
 - **Benchmark**: Nifty 50, Nifty 500, Bank Nifty, Sensex, Nifty Next 50, Midcap Nifty or Fin Nifty. **Timeframe**: daily, or weekly bars ending Friday built from daily closes. **Tail** sets how many bars of trail to draw.
-- **Data source**: **Broker API** needs an active broker login; **Historify** works without one, once you have downloaded daily history for the indices in Historify. Not every broker publishes every sector index; a symbol with no history is listed under *Not on the map* with the reason instead of failing the whole map.
+- **Data source**: **Broker API** needs an active broker login; **Historify** works without one, once you have downloaded daily history for the indices in Historify. Consumer Durables, Healthcare, India Defence and Oil & Gas are left off the default map because many brokers do not publish them; add them from search when your source has them. A symbol with no history is listed under *Not on the map* with the reason instead of failing the whole map.
 - **Add symbols** with the search box: pick the exchange (NSE or BSE equity, NSE, BSE, MCX or global indices) and search the master contract. Remove a row with the cross on hover, or go back to the sector set with **Reset to sectors**. Up to 40 symbols per map; on the broker source each is one history request.
 - The ranking table toggles each symbol on or off the map and shows how many days (or weeks) it has spent in its current quadrant.
 - Your benchmark, timeframe, tail, data source, symbol list and hidden rows are saved in the browser and restored on your next visit.
