@@ -132,6 +132,21 @@ Futures candlestick with OI profile overlay.
 - **Daily OI change** across strikes
 - Combines price action with positioning data in one view
 
+### 14. Sector Rotation (`/sector-rotation`)
+
+A relative rotation map: every NSE sector index, or any stocks and indices you add, placed on four quadrants against a benchmark, with the trail each took to get there.
+
+- **RS-Ratio** (horizontal) shows whether the symbol is stronger than the benchmark compared with its own recent history. **RS-Momentum** (vertical) shows whether that strength is still building. Both are centred on 100.
+- The quadrants read clockwise: **Improving** (weak but turning up), **Leading** (strong and rising), **Weakening** (strong but slowing), **Lagging** (weak and falling).
+- The calculation: RS = 100 x symbol close / benchmark close, smoothed with a 10-bar EMA; RS-Ratio = 100 + 2 x its 52-bar z-score; RS-Momentum = 100 + 2 x the 52-bar z-score of a 5-bar EMA of the change in RS-Ratio. The **Methodology** button on the page shows the same.
+- **Benchmark**: Nifty 50, Nifty 500, Bank Nifty, Sensex, Nifty Next 50, Midcap Nifty or Fin Nifty. **Timeframe**: daily, or weekly bars ending Friday built from daily closes. **Tail** sets how many bars of trail to draw.
+- **Data source**: **Broker API** needs an active broker login; **Historify** works without one, once you have downloaded daily history for the indices in Historify. Not every broker publishes every sector index; a symbol with no history is listed under *Not on the map* with the reason instead of failing the whole map.
+- **Add symbols** with the search box: pick the exchange (NSE or BSE equity, NSE, BSE, MCX or global indices) and search the master contract. Remove a row with the cross on hover, or go back to the sector set with **Reset to sectors**. Up to 40 symbols per map; on the broker source each is one history request.
+- The ranking table toggles each symbol on or off the map and shows how many days (or weeks) it has spent in its current quadrant.
+- Your benchmark, timeframe, tail, data source, symbol list and hidden rows are saved in the browser and restored on your next visit.
+- **Save image** downloads the map and the ranking as a PNG, titled with the benchmark, timeframe and date.
+- The map describes where symbols stand today; it does not predict what happens next.
+
 ## Tips
 
 - Tools subscribe to live ticks, so **keep the connected broker's WebSocket active** and stay logged in.
