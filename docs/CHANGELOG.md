@@ -8,6 +8,29 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Scalping Terminal charts are now drawn by openalgo-charts, the engine
+  behind the /trading chart, in place of the separate library they used
+  before. They look and read like /trading: the same candle and volume
+  colours in light, dark and analyzer mode, the same legend (symbol, interval,
+  exchange, then open, high, low, close, volume and the candle's change), and
+  times shown in IST.
+- The charts now count down to the close of the forming candle, directly
+  under the last price, as /trading does. The countdown reads your computer's
+  clock, so a clock a few seconds out shows a countdown out by the same
+  amount, and it keeps counting after the market closes.
+- Hovering an earlier candle now holds it in the legend while live prices keep
+  arriving, instead of jumping back to the latest candle on every tick.
+- Index charts (NIFTY, SENSEX and other index symbols) no longer draw an empty
+  volume strip or a "Volume 0" readout, since indices trade no volume.
+- The arrow keys and F6/F7 still place, close and cancel orders as before when
+  a chart has focus. The chart's own keyboard shortcuts are switched off on
+  the scalper so it never takes a key meant as an order.
+- Charts are still off until you turn them on, and the charting engine is now
+  only downloaded at that point, so opening the Scalping Terminal with charts
+  off loads nothing extra.
+
 ### Fixed
 
 - Sandbox orders could occasionally fail to place with an error, and when
