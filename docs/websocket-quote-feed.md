@@ -100,16 +100,23 @@ OpenAlgo provides a unified WebSocket server (port 8765 by default) that normali
 
 ## Data Formats
 
+Market data messages arrive as a JSON envelope: the broker payload is
+nested under `data`, `mode` is the numeric mode (1 LTP, 2 Quote, 3 Depth),
+and `broker` names the adapter that produced the tick when known.
+
 ### LTP Data
 
 ```json
 {
     "type": "market_data",
-    "mode": "LTP",
+    "mode": 1,
     "symbol": "SBIN",
     "exchange": "NSE",
-    "ltp": 625.50,
-    "timestamp": "2024-01-15T10:30:00+05:30"
+    "broker": "zerodha",
+    "data": {
+        "last_price": 625.50,
+        "timestamp": "2024-01-15T10:30:00+05:30"
+    }
 }
 ```
 
@@ -118,47 +125,81 @@ OpenAlgo provides a unified WebSocket server (port 8765 by default) that normali
 ```json
 {
     "type": "market_data",
-    "mode": "QUOTE",
+    "mode": 2,
     "symbol": "SBIN",
     "exchange": "NSE",
-    "ltp": 625.50,
-    "open": 620.00,
-    "high": 628.00,
-    "low": 618.50,
-    "close": 622.00,
-    "volume": 1500000,
-    "change": 3.50,
-    "change_percent": 0.56,
-    "timestamp": "2024-01-15T10:30:00+05:30"
+    "broker": "zerodha",
+    "data": {
+        "ltp": 625.50,
+        "open": 620.00,
+        "high": 628.00,
+        "low": 618.50,
+        "close": 622.00,
+        "volume": 1500000,
+        "timestamp": "2024-01-15T10:30:00+05:30"
+    }
 }
 ```
+
+### Quote-Mode Field Contract
+
+Adapters forward broker payloads with their own key conventions, and some
+mappers only add OHLC fields when the broker snapshot happens to carry
+them. The server normalizes every Quote-mode (`mode: 2`) tick before
+delivery, so clients can rely on a guaranteed field set:
+
+| Field | Guarantee |
+|-------|-----------|
+| `ltp` | Always present. Falls back to `last_price` when an adapter uses that key; `null` when neither is supplied. |
+| `open`, `high`, `low`, `close` | Always present. `null` when the broker did not supply the value. |
+| `volume` | Always present. `null` for instruments without volume (e.g. indices). |
+| `timestamp` | Always present. `null` when the broker did not stamp the tick. |
+
+Semantics:
+
+- **Absence is `null`, never a fabricated value.** A `0` would render as a
+  doji bar on OHLC charts and corrupt interval aggregation, so missing
+  broker values are always `null`.
+- **Broker-supplied values are passed through verbatim**, including zeros —
+  the server never overwrites adapter data.
+- Higher modes include lower-mode data: a Depth-mode tick (delivered to a
+  Quote subscriber as `mode: 2`) carries the same guaranteed field set,
+  plus `depth` when the adapter provided it.
 
 ### Depth Data
 
 ```json
 {
     "type": "market_data",
-    "mode": "DEPTH",
+    "mode": 3,
     "symbol": "SBIN",
     "exchange": "NSE",
-    "ltp": 625.50,
-    "depth": {
-        "buy": [
-            {"price": 625.45, "quantity": 1000, "orders": 5},
-            {"price": 625.40, "quantity": 2500, "orders": 8},
-            {"price": 625.35, "quantity": 1800, "orders": 6},
-            {"price": 625.30, "quantity": 3200, "orders": 12},
-            {"price": 625.25, "quantity": 2100, "orders": 7}
-        ],
-        "sell": [
-            {"price": 625.50, "quantity": 800, "orders": 3},
-            {"price": 625.55, "quantity": 1200, "orders": 4},
-            {"price": 625.60, "quantity": 1500, "orders": 5},
-            {"price": 625.65, "quantity": 2000, "orders": 6},
-            {"price": 625.70, "quantity": 1700, "orders": 5}
-        ]
-    },
-    "timestamp": "2024-01-15T10:30:00+05:30"
+    "broker": "zerodha",
+    "data": {
+        "ltp": 625.50,
+        "open": 620.00,
+        "high": 628.00,
+        "low": 618.50,
+        "close": 622.00,
+        "volume": 1500000,
+        "depth": {
+            "buy": [
+                {"price": 625.45, "quantity": 1000, "orders": 5},
+                {"price": 625.40, "quantity": 2500, "orders": 8},
+                {"price": 625.35, "quantity": 1800, "orders": 6},
+                {"price": 625.30, "quantity": 3200, "orders": 12},
+                {"price": 625.25, "quantity": 2100, "orders": 7}
+            ],
+            "sell": [
+                {"price": 625.50, "quantity": 800, "orders": 3},
+                {"price": 625.55, "quantity": 1200, "orders": 4},
+                {"price": 625.60, "quantity": 1500, "orders": 5},
+                {"price": 625.65, "quantity": 2000, "orders": 6},
+                {"price": 625.70, "quantity": 1700, "orders": 5}
+            ]
+        },
+        "timestamp": "2024-01-15T10:30:00+05:30"
+    }
 }
 ```
 
@@ -200,7 +241,7 @@ async def connect_quote_feed():
         while True:
             data = await ws.recv()
             tick = json.loads(data)
-            print(f"{tick['symbol']}: {tick['ltp']}")
+            print(f"{tick['symbol']}: {tick['data']['ltp']}")
 
 asyncio.run(connect_quote_feed())
 ```
