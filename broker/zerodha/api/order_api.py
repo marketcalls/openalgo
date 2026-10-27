@@ -1,9 +1,12 @@
 import http.client
 import json
 import os
+import secrets
 import threading
 import time
 import urllib.parse
+
+import httpx
 
 from broker.zerodha.mapping.mcx_contract_size import (
     McxQuantityError,
@@ -18,7 +21,7 @@ from broker.zerodha.mapping.transform_data import (
 )
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_oa_symbol
-from utils.httpx_client import get_httpx_client
+from utils.httpx_client import get_httpx_client, request_may_have_been_sent
 from utils.logging import get_logger
 from utils.position_read import (
     PositionReadError,
@@ -207,6 +210,39 @@ class _RejectedResponse:
         self.status_code = status
 
 
+class _RecoveredOrderResponse:
+    """Response-shaped success for an order found after its POST reply was lost."""
+
+    status = 200
+    status_code = 200
+
+
+def _recover_order_by_tag(auth, tag, timeout_seconds=2.0):
+    """Look for a just-accepted order in Kite's order book, without resending it."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            order_book = get_order_book(auth)
+            if order_book.get("status") == "success":
+                for order in order_book.get("data", []):
+                    if order.get("tag") == tag and order.get("order_id"):
+                        order_id = order["order_id"]
+                        logger.warning(
+                            "Recovered Kite order %s from the order book after its POST response was lost",
+                            order_id,
+                        )
+                        return order_id
+        except Exception:
+            # The original POST outcome remains ambiguous; keep checking briefly,
+            # then let the service return its explicit may-have-been-placed result.
+            logger.warning("Could not read Kite's order book while recovering tag %s", tag)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(0.25, remaining))
+
+
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
 
@@ -214,7 +250,8 @@ def place_order_api(data, auth):
     data["apikey"] = BROKER_API_KEY
     # token = get_token(data['symbol'], data['exchange'])
     try:
-        newdata = transform_data(data)
+        tag = f"openalgo{secrets.token_hex(6)}"
+        newdata = transform_data(data, tag=tag)
     except McxQuantityError as exc:
         logger.info(f"Rejected order before sending to Kite: {exc}")
         return _RejectedResponse(), {"status": "error", "message": str(exc)}, None
@@ -251,9 +288,20 @@ def place_order_api(data, auth):
     }
 
     # Make the request using the shared client
-    response = client.post(
-        "https://api.kite.trade/orders/regular", headers=headers, content=payload_encoded
-    )
+    try:
+        response = client.post(
+            "https://api.kite.trade/orders/regular", headers=headers, content=payload_encoded
+        )
+    except httpx.TransportError as exc:
+        if request_may_have_been_sent(exc):
+            recovered_order_id = _recover_order_by_tag(AUTH_TOKEN, tag)
+            if recovered_order_id:
+                response_data = {
+                    "status": "success",
+                    "data": {"order_id": recovered_order_id},
+                }
+                return _RecoveredOrderResponse(), response_data, recovered_order_id
+        raise
 
     # Log raw response
     logger.debug(f"Zerodha raw response: status={response.status_code}, body={response.text}")
