@@ -30,7 +30,7 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 
 ## Video Tutorial
 
-[![What is OpenAlgo](https://img.youtube.com/vi/S5myMo9WUdQ/0.jpg)](https://www.youtube.com/watch?v=S5myMo9WUdQ)
+[![OpenAlgo Explainer](https://img.youtube.com/vi/DgFwpvuxQr8/0.jpg)](https://www.youtube.com/watch?v=DgFwpvuxQr8)
 
 ## Quick Links
 
