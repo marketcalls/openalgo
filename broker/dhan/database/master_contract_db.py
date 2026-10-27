@@ -220,10 +220,13 @@ def assign_values(row):
             return "BSE", "BSE_EQ", "EQ"
 
     elif segment == SEGMENT_INDEX and instrument == "INDEX":
+        # Typed EQ, as Kite types its INDICES segment; the *_INDEX exchange is
+        # what says the row is an index (QA MC-04). History still asks Dhan for
+        # instrument INDEX, which data.py derives from the exchange.
         if exchange_id == "NSE":
-            return "NSE_INDEX", "IDX_I", "INDEX"
+            return "NSE_INDEX", "IDX_I", "EQ"
         if exchange_id == "BSE":
-            return "BSE_INDEX", "IDX_I", "INDEX"
+            return "BSE_INDEX", "IDX_I", "EQ"
 
     elif segment == SEGMENT_EQUITY_DERIVATIVE and instrument in EQUITY_FNO_INSTRUMENTS:
         if exchange_id == "NSE":
