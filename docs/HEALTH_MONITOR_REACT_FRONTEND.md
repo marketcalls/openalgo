@@ -29,7 +29,7 @@ Beautiful, modern dashboard with:
 - Real-time metric cards (FD, Memory, DB, WS, Threads)
 - Status-based color coding (green/yellow/red)
 - Active alerts panel with acknowledge button
-- Live charts (File Descriptors & Memory) using lightweight-charts
+- Live charts (File Descriptors & Memory) using openalgo-charts, the engine the trading terminal uses
 - Statistics cards with min/max/avg
 - Recent metrics table (last 20 samples)
 - Auto-refresh every 10 seconds (toggle on/off)
@@ -40,7 +40,7 @@ Beautiful, modern dashboard with:
 
 **Components Used**:
 - shadcn/ui Card, Badge, Button, Alert, Table
-- lightweight-charts for time-series visualization
+- openalgo-charts for time-series visualization
 - lucide-react icons
 - Sonner toast notifications
 
@@ -166,28 +166,28 @@ useEffect(() => {
 
 ### Live Charts
 ```typescript
-// Uses lightweight-charts from TradingView
-const chart = createChart(containerRef.current, {
-  width: containerRef.current.clientWidth,
-  height: 300,
-  layout: {
-    background: { type: ColorType.Solid, color: 'transparent' },
-    textColor: '#9ca3af',
-  },
-  // ... more config
+// openalgo-charts, driven as the other read-only charts drive it
+const chart = createChart(host, {
+  theme: metricChartTheme(mode, appMode, FD_LINE_COLOR), // the app's theme tokens
+  shortcuts: false,
+  timeNavigator: false,
+  branding: false,
+  grid: { vertLines: false, horzLines: false },
 })
 
-const series = chart.addLineSeries({
-  color: '#3b82f6',
-  lineWidth: 2,
-  title: 'File Descriptors',
+const series = chart.addSeries('line', {
+  style: { color: FD_LINE_COLOR, lineWidth: 2, priceLineVisible: false },
+  priceFormat: { type: 'custom', formatter: (v) => Math.round(v).toString() },
 })
+series.setData(points) // { time: UTC seconds, value }
 ```
 
 - Real-time updates every 10 seconds
-- Responsive (auto-resize on window resize)
-- 24-hour historical data
-- Smooth animations
+- The chart tracks its own container size, so there is no resize handler
+- 6-hour historical data, downsampled to at most 1200 points
+- Times are handed to the chart in real UTC seconds; the chart labels them in
+  IST by itself, so the page carries no time formatter
+- Light, dark and analyzer themes are applied in place with `chart.setTheme`
 
 ### Alert Management
 ```typescript
@@ -299,14 +299,15 @@ const AUTO_REFRESH_INTERVAL = 10000 // Change to desired ms
 
 ### Change Chart Colors
 
-Edit chart configuration in `HealthMonitor.tsx`:
+Edit the line colours at the top of `HealthMonitor.tsx`:
 
 ```typescript
-const series = chart.addLineSeries({
-  color: '#3b82f6', // Change color (hex format)
-  lineWidth: 2,      // Change line width
-})
+const FD_LINE_COLOR = '#3b82f6' // hex format
+const MEMORY_LINE_COLOR = '#10b981'
 ```
+
+The rest of the chart (background, axis text, crosshair) comes from the app's
+theme tokens through `buildChartTheme`, so it is changed in the theme, not here.
 
 ### Add More Metric Cards
 
@@ -472,7 +473,7 @@ See `CONTRIBUTING.md` for guidelines on submitting PRs for new features.
 **Complete React Frontend Built**
 - Modern, beautiful dashboard with shadcn/ui
 - Real-time monitoring with auto-refresh
-- Live charts with lightweight-charts
+- Live charts with openalgo-charts
 - Alert management
 - CSV export
 - Fully responsive and dark mode compatible
