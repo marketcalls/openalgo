@@ -93,6 +93,15 @@ fix, live in [docs/releases](releases/).
   recorded or neither is, so a failed order never reduces your available
   funds.
 
+### Removed
+
+- The lightweight-charts library is no longer part of OpenAlgo. Every chart
+  in the app (the trading terminal, the Scalping Terminal, the straddle, IV,
+  P&L and health monitor charts) now draws with OpenAlgo Charts, so all of
+  them follow the same light, dark and analyzer looks and improve together
+  when the charting engine is upgraded. Nothing to do on your side: the
+  frontend build that ships with an update already contains the change.
+
 ### Dependencies
 
 Security updates. No behaviour change is expected. Two actions sit outside

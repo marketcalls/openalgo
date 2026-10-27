@@ -101,7 +101,7 @@ installed package disagree, test against the package (section 18).
 Tech stack (README): Flask 3, SQLAlchemy 2, Flask-SocketIO, ZeroMQ,
 Argon2-CFFI, cryptography, Agno and LiteLLM (agent); React 19, TypeScript,
 Vite, Tailwind 4, shadcn/ui, TanStack Query, Zustand, CodeMirror, xyflow,
-Lightweight Charts and Plotly. Diagram: `docs/architecture-diagram.png`.
+openalgo-charts and Plotly. Diagram: `docs/architecture-diagram.png`.
 
 ## 4. Product surfaces
 
