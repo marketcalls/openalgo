@@ -37,6 +37,17 @@ fix, live in [docs/releases](releases/).
   a multi-day range the time axis marks each new day with its date. Times are
   in IST, as before. The large faint OpenAlgo text behind each chart is
   replaced by a small mark in its corner.
+- The PnL Tracker chart (`/pnl-tracker`) is now drawn by the same charting
+  engine as the trading terminal. It follows the light, dark and analyzer
+  themes: the MTM curve is green above break-even and red below it in the
+  theme's own profit and loss colours, and the drawdown stays amber in its pane
+  underneath. The current MTM tag on the price axis is green or red by whether
+  the day is up or down, and the current drawdown has an amber tag of its own.
+  Hovering the chart now shows the date and time under the pointer, in IST as
+  before. Switching theme no longer reloads the day's P&L. The Screenshot
+  button saves the same picture as before, the cards and the chart together;
+  the large faint OpenAlgo text behind the chart is replaced by a small mark in
+  its corner.
 
 ### Fixed
 
