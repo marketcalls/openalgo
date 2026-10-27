@@ -33,11 +33,11 @@ logger = get_logger(__name__)
 chart_test_bp = Blueprint("chart_test_bp", __name__)
 
 IST = pytz.timezone("Asia/Kolkata")
-# Seconds to add to a UTC epoch so that, when lightweight-charts renders the
-# value as UTC, the displayed wall-clock equals IST. 5h30m = 19800s = a whole
-# number of minutes, so minute-bucketing is identical before/after the shift.
-# The React page applies the same offset to live ticks so history and live bars
-# line up on the time axis.
+# Seconds added to a UTC epoch so the bar time reads as IST wall-clock seconds.
+# 5h30m = 19800s = a whole number of minutes, so minute-bucketing is identical
+# before/after the shift. The React page buckets live ticks in the same shifted
+# base so history and live bars line up, and removes the shift where it hands a
+# bar to openalgo-charts, which takes real UTC and renders IST itself.
 IST_OFFSET_SECONDS = 19800
 
 # Supported intervals (OpenAlgo format) -> trading days of history to load.

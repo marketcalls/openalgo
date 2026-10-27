@@ -68,7 +68,7 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 - **TanStack Query 5** - Server state management
 - **Zustand 5** - Client state management
 - **React Router 7** - Client-side routing
-- **Plotly.js / Lightweight Charts** - Data visualization
+- **Plotly.js / OpenAlgo Charts** - Data visualization
 - **Socket.IO Client** - Real-time communication
 - **Biome.js** - Fast linter and formatter
 - **Vitest** - Unit testing framework
@@ -539,7 +539,7 @@ More advanced contributions:
 
 3. **React Frontend Features**
    - Build new pages or components
-   - Add data visualizations with Plotly/Lightweight Charts
+   - Add data visualizations with Plotly/OpenAlgo Charts
    - Improve real-time updates via Socket.IO
 
 4. **Performance Optimization**
