@@ -139,7 +139,7 @@ dependencies = [
   "requests==2.34.2",
   "rich==13.7.1",
   "rpds-py==0.30.0",
-  "setuptools==83.0.0",
+  "setuptools==84.1.0",
   "simple-websocket==1.1.0",
   "simplejson==3.20.2",
   "six==1.17.0",
@@ -171,6 +171,13 @@ dependencies = [
   "agno==3.0.5",
   "ddgs>=9.16.0",
 ]
+
+[tool.uv]
+# litellm (through 1.106.x) caps filelock<4.0, but every 3.x from 3.20.4 is
+# vulnerable (GHSA alerts fixed in 4.2.1). litellm only imports FileLock in its
+# proxy CLI, and filelock 4.0 broke only SoftReadWriteLock, which nothing here uses.
+# Drop this once litellm allows filelock 4.
+override-dependencies = ["filelock>=4.2.1"]
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]
