@@ -115,12 +115,13 @@ describe('Navbar More menu', () => {
     expect(await moreMenuLabels()).toEqual(['Platforms', 'Strategies', 'Logs', 'Tools'])
   })
 
-  it('takes Tradebook and Trading as well below lg', async () => {
+  it('takes Tradebook, P&L and Trading as well below lg', async () => {
     screenWidth(800)
     renderNavbar('/dashboard')
 
     expect(await moreMenuLabels()).toEqual([
       'Tradebook',
+      'P&L',
       'Trading',
       'Platforms',
       'Strategies',
