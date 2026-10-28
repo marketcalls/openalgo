@@ -271,6 +271,21 @@ REFUSALS = [
         {"legs": [leg(strike_mode="strike", strike=24500)]},
         "atm_offset",
     ),
+    (
+        "an underlying-percent leg with no percentage",
+        {"legs": [leg(strike_mode="underlying_percent", atm_offset=None)]},
+        "underlying_percent",
+    ),
+    (
+        "an underlying percentage of zero",
+        {"legs": [leg(strike_mode="underlying_percent", atm_offset=None, underlying_percent=0)]},
+        "underlying_percent",
+    ),
+    (
+        "an underlying percentage alongside an ATM offset",
+        {"legs": [leg(strike_mode="underlying_percent", underlying_percent=1)]},
+        "atm_offset",
+    ),
     ("a strike named on an ATM leg", {"legs": [leg(strike=24500)]}, "strike"),
     (
         "an option_type on a futures leg",

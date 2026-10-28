@@ -60,7 +60,7 @@ EXPIRY_RANKS = ("weekly", "next_week", "monthly", "next_month", "current", "next
 SEGMENTS = ("cash", "futures", "options")
 
 #: How an option leg names its strike.
-STRIKE_MODES = ("atm", "strike")
+STRIKE_MODES = ("atm", "strike", "underlying_percent")
 
 #: Offsets from the money, in strike steps. Bounded at five because a basket
 #: that reaches further than that is nearly always a typo, and an unbounded
@@ -841,6 +841,66 @@ def _resolve_atm_strike(
     return atm_strike, target, None, None
 
 
+def _resolve_premium_strike(
+    *,
+    base_symbol: str,
+    option_exchange: str,
+    expiry_symbol: str,
+    option_type: str,
+    target_premium: float,
+    api_key: str | None,
+) -> tuple[float | None, float | None, str | None, str | None]:
+    """Choose one listed strike from a single bulk snapshot of its chain."""
+    strikes = option_symbol_service.get_available_strikes(
+        base_symbol, expiry_symbol, option_type, option_exchange
+    )
+    symbols = [
+        {
+            "symbol": option_symbol_service.construct_option_symbol(
+                base_symbol, expiry_symbol, float(strike), option_type
+            ),
+            "exchange": option_exchange,
+        }
+        for strike in strikes
+    ]
+    if not symbols:
+        return None, None, "No eligible strikes were found for premium selection.", "no_strikes"
+
+    success, response, _status = quotes_service.get_multiquotes(symbols=symbols, api_key=api_key)
+    if not success:
+        return (
+            None,
+            None,
+            (response or {}).get("message") or "Could not fetch option-chain premiums.",
+            "premium_quotes_failed",
+        )
+
+    quote_by_symbol: dict[str, float] = {}
+    for result in (response or {}).get("results", []):
+        data = result.get("data", result)
+        premium = data.get("ltp") if isinstance(data, Mapping) else None
+        if result.get("symbol") and _is_positive_number(premium):
+            quote_by_symbol[result["symbol"]] = float(premium)
+
+    candidates: list[tuple[float, float]] = []
+    for strike, item in zip(strikes, symbols, strict=True):
+        premium = quote_by_symbol.get(item["symbol"])
+        if premium is None:
+            continue
+        candidates.append((float(strike), premium))
+
+    if not candidates:
+        return (
+            None,
+            None,
+            f"No {option_type} strike has a usable live premium.",
+            "no_matching_premium",
+        )
+
+    strike, premium = min(candidates, key=lambda item: (abs(item[1] - target_premium), item[0]))
+    return strike, premium, None, None
+
+
 def resolve_leg(
     leg: Mapping[str, Any],
     underlying: str,
@@ -862,11 +922,14 @@ def resolve_leg(
                             literal date ("28-MAY-26" or "28MAY26"). Futures
                             and options only; default "current".
             ``option_type`` "CE" or "PE". Options only.
-            ``strike_mode`` "atm" or "strike". Options only, default "atm".
+            ``strike_mode`` "atm", "strike" or "underlying_percent". Options only,
+                            default "atm".
             ``atm_offset``  "ATM", "ITM1".."ITM5", "OTM1".."OTM5", default
                             "ATM". Used when ``strike_mode`` is "atm".
             ``strike``      An absolute strike, fractional allowed. Used when
                             ``strike_mode`` is "strike".
+            ``underlying_percent`` Percentage of spot used as the target option premium.
+                            and BANKNIFTY 500-point strikes only).
             ``strike_int``  Optional strike interval. Supplying it switches the
                             ATM calculation from the listed strikes to plain
                             arithmetic.
@@ -1111,6 +1174,7 @@ def _resolve_options_leg(
     ltp: float | None = None
     atm_strike: float | None = None
     offset: str | None = None
+    selected_premium: float | None = None
     detail: dict[str, Any] = {
         "expiry_rank": expiry.rank,
         "expiry_fallback": expiry.fallback,
@@ -1132,7 +1196,7 @@ def _resolve_options_leg(
         # float(), never int(): VEDL25APR24292.5CE is a real contract, and
         # truncating its strike names one that does not exist.
         target_strike = float(declared)
-    else:
+    elif strike_mode == "atm":
         offset_raw = _leg_value(leg, "atm_offset", "atmOffset", "offset") or "ATM"
         offset = str(offset_raw).strip().upper()
         if not ATM_OFFSET_PATTERN.match(offset):
@@ -1193,6 +1257,68 @@ def _resolve_options_leg(
                 atm_strike=atm_strike,
                 **context,
             )
+    else:
+        declared_percent = _leg_value(leg, "underlying_percent", "underlyingPercent")
+        if not _is_positive_number(declared_percent):
+            return _fail_leg(
+                "invalid_underlying_percent",
+                f"Underlying percentage {declared_percent!r} on a {base_symbol} option leg must be positive.",
+                exchange=exchange,
+                expiry=expiry.expiry,
+                expiry_symbol=expiry.expiry_symbol,
+                **context,
+            )
+        if underlying_ltp is not None:
+            if not _is_positive_number(underlying_ltp):
+                return _fail_leg(
+                    "no_ltp",
+                    f"Unusable last price {underlying_ltp!r} supplied for {base_symbol}.",
+                    exchange=exchange,
+                    expiry=expiry.expiry,
+                    expiry_symbol=expiry.expiry_symbol,
+                    **context,
+                )
+            ltp = float(underlying_ltp)
+        else:
+            quote = resolve_underlying_ltp(base_symbol, underlying_exchange, api_key)
+            if not quote.ok:
+                return _fail_leg(
+                    quote.code or "no_ltp",
+                    quote.error or "",
+                    exchange=exchange,
+                    expiry=expiry.expiry,
+                    expiry_symbol=expiry.expiry_symbol,
+                    **context,
+                )
+            ltp = quote.ltp
+            detail["quote_symbol"] = quote.symbol
+            detail["quote_exchange"] = quote.exchange
+        target_premium = ltp * float(declared_percent) / 100
+        target_strike, selected_premium, error, code = _resolve_premium_strike(
+            base_symbol=base_symbol,
+            option_exchange=exchange,
+            expiry_symbol=expiry.expiry_symbol,
+            option_type=option_type,
+            target_premium=target_premium,
+            api_key=api_key,
+        )
+        if target_strike is None:
+            return _fail_leg(
+                code or "no_matching_premium",
+                error or "No strike matched the requested premium.",
+                exchange=exchange,
+                expiry=expiry.expiry,
+                expiry_symbol=expiry.expiry_symbol,
+                **context,
+            )
+        detail.update(
+            {
+                "underlying_percent": float(declared_percent),
+                "underlying_ltp": ltp,
+                "target_premium": target_premium,
+                "selected_premium": selected_premium,
+            }
+        )
 
     symbol = option_symbol_service.construct_option_symbol(
         base_symbol, expiry.expiry_symbol, target_strike, option_type
