@@ -210,13 +210,9 @@ class SamcoWebSocket:
         self.auth_failure_reason = None
 
         # Build headers with session token
-        # Log token info for debugging (first/last 4 chars only for security)
-        token_preview = (
-            f"{self.session_token[:4]}...{self.session_token[-4:]}"
-            if len(self.session_token) > 8
-            else "***"
+        self.logger.info(
+            f"Connecting to {self.WS_URL} with a session token of length {len(self.session_token)}"
         )
-        self.logger.info(f"Connecting to {self.WS_URL} with token: {token_preview}")
 
         # Headers as dict - matching official Samco SDK format
         headers = {"x-session-token": self.session_token}

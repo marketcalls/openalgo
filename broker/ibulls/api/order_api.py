@@ -42,7 +42,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     url = f"{INTERACTIVE_URL}{endpoint}"
 
     logger.debug(f"Request URL: {url}")
-    logger.debug(f"Headers: {headers}")
+    logger.debug(f"Header names: {list(headers)}")
     logger.debug(f"Payload: {json.dumps(payload, indent=2) if payload else 'None'}")
 
     if method == "GET":
