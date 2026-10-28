@@ -271,6 +271,12 @@ def react_sip_backtester():
     return serve_react_app()
 
 
+# Sector Rotation
+@react_bp.route("/sector-rotation", strict_slashes=False)
+def react_sector_rotation():
+    return serve_react_app()
+
+
 # The former path. Kept so an existing bookmark reaches the SPA, which
 # redirects it to the new one rather than showing a not-found.
 @react_bp.route("/portfolio")

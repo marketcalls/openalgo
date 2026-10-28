@@ -30,7 +30,7 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 
 ## Video Tutorial
 
-[![What is OpenAlgo](https://img.youtube.com/vi/S5myMo9WUdQ/0.jpg)](https://www.youtube.com/watch?v=S5myMo9WUdQ)
+[![OpenAlgo Explainer](https://img.youtube.com/vi/DgFwpvuxQr8/0.jpg)](https://www.youtube.com/watch?v=DgFwpvuxQr8)
 
 ## Quick Links
 
@@ -201,7 +201,7 @@ Real-time notifications and command execution:
 
 **Traffic Monitor**: API usage analytics, error tracking, and endpoint statistics
 
-**PnL Tracker**: Real-time profit/loss with interactive charts powered by TradingView Lightweight Charts
+**PnL Tracker**: Real-time profit/loss with interactive charts powered by OpenAlgo Charts
 
 [PnL Tracker Documentation](https://docs.openalgo.in/new-features/pnl-tracker)
 
@@ -232,7 +232,7 @@ Real-time notifications and command execution:
 - **Real-time updates** via Socket.IO (orders, trades, positions, logs)
 - **CodeMirror** for Python and JSON editing with syntax highlighting and themes
 - **xyflow/React Flow** for visual Flow strategy builder
-- **TradingView Lightweight Charts** for P&L and market data visualization
+- **OpenAlgo Charts** for every chart: the trading terminal, scalping, P&L and market data visualization
 - Light and Dark themes with 8 accent colors
 - Mobile-friendly responsive design
 
@@ -276,7 +276,7 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 - **Zustand** - Client state management
 
 ### Data Visualization & Editors
-- **TradingView Lightweight Charts** - Financial charts
+- **OpenAlgo Charts** - Financial charts
 - **CodeMirror** - Code editor for strategies
 - **xyflow/React Flow** - Visual Flow builder
 - **Lucide React** - Icon library
@@ -427,7 +427,7 @@ The AI Agent at `/agent` is deliberately LLM-agnostic. The agent loop and the pr
 - **[Lucide](https://lucide.dev)** - ISC License - Beautiful & consistent icon library
 
 ### Data Visualization
-- **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Apache 2.0 - Financial charting library for market data and P&L visualization
+- **[OpenAlgo Charts](https://github.com/marketcalls/openalgo-charts)** - Apache 2.0 - Financial charting engine behind every chart in the app
 - **[Plotly](https://plotly.com/javascript/)** - MIT License - Interactive charting library for options analytics and visualization
 - **[xyflow/React Flow](https://reactflow.dev)** - MIT License - Highly customizable library for building node-based visual strategy editors
 

@@ -8,6 +8,90 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Changed
+
+- `/trading`, Historify and every other chart now use openalgo-charts 2.6.9
+  (from 2.6.7). Volume studies such as On-Balance Volume and VWAP now work on
+  Renko, range bar, line break and point and figure charts, where before they
+  drew a flat line or nothing, and a custom study reading volume sees it
+  there too. On a Kagi chart, set a volume study's **Compute on** to
+  **Underlying bars**, as before. A study on a higher timeframe (a 15 minute
+  EMA on a 5 minute chart) no longer shows "Insufficient confirmed history"
+  when the loaded history starts just after a weekend or a holiday. OHLC and
+  high-low bars get thicker as you zoom in instead of staying one pixel wide;
+  at the default zoom they look as before. 2.6.9 itself only carries security
+  updates to the library's own build tools and website, so nothing else in
+  the chart changes. Existing custom indicators keep working unchanged.
+- The Scalping Terminal charts are now drawn by openalgo-charts, the engine
+  behind the /trading chart, in place of the separate library they used
+  before. They look and read like /trading: the same candle and volume
+  colours in light, dark and analyzer mode, the same legend (symbol, interval,
+  exchange, then open, high, low, close, volume and the candle's change), and
+  times shown in IST.
+- The charts now count down to the close of the forming candle, directly
+  under the last price, as /trading does. The countdown reads your computer's
+  clock, so a clock a few seconds out shows a countdown out by the same
+  amount, and it keeps counting after the market closes.
+- Hovering an earlier candle now holds it in the legend while live prices keep
+  arriving, instead of jumping back to the latest candle on every tick.
+- Index charts (NIFTY, SENSEX and other index symbols) no longer draw an empty
+  volume strip or a "Volume 0" readout, since indices trade no volume.
+- The arrow keys and F6/F7 still place, close and cancel orders as before when
+  a chart has focus. The chart's own keyboard shortcuts are switched off on
+  the scalper so it never takes a key meant as an order.
+- Charts are still off until you turn them on, and the charting engine is now
+  only downloaded at that point, so opening the Scalping Terminal with charts
+  off loads nothing extra.
+- The Option Greeks charts (`/ivchart`) are now drawn by the same charting
+  engine as the trading terminal. They follow the light, dark and analyzer
+  themes, with the call in the theme's green and the put in its red. Hovering
+  a chart now shows the date and time of the reading under the pointer, and on
+  a multi-day range the time axis marks each new day with its date. Times are
+  in IST, as before. The large faint OpenAlgo text behind each chart is
+  replaced by a small mark in its corner.
+- The PnL Tracker chart (`/pnl-tracker`) is now drawn by the same charting
+  engine as the trading terminal. It follows the light, dark and analyzer
+  themes: the MTM curve is green above break-even and red below it in the
+  theme's own profit and loss colours, and the drawdown stays amber in its pane
+  underneath. The current MTM tag on the price axis is green or red by whether
+  the day is up or down, and the current drawdown has an amber tag of its own.
+  Hovering the chart now shows the date and time under the pointer, in IST as
+  before. Switching theme no longer reloads the day's P&L. The Screenshot
+  button saves the same picture as before, the cards and the chart together;
+  the large faint OpenAlgo text behind the chart is replaced by a small mark in
+  its corner.
+- The Straddle Chart (`/straddle`) is now drawn by the same charting engine as
+  the trading terminal. The time axis reads in IST and marks each new day, and
+  hovering shows the date and time of the bar under the pointer as well as the
+  straddle tooltip. Switching between light, dark and analyzer mode, or showing
+  and hiding Straddle, Spot and Synthetic Fut, now keeps your zoom instead of
+  redrawing the chart from scratch. The large OpenAlgo watermark in the middle
+  of the chart is replaced by a small mark in its corner, and the series names
+  are shown in the legend under the chart rather than beside the price tags.
+  The data, the tooltip and the toggles are unchanged.
+- The Straddle PnL Simulator (`/straddlepnl`) chart is now drawn by the same
+  charting engine as the trading terminal. Profit and loss are drawn in the
+  same green and red as the trading terminal's charts, in light, dark and
+  analyzer mode. The time axis reads in IST and marks each new day,
+  and hovering shows the date and time of the bar under the pointer as well as
+  the P&L tooltip. Switching theme, or showing and hiding P&L, Spot and
+  Synthetic Fut, now keeps your zoom instead of redrawing the chart from
+  scratch. The large OpenAlgo watermark in the middle of the chart is replaced
+  by a small mark in its corner, and the series names are shown in the legend
+  under the chart rather than beside the price tags. The simulation, the
+  tooltip, the summary and the trade log are unchanged.
+- The File Descriptors and Memory Usage charts on the Health Monitor page
+  (`/health`) are now drawn by the same charting engine as the trading
+  terminal. Times on the axis and under the crosshair still read in IST. The
+  charts now follow a switch between light, dark and analyzer mode straight
+  away; before, their axis text and crosshair kept the colours of the theme the
+  page was opened in until it was reloaded. The crosshair's time label also shows the weekday, for
+  example `Tue 27 Oct '26 13:47:10`, and each chart's current value is still
+  tagged on its axis in the line's own colour.
+- The developer chart test page (`/chart/test`) now draws its candles with the
+  trading terminal's charting engine and colours, and follows the light, dark
+  and analyzer themes.
+
 ### Fixed
 
 - Sandbox orders could occasionally fail to place with an error, and when
@@ -20,6 +104,15 @@ fix, live in [docs/releases](releases/).
   saved. The margin is now taken together with the order: either both are
   recorded or neither is, so a failed order never reduces your available
   funds.
+
+### Removed
+
+- The lightweight-charts library is no longer part of OpenAlgo. Every chart
+  in the app (the trading terminal, the Scalping Terminal, the straddle, IV,
+  P&L and health monitor charts) now draws with OpenAlgo Charts, so all of
+  them follow the same light, dark and analyzer looks and improve together
+  when the charting engine is upgraded. Nothing to do on your side: the
+  frontend build that ships with an update already contains the change.
 
 ### Dependencies
 
