@@ -189,7 +189,7 @@ def place_order_api(data, auth):
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data["symbol"], data["exchange"])
-        logger.debug(f"token: {token}")
+        logger.debug("Order API token available")
         newdata = transform_data(data, token)
 
     headers = {
