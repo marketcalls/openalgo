@@ -71,6 +71,7 @@ class GrowwNATSWebSocket:
         self.connected = False
         self.authenticated = False
         self.server_nonce = None  # Server nonce for signing
+        self.connect_sent = False  # CONNECT is sent once per connection
 
         # Groww URLs
         self.ws_url = "wss://socket-api.groww.in"
@@ -285,6 +286,7 @@ class GrowwNATSWebSocket:
         """Handle WebSocket open"""
         logger.info("WebSocket connected to Groww")
         self.connected = True
+        self.connect_sent = False
 
         # NATS protocol: Server sends INFO first, then we respond with CONNECT
         # Don't send CONNECT immediately, wait for INFO message
@@ -391,7 +393,7 @@ class GrowwNATSWebSocket:
                                         )
                                         self._process_nats_message(msg)
 
-            elif text.startswith("PING") or text.startswith("PONG") or text.startswith("+OK"):
+            elif text.startswith(("PING", "PONG", "+OK", "-ERR")):
                 # Parse as text for control messages
                 logger.debug(f"Control message received: {text.strip()}")
                 if self.nats_protocol:
@@ -460,8 +462,13 @@ class GrowwNATSWebSocket:
                 self.server_nonce = server_info["nonce"]
                 logger.debug(f"Server nonce: {self.server_nonce}")
 
-            # Always send CONNECT after INFO (Groww always requires auth)
-            self._send_connect_with_signature()
+            # Only the first INFO of a connection is the handshake. The server
+            # sends another INFO after CONNECT; answering it with a second
+            # CONNECT makes Groww reject the connection with
+            # "-ERR 'maximum subscriptions exceeded'" (nats.py also ignores it).
+            if not self.connect_sent:
+                self.connect_sent = True
+                self._send_connect_with_signature()
 
         elif msg_type == "OK":
             logger.info("NATS: +OK received - Authentication successful")
