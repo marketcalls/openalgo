@@ -187,7 +187,9 @@ again until the bar closes. The brick, range or box size is set from the
 instrument's price when the chart opens (about 0.15 percent of the last close,
 rounded to the tick; a Kagi reversal is twice that) and stays the same as the
 chart pages in older history. Volume under each element is the sum of the time
-bars it was built from.
+bars it was built from, and volume studies such as On-Balance Volume and VWAP
+read the same volume on Chart bars. Kagi is the exception: set a volume study
+on a Kagi chart to **Underlying bars**.
 
 **Chart settings > Price** shows the chart type's own options: the box or range
 size, the reversal, the lines to break, and for Point & Figure how the box is

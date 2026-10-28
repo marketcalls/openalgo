@@ -49,6 +49,13 @@ export const tools: Tool[] = [
     color: 'bg-sky-500',
   },
   {
+    title: 'Sector Rotation',
+    description:
+      'Which NSE sectors, stocks and indices are leading, weakening, lagging or improving against a benchmark, with daily or weekly trails',
+    href: '/sector-rotation',
+    color: 'bg-cyan-500',
+  },
+  {
     title: 'Option Chain',
     description: 'Real-time option chain with live Greeks, OI data, and quick order placement',
     href: '/optionchain',
