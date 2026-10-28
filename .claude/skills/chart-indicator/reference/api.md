@@ -174,6 +174,8 @@ are identified separately so a custom module can use the right surface.
 
 | | |
 | --- | --- |
+| **2.6.9** | No descriptor or export changes: 112 built-ins and 438 indexed names. Security updates to the library's build toolchain and documentation site; the published code is 2.6.8's. |
+| **2.6.8** | No descriptor or export changes. Renko, range bar, line break and point and figure elements carry the volume traded while they formed, so a study on Chart bars reads real `bar.volume` there; Kagi keeps its line thickness in `volume` and needs Underlying bars for a volume study. Higher-timeframe warmup crosses weekends and holidays (an empty history window doubles the next; history is declared missing only past 30 empty days). OHLC and high-low bars widen with the zoom. |
 | **2.6.7** | Independent confirmed higher-timeframe history and warmup via `createTimeframeProvider`, optional descriptor `historyBars`, and provider snapshot capabilities. Compatible custom candles use `planTimeframe`, `aggregateTimeframeBars` and `withTimeframes`. Both chart routes wire the provider; the index contains 438 names and 112 built-ins. Live-only history cannot reconstruct earlier revisions for replay. |
 | **2.6.6** | No descriptor or export changes: 112 built-ins and 433 indexed names. Legend actions retain their positions when readings change; the packaged widget opens the selected instance's settings. |
 | **2.6.5** | No descriptor or export changes. Packaged-widget improvements: running studies before the catalog and searchable, grouped mobile drawing tools with shared favorites. Trade-feed order modification handling changes do not affect indicator calculations. |
@@ -221,7 +223,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 438 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.6.7 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.6.9 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (14)

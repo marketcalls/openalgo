@@ -10,6 +10,18 @@ fix, live in [docs/releases](releases/).
 
 ### Changed
 
+- `/trading`, Historify and every other chart now use openalgo-charts 2.6.9
+  (from 2.6.7). Volume studies such as On-Balance Volume and VWAP now work on
+  Renko, range bar, line break and point and figure charts, where before they
+  drew a flat line or nothing, and a custom study reading volume sees it
+  there too. On a Kagi chart, set a volume study's **Compute on** to
+  **Underlying bars**, as before. A study on a higher timeframe (a 15 minute
+  EMA on a 5 minute chart) no longer shows "Insufficient confirmed history"
+  when the loaded history starts just after a weekend or a holiday. OHLC and
+  high-low bars get thicker as you zoom in instead of staying one pixel wide;
+  at the default zoom they look as before. 2.6.9 itself only carries security
+  updates to the library's own build tools and website, so nothing else in
+  the chart changes. Existing custom indicators keep working unchanged.
 - The Scalping Terminal charts are now drawn by openalgo-charts, the engine
   behind the /trading chart, in place of the separate library they used
   before. They look and read like /trading: the same candle and volume
