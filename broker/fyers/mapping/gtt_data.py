@@ -2,6 +2,7 @@
 # Fyers GTT reference: fyers-api-docs/FYERS_API_v3.md -> "GTT Orders"
 # (GTT Single / GTT OCO / GTT Modify Order / GTT Cancel Order / GTT Order Book)
 
+from broker.fyers.mapping.lot_quantity import from_fyers_qty, to_fyers_qty
 from broker.fyers.mapping.order_data import get_exchange
 from broker.fyers.mapping.transform_data import (
     map_action,
@@ -89,8 +90,13 @@ def build_order_info(data):
     SINGLE simply uses leg1 with the resolved single trigger; the above/below
     rule is an OCO-only constraint, so a SINGLE trigger below the LTP is fine
     in leg1.
+
+    A GTT becomes a real order when it fires, so its quantity goes out in lots
+    on MCX and CDS like any other (lot_quantity.py); raises LotQuantityError.
     """
-    quantity = data["quantity"]
+    quantity = to_fyers_qty(
+        int(float(data["quantity"] or 0)), data.get("symbol"), data.get("exchange")
+    )
     trigger_type = (data.get("trigger_type") or "").upper()
 
     if trigger_type != "OCO":
@@ -212,14 +218,17 @@ def map_gtt_book(gtt_data):
             "product_type", ""
         )
 
+        # Units: Fyers counts MCX and CDS in lots (lot_quantity.py).
+        leg_symbol = oa_symbol or br_symbol
+
         oco_ind = order.get("gtt_oco_ind")
-        legs = [_leg_from_book(action, product, order.get("price_limit"), order.get("qty"))]
+        qty = from_fyers_qty(order.get("qty") or 0, leg_symbol, exchange)
+        legs = [_leg_from_book(action, product, order.get("price_limit"), qty)]
         trigger_prices = [float(order.get("price_trigger") or 0)]
 
         if oco_ind == 2:
-            legs.append(
-                _leg_from_book(action, product, order.get("price2_limit"), order.get("qty2"))
-            )
+            qty2 = from_fyers_qty(order.get("qty2") or 0, leg_symbol, exchange)
+            legs.append(_leg_from_book(action, product, order.get("price2_limit"), qty2))
             trigger_prices.append(float(order.get("price2_trigger") or 0))
             # OpenAlgo presents trigger prices low -> high; Fyers stores leg1
             # (above LTP) first, so sort rather than assume the API's ordering.

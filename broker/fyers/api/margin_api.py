@@ -1,6 +1,7 @@
 import json
 import os
 
+from broker.fyers.mapping.lot_quantity import LotQuantityError
 from broker.fyers.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -30,7 +31,16 @@ def calculate_margin_api(positions, auth):
     BROKER_API_KEY = os.getenv("BROKER_API_KEY")
 
     # Transform positions to Fyers format
-    transformed_positions = transform_margin_positions(positions)
+    try:
+        transformed_positions = transform_margin_positions(positions)
+    except LotQuantityError as exc:
+        # Refuse the whole basket. Pricing the remaining legs would answer a
+        # question the caller did not ask, with a 200 to say so.
+        class MockResponse:
+            status_code = 400
+            status = 400
+
+        return MockResponse(), {"status": "error", "message": str(exc)}
 
     if not transformed_positions:
         error_response = {

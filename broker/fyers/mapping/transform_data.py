@@ -1,6 +1,7 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Fyers Broking Parameters
 
+from broker.fyers.mapping.lot_quantity import to_fyers_qty
 from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
@@ -10,13 +11,22 @@ logger = get_logger(__name__)
 def transform_data(data):
     """
     Transforms the OpenAlgo Platform API request structure to the format expected by the Fyers API.
+
+    Raises:
+        LotQuantityError: an MCX or CDS quantity that is not a whole number of lots.
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
 
-    quantity = int(data["quantity"])
+    # Fyers counts MCX and CDS in lots (broker/fyers/mapping/lot_quantity.py).
+    quantity = to_fyers_qty(int(data["quantity"]), data["symbol"], data["exchange"])
     price = float(data.get("price", 0))
     trigger_price = float(data.get("trigger_price", 0))
-    disclosed_quantity = int(data.get("disclosed_quantity", 0))
+    disclosed_quantity = to_fyers_qty(
+        int(data.get("disclosed_quantity", 0)),
+        data["symbol"],
+        data["exchange"],
+        field="Disclosed quantity",
+    )
 
     transformed = {
         "symbol": symbol,
@@ -41,6 +51,9 @@ def transform_modify_order_data(data):
     """
     Transforms the order modification data to the format expected by Fyers API.
     Handles empty strings and None values for price and trigger_price.
+
+    Raises:
+        LotQuantityError: an MCX or CDS quantity that is not a whole number of lots.
     """
     order_id = data.get("orderid", "N/A")
     try:
@@ -50,6 +63,8 @@ def transform_modify_order_data(data):
             f"Could not parse quantity for order modification {order_id}. Defaulting to 0. Error: {e}"
         )
         quantity = 0
+    # Fyers counts MCX and CDS in lots (broker/fyers/mapping/lot_quantity.py).
+    quantity = to_fyers_qty(quantity, data.get("symbol"), data.get("exchange"))
 
     try:
         price = float(data.get("price", 0)) if data.get("price") else 0.0

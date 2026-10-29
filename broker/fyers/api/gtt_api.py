@@ -34,6 +34,7 @@ from broker.fyers.mapping.gtt_data import (
     transform_modify_gtt,
     transform_place_gtt,
 )
+from broker.fyers.mapping.lot_quantity import LotQuantityError
 from database.token_db_enhanced import get_symbol_info
 from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
@@ -274,6 +275,10 @@ def place_gtt_order(data, auth):
 
         return response, response_data, trigger_id
 
+    except LotQuantityError as e:
+        # Refused before it was sent, with the reason rather than a 500.
+        logger.info(f"Rejected GTT before sending to Fyers: {e}")
+        return _FakeResponse(400), {"s": "error", "message": str(e)}, None
     except BrokerBusyError as busy:
         # Refused before it was sent, so nothing reached Fyers.
         return _FakeResponse(429), {"s": "error", "message": str(busy)}, None
@@ -319,6 +324,9 @@ def modify_gtt_order(data, auth):
             "message": response_data.get("message", "Failed to modify GTT"),
         }, response.status_code
 
+    except LotQuantityError as e:
+        logger.info(f"Rejected GTT modify before sending to Fyers: {e}")
+        return {"status": "error", "message": str(e)}, 400
     except BrokerBusyError as busy:
         return {"status": "error", "message": str(busy)}, 429
     except httpx.HTTPError as e:
