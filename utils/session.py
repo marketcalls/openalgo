@@ -76,15 +76,14 @@ def is_session_valid():
     # Parse login time
     login_time = datetime.fromisoformat(session["login_time"])
 
-    # Get configured expiry time
-    expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-    hour, minute = map(int, expiry_time.split(":"))
+    # The most recent rollover: today's once it has passed, yesterday's before
+    # it. Comparing only against today's let any older login through between
+    # midnight and the rollover, whether it was a day old or a month old.
+    daily_expiry = _todays_rollover_boundary(now_ist)
+    if now_ist < daily_expiry:
+        daily_expiry -= timedelta(days=1)
 
-    # Get today's expiry time
-    daily_expiry = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-    # If current time is past expiry time and login was before expiry time
-    if now_ist > daily_expiry and login_time < daily_expiry:
+    if login_time < daily_expiry:
         logger.info(f"Session expired at {daily_expiry} IST")
         return False
 

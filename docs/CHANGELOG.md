@@ -6,6 +6,23 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Security
+
+- A login cookie from before the daily 3 AM IST session expiry could still
+  read your OpenAlgo API key. Every page turned such a cookie away, but the
+  connections the trading terminal, the charts and the WebSocket test pages use
+  to fetch the API key and the live data settings accepted it, and kept it
+  alive each time it was used. They now require a current login, like every
+  other page. Someone who had copied an old cookie, from a shared browser
+  profile or a saved network log, could have used it to read the key.
+- Between midnight and 3 AM IST, a login of any age counted as current. A login
+  now counts only if it was made after the most recent 3 AM expiry.
+- Nothing changes while you are logged in. After 3 AM, a tab still open from
+  the day before has to log in again before it can fetch the API key or the
+  live data settings, as every other page already required.
+
 ## [2.0.3.1] - 2026-10-30
 
 ### Email Security and Fyers Live Data Release
