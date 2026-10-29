@@ -57,7 +57,7 @@ def test_index_feed_without_scale_fields_stays_at_hundred(mapper):
     quote = mapper.map_to_openalgo_quote(data)
     assert quote["ltp"] == 25123.45
     assert quote["open"] == 25000.0
-    assert mapper.map_index_to_synthetic_depth(data)["ltp"] == 25123.45
+    assert mapper.map_index_to_depth(data)["ltp"] == 25123.45
 
 
 # --- the bug: precision 4 currency ------------------------------------------
