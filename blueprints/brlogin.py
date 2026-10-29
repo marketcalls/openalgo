@@ -570,6 +570,12 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "sahi":
+        # Sahi mints the day's token from the API key and secret in the
+        # environment; there is nothing for the trader to enter.
+        auth_token, error_message = auth_function("sahi")
+        forward_url = "broker.html"
+
     elif broker == "wisdom":
         code = "wisdom"
         logger.debug("Wisdom broker - authentication initiated")
