@@ -26,6 +26,17 @@ export interface Watchlist {
   items: WatchlistItem[]
 }
 
+/** What happened to each name in a pasted list. Every name is in exactly one. */
+export interface BulkAddResult {
+  added: Array<{ symbol: string; exchange: string }>
+  /** Already in the list, or named twice in the paste. */
+  existing: Array<{ symbol: string; exchange: string }>
+  /** Refused because the list is full. */
+  over_limit: Array<{ symbol: string; exchange: string }>
+  /** As the user wrote them: the broker has no instrument by that name. */
+  not_found: string[]
+}
+
 interface Envelope<T> {
   status: 'success' | 'error'
   data: T
@@ -67,6 +78,15 @@ export const watchlistApi = {
       symbol,
       exchange,
     })
+    return res.data.data
+  },
+
+  /** Adds every symbol in pasted text; the server resolves each name. */
+  addMany: async (id: number, text: string): Promise<BulkAddResult> => {
+    const res = await webClient.post<Envelope<BulkAddResult>>(
+      `/watchlist/api/lists/${id}/items/bulk`,
+      { text }
+    )
     return res.data.data
   },
 
