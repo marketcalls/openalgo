@@ -521,6 +521,7 @@ sudo rm -rf /var/lib/docker
 | Pocketful | `pocketful` | No |
 | RMoney | `rmoney` | Yes |
 | Rupeezy | `rupeezy` | No |
+| Sahi | `sahi` | No |
 | Samco | `samco` | No |
 | Shoonya | `shoonya` | No |
 | Tradejini | `tradejini` | No |

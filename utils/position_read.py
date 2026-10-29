@@ -69,6 +69,7 @@ BROKER_DISPLAY_NAMES = {
     "pocketful": "Pocketful",
     "rmoney": "RMoney",
     "rupeezy": "Rupeezy",
+    "sahi": "Sahi",
     "samco": "Samco",
     "shoonya": "Shoonya",
     "tradejini": "Tradejini",

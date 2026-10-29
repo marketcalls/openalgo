@@ -45,6 +45,7 @@ const allBrokers = [
   { id: 'pocketful', name: 'Pocketful', authType: 'oauth' },
   { id: 'rmoney', name: 'RMoney', authType: 'oauth' },
   { id: 'rupeezy', name: 'Rupeezy', authType: 'oauth' },
+  { id: 'sahi', name: 'Sahi', authType: 'totp' },
   { id: 'samco', name: 'Samco', authType: 'totp' },
   { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
   { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
@@ -148,6 +149,7 @@ export default function BrokerSelect() {
       case 'motilal':
       case 'nubra':
       case 'groww':
+      case 'sahi':
       case 'ibulls':
       case 'iifl':
       case 'kotak':
