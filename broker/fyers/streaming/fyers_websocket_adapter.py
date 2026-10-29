@@ -841,6 +841,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Failed to map TBT depth data for {ticker}")
                 return
 
+            # TBT depth carries no LTP: use the real one from the quote feed
+            # when that symbol is subscribed there, never a bid/ask midpoint
+            actual_symbol = subscription.get("actual_symbol", symbol)
+            ltp = (
+                self.fyers_adapter.get_last_ltp(exchange, actual_symbol)
+                if self.fyers_adapter
+                else None
+            )
+            if ltp:
+                mapped_data["ltp"] = ltp
+
             # Add subscription mode for proper topic generation
             mapped_data["subscription_mode"] = 3  # Depth mode
 

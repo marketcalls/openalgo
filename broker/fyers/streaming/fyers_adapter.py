@@ -58,8 +58,8 @@ class FyersAdapter:
         # Threading
         self.lock = threading.Lock()
 
-        # Deduplication tracking
-        self.last_data = {}  # symbol -> {ltp, timestamp} for deduplication
+        # Real LTP per symbol, borrowed by depth messages (which carry none)
+        self.last_ltp = {}  # "EXCHANGE:SYMBOL" -> last traded price from the sf/if feed
 
         # self.logger.info(f"Fyers adapter initialized for user: {userid}")
 
@@ -147,13 +147,13 @@ class FyersAdapter:
                 self.symbol_to_hsm.clear()
                 self.hsm_to_symbol.clear()  # Clear reverse mapping too
                 self.subscription_callbacks.clear()  # Clear callbacks
-                self.last_data.clear()  # Clear deduplication cache
+                self.last_ltp.clear()
                 self.logger.info("Disconnected from Fyers WebSocket (cleared all mappings)")
             else:
                 # Keep mappings but clear active subscriptions for reconnection
                 self.active_subscriptions.clear()
                 self.subscription_callbacks.clear()
-                self.last_data.clear()
+                self.last_ltp.clear()
                 # self.logger.info(f"Disconnected from Fyers WebSocket (preserved {len(self.hsm_to_symbol)} mappings)")
 
         except Exception as e:
@@ -322,6 +322,10 @@ class FyersAdapter:
     def subscribe_depth(self, symbols: list[dict[str, str]], callback: Callable):
         """Subscribe to Depth data"""
         return self.subscribe_symbols(symbols, "DepthUpdate", callback)
+
+    def get_last_ltp(self, exchange: str, symbol: str) -> float | None:
+        """Last traded price seen on the sf/if feed, or None if not subscribed there"""
+        return self.last_ltp.get(f"{exchange}:{symbol}")
 
     def unsubscribe_symbols(self, symbols: list[dict[str, str]]):
         """
@@ -528,20 +532,18 @@ class FyersAdapter:
                 if quote_cb:
                     dispatches.append((quote_cb, "Quote"))
 
+            # Remember the real last traded price. A Fyers depth (dp) message
+            # carries no LTP, so depth messages borrow it from here.
+            if fyers_type in ("sf", "if") and mapped_data.get("ltp"):
+                self.last_ltp[full_symbol] = mapped_data["ltp"]
+
             if not dispatches:
                 return
 
-            # Deduplicate ONCE at the symbol level so we don't drop the second
-            # fan-out leg just because the first leg already updated last_data.
-            symbol_key = full_symbol
+            # No LTP-based de-duplication here: the HSM client sends one
+            # message per changed scrip, and an update that moves only bid,
+            # ask or volume still has to reach subscribers (issue #2318).
             now = int(time.time())
-            current_ltp = mapped_data.get("ltp", 0)
-            if symbol_key in self.last_data:
-                last_ltp = self.last_data[symbol_key].get("ltp", 0)
-                last_time = self.last_data[symbol_key].get("timestamp", 0)
-                if current_ltp == last_ltp and abs(now - last_time) < 0.1:
-                    return
-            self.last_data[symbol_key] = {"ltp": current_ltp, "timestamp": now}
 
             for cb, openalgo_data_type in dispatches:
                 # Re-map per side. The Quote map already happened above; only
@@ -553,6 +555,13 @@ class FyersAdapter:
                         continue
                 else:
                     side_data = dict(mapped_data)
+
+                if fyers_type == "dp":
+                    # Real LTP only, from the quote feed when it is subscribed.
+                    # Without one the field is left out rather than invented.
+                    side_data.pop("ltp", None)
+                    if full_symbol in self.last_ltp:
+                        side_data["ltp"] = self.last_ltp[full_symbol]
 
                 side_data["symbol"] = matched_subscription["symbol"]
                 side_data["exchange"] = matched_subscription["exchange"]
@@ -640,8 +649,8 @@ class FyersAdapter:
                 self.symbol_to_hsm.clear()
             if hasattr(self, "hsm_to_symbol"):
                 self.hsm_to_symbol.clear()
-            if hasattr(self, "last_data"):
-                self.last_data.clear()
+            if hasattr(self, "last_ltp"):
+                self.last_ltp.clear()
 
             # Force cleanup WebSocket client
             if hasattr(self, "ws_client") and self.ws_client:
