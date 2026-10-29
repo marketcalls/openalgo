@@ -144,7 +144,7 @@ class JainamXTSWebSocketClient:
 
             if response.status_code == 200:
                 result = response.json()
-                self.logger.debug(f"[MARKET DATA LOGIN] Response: {result}")
+                self.logger.debug(f"[MARKET DATA LOGIN] Response type: {result.get('type')}")
 
                 if result.get("type") == "success":
                     login_result = result.get("result", {})
@@ -191,7 +191,7 @@ class JainamXTSWebSocketClient:
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
 
-            self.logger.info(f"Connecting to JainamXTS Socket.IO: {connection_url}")
+            self.logger.info(f"Connecting to JainamXTS Socket.IO: {self.base_url}")
             self.logger.info(f"Socket path: {self.SOCKET_PATH}")
 
             # Connect to Socket.IO server
@@ -273,9 +273,7 @@ class JainamXTSWebSocketClient:
             headers = {"Authorization": self.market_data_token, "Content-Type": "application/json"}
 
             self.logger.debug(f"[SUBSCRIPTION REQUEST] URL: {self.API_BASE_URL}")
-            self.logger.debug(
-                f"[SUBSCRIPTION REQUEST] Headers: Authorization={self.market_data_token[:20]}..."
-            )
+            self.logger.debug(f"[SUBSCRIPTION REQUEST] Header names: {list(headers)}")
             self.logger.debug(f"[SUBSCRIPTION REQUEST] Payload: {subscription_request}")
 
             response = requests.post(
@@ -380,9 +378,7 @@ class JainamXTSWebSocketClient:
         self.connected = True
         self.logger.debug("[SOCKET.IO] Connected successfully!")
         self.logger.debug(f"[SOCKET.IO] UserID: {self.actual_user_id}")
-        self.logger.debug(
-            f"[SOCKET.IO] Token: {self.market_data_token[:30] if self.market_data_token else 'None'}..."
-        )
+        self.logger.debug(f"[SOCKET.IO] Market data token present: {bool(self.market_data_token)}")
 
         # Call external callback
         if self.on_open:

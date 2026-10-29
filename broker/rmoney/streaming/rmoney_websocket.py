@@ -270,7 +270,7 @@ class RMoneyWebSocketClient:
             try:
                 if response.status_code == 200:
                     result = response.json()
-                    self.logger.debug(f"[MARKET DATA LOGIN] Response: {result}")
+                    self.logger.debug(f"[MARKET DATA LOGIN] Response type: {result.get('type')}")
 
                     if result.get("type") == "success":
                         login_result = result.get("result", {})

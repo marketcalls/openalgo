@@ -104,6 +104,7 @@ from blueprints.straddle_chart import straddle_bp  # Import the straddle chart b
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
 from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
+from blueprints.strike_profile import strike_profile_bp  # Import the Strike Profile blueprint
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
@@ -342,6 +343,7 @@ def create_app():
     app.register_blueprint(custom_straddle_bp)  # Register custom straddle blueprint
     app.register_blueprint(vol_surface_bp)  # Register vol surface blueprint
     app.register_blueprint(gex_bp)  # Register GEX blueprint
+    app.register_blueprint(strike_profile_bp)  # Register Strike Profile blueprint
     app.register_blueprint(ivsmile_bp)  # Register IV Smile blueprint
     app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
     app.register_blueprint(arbitrage_bp)  # Register Arbitrage blueprint

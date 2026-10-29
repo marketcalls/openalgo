@@ -13,7 +13,7 @@
 | `services/scalping_risk_monitor_service.py` | Long-lived tick evaluation and reducing exits |
 | `frontend/src/pages/Scalping.tsx` | Terminal interaction and state composition |
 | `frontend/src/api/scalping.ts` | Typed blueprint client |
-| `frontend/src/components/scalping/ScalpChart.tsx` | Candles and volume |
+| `frontend/src/components/scalping/ScalpChart.tsx` | Candles, volume, OHLC legend and candle countdown, drawn with openalgo-charts |
 | `frontend/src/components/scalping/SetSLDialog.tsx` | Stop/target/trailing configuration |
 
 ## Session APIs
@@ -41,9 +41,9 @@ Analyzer/live mode is read from the global application setting and used to segre
 
 The page uses the shared browser market-data manager for ticks and Socket.IO order events for throttled order/trade/position refresh. Stale ticks can fall back to multi-quotes. Client filtering keeps displayed book entries scoped to the current day when timestamps are parseable.
 
-History supports `1m`, `5m`, and `15m` with lookbacks of 1, 3, and 9 trading days. Returned chart times are shifted for Lightweight Charts' UTC rendering so displayed bars align with IST. Indices can legitimately have zero volume.
+History supports `1m`, `5m`, and `15m` with lookbacks of 1, 3, and 9 trading days. Returned bar times carry a +5:30 shift (IST wall-clock seconds), which `ScalpChart` uses for its bucket arithmetic. It removes the shift where it hands a bar to openalgo-charts, which takes real UTC seconds and renders them in IST itself. Indices carry zero volume, so their charts draw no volume bars and no volume readout, as `/trading` does for index symbols.
 
-Charts are off by default because three live charts create additional subscriptions and history reconciliation. The charts toggle and timeframe are stored in browser local storage.
+Charts are off by default because three live charts create additional subscriptions and history reconciliation. `ScalpChart` is lazy-loaded, so the charting engine is only downloaded once a trader turns charts on. The engine's keyboard shortcuts are disabled on these charts because the scalper places orders on the arrow keys. The charts toggle and timeframe are stored in browser local storage.
 
 ## Persisted Stops
 

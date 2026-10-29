@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { type QuotesData, tradingApi } from '@/api/trading'
-import { ScalpChart } from '@/components/scalping/ScalpChart'
 import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,6 +44,12 @@ import type {
   SelectedLeg,
 } from '@/types/scalping'
 import { showToast } from '@/utils/toast'
+
+// The charts draw with the openalgo-charts engine, and they are off until the
+// trader turns them on, so the engine is only fetched when they are.
+const ScalpChart = lazy(() =>
+  import('@/components/scalping/ScalpChart').then((m) => ({ default: m.ScalpChart }))
+)
 
 const DEFAULT_STRIKE_COUNT = 10
 const MAX_LOTS = 20
@@ -1352,46 +1357,49 @@ export default function Scalping() {
         )}
       </div>
 
-      {showCharts &&
-        (isSingle ? (
-          <div className="grid grid-cols-1 gap-3">
-            <div className="h-[340px]">
-              <ScalpChart
-                symbol={singleLeg?.symbol ?? ''}
-                exchange={singleLeg?.exchange ?? ''}
-                interval={chartTf}
-                title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
-              />
+      {showCharts && (
+        <Suspense fallback={<div className="h-[340px] rounded-lg border bg-card" />}>
+          {isSingle ? (
+            <div className="grid grid-cols-1 gap-3">
+              <div className="h-[340px]">
+                <ScalpChart
+                  symbol={singleLeg?.symbol ?? ''}
+                  exchange={singleLeg?.exchange ?? ''}
+                  interval={chartTf}
+                  title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
+                />
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="h-[340px]">
-              <ScalpChart
-                symbol={ceLeg?.symbol ?? ''}
-                exchange={ceLeg?.exchange ?? ''}
-                interval={chartTf}
-                title="Call (CE)"
-              />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="h-[340px]">
+                <ScalpChart
+                  symbol={ceLeg?.symbol ?? ''}
+                  exchange={ceLeg?.exchange ?? ''}
+                  interval={chartTf}
+                  title="Call (CE)"
+                />
+              </div>
+              <div className="h-[340px]">
+                <ScalpChart
+                  symbol={underlyingSym}
+                  exchange={underlyingExch}
+                  interval={chartTf}
+                  title={underlying || 'Underlying'}
+                />
+              </div>
+              <div className="h-[340px]">
+                <ScalpChart
+                  symbol={peLeg?.symbol ?? ''}
+                  exchange={peLeg?.exchange ?? ''}
+                  interval={chartTf}
+                  title="Put (PE)"
+                />
+              </div>
             </div>
-            <div className="h-[340px]">
-              <ScalpChart
-                symbol={underlyingSym}
-                exchange={underlyingExch}
-                interval={chartTf}
-                title={underlying || 'Underlying'}
-              />
-            </div>
-            <div className="h-[340px]">
-              <ScalpChart
-                symbol={peLeg?.symbol ?? ''}
-                exchange={peLeg?.exchange ?? ''}
-                interval={chartTf}
-                title="Put (PE)"
-              />
-            </div>
-          </div>
-        ))}
+          )}
+        </Suspense>
+      )}
 
       {/* Order entry */}
       <Card>

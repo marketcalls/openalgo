@@ -23,6 +23,14 @@ from . import groww_nats, groww_nkeys, groww_protobuf
 logger = get_logger(__name__)
 
 
+class GrowwSessionExpired(Exception):
+    """Groww refused the socket-token request because the login has expired"""
+
+
+# Worded so the connection pool's auth-error check ("token expired") matches it
+SESSION_EXPIRED_MESSAGE = "Groww login token expired. Please log in to Groww again."
+
+
 class GrowwNATSWebSocket:
     """
     Simplified WebSocket implementation for Groww
@@ -71,6 +79,16 @@ class GrowwNATSWebSocket:
         self.connected = False
         self.authenticated = False
         self.server_nonce = None  # Server nonce for signing
+        self.connect_sent = False  # CONNECT is sent once per connection
+        self.conn_generation = 0  # Bumped on every open; helper threads exit when it changes
+        self._conn_closed = None  # Set when the current connection closes; wakes its helpers
+
+        # Reconnect loop: exponential backoff, capped, interruptible by disconnect()
+        self._stop_event = threading.Event()
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 50
+        self.base_reconnect_delay = 2
+        self.max_reconnect_delay = 60
 
         # Groww URLs
         self.ws_url = "wss://socket-api.groww.in"
@@ -140,6 +158,8 @@ class GrowwNATSWebSocket:
 
             # Start WebSocket connection
             self.running = True
+            self._stop_event.clear()
+            self.reconnect_attempts = 0
             self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
             self.ws_thread.start()
 
@@ -167,6 +187,15 @@ class GrowwNATSWebSocket:
         except Exception as e:
             logger.error(f"Failed to connect to Groww: {e}")
             self.connected = False
+            # Stop the background thread too, or a failed connect leaves it
+            # reconnecting on its own with nothing left to disconnect it.
+            self.running = False
+            self._stop_event.set()
+            if self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
             raise
 
     def _refresh_auth_token(self):
@@ -219,26 +248,87 @@ class GrowwNATSWebSocket:
                 logger.info(
                     f"Generated socket token successfully, subscription ID: {self.subscription_id}"
                 )
-            else:
-                # Fallback: use the main auth token directly
-                logger.warning(
-                    f"Failed to generate socket token ({response.status_code}): {response.text}"
+            elif response.status_code in (401, 403):
+                # The login token itself is dead. The feed cannot work with it,
+                # so stop instead of retrying until the next login.
+                logger.error(
+                    f"Groww refused the socket token request ({response.status_code}): {response.text}"
                 )
-                logger.warning("Using auth token directly as fallback")
-                self.socket_token = self.auth_token
-                self.subscription_id = "direct_auth"
-                self.nkey_seed = None
+                raise GrowwSessionExpired(SESSION_EXPIRED_MESSAGE)
+            else:
+                # No fallback: the NATS server only accepts a socket token, so
+                # connecting with the login token can never succeed.
+                raise ConnectionError(
+                    f"Failed to generate Groww socket token ({response.status_code}): {response.text}"
+                )
 
+        except GrowwSessionExpired:
+            raise
         except Exception as e:
-            logger.warning(f"Failed to generate socket token: {e}")
-            logger.warning("Using auth token directly as fallback")
-            # Fallback to using auth token directly
-            self.socket_token = self.auth_token
-            self.subscription_id = "direct_auth"
-            self.nkey_seed = None
+            logger.error(f"Failed to generate socket token: {e}")
+            raise
 
     def _run_websocket(self):
-        """Run WebSocket in thread"""
+        """Run the WebSocket and reconnect with backoff until stopped.
+
+        One loop on one thread: _on_close only flips flags, so reconnects never
+        nest inside the previous connection's close callback.
+        """
+        while self.running:
+            self._run_once()
+            if not self._prepare_reconnect():
+                break
+
+        logger.info("Groww WebSocket thread exiting")
+
+    def _prepare_reconnect(self) -> bool:
+        """Wait out the backoff and fetch a fresh socket token.
+
+        Returns True when the next connection can be opened, False when the
+        feed should stop (disconnect, expired login, or too many failures).
+        """
+        while self.running:
+            self.reconnect_attempts += 1
+            if self.reconnect_attempts > self.max_reconnect_attempts:
+                logger.error(
+                    f"Groww feed reconnect failed {self.max_reconnect_attempts} times; giving up"
+                )
+                self.running = False
+                self.on_error("Live data from Groww stopped after repeated reconnect failures")
+                return False
+
+            delay = min(
+                self.base_reconnect_delay * 2 ** (self.reconnect_attempts - 1),
+                self.max_reconnect_delay,
+            )
+            logger.info(
+                f"Reconnecting in {delay}s (attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})"
+            )
+            if self._stop_event.wait(delay) or not self.running:
+                return False
+
+            # Re-read a fresh auth token and regenerate the socket token so the
+            # reconnect uses live credentials instead of the dead daily-rolled
+            # token.
+            self._refresh_auth_token()
+            try:
+                self._generate_socket_token()
+            except GrowwSessionExpired as e:
+                logger.error("Groww login expired; stopping the feed until the next login")
+                self.running = False
+                self.on_error(str(e))
+                return False
+            except Exception:
+                continue  # Already logged; back off and try again
+
+            # A fresh protocol handler drops the old connection's SIDs and any
+            # half-parsed data.
+            self.nats_protocol = groww_nats.NATSProtocol()
+            return True
+        return False
+
+    def _run_once(self):
+        """Open one WebSocket connection and block until it closes"""
         try:
             # Check if we should even start
             if not self.running:
@@ -285,6 +375,13 @@ class GrowwNATSWebSocket:
         """Handle WebSocket open"""
         logger.info("WebSocket connected to Groww")
         self.connected = True
+        self.connect_sent = False
+        self.conn_generation += 1
+        generation = self.conn_generation
+        # Helper threads wait on this, so they exit as soon as this connection
+        # closes instead of finishing a sleep first.
+        closed = threading.Event()
+        self._conn_closed = closed
 
         # NATS protocol: Server sends INFO first, then we respond with CONNECT
         # Don't send CONNECT immediately, wait for INFO message
@@ -292,25 +389,23 @@ class GrowwNATSWebSocket:
 
         # For Groww, we might not get explicit +OK, so mark as authenticated after a delay
         def check_auth_status():
-            import time
-
-            time.sleep(2)
+            if closed.wait(2) or generation != self.conn_generation:
+                return
             if self.connected and not self.authenticated:
                 logger.info("No explicit +OK received, assuming authenticated")
                 self.authenticated = True
                 self._resubscribe_all()
 
-        import threading
-
         threading.Thread(target=check_auth_status, daemon=True).start()
 
         # Start periodic PING to keep connection alive and check if we're receiving data
         def periodic_ping():
-            import time
-
             ping_count = 0
-            while self.connected and self.running:  # Check both connected and running flags
-                time.sleep(10)  # Send PING every 10 seconds
+            # Exit once this connection closes or is replaced, or a quick
+            # reconnect would leave the old thread alive next to the new one.
+            while not closed.wait(10):  # Send PING every 10 seconds
+                if generation != self.conn_generation or not self.running:
+                    break
                 if self.connected and self.running and self.ws:
                     try:
                         ping_count += 1
@@ -391,7 +486,7 @@ class GrowwNATSWebSocket:
                                         )
                                         self._process_nats_message(msg)
 
-            elif text.startswith("PING") or text.startswith("PONG") or text.startswith("+OK"):
+            elif text.startswith(("PING", "PONG", "+OK", "-ERR")):
                 # Parse as text for control messages
                 logger.debug(f"Control message received: {text.strip()}")
                 if self.nats_protocol:
@@ -460,8 +555,13 @@ class GrowwNATSWebSocket:
                 self.server_nonce = server_info["nonce"]
                 logger.debug(f"Server nonce: {self.server_nonce}")
 
-            # Always send CONNECT after INFO (Groww always requires auth)
-            self._send_connect_with_signature()
+            # Only the first INFO of a connection is the handshake. The server
+            # sends another INFO after CONNECT; answering it with a second
+            # CONNECT makes Groww reject the connection with
+            # "-ERR 'maximum subscriptions exceeded'" (nats.py also ignores it).
+            if not self.connect_sent:
+                self.connect_sent = True
+                self._send_connect_with_signature()
 
         elif msg_type == "OK":
             logger.info("NATS: +OK received - Authentication successful")
@@ -489,6 +589,8 @@ class GrowwNATSWebSocket:
 
         elif msg_type == "PONG":
             logger.debug("Received PONG from server - Connection alive")
+            # A PONG means the server accepted CONNECT; reset the backoff
+            self.reconnect_attempts = 0
 
         elif msg_type == "MSG":
             logger.debug(
@@ -506,21 +608,10 @@ class GrowwNATSWebSocket:
         logger.info(f"WebSocket closed: {close_status_code} - {close_msg}")
         self.connected = False
         self.authenticated = False
-
-        # Only attempt reconnection if still running (not manually disconnected)
-        if self.running:
-            logger.info("Attempting to reconnect...")
-            time.sleep(5)
-            try:
-                # Re-read a fresh auth token and regenerate the socket token so
-                # the reconnect's Authorization header uses live credentials
-                # instead of the dead daily-rolled token.
-                self._refresh_auth_token()
-                self._generate_socket_token()
-                self._run_websocket()
-            except Exception as e:
-                logger.error(f"Reconnection failed: {e}")
-        else:
+        if self._conn_closed:
+            self._conn_closed.set()
+        # Reconnect is driven by the loop in _run_websocket, not from here
+        if not self.running:
             logger.info("WebSocket closed gracefully - not reconnecting as running=False")
 
     def _process_market_data_msg(self, msg: dict[str, Any]):
@@ -1000,6 +1091,9 @@ class GrowwNATSWebSocket:
 
         # Set disconnect flags first (similar to Angel's approach)
         self.running = False
+        self._stop_event.set()  # Wake the reconnect loop if it is waiting
+        if self._conn_closed:
+            self._conn_closed.set()  # Stop this connection's helper threads
         self.connected = False  # Set this immediately to stop ping thread
         self.authenticated = False  # Reset authentication status
 

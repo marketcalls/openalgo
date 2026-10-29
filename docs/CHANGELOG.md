@@ -6,6 +6,172 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Changed
+
+- `/trading`, Historify and every other chart now use openalgo-charts 2.6.9
+  (from 2.6.7). Volume studies such as On-Balance Volume and VWAP now work on
+  Renko, range bar, line break and point and figure charts, where before they
+  drew a flat line or nothing, and a custom study reading volume sees it
+  there too. On a Kagi chart, set a volume study's **Compute on** to
+  **Underlying bars**, as before. A study on a higher timeframe (a 15 minute
+  EMA on a 5 minute chart) no longer shows "Insufficient confirmed history"
+  when the loaded history starts just after a weekend or a holiday. OHLC and
+  high-low bars get thicker as you zoom in instead of staying one pixel wide;
+  at the default zoom they look as before. 2.6.9 itself only carries security
+  updates to the library's own build tools and website, so nothing else in
+  the chart changes. Existing custom indicators keep working unchanged.
+- The Scalping Terminal charts are now drawn by openalgo-charts, the engine
+  behind the /trading chart, in place of the separate library they used
+  before. They look and read like /trading: the same candle and volume
+  colours in light, dark and analyzer mode, the same legend (symbol, interval,
+  exchange, then open, high, low, close, volume and the candle's change), and
+  times shown in IST.
+- The charts now count down to the close of the forming candle, directly
+  under the last price, as /trading does. The countdown reads your computer's
+  clock, so a clock a few seconds out shows a countdown out by the same
+  amount, and it keeps counting after the market closes.
+- Hovering an earlier candle now holds it in the legend while live prices keep
+  arriving, instead of jumping back to the latest candle on every tick.
+- Index charts (NIFTY, SENSEX and other index symbols) no longer draw an empty
+  volume strip or a "Volume 0" readout, since indices trade no volume.
+- The arrow keys and F6/F7 still place, close and cancel orders as before when
+  a chart has focus. The chart's own keyboard shortcuts are switched off on
+  the scalper so it never takes a key meant as an order.
+- Charts are still off until you turn them on, and the charting engine is now
+  only downloaded at that point, so opening the Scalping Terminal with charts
+  off loads nothing extra.
+- The Option Greeks charts (`/ivchart`) are now drawn by the same charting
+  engine as the trading terminal. They follow the light, dark and analyzer
+  themes, with the call in the theme's green and the put in its red. Hovering
+  a chart now shows the date and time of the reading under the pointer, and on
+  a multi-day range the time axis marks each new day with its date. Times are
+  in IST, as before. The large faint OpenAlgo text behind each chart is
+  replaced by a small mark in its corner.
+- The PnL Tracker chart (`/pnl-tracker`) is now drawn by the same charting
+  engine as the trading terminal. It follows the light, dark and analyzer
+  themes: the MTM curve is green above break-even and red below it in the
+  theme's own profit and loss colours, and the drawdown stays amber in its pane
+  underneath. The current MTM tag on the price axis is green or red by whether
+  the day is up or down, and the current drawdown has an amber tag of its own.
+  Hovering the chart now shows the date and time under the pointer, in IST as
+  before. Switching theme no longer reloads the day's P&L. The Screenshot
+  button saves the same picture as before, the cards and the chart together;
+  the large faint OpenAlgo text behind the chart is replaced by a small mark in
+  its corner.
+- The Straddle Chart (`/straddle`) is now drawn by the same charting engine as
+  the trading terminal. The time axis reads in IST and marks each new day, and
+  hovering shows the date and time of the bar under the pointer as well as the
+  straddle tooltip. Switching between light, dark and analyzer mode, or showing
+  and hiding Straddle, Spot and Synthetic Fut, now keeps your zoom instead of
+  redrawing the chart from scratch. The large OpenAlgo watermark in the middle
+  of the chart is replaced by a small mark in its corner, and the series names
+  are shown in the legend under the chart rather than beside the price tags.
+  The data, the tooltip and the toggles are unchanged.
+- The Straddle PnL Simulator (`/straddlepnl`) chart is now drawn by the same
+  charting engine as the trading terminal. Profit and loss are drawn in the
+  same green and red as the trading terminal's charts, in light, dark and
+  analyzer mode. The time axis reads in IST and marks each new day,
+  and hovering shows the date and time of the bar under the pointer as well as
+  the P&L tooltip. Switching theme, or showing and hiding P&L, Spot and
+  Synthetic Fut, now keeps your zoom instead of redrawing the chart from
+  scratch. The large OpenAlgo watermark in the middle of the chart is replaced
+  by a small mark in its corner, and the series names are shown in the legend
+  under the chart rather than beside the price tags. The simulation, the
+  tooltip, the summary and the trade log are unchanged.
+- The File Descriptors and Memory Usage charts on the Health Monitor page
+  (`/health`) are now drawn by the same charting engine as the trading
+  terminal. Times on the axis and under the crosshair still read in IST. The
+  charts now follow a switch between light, dark and analyzer mode straight
+  away; before, their axis text and crosshair kept the colours of the theme the
+  page was opened in until it was reloaded. The crosshair's time label also shows the weekday, for
+  example `Tue 27 Oct '26 13:47:10`, and each chart's current value is still
+  tagged on its axis in the line's own colour.
+- The developer chart test page (`/chart/test`) now draws its candles with the
+  trading terminal's charting engine and colours, and follows the light, dark
+  and analyzer themes.
+
+### Fixed
+
+- Sandbox orders could occasionally fail to place with an error, and when
+  they did, the order's margin stayed blocked with no order to show for it.
+  Two orders on the same day could be given the same order id, more likely the
+  more orders an account placed that day. Every order now gets an id no other
+  order has. The id keeps its format, the date followed by eight digits.
+- A sandbox order that failed to place for any other reason could also leave
+  its margin blocked, because the margin was taken before the order was
+  saved. The margin is now taken together with the order: either both are
+  recorded or neither is, so a failed order never reduces your available
+  funds.
+
+### Removed
+
+- The lightweight-charts library is no longer part of OpenAlgo. Every chart
+  in the app (the trading terminal, the Scalping Terminal, the straddle, IV,
+  P&L and health monitor charts) now draws with OpenAlgo Charts, so all of
+  them follow the same light, dark and analyzer looks and improve together
+  when the charting engine is upgraded. Nothing to do on your side: the
+  frontend build that ships with an update already contains the change.
+
+### Dependencies
+
+Security updates. No behaviour change is expected. Two actions sit outside
+OpenAlgo itself: install your operating system's certificate update when it is
+published, and if you build the frontend yourself, use a patched Node.js. Both
+are explained below.
+
+- `certifi` 2026.7.22 to 2026.10.19 (GHSA-6q48-6c7w-9gw2, critical). Several
+  eMudhra intermediate certificates were created with private keys that can be
+  recovered, so whoever recovers one could issue a certificate that passes for
+  any website. The new bundle removes `emSign ECC Root CA - G3`, the root that
+  signed them; the other emSign roots stay trusted. Every broker and service
+  address named in OpenAlgo's code was tested against the new bundle before
+  this change, and none stopped working. Nubra uses a different emSign root
+  (G1), which remains trusted.
+- Broker live-data feeds connect through the operating system's certificate
+  store, not certifi, so they are covered by your operating system's own
+  `ca-certificates` update rather than by this release. Install it when it is
+  published (on Ubuntu: `sudo apt update && sudo apt upgrade`). Docker images
+  include it from the first build after it is published.
+- `Pillow` 12.3.0 to 13.0.0 (28 advisories, three critical, including heap
+  overflows in JPEG and TIFF decoding and argument injection into
+  Ghostscript). OpenAlgo's own code does not open images with Pillow; it draws
+  the TOTP QR code at account setup, which was tested on 13.0.0. Pillow 13 is
+  a major release, and nothing it removed is used here. The optional
+  `analysis` group moves to `streamlit` 1.66.1, the first release that accepts
+  Pillow 13.
+- Node.js for frontend builds: 22.23.4 or later on 22, 24.22.1 or later on 24,
+  or 26.12.1 or later, from the October 21 security release (ten advisories,
+  including remote code execution in the Brotli decoder). Node 20 is end of
+  life and gets no fix, so it is dropped from CI and from `engines`, and npm
+  now warns on an unpatched version. Installed servers do not run Node.js: the
+  frontend arrives prebuilt, and the Docker image uses Node only to build the
+  frontend, on 22.23.4.
+- `aiohttp` 3.14.3 to 3.14.5, which also moves `yarl` to 1.25.1. The update
+  closes seven advisories: request smuggling, scheme spoofing, a missing
+  header timeout and unbounded memory and CPU use on the server side, and
+  three in cookie handling on the client side.
+  OpenAlgo does not import aiohttp itself; it is used only by the Agent,
+  through LiteLLM, when it calls an AI provider. It is now pinned in the
+  requirements files, so an existing install upgrades it on its next update
+  instead of keeping the old version.
+- `follow-redirects` 1.16.0 to 1.16.1 in the frontend lockfile: credential
+  headers could survive a redirect to another site. It is not part of the
+  built frontend, because browsers follow redirects themselves.
+- Frontend development tools: `vite` 8.0.16 to 8.1.6, for three advisories in
+  the development server's open-in-editor feature, and `vitest` 4.1.11 to
+  4.1.12, for two advisories in its mock handling. The 8.0 line has no patched
+  release. Both run only when a developer builds or tests the frontend, never
+  on an installed server.
+- `GitPython` 3.1.62 to 3.2.1 in the optional `analysis` group
+  (GHSA-83vg-56qc-22m7, high): creating a submodule could plant a git hook,
+  which then runs code on the next checkout. OpenAlgo never uses GitPython
+  itself, and it is not part of a server install.
+- **Not fixed:** `braces`, used only by the frontend test tools, still has no
+  patched release for GHSA-vfj7-8cjw-p6xm. It never reaches a browser or the
+  server.
+
 ## [2.0.2.9] - 2026-10-17
 
 ### Custom Intervals and Independent Indicator History Release

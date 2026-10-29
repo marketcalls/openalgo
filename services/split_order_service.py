@@ -16,6 +16,7 @@ from utils.constants import (
     VALID_PRODUCT_TYPES,
 )
 from utils.event_bus import bus
+from utils.httpx_client import UNANSWERED_ORDER_MESSAGE, watch_for_unanswered_writes
 from utils.logging import get_logger
 
 # Initialize logger
@@ -106,9 +107,11 @@ def place_single_order(
     Returns:
         Order result dictionary
     """
+    unanswered: list[str] = []
     try:
         # Place the order using place_order_api
-        res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
+        with watch_for_unanswered_writes() as unanswered:
+            res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
             # No per-order event emission - a summary event is emitted at the end of all orders
@@ -124,6 +127,8 @@ def place_single_order(
                 if isinstance(response_data, dict)
                 else "Failed to place order"
             )
+            if unanswered:
+                message = UNANSWERED_ORDER_MESSAGE
             return {
                 "order_num": order_num,
                 "quantity": int(order_data["quantity"]),
@@ -148,7 +153,9 @@ def place_single_order(
             "order_num": order_num,
             "quantity": int(order_data["quantity"]),
             "status": "error",
-            "message": "Failed to place order due to internal error",
+            "message": UNANSWERED_ORDER_MESSAGE
+            if unanswered
+            else "Failed to place order due to internal error",
         }
 
 

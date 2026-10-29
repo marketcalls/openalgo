@@ -297,6 +297,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -314,6 +315,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -345,6 +347,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -363,7 +366,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['20', '22', '24']
+        node-version: ['22', '24']
     defaults:
       run:
         working-directory: frontend
@@ -372,6 +375,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -388,7 +392,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ['20', '22', '24']
+        node-version: ['22', '24']
     defaults:
       run:
         working-directory: frontend
@@ -397,6 +401,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -409,8 +414,10 @@ jobs:
           retention-days: 7
 
   # Frontend E2E tests (Chromium only for speed)
+  # Pinned to 24.04: ubuntu-latest became 26.04, which Playwright supports only
+  # from 1.64.0, and installing its browser fails on the 1.58 this project locks.
   frontend-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -419,6 +426,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -462,6 +470,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          check-latest: true
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - name: Build frontend

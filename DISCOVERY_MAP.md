@@ -35,7 +35,7 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 - Key backend packages include Flask `3.1.3`, Flask-RESTX `1.3.2`, Flask-SocketIO `5.6.1`, httpx `0.28.1`, websockets `15.0.1`, openalgo SDK `2.0.2`, and pytest `9.1.1`. Source: `pyproject.toml:37` through `pyproject.toml:144`.
 - Frontend requires Node `>=20.20.0 || >=22.22.0 || >=24.13.0`. Source: `frontend/package.json:6`.
 - Frontend scripts include Vite dev/build, Vitest, and Playwright e2e. Source: `frontend/package.json:9` through `frontend/package.json:24`.
-- Frontend dependencies include React `^19.2.3`, React Router `^7.15.0`, TanStack Query, XYFlow, Plotly, lightweight-charts, Socket.IO client, Tailwind CSS 4, and Zustand. Source: `frontend/package.json:26` through `frontend/package.json:71`.
+- Frontend dependencies include React `^19.2.3`, React Router `^7.15.0`, TanStack Query, XYFlow, Plotly, openalgo-charts, Socket.IO client, Tailwind CSS 4, and Zustand. Source: `frontend/package.json:26` through `frontend/package.json:71`.
 
 ## Data Stores
 

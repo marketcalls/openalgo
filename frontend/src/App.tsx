@@ -14,6 +14,7 @@ const Home = lazy(() => import('@/pages/Home'))
 const PortfolioBacktester = lazy(() => import('@/pages/PortfolioBacktester'))
 const PortfolioBacktesterResults = lazy(() => import('@/pages/PortfolioBacktesterResults'))
 const SipBacktester = lazy(() => import('@/pages/SipBacktester'))
+const SectorRotation = lazy(() => import('@/pages/SectorRotation'))
 const SipBacktesterResults = lazy(() => import('@/pages/SipBacktesterResults'))
 const PortfolioAnalyzer = lazy(() => import('@/pages/PortfolioAnalyzer'))
 const Faq = lazy(() => import('@/pages/Faq'))
@@ -76,6 +77,7 @@ const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
 const CustomStraddle = lazy(() => import('@/pages/CustomStraddle'))
 const VolSurface = lazy(() => import('@/pages/VolSurface'))
 const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
+const StrikeProfile = lazy(() => import('@/pages/StrikeProfile'))
 const IVSmile = lazy(() => import('@/pages/IVSmile'))
 const OIProfile = lazy(() => import('@/pages/OIProfile'))
 const Arbitrage = lazy(() => import('@/pages/Arbitrage'))
@@ -212,6 +214,7 @@ function App() {
                 <Route path="/sip-backtester" element={<SipBacktester />} />
                 <Route path="/sip-backtester/results" element={<SipBacktesterResults />} />
                 <Route path="/portfolio-analyzer" element={<PortfolioAnalyzer />} />
+                <Route path="/sector-rotation" element={<SectorRotation />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
                 {/* Phase 4: Sandbox & Analyzer */}
@@ -230,6 +233,7 @@ function App() {
                 <Route path="/straddlepnl" element={<CustomStraddle />} />
                 <Route path="/volsurface" element={<VolSurface />} />
                 <Route path="/gex" element={<GEXDashboard />} />
+                <Route path="/strikeprofile" element={<StrikeProfile />} />
                 <Route path="/ivsmile" element={<IVSmile />} />
                 <Route path="/oiprofile" element={<OIProfile />} />
                 <Route path="/arbitrage" element={<Arbitrage />} />

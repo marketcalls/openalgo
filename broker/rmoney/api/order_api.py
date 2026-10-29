@@ -122,6 +122,7 @@ def _invalidate_position_cache(auth):
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    token = get_token(tradingsymbol, exchange)
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
 
@@ -156,13 +157,18 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
         for position in position_list:
             pos_symbol = position.get("TradingSymbol", "")
+            pos_token = position.get("ExchangeInstrumentID", position.get("ExchangeInstrumentId"))
             pos_exchange = position.get("ExchangeSegment", "")
             pos_product = position.get("ProductType", "")
-            if (
-                pos_symbol == tradingsymbol
-                and pos_exchange == xts_exchange
-                and pos_product == producttype
-            ):
+            # XTS names a position its own way ("NIFTY 27OCT2026 CE 22400"), not as the
+            # contract list does ("NIFTY26OCT22400CE"): match the instrument, as the
+            # position book and close all do, and the name only when the position
+            # carries no instrument id.
+            if pos_token not in (None, "") and token:
+                same_instrument = str(pos_token) == str(token)
+            else:
+                same_instrument = pos_symbol == tradingsymbol
+            if same_instrument and pos_exchange == xts_exchange and pos_product == producttype:
                 net_qty = str(position.get("Quantity", 0))
                 logger.debug(f"Found matching position. Net Quantity: {net_qty}")
                 break
@@ -183,7 +189,7 @@ def place_order_api(data, auth):
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data["symbol"], data["exchange"])
-        logger.debug(f"token: {token}")
+        logger.debug("Order API token available")
         newdata = transform_data(data, token)
 
     headers = {

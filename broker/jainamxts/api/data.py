@@ -41,7 +41,7 @@ def get_api_response(endpoint, auth, method="GET", payload="", feed_token=None, 
         logger.debug("=== API Request Details ===")
         logger.debug(f"URL: {url}")
         logger.debug(f"Method: {method}")
-        logger.debug(f"Headers: {json.dumps(headers, indent=2)}")
+        logger.debug(f"Header names: {list(headers)}")
         if params:
             logger.debug(f"Query Params: {json.dumps(params, indent=2)}")
         if payload and payload != "":
@@ -886,11 +886,7 @@ class BrokerData:
 
             # Log the user ID and feed token we're using
             logger.debug(f"Using user ID: {user_id}")
-            logger.debug(
-                f"Using feed token: {feed_token[:20]}..."
-                if feed_token
-                else "No feed token available"
-            )
+            logger.debug("Using feed token" if feed_token else "No feed token available")
 
             # Exchange segment mapping
             exchange_segment_map = {"NSE": 1, "NFO": 2, "CDS": 3, "BSE": 11, "BFO": 12, "MCX": 51}

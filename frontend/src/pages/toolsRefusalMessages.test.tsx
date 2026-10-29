@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     ivSmile: { ...listing(), getIVSmileData: vi.fn() },
     oiTracker: { ...listing(), getOIData: vi.fn(), getMaxPain: vi.fn() },
     oiProfile: { ...listing(), getIntervals: vi.fn(), getProfileData: vi.fn() },
+    strikeProfile: { ...listing(), getProfileData: vi.fn() },
   }
 })
 
@@ -34,6 +35,7 @@ vi.mock('@/api/gamma-density', () => ({ gammaDensityApi: mocks.gamma }))
 vi.mock('@/api/iv-smile', () => ({ ivSmileApi: mocks.ivSmile }))
 vi.mock('@/api/oi-tracker', () => ({ oiTrackerApi: mocks.oiTracker }))
 vi.mock('@/api/oi-profile', () => ({ oiProfileApi: mocks.oiProfile }))
+vi.mock('@/api/strike-profile', () => ({ strikeProfileApi: mocks.strikeProfile }))
 vi.mock('@/lib/Plot2D', () => ({ default: () => null }))
 vi.mock('@/utils/toast', () => ({
   showToast: {
@@ -119,6 +121,13 @@ const PAGES: PageCase[] = [
     dataMethod: 'getProfileData',
     fallback: 'Failed to fetch OI Profile data',
   },
+  {
+    name: 'Strike Profile',
+    load: () => import('./StrikeProfile'),
+    api: mocks.strikeProfile,
+    dataMethod: 'getProfileData',
+    fallback: 'Failed to fetch strike profile',
+  },
 ]
 
 /** A real axios failure with the status and body the server sent. */
@@ -126,7 +135,14 @@ const failure = (status: number, data: unknown) =>
   axiosFailure((adapter) => axios.post('/tools/api/data', {}, { adapter }), status, data)
 
 beforeEach(() => {
-  const apis = [mocks.gex, mocks.gamma, mocks.ivSmile, mocks.oiTracker, mocks.oiProfile]
+  const apis = [
+    mocks.gex,
+    mocks.gamma,
+    mocks.ivSmile,
+    mocks.oiTracker,
+    mocks.oiProfile,
+    mocks.strikeProfile,
+  ]
   for (const api of apis as ApiMock[]) {
     for (const fn of Object.values(api)) fn.mockReset()
     api.getUnderlyings.mockResolvedValue({ status: 'success', underlyings: ['NIFTY'] })
