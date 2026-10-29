@@ -6,7 +6,22 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
-## [Unreleased]
+## [2.0.3.1] - 2026-10-30
+
+### Security Fixes and Fyers Live Data Release
+
+6 commits since 2.0.3.0, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.1-released.md](releases/version-2.0.3.1-released.md).
+This release adds no database migration.
+
+### Highlights
+
+- An expired login can no longer read your OpenAlgo API key.
+- Email checks the mail server's certificate before sending your mail password
+  or a password reset link.
+- Fyers live data arrives complete and on time (#2323).
+- `tornado` 6.6 for three advisories.
 
 ### Security
 
@@ -22,25 +37,8 @@ fix, live in [docs/releases](releases/).
 - Nothing changes while you are logged in. After 3 AM, a tab still open from
   the day before has to log in again before it can fetch the API key or the
   live data settings, as every other page already required.
-
-## [2.0.3.1] - 2026-10-30
-
-### Email Security and Fyers Live Data Release
-
-4 commits since 2.0.3.0, excluding automated frontend build commits and
-including this release. Full notes:
-[version-2.0.3.1-released.md](releases/version-2.0.3.1-released.md).
-This release adds no database migration.
-
-### Highlights
-
-- Email checks the mail server's certificate before sending your mail password
-  or a password reset link.
-- Fyers live data arrives complete and on time (#2323).
-- `tornado` 6.6 for three advisories.
-
-### Security
-
+- **If you think an old login cookie of yours may have been copied,** generate
+  a new key with Regenerate on the API Key page. The old key stops working.
 - Email now checks the mail server's security certificate before logging in.
   Before, OpenAlgo accepted any certificate, so someone able to intercept the
   connection between your OpenAlgo server and your mail server could read your
@@ -83,9 +81,11 @@ This release adds no database migration.
 
 ### Contributors
 
-- **@marketcalls** - mail server certificate verification, the SMTP debug log
-  fix, the Gmail relay message, the tornado security update and the release.
+- **@marketcalls** - the expired-login fix, mail server certificate
+  verification, the SMTP debug log fix, the Gmail relay message, the tornado
+  security update and the release.
 - **@Kalaiviswa** - complete and timely Fyers live data (#2323).
+- **@carfeii** - reported that an expired login could still read the API key.
 - **@ParzivalHack** - reported the mail server certificate issue.
 
 ## [2.0.3.0] - 2026-10-29
