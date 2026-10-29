@@ -10,6 +10,7 @@ import smtplib
 import ssl
 
 from database.settings_db import get_smtp_settings
+from utils.email_utils import CERTIFICATE_UNVERIFIED_MESSAGE, mail_tls_context
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -64,12 +65,9 @@ def debug_smtp_connection():
                 "details": details,
             }
 
-        # Create SSL context
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        context = mail_tls_context()
 
-        details.append("SSL Context created (hostname verification disabled)")
+        details.append("SSL Context created (certificate and host name verified)")
 
         # Choose connection method based on port
         if smtp_port == 465:
@@ -86,8 +84,9 @@ def debug_smtp_connection():
 
         details.append("Connection established")
 
-        # Enable debug output
-        server.set_debuglevel(1)
+        # No smtplib debug output: it prints every command sent to stderr, and
+        # the AUTH line carries the username and password, base64-encoded, into
+        # the server log where nothing redacts it.
 
         # Test authentication
         details.append("Attempting authentication...")
@@ -122,6 +121,11 @@ def debug_smtp_connection():
         error_message = f"Connection failed: {e}"
         details.append(f"Connection error: {e}")
         details.append("Check server address and port")
+
+    except ssl.SSLCertVerificationError as e:
+        error_message = CERTIFICATE_UNVERIFIED_MESSAGE
+        details.append(f"Certificate verification failed: {e.verify_message}")
+        details.append("Enter the SMTP host by its name, not by an IP address")
 
     except ssl.SSLError as e:
         error_message = f"SSL error: {e}"
@@ -172,10 +176,7 @@ def test_gmail_configurations():
         results.append(f"   Mode: {config['ssl_mode']}")
 
         try:
-            # Create SSL context
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+            context = mail_tls_context()
 
             # Test connection
             if config["port"] == 465:
