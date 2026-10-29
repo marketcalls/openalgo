@@ -76,6 +76,7 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 - Pocketful
 - RMoney
 - Rupeezy
+- Sahi
 - Samco
 - Shoonya (Finvasia)
 - Tradejini
