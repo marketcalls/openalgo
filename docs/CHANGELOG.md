@@ -6,6 +6,71 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [2.0.3.1] - 2026-10-30
+
+### Email Security and Fyers Live Data Release
+
+4 commits since 2.0.3.0, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.1-released.md](releases/version-2.0.3.1-released.md).
+This release adds no database migration.
+
+### Highlights
+
+- Email checks the mail server's certificate before sending your mail password
+  or a password reset link.
+- Fyers live data arrives complete and on time (#2323).
+- `tornado` 6.6 for three advisories.
+
+### Security
+
+- Email now checks the mail server's security certificate before logging in.
+  Before, OpenAlgo accepted any certificate, so someone able to intercept the
+  connection between your OpenAlgo server and your mail server could read your
+  mail password and the password reset links OpenAlgo sends. This covers
+  password reset emails, the test email, the SMTP connection check and the
+  SMTP debug tool.
+- **Check after upgrading:** if your SMTP host is entered as an IP address, or
+  your own mail server uses a self-signed certificate, email now stops with
+  "The mail server's security certificate could not be verified". Enter the
+  host by its name, for example `smtp.gmail.com`, and give a private mail
+  server a certificate from a recognised authority. Gmail, Outlook, Zoho and
+  the other public providers need no change.
+- The SMTP debug tool no longer prints the mail server conversation to the
+  server log. That output included the login line, which carries the mail
+  password.
+
+### Fixed
+
+- When Google Workspace's SMTP relay refused an email, OpenAlgo told you to
+  allow one fixed IP address in the Google Admin console. That address belonged
+  to a single machine, so the advice could not work on yours. The message now
+  asks you to allow the public IP address of your own OpenAlgo server, or to use
+  smtp.gmail.com on port 587 with an app password.
+- Fyers: live prices showed LTP on time but volume, bid and ask one update
+  behind, and an update that moved only bid, ask or volume was dropped. Each
+  update is now published whole. Change and change percent are filled from the
+  previous close instead of reading 0, a depth update no longer reports the
+  bid and ask midpoint as the LTP, and an index shows no made-up depth levels
+  (#2323).
+
+### Dependencies
+
+- `tornado` 6.5.10 to 6.6 (GHSA-pcg2-g6cj-q92c and GHSA-r4j5-9xpp-3985,
+  medium; GHSA-pw9p-v7r6-gx4p, low): slow parsing of folded HTTP headers,
+  memory and event-loop use from bodies sent in many small chunks, and an
+  open redirect. OpenAlgo does not import tornado or serve HTTP with it; it is
+  installed for the Jupyter kernel packages. A kernel was started and ran code
+  on 6.6. No behaviour change is expected.
+- The pinned `openalgo` Python SDK remains 2.0.5.
+
+### Contributors
+
+- **@marketcalls** - mail server certificate verification, the SMTP debug log
+  fix, the Gmail relay message, the tornado security update and the release.
+- **@Kalaiviswa** - complete and timely Fyers live data (#2323).
+- **@ParzivalHack** - reported the mail server certificate issue.
+
 ## [2.0.3.0] - 2026-10-29
 
 ### One Chart Engine, Sector Rotation and Strike Profile Release
