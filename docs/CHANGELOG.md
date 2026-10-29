@@ -6,7 +6,49 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
-## [Unreleased]
+## [2.0.3.0] - 2026-10-29
+
+### One Chart Engine, Sector Rotation and Strike Profile Release
+
+36 commits since 2.0.2.9, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.0-released.md](releases/version-2.0.3.0-released.md).
+This release adds no database migration.
+
+### Highlights
+
+- Every chart in OpenAlgo now draws with openalgo-charts, the engine behind
+  `/trading`, upgraded to 2.6.9. lightweight-charts is removed.
+- Sector Rotation (`/sector-rotation`): a relative rotation map of sectors,
+  stocks and indices against a benchmark, from Historify or the broker.
+- Strike Profile (`/strikeprofile`): GEX and DEX by strike and expiry, with
+  the gamma flip and the call and put walls.
+- Sahi joins the supported brokers (#2320).
+- An order the broker accepted is no longer reported as failed when its reply
+  is lost (#2305).
+- Sandbox orders get unique ids, and a failed sandbox order never keeps its
+  margin blocked.
+
+### Added
+
+- **Sector Rotation** at `/sector-rotation` places every NSE sector index, or
+  any stocks and indices you add, on four quadrants (Leading, Weakening,
+  Lagging, Improving) against a benchmark, with a trail of daily or weekly
+  bars. Prices come from Historify or your broker. A symbol needs 44 daily
+  sessions or 20 weeks of shared history to appear. Consumer Durables,
+  Healthcare, India Defence and Oil & Gas are off the default map, because
+  many brokers do not publish them, and can be added from search. Settings
+  are saved across visits, and the map can be saved as an image.
+- **Strike Profile** at `/strikeprofile` shows gamma exposure (GEX) and delta
+  exposure (DEX) in rupees crore for every strike of up to twenty expiries at
+  once, as a strike by expiry heatmap. Each expiry's peaks are marked, and the
+  page shows the gamma flip level and the call and put walls. Each expiry
+  costs one option chain request.
+- **Sahi broker.** Sign in with the API key and secret from Sahi; the key must
+  be approved once per trading day in Sahi's API Dashboard. Orders, smart
+  orders, books, funds, margin, quotes, depth, history and live streaming on
+  NSE, BSE, NFO and BFO. MCX is not loaded, because Sahi does not yet allow
+  trading it.
 
 ### Changed
 
@@ -104,6 +146,44 @@ fix, live in [docs/releases](releases/).
   saved. The margin is now taken together with the order: either both are
   recorded or neither is, so a failed order never reduces your available
   funds.
+- An order the broker had accepted could be reported as failed when the
+  connection dropped before the reply arrived, most often on Windows, so a
+  caller that retried placed it twice (#2067, #2293). Place order, smart
+  order, basket order and split order now answer "The connection to the
+  broker dropped after the order was sent, so it may have been placed. Check
+  the order book before placing it again." with HTTP status 502. An order is
+  never sent twice automatically; only reads are retried once (#2305).
+- Angel: modifying an SL or SL-M order now moves its trigger at the broker;
+  before, the modify answered success and the trigger stayed unchanged
+  (#2279). Daily candles are dated on their own session instead of the
+  evening before, and quotes carry bid and ask quantities, so the option
+  chain shows what is on offer (#2290).
+- RMoney: smart exits on F&O positions find the open position again; before,
+  every one was refused with "No OpenPosition Found" (#2292).
+- Groww: the live feed no longer falls into an endless reconnect loop, and
+  reconnects no longer leak threads or memory (#2312).
+- Dhan: index charts on 30 minutes no longer fail after the close, because
+  the extra bar Dhan appends to index history after the close is dropped
+  (#2308).
+- Flattrade: an empty order, trade or position book no longer prints a
+  warning every five seconds, and an expired session is now logged as one
+  (#2249).
+- Seven XTS brokers and Samco no longer write any part of a session token to
+  the log, and a test refuses any new log line that would (#2313, #1853).
+
+### Symbol master changes
+
+Update any strategy, alert or watchlist that uses an old name below.
+
+- Fyers: NSE debt, warrant and InvIT series now load (#2280). The 44
+  sovereign gold bonds Fyers already loaded are renamed to match Zerodha:
+  `SGBAPR28I` becomes `SGBAPR28I-GB` (#2290).
+- Dhan: every NSE and BSE index now uses the standard OpenAlgo name, so
+  "Nifty100 Alpha 30" becomes `NIFTY100ALPHA30`; headline indices are
+  unchanged. Equity and index rows carry no expiry (#2306).
+- Dhan and Angel: index rows are typed `EQ`, as Zerodha types them; the
+  `NSE_INDEX` or `BSE_INDEX` exchange is what marks an index. Angel drops 101
+  non-tradable CDS bond and NCDEX index rows (#2290, #2306).
 
 ### Removed
 
@@ -168,9 +248,32 @@ are explained below.
   (GHSA-83vg-56qc-22m7, high): creating a submodule could plant a git hook,
   which then runs code on the next checkout. OpenAlgo never uses GitPython
   itself, and it is not part of a server install.
+- `dnspython` 2.8.0 to 2.9.0 and `msgpack` 1.2.2 to 1.2.3 (high). Nothing in
+  OpenAlgo imports either directly; eventlet's DNS resolving of broker hosts
+  was checked on the new version (#2315).
+- `setuptools` 83.0.0 to 84.1.0, and `filelock` to 4.2.4 through a uv
+  override, because LiteLLM still caps it below 4. `zod` 4.6.7 in the
+  frontend, with an override for the copy a frontend dependency nested
+  (#2294).
+- The pinned `openalgo` Python SDK remains 2.0.5.
 - **Not fixed:** `braces`, used only by the frontend test tools, still has no
   patched release for GHSA-vfj7-8cjw-p6xm. It never reaches a browser or the
   server.
+
+### Contributors
+
+- **@marketcalls** - every chart moved to openalgo-charts (#2297 to #2304) and
+  the 2.6.9 upgrade, Sector Rotation, Strike Profile, sandbox order id and
+  margin fixes, credential logging follow-up, Flattrade log noise (#2249),
+  security dependency updates, CI and the release.
+- **@Kalaiviswa** - Sahi broker integration (#2320), lost-reply order safety
+  (#2305), Groww feed reconnects (#2312), Dhan index history and master
+  (#2306, #2308), Fyers and Angel master, history and quote fixes (#2290),
+  and Dependabot fixes (#2294, #2315).
+- **@dmchandru (Chandru Dhanasekar)** - Angel SL order modify trigger (#2279).
+- **@SatriaBagusNurhadianto (Chavaaa)** - XTS token values kept out of logs
+  (#2313).
+- **@dvygo (Deshik Narasimha)** - RMoney smart exit position lookup (#2292).
 
 ## [2.0.2.9] - 2026-10-17
 
