@@ -2466,6 +2466,9 @@ class NodeExecutor:
         expiry_date = self.get_str(node_data, "expiryDate", "")
         offset = self.get_str(node_data, "offset", "ATM")
         option_type = self.get_str(node_data, "optionType", "CE")
+        include_quotes = node_data.get(
+            "includeQuotes", node_data.get("include_quotes", False)
+        ) is True
         self.log(f"Resolving option symbol: {underlying} {option_type} {offset}")
         result = self.client.optionsymbol(
             underlying=underlying,
@@ -2473,6 +2476,7 @@ class NodeExecutor:
             expiry_date=expiry_date,
             offset=offset,
             option_type=option_type,
+            include_quotes=include_quotes,
         )
         self.log(f"Option symbol result: {result}")
         self.store_output(node_data, result)

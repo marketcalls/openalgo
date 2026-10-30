@@ -1353,6 +1353,7 @@ def get_option_symbol(
     offset: str,
     option_type: str,
     expiry_date: str | None = None,
+    include_quotes: bool = False,
 ) -> str:
     """
     Get option symbol for specific strike and expiry.
@@ -1364,9 +1365,11 @@ def get_option_symbol(
         option_type: 'CE' for Call or 'PE' for Put
         expiry_date: Expiry date in 'DDMMMYY' format (e.g., '28OCT25'). Optional when
                      the underlying already includes an expiry.
+        include_quotes: Include the selected option quote in the response.
 
     Returns:
-        JSON with symbol, exchange, lotsize, tick_size, underlying_ltp
+        JSON with symbol, exchange, lotsize, tick_size, underlying_ltp, and the
+        selected option quote when include_quotes is true.
     """
     try:
         params: dict[str, Any] = {
@@ -1377,6 +1380,8 @@ def get_option_symbol(
         }
         if expiry_date is not None:
             params["expiry_date"] = expiry_date
+        if include_quotes:
+            params["include_quotes"] = True
         response = client.optionsymbol(**params)
         return json.dumps(response, indent=2)
     except Exception as e:
