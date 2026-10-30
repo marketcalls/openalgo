@@ -2149,6 +2149,20 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
                         )
                     break
 
+        if strategy.get("move_sl_to_cost"):
+            for leg_id, kind in leg_exits:
+                if kind in _STOP_DRIVEN_EXITS:
+                    moved = risk_adapter.move_opposite_side_to_cost(run, run["legs"][str(leg_id)])
+                    if moved:
+                        events.append(
+                            (
+                                "sl_moved_to_cost",
+                                f"Stop on leg {leg_id} moved {len(moved)} opposite-side legs to cost",
+                                {"severity": "warn"},
+                            )
+                        )
+                    break
+
         aggregate = risk_adapter.evaluate_run(run, strategy)
         if aggregate.lock_armed_now:
             events.append(

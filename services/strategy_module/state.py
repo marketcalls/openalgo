@@ -129,6 +129,7 @@ def init_run_state(run_id: int, strategy_id: int, legs: list[dict]) -> dict[str,
         "lock_armed": False,
         "lock_floor": None,
         "trail_to_entry_active": False,
+        "sl_cost_side": None,
         "tick_source_degraded": False,
         # Set after the stop request is durable and before any broker/API-key
         # work.  Entry claims consult this under the same run lock, closing the
@@ -791,5 +792,6 @@ def snapshot_for_checkpoint(state: dict[str, Any]) -> dict[str, Any]:
         "pnl_trough": state.get("pnl_trough", 0.0),
         "lock_floor": state.get("lock_floor"),
         "trail_to_entry_active": bool(state.get("trail_to_entry_active", False)),
+        "sl_cost_side": state.get("sl_cost_side"),
         "leg_state": deepcopy(state.get("legs", {})),
     }

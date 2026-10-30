@@ -231,7 +231,7 @@ Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `l
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 
-Strategy risk: `overall_sl_hit`, `overall_target_hit`, `lock_profit_armed`, `lock_profit_floor_advanced`, `lock_profit_triggered`, `trail_to_entry_activated`, `eod_squareoff`, `expiry_squareoff`
+Strategy risk: `overall_sl_hit`, `overall_target_hit`, `lock_profit_armed`, `lock_profit_floor_advanced`, `lock_profit_triggered`, `trail_to_entry_activated`, `sl_moved_to_cost`, `eod_squareoff`, `expiry_squareoff`
 
 Tick source: `tick_source_switched_to_polling`, `tick_source_switched_to_ws`, `tick_source_stale`
 
