@@ -28,7 +28,7 @@ broker-api-docs/fyers-api-docs/FYERS_API_v3.md ~line 4167.
 
 import json
 
-from broker.fyers.mapping.lot_quantity import from_fyers_qty
+from broker.fyers.mapping.transform_data import from_fyers_qty
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
 from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
@@ -177,7 +177,7 @@ class FyersOrderUpdateAdapter(BaseOrderUpdateAdapter):
         symbol = to_openalgo_symbol(_pick(data, "symbol") or "", exchange)
 
         # Units, as the order book reports them: Fyers counts MCX and CDS in
-        # lots (broker/fyers/mapping/lot_quantity.py).
+        # lots (broker/fyers/mapping/transform_data.py, from_fyers_qty).
         qty = from_fyers_qty(int(_pick(data, "qty") or 0), symbol, exchange)
         filled_qty = from_fyers_qty(
             int(_pick(data, "qty_filled", "filledQty") or 0), symbol, exchange

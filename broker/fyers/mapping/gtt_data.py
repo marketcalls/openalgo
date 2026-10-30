@@ -2,12 +2,13 @@
 # Fyers GTT reference: fyers-api-docs/FYERS_API_v3.md -> "GTT Orders"
 # (GTT Single / GTT OCO / GTT Modify Order / GTT Cancel Order / GTT Order Book)
 
-from broker.fyers.mapping.lot_quantity import from_fyers_qty, to_fyers_qty
 from broker.fyers.mapping.order_data import get_exchange
 from broker.fyers.mapping.transform_data import (
+    from_fyers_qty,
     map_action,
     map_product_type,
     reverse_map_product_type,
+    to_fyers_qty,
 )
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.logging import get_logger
@@ -92,7 +93,7 @@ def build_order_info(data):
     in leg1.
 
     A GTT becomes a real order when it fires, so its quantity goes out in lots
-    on MCX and CDS like any other (lot_quantity.py); raises LotQuantityError.
+    on MCX and CDS like any other (to_fyers_qty); raises LotQuantityError.
     """
     quantity = to_fyers_qty(
         int(float(data["quantity"] or 0)), data.get("symbol"), data.get("exchange")
@@ -218,7 +219,7 @@ def map_gtt_book(gtt_data):
             "product_type", ""
         )
 
-        # Units: Fyers counts MCX and CDS in lots (lot_quantity.py).
+        # Units: Fyers counts MCX and CDS in lots (see from_fyers_qty).
         leg_symbol = oa_symbol or br_symbol
 
         oco_ind = order.get("gtt_oco_ind")

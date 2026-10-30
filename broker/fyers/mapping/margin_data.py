@@ -1,8 +1,13 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Fyers Margin API
 
-from broker.fyers.mapping.lot_quantity import LotQuantityError, to_fyers_qty
-from broker.fyers.mapping.transform_data import map_action, map_order_type, map_product_type
+from broker.fyers.mapping.transform_data import (
+    LotQuantityError,
+    map_action,
+    map_order_type,
+    map_product_type,
+    to_fyers_qty,
+)
 from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
@@ -76,7 +81,7 @@ def transform_margin_positions(positions):
             # Transform the position
             transformed_position = {
                 "symbol": br_symbol_str,
-                # Fyers counts MCX and CDS in lots (lot_quantity.py).
+                # Fyers counts MCX and CDS in lots (see to_fyers_qty).
                 "qty": to_fyers_qty(int(position["quantity"]), symbol, exchange),
                 "side": map_action(position["action"].upper()),
                 "type": map_order_type(position["pricetype"]),

@@ -34,7 +34,7 @@ from broker.fyers.mapping.gtt_data import (
     transform_modify_gtt,
     transform_place_gtt,
 )
-from broker.fyers.mapping.lot_quantity import LotQuantityError
+from broker.fyers.mapping.transform_data import LotQuantityError
 from database.token_db_enhanced import get_symbol_info
 from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client

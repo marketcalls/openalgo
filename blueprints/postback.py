@@ -149,7 +149,7 @@ def _normalize_dhan(data: dict) -> dict | None:
 
 
 def _normalize_fyers(data: dict) -> dict | None:
-    from broker.fyers.mapping.lot_quantity import from_fyers_qty
+    from broker.fyers.mapping.transform_data import from_fyers_qty
     from broker.fyers.streaming.fyers_order_adapter import (
         _ACTION_MAP,
         _PRICETYPE_MAP,
@@ -164,7 +164,7 @@ def _normalize_fyers(data: dict) -> dict | None:
     exchange = _oa_exchange(data)
     symbol = to_openalgo_symbol(data.get("symbol", ""), exchange)
     # Units, as the order book reports them: Fyers counts MCX and CDS in lots
-    # (broker/fyers/mapping/lot_quantity.py).
+    # (broker/fyers/mapping/transform_data.py, from_fyers_qty).
     qty = from_fyers_qty(int(data.get("qty") or 0), symbol, exchange)
     filled = from_fyers_qty(int(data.get("filledQty") or 0), symbol, exchange)
     remaining = from_fyers_qty(int(data.get("remainingQuantity") or 0), symbol, exchange)

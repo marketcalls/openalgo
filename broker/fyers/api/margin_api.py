@@ -1,8 +1,8 @@
 import json
 import os
 
-from broker.fyers.mapping.lot_quantity import LotQuantityError
 from broker.fyers.mapping.margin_data import parse_margin_response, transform_margin_positions
+from broker.fyers.mapping.transform_data import LotQuantityError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 

@@ -6,8 +6,9 @@ import time
 import httpx
 
 from broker.fyers.api.rate_limiter import MAX_RETRIES, apply_rate_limit, retry_delay_from_headers
-from broker.fyers.mapping.lot_quantity import LotQuantityError, from_fyers_qty
 from broker.fyers.mapping.transform_data import (
+    LotQuantityError,
+    from_fyers_qty,
     map_product_type,
     reverse_map_product_type,
     transform_data,

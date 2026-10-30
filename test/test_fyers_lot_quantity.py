@@ -19,8 +19,8 @@ from types import SimpleNamespace
 import pytest
 
 import broker.fyers.api.order_api as order_api
-from broker.fyers.mapping import lot_quantity
-from broker.fyers.mapping.lot_quantity import LotQuantityError, from_fyers_qty, to_fyers_qty
+from broker.fyers.mapping import transform_data
+from broker.fyers.mapping.transform_data import LotQuantityError, from_fyers_qty, to_fyers_qty
 
 CRUDEOILM = "CRUDEOILM19NOV26FUT"  # 10 barrels a lot
 CRUDEOIL = "CRUDEOIL19NOV26FUT"  # 100 barrels a lot
@@ -43,7 +43,7 @@ def master_contract(monkeypatch):
         size = LOT_SIZES.get((symbol, exchange))
         return SimpleNamespace(lotsize=size) if size else None
 
-    monkeypatch.setattr(lot_quantity, "get_symbol_info", get_symbol_info)
+    monkeypatch.setattr(transform_data, "get_symbol_info", get_symbol_info)
 
 
 class TestConversion:
