@@ -851,6 +851,20 @@ class WebSocketClient:
         await self.ws.send(json.dumps(auth_msg))
         logger.info("Sent authentication request")
 
+    async def _restore_subscriptions(self):
+        """Restore accepted symbols after the proxy creates a fresh adapter."""
+        with self.lock:
+            by_mode = {}
+            for symbol_key, modes in self.active_subscriptions.items():
+                exchange, symbol = symbol_key.split(":", 1)
+                for mode in modes:
+                    by_mode.setdefault(mode, []).append({"symbol": symbol, "exchange": exchange})
+
+        for mode, symbols in sorted(by_mode.items()):
+            await self.ws.send(
+                json.dumps({"action": "subscribe", "symbols": symbols, "mode": mode})
+            )
+
     async def _disconnect(self):
         """Disconnect from WebSocket"""
         if self.ws:
@@ -867,6 +881,7 @@ class WebSocketClient:
                 if data.get("status") == "success":
                     self.authenticated = True
                     logger.info("Authentication successful")
+                    await self._restore_subscriptions()
                 else:
                     logger.error(f"Authentication failed: {data.get('message')}")
 
