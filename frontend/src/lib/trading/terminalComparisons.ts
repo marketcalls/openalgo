@@ -57,6 +57,13 @@ interface Options {
   bucketStart?: (request: BarsRequest, time: number) => number | null
   /** How a comparison's price reads in its legend row. Two decimals by default. */
   formatPrice?: (value: number) => string
+  /**
+   * Where the legend rows start in the price pane: the chart's own
+   * `legendOffset`. The chart moves only its indicator rows by that offset and
+   * leaves a host's rows where the host puts them, so without it these rows
+   * draw over whatever readout the host keeps in that corner.
+   */
+  legendOffset?: { top?: number; left?: number }
 }
 
 /** Where a comparison's legend row is addressed: `cmp:<id>`, then `::hide` or `::close`. */
@@ -663,6 +670,7 @@ export class TerminalComparisons {
   private addLegend(spec: WorkspaceComparison): PaneLegend | null {
     const chart = this.chart
     if (!chart) return null
+    const offset = this.options.legendOffset
     try {
       const legend = new PaneLegend({
         id: `${LEGEND_PREFIX}${spec.id}`,
@@ -671,6 +679,8 @@ export class TerminalComparisons {
         color: spec.color,
         actions: ['hide', 'close'],
         hidden: !spec.visible,
+        ...(offset?.top !== undefined ? { top: offset.top } : {}),
+        ...(offset?.left !== undefined ? { left: offset.left } : {}),
       })
       chart.addPrimitive(legend, chart.primaryPaneIndex())
       return legend
