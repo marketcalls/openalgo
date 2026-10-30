@@ -85,3 +85,33 @@ describe('useLivePrice closed-position gate', () => {
     await waitFor(() => expect(result.current.data[0].ltp).toBe(1350))
   })
 })
+
+describe('useLivePrice broker P&L', () => {
+  beforeEach(() => {
+    marketData.clear()
+  })
+
+  it('keeps the realized part of a partially closed position (#1631)', async () => {
+    // Short 65 at 48.10, broker total -8992.75 at 91.40, of which -6178.25 is
+    // realized from an earlier partial exit. A tick to 92.40 costs another 65.
+    marketData.set('NFO:NIFTY14JUL2624200CE', { data: { ltp: 92.4 }, lastUpdate: Date.now() })
+    const { result } = renderHook(() =>
+      useLivePrice(
+        [
+          {
+            symbol: 'NIFTY14JUL2624200CE',
+            exchange: 'NFO',
+            quantity: -65,
+            average_price: 48.1,
+            ltp: 91.4,
+            pnl: -8992.75,
+          },
+        ],
+        { enabled: true, useMultiQuotesFallback: false }
+      )
+    )
+
+    await waitFor(() => expect(result.current.data[0].ltp).toBe(92.4))
+    expect(result.current.data[0].pnl).toBeCloseTo(-9057.75, 2)
+  })
+})
