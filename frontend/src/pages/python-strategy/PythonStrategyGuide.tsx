@@ -708,13 +708,13 @@ export default function PythonStrategyGuide() {
                     </td>
                     <td className="py-2 pr-3">NSE / BSE / NFO</td>
                     <td className="py-2">
-                      SPECIAL_SESSION 18:00&ndash;19:15. Runs only inside that window, despite being
-                      Sunday
+                      SPECIAL_SESSION 14:20&ndash;15:30 (NFO to 15:40). Runs only inside that
+                      window, despite being Sunday
                     </td>
                   </tr>
                   <tr className="border-b">
                     <td className="py-2 pr-3">MCX</td>
-                    <td className="py-2">SPECIAL_SESSION 18:00&ndash;00:15 next day</td>
+                    <td className="py-2">SPECIAL_SESSION 14:20&ndash;15:30</td>
                   </tr>
                   <tr className="border-b">
                     <td className="py-2 pr-3">CRYPTO</td>
@@ -986,7 +986,7 @@ export default function PythonStrategyGuide() {
                       </li>
                       <li>
                         Add a <strong>SPECIAL_SESSION</strong> row for the date and exchange with
-                        the session timing (e.g. Muhurat: NSE 18:00&ndash;19:15)
+                        the session timing (e.g. Muhurat: NSE 14:20&ndash;15:30)
                       </li>
                       <li>
                         Ensure the relevant day (Sat/Sun) is in your strategy's{' '}

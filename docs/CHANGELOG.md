@@ -8,6 +8,75 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### NSE index freeze limits from 2 November 2026
+
+NSE circular NSE/FAOP/77189 (30 October 2026) lowers every index freeze limit
+from Monday 2 November 2026, returning to NSE's computation method, which the
+October circular had set aside:
+
+| Index | Until 1 Nov | From 2 Nov | Largest single order |
+| --- | --- | --- | --- |
+| NIFTY | 3,510 | 1,800 | 27 lots of 65 (1,755) |
+| BANKNIFTY | 1,440 | 900 | 30 lots of 30 |
+| FINNIFTY | 3,240 | 1,800 | 30 lots of 60 |
+| MIDCPNIFTY | 5,760 | 2,800 | 23 lots of 120 (2,760) |
+| NIFTYNXT50 | 1,125 | 600 | 24 lots of 25 |
+| NIFTYFPI | 53,900 | 8,500 | 7 lots of 1,100 (7,700) |
+
+- **Upgrade before Monday's open.** The exchange rejects any order above the
+  new limit. On the October limits, the `/trading` terminal would let a NIFTY
+  order of 28 to 54 lots go in one piece, the scalping terminal would close a
+  position in pieces of up to 54 lots, and tools reading `freeze_qty` from the
+  symbol and search APIs would split at 3,510. Each of those orders would be
+  rejected.
+- **New installs** get the limits from `data/qtyfreeze.csv`. **Existing
+  installs** get them from `upgrade/migrate_qty_freeze_nov_2026.py`, which
+  `migrate_all.py` runs; restart OpenAlgo afterwards. A limit you set yourself
+  on the Freeze Quantities page is left as it is and listed in the output.
+- **The stored limit is NSE's figure, 1,800 for NIFTY,** not a whole number of
+  lots. OpenAlgo rounds down to whole lots when it splits an order, which gives
+  the last column above (at the lot sizes in force in October).
+- `migrate_qty_freeze_oct_2026.py` is replaced, not kept beside the new script.
+  It treated 1,800 as an old NIFTY limit and raised it, so running both would
+  undo this change each time the migrations ran. The new script handles every
+  value the old one did.
+
+### Diwali Muhurat trading on Sunday 8 November 2026
+
+NSE, BSE and MCX published the Muhurat session on 19 October 2026. The 2026
+calendar OpenAlgo shipped carried a guess of 18:00 to 19:15, with MCX running
+to 00:15, so a `/python` strategy scheduled for that Sunday would have been
+held back during the real session and let run after the market had shut. The
+calendar now carries the published session:
+
+| Segment | Pre-open | Trading |
+| --- | --- | --- |
+| Equity (NSE, BSE) | 14:05 to 14:15 | 14:20 to 15:30 |
+| Equity derivatives (NFO, BFO) | 14:05 to 14:15 | 14:20 to 15:40 |
+| Commodities (MCX, and NSE commodities on Zerodha) | 14:05 to 14:20 | 14:20 to 15:30 |
+| Currency (CDS, BCD) | none | 14:20 to 15:30 |
+
+- **New installs** are seeded with these timings. **Existing installs** are
+  updated when OpenAlgo next starts, and by
+  `upgrade/migrate_muhurat_2026.py`, which `migrate_all.py` runs. An exchange
+  whose session you set or removed on the Holidays page is left as it is.
+- NSE commodities (NCO) is now open for the session; it was missing before.
+- The `/python` guide shows these timings instead of the guess.
+
+### An upgrade no longer erases the holidays you set
+
+- Every upgrade ran `upgrade/migrate_market_holidays.py`, which deleted the
+  whole holiday calendar and reloaded the one OpenAlgo ships. A holiday you
+  added or edited on the Holidays page was undone each time, and one you
+  deleted came back. OpenAlgo did the same at startup whenever no special
+  session was stored, which happens only once you have deleted them all.
+- Both now change only rows OpenAlgo shipped and nobody edited. An install
+  still on the first 2026 calendar (December 2025, with Holi on 10 March and
+  Muhurat on 20 October) is moved to the corrected one; any other calendar is
+  left exactly as it is.
+- A holiday an earlier upgrade erased is not restored. Add it again on the
+  Holidays page, and it now stays.
+
 ### Agent: LiteLLM 1.106.6 and newer models
 
 The Agent's provider and model lists at `/agent/config` come from LiteLLM, which

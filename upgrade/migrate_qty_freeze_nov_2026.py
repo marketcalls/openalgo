@@ -1,31 +1,44 @@
 #!/usr/bin/env python3
-"""Raise the NSE index freeze limits to the values in force from 5 October 2026.
+"""Set the NSE index freeze limits to the values in force from 2 November 2026.
 
-NSE circular NSE/FAOP/76693 (1 October 2026) raised the quantity freeze limits
-for index futures and options:
+NSE circular NSE/FAOP/77189 (30 October 2026) returns the index futures and
+options freeze limits to its computation methodology, which NSE/FAOP/76693 had
+set aside from 5 October 2026. Every limit comes down:
 
-    Index        Old     New     New in lots
-    NIFTY        1,800   3,510   54 x 65
-    BANKNIFTY      600   1,440   48 x 30
-    FINNIFTY     1,800   3,240   54 x 60
-    MIDCPNIFTY   2,800   5,760   48 x 120
-    NIFTYNXT50     600   1,125   45 x 25
-    NIFTYFPI     8,500  53,900   49 x 1,100
+    Index        5 Oct 2026   2 Nov 2026   Largest order at October's lot sizes
+    NIFTY             3,510        1,800   27 x 65 = 1,755
+    BANKNIFTY         1,440          900   30 x 30
+    FINNIFTY          3,240        1,800   30 x 60
+    MIDCPNIFTY        5,760        2,800   23 x 120 = 2,760
+    NIFTYNXT50        1,125          600   24 x 25
+    NIFTYFPI         53,900        8,500   7 x 1,100 = 7,700
+
+The table stores NSE's figure as published, not a whole number of lots: the
+order paths round down to whole lots themselves.
 
 A fresh install picks these up from data/qtyfreeze.csv, but the startup hook
-only seeds an empty table, so an existing install would keep splitting orders
-at the old limits forever. This migration updates the NFO rows in place.
+only seeds an empty table, so an existing install would keep the October limits
+forever, and the exchange rejects every order above the new ones. This
+migration updates the NFO rows in place.
 
 It only changes a row that still holds a value OpenAlgo shipped or NSE
-published before this revision. NSE revised the index limits almost every month
-from November 2025 to September 2026, and the values it published in that time
-were NIFTY 1,800; BANKNIFTY 600 or 900 (900 from 1 April to 30 June 2026);
-FINNIFTY 1,200 or 1,800 (1,200, the shipped seed, in December 2025 and
-January and March 2026); MIDCPNIFTY 2,800; NIFTYNXT50 600; NIFTYFPI 8,500
-(from 1 September 2026). A row an admin set to anything else on the Freeze
-Quantities page is left alone and reported. A missing NIFTYFPI row is added,
-because no release ever seeded one; a missing row for the other five was
-deleted by an admin, so it stays deleted.
+published before this revision: the October limits above, and the values NSE
+published from November 2025 to September 2026, which were NIFTY 1,800;
+BANKNIFTY 600 or 900 (900 from 1 April to 30 June 2026); FINNIFTY 1,200 or
+1,800 (1,200, the seed OpenAlgo shipped until October); MIDCPNIFTY 2,800;
+NIFTYNXT50 600; NIFTYFPI 8,500. Most of those equal the new limits, so a row
+still holding one is already current. A row an admin set to anything else on
+the Freeze Quantities page is left alone and reported. A missing NIFTYFPI row is
+added, because no release before October seeded one; a missing row for the
+other five was deleted by an admin, so it stays deleted.
+
+**It replaces migrate_qty_freeze_oct_2026.py rather than running after it.**
+migrate_all.py runs every script on every upgrade, and the October script
+treated 1,800 as a stale NIFTY limit to raise to 3,510. Left in the list it
+would raise these rows on each upgrade, one script before this one lowered them
+again, and an upgrade stopped between the two would leave limits the exchange
+rejects. This script covers every value the October one replaced, so an install
+that never ran it lands in the same place.
 
 An empty or missing table is left alone: the app seeds it from the CSV, which
 already carries the new limits, and a single inserted row would stop that.
@@ -37,8 +50,8 @@ Idempotent, and safe to re-run.
 
 Usage:
     cd upgrade
-    uv run migrate_qty_freeze_oct_2026.py
-    uv run migrate_qty_freeze_oct_2026.py --status
+    uv run migrate_qty_freeze_nov_2026.py
+    uv run migrate_qty_freeze_nov_2026.py --status
 """
 
 import argparse
@@ -62,12 +75,12 @@ EXCHANGE = "NFO"
 #: Underlying -> (new freeze limit, values it may hold that this revision replaces).
 #: None in the old values means the row may be absent and is then added.
 REVISION = {
-    "NIFTY": (3510, {1800}),
-    "BANKNIFTY": (1440, {600, 900}),
-    "FINNIFTY": (3240, {1200, 1800}),
-    "MIDCPNIFTY": (5760, {2800}),
-    "NIFTYNXT50": (1125, {600}),
-    "NIFTYFPI": (53900, {8500, None}),
+    "NIFTY": (1800, {3510}),
+    "BANKNIFTY": (900, {600, 1440}),
+    "FINNIFTY": (1800, {1200, 3240}),
+    "MIDCPNIFTY": (2800, {5760}),
+    "NIFTYNXT50": (600, {1125}),
+    "NIFTYFPI": (8500, {53900, None}),
 }
 
 
@@ -192,7 +205,7 @@ def status(engine):
     Returns:
         bool: True when the report was produced.
     """
-    print("NSE index freeze limits (5 October 2026) status")
+    print("NSE index freeze limits (2 November 2026) status")
     print("-" * 62)
     steps = plan(engine) if engine is not None else None
     if steps is None:
@@ -263,7 +276,7 @@ def main():
         int: 0 on success, 1 on failure.
     """
     parser = argparse.ArgumentParser(
-        description="Raise the NSE index freeze limits to the 5 October 2026 values"
+        description="Set the NSE index freeze limits to the 2 November 2026 values"
     )
     parser.add_argument(
         "--status", action="store_true", help="Report what would change without changing it"
@@ -284,7 +297,7 @@ def main():
         if args.status:
             return 0 if status(engine) else 1
         print("=" * 62)
-        print("Migration: NSE index freeze limits from 5 October 2026")
+        print("Migration: NSE index freeze limits from 2 November 2026")
         print("=" * 62)
         ok = apply(engine)
         print("-" * 62)

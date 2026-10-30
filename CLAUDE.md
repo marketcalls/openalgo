@@ -622,7 +622,13 @@ schema forever and the change silently never reaches the ~290k live deployments.
   installs and nobody else. Ship a migration that updates the rows, guarded on
   every value OpenAlgo shipped or the exchange published before, and leave an
   empty table to the seed: one inserted row stops the seed from running.
-  `upgrade/migrate_qty_freeze_oct_2026.py` is the pattern.
+  `upgrade/migrate_qty_freeze_nov_2026.py` is the pattern.
+- **A later revision of the same values replaces the earlier migration.**
+  `migrate_all.py` runs every listed script on every upgrade, in order, so an
+  older revision left in the list rewrites the rows before the newer one runs.
+  NSE's November 2026 freeze limits went back to values the October migration
+  treated as stale and raised. Fold the old script's guard values into the new
+  one, then delete the old script and its entry.
 - **SQLite limits shape the approach.** It cannot alter a `CHECK` constraint or
   add a `UNIQUE` column in place: rebuild the table (see
   `migrate_sandbox_trigger_pending.py`) or add a partial unique index instead.

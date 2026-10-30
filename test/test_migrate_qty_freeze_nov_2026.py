@@ -1,10 +1,13 @@
-"""The 5 October 2026 index freeze limits reach new and existing installs.
+"""The 2 November 2026 index freeze limits reach new and existing installs.
 
 The startup hook seeds qty_freeze from data/qtyfreeze.csv only when the table
 is empty, so a new CSV reaches a new install and nothing else. Without the
-migration an existing install kept splitting NIFTY at 1,800 a slice when the
-exchange takes 3,510, and NIFTYFPI options fell through the prefix match to
-NIFTY's limit because they had no row of their own.
+migration an install carrying the 5 October limits would keep sending NIFTY
+orders of up to 3,510 when the exchange now rejects anything above 1,800.
+
+The October migration is not run alongside this one: it treated 1,800 as a
+stale NIFTY limit and raised it, so in migrate_all's list it would undo this
+revision on every upgrade. `test_the_october_migration_is_gone` pins that.
 """
 
 import csv
@@ -21,17 +24,41 @@ from database.engine_factory import create_db_engine
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "upgrade"))
 
-import migrate_qty_freeze_oct_2026 as migration  # noqa: E402
+import migrate_qty_freeze_nov_2026 as migration  # noqa: E402
 
-#: The rows OpenAlgo shipped before this revision, plus rows it must not touch.
-SHIPPED = {
+#: Rows the migration must never touch, present in every scenario.
+OTHERS = {("NFO", "RELIANCE"): 25000, ("MCX", "CRUDEOIL"): 10000}
+
+#: An install that applied the 5 October revision, or was seeded from its CSV.
+OCTOBER = {
+    ("NFO", "NIFTY"): 3510,
+    ("NFO", "BANKNIFTY"): 1440,
+    ("NFO", "FINNIFTY"): 3240,
+    ("NFO", "MIDCPNIFTY"): 5760,
+    ("NFO", "NIFTYNXT50"): 1125,
+    ("NFO", "NIFTYFPI"): 53900,
+    **OTHERS,
+}
+
+#: An install still on the seed OpenAlgo shipped before October, which never
+#: carried a NIFTYFPI row.
+BEFORE_OCTOBER = {
     ("NFO", "NIFTY"): 1800,
     ("NFO", "BANKNIFTY"): 600,
     ("NFO", "FINNIFTY"): 1200,
     ("NFO", "MIDCPNIFTY"): 2800,
     ("NFO", "NIFTYNXT50"): 600,
-    ("NFO", "RELIANCE"): 25000,
-    ("MCX", "CRUDEOIL"): 10000,
+    **OTHERS,
+}
+
+#: NSE/FAOP/77189, as published.
+CIRCULAR = {
+    "NIFTY": 1800,
+    "BANKNIFTY": 900,
+    "FINNIFTY": 1800,
+    "MIDCPNIFTY": 2800,
+    "NIFTYNXT50": 600,
+    "NIFTYFPI": 8500,
 }
 
 NEW = {symbol: new for symbol, (new, _old) in migration.REVISION.items()}
@@ -56,42 +83,53 @@ def _rows(engine):
         return {(exchange, symbol): qty for exchange, symbol, qty in result}
 
 
-def test_an_existing_install_moves_to_the_new_limits(tmp_path):
-    engine = _engine(tmp_path, SHIPPED)
+def _migrated(tmp_path, rows):
+    engine = _engine(tmp_path, rows)
     try:
         assert migration.apply(engine)
-        rows = _rows(engine)
+        return _rows(engine)
     finally:
         engine.dispose()
 
-    for symbol, new in NEW.items():
-        assert rows[("NFO", symbol)] == new, symbol
+
+def test_the_revision_is_the_circular():
+    assert NEW == CIRCULAR
+
+
+def test_an_install_on_the_october_limits_comes_down(tmp_path):
+    rows = _migrated(tmp_path, OCTOBER)
+
+    assert {symbol: rows[("NFO", symbol)] for symbol in CIRCULAR} == CIRCULAR
+    assert len(rows) == len(OCTOBER)
+    for key, qty in OTHERS.items():
+        assert rows[key] == qty
+
+
+def test_an_install_that_never_took_the_october_limits_lands_in_the_same_place(tmp_path):
+    rows = _migrated(tmp_path, BEFORE_OCTOBER)
+
+    assert {symbol: rows[("NFO", symbol)] for symbol in CIRCULAR} == CIRCULAR
     # NIFTYFPI never had a row, so it is added; nothing else is.
-    assert len(rows) == len(SHIPPED) + 1
-    assert rows[("NFO", "RELIANCE")] == 25000
-    assert rows[("MCX", "CRUDEOIL")] == 10000
+    assert len(rows) == len(BEFORE_OCTOBER) + 1
 
 
 @pytest.mark.parametrize(
     "symbol,published,new",
     [
-        ("FINNIFTY", 1800, 3240),  # NSE's limit in most months; the seed shipped 1,200
-        ("BANKNIFTY", 900, 1440),  # NSE's limit from 1 April to 30 June 2026
+        ("BANKNIFTY", 600, 900),  # NSE's limit in most months to September 2026
+        ("FINNIFTY", 1200, 1800),  # the seed OpenAlgo shipped until October
     ],
 )
 def test_an_earlier_published_limit_moves_too(tmp_path, symbol, published, new):
     """An admin who copied in an NSE value that has since gone stale is updated."""
-    engine = _engine(tmp_path, {("NFO", symbol): published, ("NFO", "NIFTY"): 1800})
-    try:
-        assert migration.apply(engine)
-        assert _rows(engine)[("NFO", symbol)] == new
-    finally:
-        engine.dispose()
+    rows = _migrated(tmp_path, {("NFO", symbol): published, ("NFO", "NIFTY"): 3510})
+
+    assert rows[("NFO", symbol)] == new
 
 
 def test_an_admin_value_is_left_alone(tmp_path):
-    rows = dict(SHIPPED)
-    rows[("NFO", "BANKNIFTY")] = 750
+    rows = dict(OCTOBER)
+    rows[("NFO", "BANKNIFTY")] = 750  # never published by NSE
     del rows[("NFO", "NIFTYNXT50")]  # an admin deleted it
     engine = _engine(tmp_path, rows)
     try:
@@ -105,11 +143,11 @@ def test_an_admin_value_is_left_alone(tmp_path):
 
     assert after[("NFO", "BANKNIFTY")] == 750
     assert ("NFO", "NIFTYNXT50") not in after
-    assert after[("NFO", "NIFTY")] == 3510
+    assert after[("NFO", "NIFTY")] == 1800
 
 
 def test_rerunning_changes_nothing(tmp_path):
-    engine = _engine(tmp_path, SHIPPED)
+    engine = _engine(tmp_path, OCTOBER)
     try:
         assert migration.apply(engine)
         first = _rows(engine)
@@ -121,10 +159,10 @@ def test_rerunning_changes_nothing(tmp_path):
 
 
 def test_status_changes_nothing(tmp_path, capsys):
-    engine = _engine(tmp_path, SHIPPED)
+    engine = _engine(tmp_path, OCTOBER)
     try:
         assert migration.status(engine)
-        assert _rows(engine) == SHIPPED
+        assert _rows(engine) == OCTOBER
     finally:
         engine.dispose()
     assert "Would change 6 row(s)." in capsys.readouterr().out
@@ -155,19 +193,32 @@ def test_the_seed_csv_carries_the_same_limits():
         assert seed[symbol] == new, symbol
 
 
-def test_the_migration_is_registered():
+def _registered():
     # On Windows migrate_all rewraps stdout at import, which closes pytest's capture.
     with patch.object(sys, "platform", "test"):
         from upgrade import migrate_all
 
-    names = [script for script, _description in migrate_all.MIGRATIONS]
-    assert names.count("migrate_qty_freeze_oct_2026.py") == 1
+    return [script for script, _description in migrate_all.MIGRATIONS]
+
+
+def test_the_migration_is_registered():
+    assert _registered().count("migrate_qty_freeze_nov_2026.py") == 1
+
+
+def test_the_october_migration_is_gone():
+    """PINNED DEFECT. migrate_all runs every script on every upgrade, in order.
+    The October script raised NIFTY from 1,800 to 3,510, so listed before this
+    one it would undo this revision each time, and an upgrade stopped between
+    the two would leave limits the exchange rejects. Run by hand it would do
+    the same, so the file goes too."""
+    assert not [name for name in _registered() if name.startswith("migrate_qty_freeze_oct")]
+    assert not (ROOT / "upgrade" / "migrate_qty_freeze_oct_2026.py").exists()
 
 
 def test_niftyfpi_options_resolve_their_own_limit(monkeypatch):
     """NIFTYFPI starts with NIFTY, so it must be matched before NIFTY."""
     monkeypatch.setattr(qf, "_cache_loaded", True)
-    monkeypatch.setattr(qf, "_freeze_qty_cache", {"NFO:NIFTY": 3510, "NFO:NIFTYFPI": 53900})
-    assert qf.get_freeze_qty_for_option("NIFTYFPI27OCT2618000CE", "NFO") == 53900
-    assert qf.get_freeze_qty_for_option("NIFTYFPI27OCT26FUT", "NFO") == 53900
-    assert qf.get_freeze_qty_for_option("NIFTY27OCT2625000CE", "NFO") == 3510
+    monkeypatch.setattr(qf, "_freeze_qty_cache", {"NFO:NIFTY": 1800, "NFO:NIFTYFPI": 8500})
+    assert qf.get_freeze_qty_for_option("NIFTYFPI24NOV2618000CE", "NFO") == 8500
+    assert qf.get_freeze_qty_for_option("NIFTYFPI24NOV26FUT", "NFO") == 8500
+    assert qf.get_freeze_qty_for_option("NIFTY24NOV2625000CE", "NFO") == 1800
