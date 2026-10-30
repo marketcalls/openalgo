@@ -16,17 +16,19 @@ timeout) and falls back to the copy bundled in the wheel when that fails or when
 than its pin, an offline one sees exactly the pin, and this module reads
 whichever LiteLLM loaded. The import is not ours to make network-free.
 
-Verified against `litellm==1.104.0` on 2026-10-07:
+Verified against `litellm==1.106.6` on 2026-10-30:
 
 * `litellm.LITELLM_CHAT_PROVIDERS` lists 98 chat-capable providers, 97 of them
   distinct because `baseten` appears twice. This is the list
-  :func:`list_providers` offers. `litellm.provider_list` has 160 but includes
+  :func:`list_providers` offers. `litellm.provider_list` has 166 but includes
   embedding, image, audio and rerank-only providers, and presenting a rerank
   provider as somewhere to run a chat agent is noise.
-* `litellm.models_by_provider` maps 101 providers onto 3785 model names from
-  the bundled map, 3864 from the remote one.
-* `litellm.model_cost` carries 4376 entries of per-model metadata from the
-  bundled map, 4484 from the remote one: `max_input_tokens`,
+* `litellm.models_by_provider` maps 101 providers onto 3536 model names from
+  the bundled map, 3619 from the remote one. Both are smaller than at 1.104.0
+  because LiteLLM dropped every `openrouter/` entry from both maps, so the
+  OpenRouter picker is empty and its models are added by name.
+* `litellm.model_cost` carries 4241 entries of per-model metadata from the
+  bundled map, 4537 from the remote one: `max_input_tokens`,
   `max_output_tokens`, `input_cost_per_token`, `output_cost_per_token`, `mode`
   and `supports_function_calling`.
 
@@ -41,7 +43,7 @@ Why not `litellm.get_model_info`
 --------------------------------
 
 It resolves a prefixed id nicely but it **invents metadata**. Measured at
-1.99.0 and again at 1.104.0, `get_model_info("ollama/definitely-not-a-real-model-xyz")` returns a
+1.99.0, 1.104.0 and 1.106.6, `get_model_info("ollama/definitely-not-a-real-model-xyz")` returns a
 complete entry with `input_cost_per_token` and `output_cost_per_token` of `0.0`
 for a model that does not exist, which is exactly the guessed price this module
 must never produce. It also raises on an unmapped model and writes a provider
@@ -466,10 +468,10 @@ def list_providers() -> list[ProviderInfo]:
     """List the chat-capable providers LiteLLM knows about.
 
     Built from `litellm.LITELLM_CHAT_PROVIDERS`, not from
-    `litellm.provider_list`: the latter's 160 entries include embedding, image,
+    `litellm.provider_list`: the latter's 166 entries include embedding, image,
     audio and rerank-only providers that cannot host a chat agent. Duplicates
     are collapsed, because LITELLM_CHAT_PROVIDERS ships `baseten` twice at
-    1.104.0.
+    1.106.6.
 
     Returns:
         Every provider, sorted by display name, case-insensitively. Empty when
