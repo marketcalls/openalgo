@@ -1,5 +1,6 @@
 import json
 
+from broker.fyers.mapping.transform_data import from_fyers_qty
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
@@ -145,7 +146,10 @@ def transform_order_data(orders):
             "symbol": order.get("symbol", ""),
             "exchange": order.get("exchange", ""),
             "action": action,
-            "quantity": order.get("qty", 0),
+            # Units: Fyers counts MCX and CDS in lots (see from_fyers_qty).
+            "quantity": from_fyers_qty(
+                order.get("qty", 0), order.get("symbol"), order.get("exchange")
+            ),
             "price": order.get("limitPrice", 0.0),
             "trigger_price": order.get("stopPrice", 0.0),
             "pricetype": ordertype,
@@ -221,7 +225,8 @@ def transform_tradebook_data(tradebook_data):
             "exchange": trade.get("exchange", ""),
             "product": producttype,
             "action": action,
-            "quantity": trade.get("tradedQty", 0),
+            # Units: Fyers counts MCX and CDS in lots (see from_fyers_qty).
+            "quantity": from_fyers_qty(trade.get("tradedQty", 0), symbol, trade.get("exchange")),
             "average_price": trade.get("tradePrice", 0.0),
             "trade_value": trade.get("tradeValue", 0),
             "orderid": trade.get("orderNumber", ""),
@@ -297,7 +302,10 @@ def transform_positions_data(positions_data):
             "symbol": position.get("symbol", ""),
             "exchange": position.get("exchange", ""),
             "product": producttype,
-            "quantity": position.get("netQty", "0"),
+            # Units: Fyers counts MCX and CDS in lots (see from_fyers_qty).
+            "quantity": from_fyers_qty(
+                position.get("netQty", "0"), position.get("symbol"), position.get("exchange")
+            ),
             "average_price": average_price_formatted,
             "ltp": ltp,
             "pnl": pnl,

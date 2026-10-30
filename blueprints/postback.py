@@ -149,6 +149,7 @@ def _normalize_dhan(data: dict) -> dict | None:
 
 
 def _normalize_fyers(data: dict) -> dict | None:
+    from broker.fyers.mapping.transform_data import from_fyers_qty
     from broker.fyers.streaming.fyers_order_adapter import (
         _ACTION_MAP,
         _PRICETYPE_MAP,
@@ -160,12 +161,16 @@ def _normalize_fyers(data: dict) -> dict | None:
         return None
     raw_status = data.get("status")
     order_status = _STATUS_MAP.get(raw_status, str(raw_status))
-    qty = int(data.get("qty") or 0)
-    filled = int(data.get("filledQty") or 0)
     exchange = _oa_exchange(data)
+    symbol = to_openalgo_symbol(data.get("symbol", ""), exchange)
+    # Units, as the order book reports them: Fyers counts MCX and CDS in lots
+    # (broker/fyers/mapping/transform_data.py, from_fyers_qty).
+    qty = from_fyers_qty(int(data.get("qty") or 0), symbol, exchange)
+    filled = from_fyers_qty(int(data.get("filledQty") or 0), symbol, exchange)
+    remaining = from_fyers_qty(int(data.get("remainingQuantity") or 0), symbol, exchange)
     return {
         "orderid": str(data.get("id", "")),
-        "symbol": to_openalgo_symbol(data.get("symbol", ""), exchange),
+        "symbol": symbol,
         "exchange": exchange,
         "action": _ACTION_MAP.get(data.get("side"), str(data.get("side", ""))),
         "quantity": qty,
@@ -175,7 +180,7 @@ def _normalize_fyers(data: dict) -> dict | None:
         "product": data.get("productType", ""),
         "order_status": order_status,
         "filled_quantity": filled,
-        "pending_quantity": int(data.get("remainingQuantity") or max(qty - filled, 0)),
+        "pending_quantity": remaining or max(qty - filled, 0),
         "average_price": float(data.get("tradedPrice") or 0),
         "rejection_reason": data.get("message", "") if raw_status == 5 else "",
     }
