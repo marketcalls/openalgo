@@ -233,10 +233,15 @@ def test_startup_corrects_a_first_calendar_install(calendar, monkeypatch):
 
 
 def _script(db_file, *args):
+    """Run the real script from the project root, as migrate_all.py runs it.
+
+    The test settings put logs in a relative LOG_DIR, which from upgrade/
+    would point at a directory a fresh checkout does not have.
+    """
     env = {**os.environ, "DATABASE_URL": f"sqlite:///{db_file.as_posix()}"}
     return subprocess.run(
-        [sys.executable, "migrate_market_holidays.py", *args],
-        cwd=ROOT / "upgrade",
+        [sys.executable, str(Path("upgrade") / "migrate_market_holidays.py"), *args],
+        cwd=ROOT,
         env=env,
         capture_output=True,
         text=True,
