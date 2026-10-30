@@ -6,6 +6,44 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Agent: LiteLLM 1.106.6 and newer models
+
+The Agent's provider and model lists at `/agent/config` come from LiteLLM, which
+moves from 1.104.0 to 1.106.6. Nothing to configure: models you have already
+added keep working as they are. A server that reaches GitHub was already
+fetching LiteLLM's online model list, so most of what follows is new only to a
+server without internet access.
+
+- **Newer models in the picker**, among them Claude Sonnet 5.5 and Claude
+  Haiku 5.5, GPT-6.1 Sol, Gemini 4 Argon and Mistral Large 4, with their
+  context window and price as before.
+- **ChatGPT Plus or Pro**: `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and
+  `gpt-rosalind-discovery` join the plan models, and `gpt-6-astra` now comes
+  from LiteLLM itself, so OpenAlgo adds no plan model of its own any more.
+  `gpt-rosalind-discovery` shows "tool support unknown" because LiteLLM records
+  nothing about what it can do, and the agent works only through tools, so run
+  the model test on the config page before relying on it. Which of these your
+  plan may use is decided by OpenAI, not by this list.
+- **OpenRouter lists no models.** LiteLLM removed its OpenRouter model list,
+  both from the package and online, so the OpenRouter picker is empty: add an
+  OpenRouter model by name with Model not listed. OpenRouter models you have
+  already added keep working, but their usage shows tokens without a cost,
+  because LiteLLM no longer carries OpenRouter prices.
+- **Example model names** in the Add Model dialog are current: `gpt-6.1-sol`
+  for OpenAI and `claude-sonnet-5-5` for Anthropic.
+
+### Dependencies
+
+- `litellm` 1.104.0 to 1.106.6, and with it `boto3` and `botocore` 1.43.87 to
+  1.43.122, the oldest LiteLLM 1.106.6 accepts being 1.43.117. LiteLLM still
+  caps `filelock` below 4.0, so the `filelock>=4.2.1` override stays.
+- LiteLLM 1.106.6 was published on 28 October 2026. A server whose uv is set
+  to install only packages older than a number of days (`exclude-newer`)
+  refuses it until it is old enough; `uv run --frozen app.py` installs from
+  the lockfile and is not affected.
+
 ## [2.0.3.1] - 2026-10-30
 
 ### Security Fixes and Fyers Live Data Release

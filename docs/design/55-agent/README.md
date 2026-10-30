@@ -731,7 +731,7 @@ call the backend streams the arguments as `function_call_arguments.delta`
 events. For a batch of parallel calls it frequently sends no deltas at all:
 each call's complete arguments arrive once in
 `response.function_call_arguments.done` and again in
-`response.output_item.done`. LiteLLM 1.104.0 builds the chat stream from the
+`response.output_item.done`. LiteLLM 1.104.0, and still 1.106.6, builds the chat stream from the
 `output_item.added` event (id and name, empty arguments) plus the deltas, and
 ignores both `done` events, so agno assembles `arguments: ""` and pydantic
 refuses the call before the tool body runs.

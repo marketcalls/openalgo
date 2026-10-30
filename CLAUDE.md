@@ -671,9 +671,10 @@ precisely so a package bump brings new models with it. This provider is the one
 exception, and it needs a person.
 
 **The symptom, if you do not know this.** LiteLLM's registry lags the backend:
-at 1.104.0 its bundled map carries fourteen `chatgpt/*` entries, newest the
-`gpt-5.6` variants, while the backend serves more. The map LiteLLM fetches from
-GitHub at import is usually ahead of the bundled one, so check both. A model
+at 1.106.6 its bundled map carries nineteen `chatgpt/*` entries, newest the
+`gpt-6` and `gpt-6.1` models, while the map it fetches from GitHub at import
+already lists `gpt-6.1-terra` as well. The remote map is usually ahead of the
+bundled one, so check both. A model
 absent from that registry has no `mode`, so LiteLLM routes it through the
 chat-completions bridge instead of `/v1/responses`. The request never reaches
 the API: it lands on a Cloudflare interstitial and returns
@@ -731,7 +732,9 @@ for this provider raises `Unknown items in responses API response: []` on a
 reply that streams back perfectly (upstream #26179, open; its fix #27562 was
 closed unmerged), and the agent only ever runs `stream=True` anyway.
 
-Delete the file when LiteLLM ships these names. Its entries win automatically.
+LiteLLM's entries win automatically once it ships a name, so drop that name from
+`SUPPLEMENTAL` in the bump that brings it. At 1.106.6 the map is empty; keep the
+file anyway, since the remote map is already a model ahead of the bundle.
 
 ## Frontend build
 
