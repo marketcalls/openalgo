@@ -10,7 +10,7 @@ fix, live in [docs/releases](releases/).
 
 ### Freeze Limits and Muhurat Session Release
 
-4 commits since 2.0.3.1, excluding automated frontend build commits and
+6 commits since 2.0.3.1, excluding automated frontend build commits and
 including this release. Full notes:
 [version-2.0.3.2-released.md](releases/version-2.0.3.2-released.md).
 This release adds two data migrations and no schema change. Upgrade and

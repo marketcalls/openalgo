@@ -4,7 +4,7 @@
 
 **NSE's lower index freeze limits from Monday 2 November, the published Diwali Muhurat session on Sunday 8 November, upgrades that keep the holidays you set, a WhatsApp bot that stays connected, and LiteLLM 1.106.6 for the agent. Upgrade before Monday's open.**
 
-4 commits since v2.0.3.1, excluding automated frontend build commits and
+6 commits since v2.0.3.1, excluding automated frontend build commits and
 including this release. The platform version moves from 2.0.3.1 to 2.0.3.2.
 The pinned `openalgo` Python SDK remains 2.0.5. This release adds two data
 migrations, `migrate_qty_freeze_nov_2026.py` and `migrate_muhurat_2026.py`,
