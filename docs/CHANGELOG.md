@@ -6,7 +6,23 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
-## [Unreleased]
+## [2.0.3.2] - 2026-10-31
+
+### Freeze Limits and Muhurat Session Release
+
+4 commits since 2.0.3.1, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.2-released.md](releases/version-2.0.3.2-released.md).
+This release adds two data migrations and no schema change. Upgrade and
+restart before Monday 2 November's open.
+
+### Highlights
+
+- NSE's lower index freeze limits from Monday 2 November 2026.
+- The published Diwali Muhurat session on Sunday 8 November 2026.
+- An upgrade no longer erases the holidays you set.
+- WhatsApp alerts stay connected (#2332).
+- LiteLLM 1.106.6 brings newer models to the agent.
 
 ### NSE index freeze limits from 2 November 2026
 
@@ -103,6 +119,13 @@ server without internet access.
 - **Example model names** in the Add Model dialog are current: `gpt-6.1-sol`
   for OpenAI and `claude-sonnet-5-5` for Anthropic.
 
+### Fixed
+
+- **WhatsApp alerts stay connected** (#2332). The WhatsApp bot could miss an
+  alert and then disconnect within an hour of starting, most often on Docker.
+  Its periodic session save removed files the live connection was still using.
+  The save now runs in a separate process, so the connection keeps its files.
+
 ### Dependencies
 
 - `litellm` 1.104.0 to 1.106.6, and with it `boto3` and `botocore` 1.43.87 to
@@ -112,6 +135,12 @@ server without internet access.
   to install only packages older than a number of days (`exclude-newer`)
   refuses it until it is old enough; `uv run --frozen app.py` installs from
   the lockfile and is not affected.
+
+### Contributors
+
+- **@marketcalls** - the November freeze limits, the Muhurat session, the
+  holiday calendar fix, LiteLLM 1.106.6 and the release.
+- **@Kalaiviswa** - WhatsApp alerts that stay connected (#2332).
 
 ## [2.0.3.1] - 2026-10-30
 
