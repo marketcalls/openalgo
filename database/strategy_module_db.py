@@ -1571,6 +1571,17 @@ def finish_unlinked_run_and_release_claim(
 
 def request_run_stop(run_id: int, reason: str) -> bool:
     """Persist a stop request while leaving the run active until it is flat."""
+    return record_run_stop_request(run_id, reason) is not None
+
+
+def record_run_stop_request(run_id: int, reason: str) -> str | None:
+    """Persist a stop request, and say whether this call is the one that made it.
+
+    Returns:
+        str | None: "new" when this call recorded the request, "existing" when
+        one was already recorded (a retry of a pending stop, or a second stop),
+        None when it could not be recorded.
+    """
     try:
         updated = (
             db_session.query(SmStrategyRun)
@@ -1591,7 +1602,7 @@ def request_run_stop(run_id: int, reason: str) -> bool:
         db_session.commit()
         db_session.expire_all()
         if updated == 1:
-            return True
+            return "new"
         existing = (
             db_session.query(SmStrategyRun.id)
             .filter(
@@ -1602,11 +1613,11 @@ def request_run_stop(run_id: int, reason: str) -> bool:
             )
             .first()
         )
-        return existing is not None
+        return "existing" if existing is not None else None
     except Exception:
         db_session.rollback()
         logger.exception("Could not request stop for run %s", run_id)
-        return False
+        return None
 
 
 def reopen_run_for_late_entry_fill(run_id: int) -> bool:

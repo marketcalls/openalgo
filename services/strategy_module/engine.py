@@ -1644,7 +1644,8 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     # Durable before every broker call. A process death after this write leaves
     # recovery knowing that a flat run should finish and that a held one must
     # reject new entries while its exits are retried.
-    if not store.request_run_stop(run_id, reason):
+    recorded = store.record_run_stop_request(run_id, reason)
+    if recorded is None:
         return {
             "ok": False,
             "stop_pending": False,
@@ -1659,13 +1660,19 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     # a signal that has not claimed yet is refused by this flag under the same
     # run lock used to create claims.
     state.mark_stopping(run_id)
-    _emit(
-        strategy_id,
-        user_id,
-        "run_stop_requested",
-        f"Stop requested ({reason}); exit orders are being attempted",
-        run_id=run_id,
-    )
+    # Said once, when the stop is first recorded. A pending stop is retried
+    # every few seconds (scheduler.reconcile_pending_stops) and may stay
+    # pending for hours, logged in to another broker or with no session, when
+    # this line would be written again on every retry, and untrue while its
+    # orders are refused.
+    if recorded == "new":
+        _emit(
+            strategy_id,
+            user_id,
+            "run_stop_requested",
+            f"Stop requested ({reason}); exit orders are being attempted",
+            run_id=run_id,
+        )
 
     from services.strategy_module import ack_reconciliation
 

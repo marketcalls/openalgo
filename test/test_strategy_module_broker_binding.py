@@ -301,6 +301,30 @@ def test_a_login_to_another_broker_is_refused_while_a_live_run_trades_elsewhere(
     assert same is None
 
 
+def test_a_pending_stop_says_it_was_requested_once_however_often_it_is_retried(session, broker):
+    """A stop refused because OpenAlgo is logged in to another broker stays
+    pending, and the scheduler retries it every five seconds, for hours if the
+    trader does not log back in. Every retry wrote "Stop requested ...; exit
+    orders are being attempted" again (about 720 rows an hour, kept for good),
+    which is untrue while the orders are refused and buried the one warning
+    that says what to do."""
+    sid, run_id = _start()
+    session.login("fyers", "fyers-token")
+
+    engine.stop_run(run_id, USER)
+    for _ in range(5):
+        engine.reconcile_pending_stop(run_id)
+
+    assert len(_events(sid, run_id, "run_stop_requested")) == 1
+    assert len(_events(sid, run_id, "run_stop_failed")) == 1
+    assert store.get_run(run_id).stop_requested_reason == "manual"
+
+    # Back on the run's broker, the retry completes it without saying it again.
+    session.login("zerodha", "zerodha-token-2")
+    engine.reconcile_pending_stop(run_id)
+    assert len(_events(sid, run_id, "run_stop_requested")) == 1
+
+
 def test_logging_back_in_to_the_run_broker_with_a_new_token_completes_the_stop(session, broker):
     sid, run_id = _start()
     session.login("fyers", "fyers-token")

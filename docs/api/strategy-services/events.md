@@ -113,7 +113,9 @@ Each object in `data`:
 Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
 `run_stop_requested` says the stop intent is durable and new signal entries are
-gated; it is not proof of flatness. `run_stopped` is the terminal transition
+gated; it is not proof of flatness. It is written once, when the stop is first
+recorded: a pending stop is retried every few seconds without repeating it, and
+a second stop of a run already stopping does not rewrite its cause. `run_stopped` is the terminal transition
 after the engine has confirmed that no owned position remains. `run_stop_failed`
 is critical whenever a pending stop could not make progress, including an
 unfilled entry, a refused order, or an asynchronous rejection/cancellation. The
