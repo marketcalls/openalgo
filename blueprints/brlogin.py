@@ -1256,11 +1256,14 @@ def _dhan_initiate_oauth():
         client_id, _ = BROKER_API_KEY.split(":::")
 
     if not client_id:
-        error_message = "Client ID not found in BROKER_API_KEY. Please configure BROKER_API_KEY as 'client_id:::api_key' in .env"
+        error_message = (
+            "Client ID not found in the Dhan API key. Save it as 'client_id:::api_key' "
+            "on Broker Configuration (or in .env when .env sets Dhan)."
+        )
         logger.error(error_message)
         return handle_auth_failure(error_message, forward_url="broker.html")
 
-    logger.info(f"Initiating Dhan OAuth flow with client ID from .env: {client_id}")
+    logger.info("Initiating Dhan OAuth flow with the configured client ID")
 
     # Import the required functions
     from broker.dhan.api.auth_api import generate_consent, get_login_url
