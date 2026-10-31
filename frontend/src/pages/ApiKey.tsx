@@ -37,7 +37,7 @@ async function fetchCSRFToken(): Promise<string> {
 }
 
 export default function ApiKey() {
-  const { user } = useAuthStore()
+  const { user, setApiKey: setStoreApiKey } = useAuthStore()
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [hasApiKey, setHasApiKey] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -117,6 +117,9 @@ export default function ApiKey() {
 
       if (data.api_key) {
         setApiKey(data.api_key)
+        // The old key stops working the moment this one is issued; the
+        // screens that trade with the store's key must move to it too.
+        setStoreApiKey(data.api_key)
         setHasApiKey(true)
         setShowApiKey(true)
         showToast.success('API key generated successfully', 'system')

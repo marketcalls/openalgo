@@ -263,7 +263,9 @@ export function PlaceOrderDialog({
 
   const isValid = useCallback(() => {
     if (!symbol || !exchange_) return false
-    if (!apiKey) return false
+    // A caller's own route carries its own key (the chart posts through its
+    // trade feed), so only the bare API post needs the one in the store.
+    if (!place && !apiKey) return false
     if (formQuantity <= 0) return false
     if (needsPrice && formPrice <= 0) return false
     if (needsTrigger && formTriggerPrice <= 0) return false
@@ -271,6 +273,7 @@ export function PlaceOrderDialog({
   }, [
     symbol,
     exchange_,
+    place,
     apiKey,
     formQuantity,
     needsPrice,
@@ -283,12 +286,6 @@ export function PlaceOrderDialog({
   const handleSubmit = async () => {
     if (!isValid()) {
       showToast.error('Please fill all required fields')
-      return
-    }
-
-    if (!apiKey) {
-      showToast.error('API key not found. Please set up your API key.')
-      onError?.('API key not found')
       return
     }
 
@@ -315,6 +312,12 @@ export function PlaceOrderDialog({
         const placed = await place(order)
         onSuccess?.(placed.orderId)
         onOpenChange(false)
+        return
+      }
+
+      if (!apiKey) {
+        showToast.error('API key not found. Please set up your API key.')
+        onError?.('API key not found')
         return
       }
 

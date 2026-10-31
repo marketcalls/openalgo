@@ -24,8 +24,10 @@ vi.mock('@/utils/toast', () => ({
   showToast: { error: vi.fn(), success: vi.fn() },
 }))
 
+const auth = vi.hoisted(() => ({ apiKey: 'test-api-key' as string | null }))
+
 vi.mock('@/stores/authStore', () => ({
-  useAuthStore: () => ({ apiKey: 'test-api-key' }),
+  useAuthStore: () => ({ apiKey: auth.apiKey }),
 }))
 
 vi.mock('@/hooks/useLiveQuote', () => ({
@@ -83,6 +85,7 @@ describe('lotsFor', () => {
 describe('PlaceOrderDialog', () => {
   beforeEach(() => {
     placeOrder.mockReset()
+    auth.apiKey = 'test-api-key'
   })
 
   it('shows the lots a units quantity stands for, over the same total', () => {
@@ -138,6 +141,26 @@ describe('PlaceOrderDialog', () => {
         quantity: 150,
       })
     )
+  })
+
+  it('places through the caller route when the store holds no key', async () => {
+    // After a TOTP-broker login the store's key is empty until a reload; the
+    // chart's route carries its own key, so its ticket must still place.
+    auth.apiKey = null
+    const place = vi.fn(async () => ({ orderId: 'ORD-3' }))
+    const onSuccess = vi.fn()
+    render(<PlaceOrderDialog {...nifty} place={place} onSuccess={onSuccess} />)
+    const button = screen.getByRole('button', { name: 'Place BUY Order' })
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith('ORD-3'))
+    expect(placeOrder).not.toHaveBeenCalled()
+  })
+
+  it('will not post through the API without a key', () => {
+    auth.apiKey = null
+    render(<PlaceOrderDialog {...nifty} />)
+    expect(screen.getByRole('button', { name: 'Place BUY Order' })).toBeDisabled()
   })
 
   it('renders inside the container it is given', () => {
