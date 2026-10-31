@@ -60,7 +60,7 @@ OpenAlgo starts every broker login on the server. The page sends only the broker
 
 While a login runs, the broker you are logged in to keeps trading with its own keys: the new broker's keys are used only by that login, and become OpenAlgo's only once it completes. A request that read a broker's session uses that broker's keys to the end, even while a switch is being stored.
 
-Where the broker reports which account a login is for, OpenAlgo checks it. Dhan reports it, and a Dhan login is refused when it is for an account other than the client ID saved for Dhan, or when Dhan does not say which account it is. RMoney reports the account of its session, and an RMoney or CompositEdge login is refused when that account is not the one the market data keys belong to. Other brokers do not report an account at login, so OpenAlgo cannot check it for them.
+Where the broker reports which account a login is for, OpenAlgo checks it. Dhan reports it, and a Dhan login is refused when it is for an account other than the client ID saved for Dhan, or when Dhan does not say which account it is. RMoney reports the account of its session, and an RMoney or CompositEdge login is refused when that account is not the one the market data keys belong to. That comparison needs the market data login to succeed: when it fails, the login completes without it, as it did before. Other brokers do not report an account at login, so OpenAlgo cannot check it for them.
 
 A logout, a password change or a password reset that happens while a broker login is completing wins: the login is not stored. So does a change to that broker's keys.
 

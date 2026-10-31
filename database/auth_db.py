@@ -1017,25 +1017,74 @@ def _tear_down_feed(name, broker, revoke):
 
 
 def _pin_keys(broker):
-    """Pin, for the reading request, the keys of the broker a token belongs to.
+    """Pin, for the reading context, the keys of the broker a token belongs to.
 
     utils.broker_keys.pin_keys_for: a request that reads a token sends that
     broker's keys with it, even while a switch is being stored.
+
+    Returns:
+        bool: False when the token's keys could not be pinned.
     """
     if not broker:
-        return
+        return True
     try:
         from utils.broker_keys import pin_keys_for
 
-        pin_keys_for(broker)
+        return pin_keys_for(broker)
     except Exception:
         logger.exception("Could not pin the keys of the token's broker")
+        return False
 
 
-def _token_of(record):
-    """A cached record's decrypted token, its broker's keys pinned."""
-    _pin_keys(record.broker)
-    return decrypt_token(record.auth)
+def _unpin_keys():
+    try:
+        from utils.broker_keys import clear_pin
+
+        clear_pin()
+    except Exception:
+        logger.exception("Could not drop a pin of broker keys")
+
+
+def _context_generation():
+    """What moves when the keys or the stored session change: (keys, session cache)."""
+    try:
+        from utils.broker_keys import publication_generation
+
+        keys = publication_generation()
+    except Exception:
+        keys = None
+    return keys, _generation(auth_cache)
+
+
+#: How often a token read starts again when a login, a sign-out or a key
+#: change lands between reading the token and pinning its keys.
+_COHERENT_READ_ATTEMPTS = 3
+
+
+def _read_coherently(read, refused):
+    """A token read whose token and pinned keys belong to one configuration.
+
+    ``read()`` returns (result, token, broker). The keys or the stored session
+    moving between the read and the pin (a switch, a key change with its
+    sign-out, a forget) means the token read may belong to a configuration
+    that is no longer the process's: the read starts again and finds the new
+    session, or none. A token whose keys cannot be pinned is not returned:
+    a request is refused before it reaches the broker rather than sent with
+    keys that are not its token's.
+
+    Returns:
+        The result, or ``refused``.
+    """
+    for _ in range(_COHERENT_READ_ATTEMPTS):
+        before = _context_generation()
+        result, token, broker = read()
+        if not token:
+            return result
+        if _pin_keys(broker) and _context_generation() == before:
+            return result
+        _unpin_keys()
+    logger.warning("Refused a broker session whose keys kept changing while it was read")
+    return refused
 
 
 def get_auth_token(name, bypass_cache: bool = False):
@@ -1055,6 +1104,18 @@ def get_auth_token(name, bypass_cache: bool = False):
         logger.debug("get_auth_token called with empty/None name, returning None")
         return None
 
+    def read():
+        record = _auth_record(name, bypass_cache)
+        if record is None:
+            return None, None, None
+        token = decrypt_token(record.auth)
+        return token, token, record.broker
+
+    return _read_coherently(read, None)
+
+
+def _auth_record(name, bypass_cache=False):
+    """The stored session of ``name`` as a cached record, or None when there is none."""
     cache_key = f"auth-{name}"
 
     # Bypass cache if requested (e.g., after 403 error for fresh token)
@@ -1071,7 +1132,7 @@ def get_auth_token(name, bypass_cache: bool = False):
             # Update cache with fresh data
             record = AuthRecord.from_row(auth_obj)
             _fill(auth_cache, cache_key, record, generation)
-            return _token_of(record)
+            return record
         return None
 
     # Normal cache-first lookup. One get, not a membership test followed by a
@@ -1081,7 +1142,7 @@ def get_auth_token(name, bypass_cache: bool = False):
     if cached is not MISSING and cached is not None:
         record = _as_record(cached)
         if record is not None and not record.is_revoked:
-            return _token_of(record)
+            return record
         auth_cache.pop(cache_key, None)
         return None
 
@@ -1093,7 +1154,7 @@ def get_auth_token(name, bypass_cache: bool = False):
     if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
         record = AuthRecord.from_row(auth_obj)
         _fill(auth_cache, cache_key, record, generation)
-        return _token_of(record)
+        return record
     return None
 
 
@@ -1456,6 +1517,21 @@ def get_broker_name(provided_api_key):
 
 
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
+    """Auth token, feed token (optional) and broker for an API key, its broker's keys pinned.
+
+    utils.broker_keys.pin_keys_for and _read_coherently: the token returned
+    and the keys the request sends with it belong to one configuration.
+    """
+    refused = (None, None, None) if include_feed_token else (None, None)
+
+    def read():
+        result = _auth_token_broker(provided_api_key, include_feed_token)
+        return result, result[0], result[-1]
+
+    return _read_coherently(read, refused)
+
+
+def _auth_token_broker(provided_api_key, include_feed_token=False):
     """
     Get auth token, feed token (optional) and broker for a valid API key with caching.
 
@@ -1492,7 +1568,6 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                     return (None, None, None) if include_feed_token else (None, None)
                 # Not revoked, return cached result
                 logger.debug(f"Auth token retrieved from cache for user_id: {user_id}")
-                _pin_keys(cached_result[-1] if cached_result[0] else None)
                 return cached_result
             except Exception as e:
                 logger.exception(f"Error checking revocation status: {e}")
@@ -1523,7 +1598,6 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 # Cache the result
                 _fill(auth_cache, cache_key, result, generation)
                 logger.debug(f"Auth token cached for user_id: {user_id}")
-                _pin_keys(auth_obj.broker if decrypted_token else None)
                 return result
             else:
                 # Cache the negative result to prevent repeated DB queries and log spam
@@ -1554,20 +1628,22 @@ def get_session_identity(provided_api_key):
     username = verify_api_key(provided_api_key)
     if not username:
         return None, None, None
-    try:
-        row = Auth.query.populate_existing().filter_by(name=username).first()
-        if row is None or row.is_revoked or not row.auth or not row.broker:
-            return None, None, None
-        token = decrypt_token(row.auth)
+
+    def read():
+        try:
+            row = Auth.query.populate_existing().filter_by(name=username).first()
+            if row is None or row.is_revoked or not row.auth or not row.broker:
+                return (None, None, None), None, None
+            token = decrypt_token(row.auth)
+            account = str(row.user_id).strip() if row.user_id else None
+        except Exception:
+            logger.exception("Could not read the stored broker session")
+            return (None, None, None), None, None
         if not token:
-            return None, None, None
-        account = str(row.user_id).strip() if row.user_id else None
-        broker = row.broker
-    except Exception:
-        logger.exception("Could not read the stored broker session")
-        return None, None, None
-    _pin_keys(broker)
-    return token, broker, account or None
+            return (None, None, None), None, None
+        return (token, row.broker, account or None), token, row.broker
+
+    return _read_coherently(read, (None, None, None))
 
 
 def get_order_mode(user_id):

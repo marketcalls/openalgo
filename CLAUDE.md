@@ -221,15 +221,21 @@ there. `utils/broker_keys.py` owns which keys a broker uses.
   waits on a broker or the network under it. A resume holds the slot alone
   from its first read to its commit, validates with staged keys, and re-reads
   the stored session before storing it.
-- **A token read pins its broker's keys.** The token readers in
-  `database/auth_db.py` call `pin_keys_for(broker)`, so the rest of that
-  request reads the keys of the broker the token belongs to: the published
-  keys when they are that broker's, else `resolve(broker)`. A request is never
-  left with one broker's token and the other's keys while a switch is stored.
-  A login's own staged keys are never replaced. A pin lasts to the end of the
-  request (the auth blueprint's teardown drops it, app-wide) or, outside a
-  request, `PIN_SECONDS`. Tests reset staging and the published record per
-  test (`test/conftest.py`).
+- **A token read pins its broker's keys, and reads again if they moved.**
+  The token readers in `database/auth_db.py` (`get_auth_token`,
+  `get_auth_token_broker`, `get_session_identity`) go through
+  `_read_coherently`: note the keys' publication generation and the session
+  cache's generation, read the token, pin the keys of its broker
+  (`pin_keys_for`: the published keys when they are that broker's, else
+  `resolve(broker)`), and if either generation moved meanwhile (a switch, a
+  key change with its sign-out, a forget) drop the pin and read again. A
+  token whose keys cannot be pinned is not returned, so the request is
+  refused before it reaches the broker instead of sending one broker's token
+  with another's keys. A login's own staged keys are never replaced. A pin
+  lasts to the end of the request (the auth blueprint's teardown drops it,
+  app-wide); outside a request it lasts until that context's next token
+  read, never a timer. `use_broker_keys` drops its caller's pin. Tests reset
+  staging and the published record per test (`test/conftest.py`).
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or
   a broker login recorded since the rollover, which a password change does not
@@ -278,7 +284,10 @@ than the configured client ID, or when Dhan does not report the account. An
 account is only ever taken from the broker's own answer, never from a label
 posted beside a token: RMoney's from its `/user/profile` reply to the session
 token, CompositEdge's from its answer to the token exchange, and either is
-refused when it is not the market data keys' account. A strategy run bound to
+refused when it is not the market data keys' account. That comparison is
+skipped when the market data login fails (the login then completes, as it did
+before): which XTS brokers and versions should refuse instead is an open
+decision, to be made against real accounts. A strategy run bound to
 a known account reads its token and the current account in one read
 (`get_session_identity`) and refuses when the account is unknown: a known
 binding is never reduced to the broker alone. Pending logins live in the

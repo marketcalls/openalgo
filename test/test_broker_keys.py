@@ -3325,7 +3325,8 @@ def test_a_request_holding_the_old_token_keeps_the_old_keys(stores, environment,
 
     def old_request():
         token = auth_db.get_auth_token(USER)
-        broker_keys.use_broker_keys("zerodha")  # a switch publishes meanwhile
+        # A switch publishes meanwhile, from a request of its own.
+        contextvars.Context().run(broker_keys.use_broker_keys, "zerodha")
         funds.get_margin_data(token)
 
     contextvars.Context().run(old_request)
@@ -3491,3 +3492,141 @@ def test_a_resume_after_this_browsers_sign_in_was_ended_stores_nothing(
         logged_in = session.get("logged_in")
 
     assert resumed is None and logged_in is None
+
+
+# --------------------------------------------------------------------------
+# Re-review of PR 2337 (89/100), A01: a token read and the keys it pins must
+# belong to one configuration, whatever lands between the two.
+# --------------------------------------------------------------------------
+
+
+def _reconfigure_at_the_pin(monkeypatch, app, change):
+    """Run a key rotation and re-login, or a forget and a switch, from another
+    browser, exactly between a token read and the pin of its keys."""
+    original = auth_db._pin_keys
+    once = []
+
+    def other_browser():
+        client = _signed_in(app)
+        if change == "rotate_same_broker":
+            saved = client.put(
+                "/api/broker/credentials/fyers?sign_out=true", json={"api_key": "FYAPP-200"}
+            )
+            chosen = "fyers"
+        else:
+            saved = client.delete("/api/broker/credentials/fyers?sign_out=true")
+            chosen = "zerodha"
+        assert saved.status_code == 200
+        url = client.post("/auth/broker/login", json={"broker": chosen}).get_json()["url"]
+        callback = (
+            f"/fyers/callback?auth_code=good&state={_url_state(url)}"
+            if chosen == "fyers"
+            else f"/zerodha/callback?request_token=good&state={_url_state(url)}"
+        )
+        assert client.get(callback).headers["Location"].endswith("/dashboard")
+
+    def landing(broker):
+        if not once:
+            once.append(True)
+            contextvars.Context().run(other_browser)
+        return original(broker)
+
+    monkeypatch.setattr(auth_db, "_pin_keys", landing)
+
+
+@pytest.mark.parametrize("change", ["rotate_same_broker", "forget_then_switch"])
+@pytest.mark.parametrize("path", ["cached", "fresh", "api_key"])
+def test_a_token_read_never_pins_a_later_configuration(
+    stores, environment, commit, monkeypatch, change, path
+):
+    """AUDIT A01. The token was read, then the keys rotated (or the broker was
+    forgotten and another logged in), and the old token was paired with the
+    new keys: FYAPP-200:tok, or zkey123:tok. Acceptable: the old token with its
+    own keys, the new session with its keys, or no token at all."""
+    funds, sent = _fyers_transport(monkeypatch)
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("fyers")
+    broker_keys.use_broker_keys("fyers")
+    auth_db.upsert_api_key(USER, "platform-key")
+    auth_db.get_auth_token(USER)  # the cached path finds the token in the cache
+    app = _app()
+    app.broker_auth_functions = {
+        "fyers_auth": lambda code: ("new-fyers-token", None),
+        "zerodha_auth": lambda code: ("new-zerodha-token", None),
+    }
+    _reconfigure_at_the_pin(monkeypatch, app, change)
+
+    with app.test_request_context("/api/v1/funds", method="POST"):
+        if path == "api_key":
+            token, _broker = auth_db.get_auth_token_broker("platform-key")
+        else:
+            token = auth_db.get_auth_token(USER, bypass_cache=path == "fresh")
+        if token:
+            funds.get_margin_data(token)
+
+    coherent = {
+        "FYAPP-100:tok",
+        "FYAPP-200:new-fyers-token",
+        "zkey123:zkey123:new-zerodha-token",
+    }
+    assert sent == [] or set(sent) <= coherent, sent
+    assert token != "tok" or sent == ["FYAPP-100:tok"]
+
+
+def test_a_token_whose_keys_are_gone_is_not_returned(stores, environment, monkeypatch):
+    """AUDIT A01. The token's broker has no keys any more (forgotten), so no
+    matching keys can be pinned: the token is refused rather than sent with the
+    process's keys."""
+    funds, sent = _fyers_transport(monkeypatch)
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("fyers")
+    broker_keys.use_broker_keys("zerodha")  # the process holds another broker's keys
+    keys_db.delete_broker_keys("fyers")
+
+    with _app().test_request_context("/api/v1/funds", method="POST"):
+        token = auth_db.get_auth_token(USER)
+
+    assert token is None
+    assert sent == []
+
+
+def test_a_pin_that_fails_returns_no_token(stores, environment, monkeypatch):
+    _save_fyers()
+    _logged_in("fyers")
+    broker_keys.use_broker_keys("fyers")
+
+    def broken(broker):
+        raise RuntimeError("no keys")
+
+    monkeypatch.setattr(broker_keys, "pin_keys_for", broken)
+    with _app().test_request_context("/api/v1/funds", method="POST"):
+        assert auth_db.get_auth_token(USER) is None
+        assert auth_db.get_auth_token_broker("no-such-key") == (None, None)
+
+
+def test_a_background_pin_belongs_to_its_token_read_not_to_a_time(
+    stores, environment, monkeypatch
+):
+    """AUDIT A01. Outside a request (a scheduler job, a strategy tick) a pin
+    lasted 60 seconds, so a slow job's broker call could outlive it and fall
+    back to whichever keys the process had by then. It now lasts until that
+    context's next token read."""
+    funds, sent = _fyers_transport(monkeypatch)
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("fyers")
+    broker_keys.use_broker_keys("fyers")
+    clock = [1000.0]
+    monkeypatch.setattr(broker_keys, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def slow_job():
+        token = auth_db.get_auth_token(USER)
+        contextvars.Context().run(broker_keys.use_broker_keys, "zerodha")
+        clock[0] += 3600
+        funds.get_margin_data(token)
+
+    contextvars.Context().run(slow_job)
+
+    assert sent == ["FYAPP-100:tok"]

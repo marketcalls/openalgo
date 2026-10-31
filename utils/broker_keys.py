@@ -139,19 +139,12 @@ _publication = {"generation": 0}
 # broker's token with another broker's keys while a switch is being stored.
 _staged = contextvars.ContextVar("staged_broker_keys", default=None)
 
-#: How long a pin lasts outside a request (a scheduler job, a strategy tick):
-#: long enough for the broker call that follows the token read, short enough
-#: that a thread reused for later work reads the process's keys again.
-PIN_SECONDS = 60
-
-
 @dataclass(frozen=True)
 class _Stage:
     """Keys staged or pinned for one context. ``values`` maps variable -> value or None."""
 
     values: dict
     kind: str  # "login" or "pin"
-    expires: float | None = None
 
 
 @dataclass(frozen=True)
@@ -178,11 +171,7 @@ def _staged_here(environ):
     if environ is not os.environ:
         return None
     stage = _staged.get()
-    if stage is None:
-        return None
-    if stage.expires is not None and stage.expires < time.monotonic():
-        return None
-    return stage.values
+    return stage.values if stage is not None else None
 
 
 def _overlay_getitem(self, key):
@@ -588,26 +577,34 @@ def _values_of(keys):
 
 
 def pin_keys_for(broker):
-    """Pin, for this request, the keys of the broker whose token was just read.
+    """Pin, for this context, the keys of the broker whose token was just read.
 
-    Called by the token reads in database.auth_db. The token and the keys a
-    request sends together must belong to one broker, and a switch stores the
-    new token and publishes the new keys as two steps: a request reading
-    between them, or still running after them, would pair one broker's token
-    with the other's keys. Pinned, every later read of the five variables in
-    this request returns the keys of the token's broker. A login's own staged
-    keys are never replaced. Outside a request the pin lasts PIN_SECONDS.
+    Called by the token reads in database.auth_db (_read_coherently). The
+    token and the keys a request sends together must belong to one broker,
+    and a switch stores the new token and publishes the new keys as two
+    steps: a request reading between them, or still running after them, would
+    pair one broker's token with the other's keys. Pinned, every later read of
+    the five variables in this context returns the keys of the token's broker.
+    A login's own staged keys are never replaced. A pin lasts to the end of
+    the request, and outside a request (a scheduler job, a strategy tick) until
+    that context's next token read pins again: it belongs to the token read,
+    not to a time.
+
+    Returns:
+        bool: True when this context now reads the keys of ``broker``; False
+        when no keys could be found for it (forgotten since), and the token
+        must not be used.
     """
     if not broker:
-        return
+        return True
     current = _staged.get()
     if current is not None and current.kind == "login":
-        return
+        return True
     published = _published["state"]
     if published is None:
         # Nothing published since startup: the process holds the .env keys,
         # which is what every read gets anyway.
-        return
+        return True
     if published.broker == broker:
         values = published.values
     else:
@@ -615,12 +612,10 @@ def pin_keys_for(broker):
         # switch is being stored, or one was refused and undone.
         keys = resolve(broker)
         if keys is None:
-            return
+            return False
         values = _values_of(keys)
-    from flask import has_request_context
-
-    expires = None if has_request_context() else time.monotonic() + PIN_SECONDS
-    _staged.set(_Stage(values=values, kind="pin", expires=expires))
+    _staged.set(_Stage(values=values, kind="pin"))
+    return True
 
 
 def clear_pin():
@@ -819,6 +814,8 @@ def use_broker_keys(broker, check_live=False):
     if check_live:
         _refuse_another_broker(broker)
     keys = _resolve_or_refuse(broker)
+    # The caller goes on to read the keys it publishes, not a pin of its own.
+    clear_pin()
     publish_broker_keys(keys)
     return keys
 
