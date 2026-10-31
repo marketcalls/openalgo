@@ -1,11 +1,11 @@
 # Angel One (SmartAPI) GTT payload transforms (OpenAlgo <-> Angel).
 # SmartAPI GTT reference: https://smartapi.angelone.in/docs  (section "GTT")
 #
-# Angel's GTT rule is a *single* trigger: one triggerprice, one child order.
-# There is no native OCO rule type, so OpenAlgo's OCO is expressed as two
-# independent Angel rules (see the module docstring of api/gtt_api.py).
-# The transforms below therefore always return a *list* of (leg_label, body)
-# pairs so the API layer can drive one or two HTTP calls uniformly.
+# One OpenAlgo GTT is one Angel rule. A SINGLE rule carries one trigger
+# (``triggerprice``/``price``). An OCO rule (``gttType: "OCO"``) carries the
+# target leg in ``triggerprice``/``price`` and the stop-loss leg in
+# ``stoplosstriggerprice``/``stoplossprice``; Angel cancels the other leg when
+# one fires.
 
 from broker.angel.mapping.transform_data import map_product_type, reverse_map_product_type
 from database.token_db import get_br_symbol, get_oa_symbol
@@ -44,29 +44,34 @@ _STATUS_MAP = {
 }
 
 # Angel's GTT docs state that only DELIVERY and MARGIN product types are
-# accepted (the engine currently covers NSE/BSE cash only). The generic order
-# mapper yields DELIVERY / CARRYFORWARD / INTRADAY, so CARRYFORWARD (NRML) is
-# folded onto MARGIN — Angel's cash-segment leveraged product — and INTRADAY
-# onto MARGIN as well. MIS is rejected upstream by the GTT schema, so in
-# practice only CNC -> DELIVERY and NRML -> MARGIN occur.
+# accepted on the cash segment. The generic order mapper yields DELIVERY /
+# CARRYFORWARD / INTRADAY, so on cash CARRYFORWARD (NRML) is folded onto
+# MARGIN — Angel's cash-segment leveraged product — and INTRADAY onto MARGIN as
+# well. Derivatives keep CARRYFORWARD, the product Angel uses for an NRML F&O
+# position (an OCO rule on an NFO option with CARRYFORWARD was accepted and
+# stored as such). MIS is rejected upstream by the GTT schema.
 _GTT_PRODUCT_OVERRIDE = {
     "CARRYFORWARD": "MARGIN",
     "INTRADAY": "MARGIN",
 }
+
+_CASH_EXCHANGES = ("NSE", "BSE")
 
 _GTT_REVERSE_PRODUCT_OVERRIDE = {
     "MARGIN": "NRML",
 }
 
 
-def map_gtt_product_type(product):
+def map_gtt_product_type(product, exchange):
     """Map an OpenAlgo product (CNC/NRML) to an Angel *GTT* producttype.
 
     Reuses the broker's existing :func:`map_product_type` and then applies the
-    GTT-only narrowing documented above (AB9015 "Invalid Product Type" is what
-    Angel returns if CARRYFORWARD reaches the GTT endpoint).
+    cash-only narrowing documented above (AB9015 "Invalid Product Type" is what
+    Angel returns if CARRYFORWARD reaches the GTT endpoint for a cash symbol).
     """
     angel_product = map_product_type(product)
+    if exchange not in _CASH_EXCHANGES:
+        return angel_product
     return _GTT_PRODUCT_OVERRIDE.get(angel_product, angel_product)
 
 
@@ -99,108 +104,76 @@ def _resolve_single_trigger(data):
     return float(sl) if float(sl) > 0 else float(tg)
 
 
-def _legs(data):
-    """Resolve the (leg_label, trigger, limit_price) tuples for this payload.
+def is_oco(data):
+    return (data.get("trigger_type") or "").upper() == "OCO"
 
-    SINGLE -> one leg. OCO -> the stop-loss leg first (lower trigger), then the
-    target leg, so the ordering of the two Angel rule ids inside a composite
-    trigger id is always ``<sl_rule_id>-<tg_rule_id>``.
+
+def _trigger_fields(data):
+    """The price fields of one Angel rule body.
+
+    SINGLE -> ``triggerprice``/``price``. OCO -> ``gttType: OCO`` with the
+    target leg in ``triggerprice``/``price`` and the stop-loss leg in
+    ``stoplosstriggerprice``/``stoplossprice``.
     """
-    if (data.get("trigger_type") or "").upper() == "OCO":
-        return [
-            ("SL", float(data["triggerprice_sl"]), float(data["stoploss"])),
-            ("TG", float(data["triggerprice_tg"]), float(data["target"])),
-        ]
-    return [("SINGLE", _resolve_single_trigger(data), float(data.get("price") or 0))]
+    if is_oco(data):
+        return {
+            "gttType": "OCO",
+            "price": _fmt(data["target"]),
+            "triggerprice": _fmt(data["triggerprice_tg"]),
+            "stoplossprice": _fmt(data["stoploss"]),
+            "stoplosstriggerprice": _fmt(data["triggerprice_sl"]),
+        }
+    return {
+        "price": _fmt(data.get("price") or 0),
+        "triggerprice": _fmt(_resolve_single_trigger(data)),
+    }
 
 
 def transform_place_gtt(data, token):
-    """Build Angel ``gtt/v1/createRule`` bodies for an OpenAlgo place-GTT payload.
-
-    Returns ``[(leg_label, body), ...]`` — one entry for SINGLE, two for OCO
-    (stop-loss leg first). Angel's create-rule body is flat:
-    ``tradingsymbol, symboltoken, exchange, transactiontype, producttype,
-    price, qty, triggerprice, disclosedqty`` (+ ``timeperiod``).
+    """Build the Angel ``gtt/v1/createRule`` body for an OpenAlgo place-GTT payload.
 
     ``token`` is the instrument's Angel ``symboltoken``, resolved by the caller
     via ``database.token_db.get_token``.
     """
-    tradingsymbol = get_br_symbol(data["symbol"], data["exchange"])
-    exchange = data["exchange"]
-    qty = _fmt(data["quantity"])
-    disclosed_qty = _fmt(data.get("disclosed_quantity") or 0)
-    producttype = map_gtt_product_type(data["product"])
-    transactiontype = data["action"].upper()
-
-    bodies = []
-    for leg_label, trigger, price in _legs(data):
-        bodies.append(
-            (
-                leg_label,
-                {
-                    "tradingsymbol": tradingsymbol,
-                    "symboltoken": str(token),
-                    "exchange": exchange,
-                    "transactiontype": transactiontype,
-                    "producttype": producttype,
-                    "price": _fmt(price),
-                    "qty": qty,
-                    "triggerprice": _fmt(trigger),
-                    "disclosedqty": disclosed_qty,
-                    "timeperiod": DEFAULT_TIME_PERIOD_DAYS,
-                },
-            )
-        )
-    return bodies
+    return {
+        "tradingsymbol": get_br_symbol(data["symbol"], data["exchange"]),
+        "symboltoken": str(token),
+        "exchange": data["exchange"],
+        "transactiontype": data["action"].upper(),
+        "producttype": map_gtt_product_type(data["product"], data["exchange"]),
+        **_trigger_fields(data),
+        "qty": _fmt(data["quantity"]),
+        "disclosedqty": _fmt(data.get("disclosed_quantity") or 0),
+        "timeperiod": DEFAULT_TIME_PERIOD_DAYS,
+    }
 
 
-def transform_modify_gtt(data, token, rule_ids):
-    """Build Angel ``gtt/v1/modifyRule`` bodies, one per existing rule id.
+def transform_modify_gtt(data, token, rule_id):
+    """Build the Angel ``gtt/v1/modifyRule`` body for an existing rule.
 
-    Angel's modify body is a strict subset of create — ``id, symboltoken,
-    exchange, price, qty, triggerprice, disclosedqty``. Notably it carries
-    neither ``tradingsymbol`` nor ``transactiontype`` nor ``producttype``,
-    so those cannot be changed once a rule exists.
-
-    ``rule_ids`` must be positionally aligned with the legs implied by
-    ``data['trigger_type']`` (1 id for SINGLE, 2 ids ``[sl, tg]`` for OCO); the
-    caller obtains them by decoding the composite trigger id.
+    Angel's modify body is a subset of create: it carries neither
+    ``tradingsymbol`` nor ``transactiontype`` nor ``producttype``, so those
+    cannot be changed once a rule exists, and neither can SINGLE vs OCO.
     """
-    exchange = data["exchange"]
-    qty = _fmt(data["quantity"])
-    disclosed_qty = _fmt(data.get("disclosed_quantity") or 0)
-
-    bodies = []
-    for (leg_label, trigger, price), rule_id in zip(_legs(data), rule_ids, strict=True):
-        bodies.append(
-            (
-                leg_label,
-                {
-                    "id": str(rule_id),
-                    "symboltoken": str(token),
-                    "exchange": exchange,
-                    "price": _fmt(price),
-                    "qty": qty,
-                    "triggerprice": _fmt(trigger),
-                    "disclosedqty": disclosed_qty,
-                    "timeperiod": DEFAULT_TIME_PERIOD_DAYS,
-                },
-            )
-        )
-    return bodies
+    return {
+        "id": str(rule_id),
+        "symboltoken": str(token),
+        "exchange": data["exchange"],
+        **_trigger_fields(data),
+        "qty": _fmt(data["quantity"]),
+        "disclosedqty": _fmt(data.get("disclosed_quantity") or 0),
+        "timeperiod": DEFAULT_TIME_PERIOD_DAYS,
+    }
 
 
 def map_gtt_book(rules):
     """Normalise Angel's ``gtt/v1/ruleList`` rows into the OpenAlgo GTT shape.
 
-    Each Angel row is one single-trigger rule, so every entry emitted here has
-    exactly one trigger price and one leg. An OpenAlgo OCO placed through
-    :func:`broker.angel.api.gtt_api.place_gtt_order` shows up as *two*
-    independent rows — Angel stores no link between the pair, and inventing one
-    from (symbol, side, qty, timestamp) would risk merging genuinely unrelated
-    rules, so the pairing is deliberately not reconstructed here.
-
-    ``last_price`` is 0: Angel's rule rows carry no LTP.
+    A SINGLE rule becomes one ``single`` entry; an OCO rule becomes one
+    ``two-leg`` entry whose ``trigger_prices`` and ``legs`` are sorted by
+    trigger, ascending, as for every broker (a SELL OCO's stop-loss leg comes
+    first, a BUY OCO's target leg). ``last_price`` is 0: Angel's rule rows carry
+    no LTP.
     """
     if not isinstance(rules, list):
         return []
@@ -222,14 +195,24 @@ def map_gtt_book(rules):
             get_oa_symbol(brsymbol=br_symbol, exchange=exchange) if br_symbol and exchange else ""
         )
 
-        leg = {
-            "action": (rule.get("transactiontype", "") or "").upper(),
-            "quantity": int(float(rule.get("qty", 0) or 0)),
-            "price": float(rule.get("price", 0) or 0),
-            # Angel GTT rules always fire a LIMIT child order.
-            "pricetype": GTT_CHILD_PRICETYPE,
-            "product": reverse_map_gtt_product_type(rule.get("producttype", "")),
-        }
+        def leg(price, rule=rule):
+            return {
+                "action": (rule.get("transactiontype", "") or "").upper(),
+                "quantity": int(float(rule.get("qty", 0) or 0)),
+                "price": float(price or 0),
+                # Angel GTT rules always fire a LIMIT child order.
+                "pricetype": GTT_CHILD_PRICETYPE,
+                "product": reverse_map_gtt_product_type(rule.get("producttype", "")),
+            }
+
+        pairs = [(float(rule.get("triggerprice", 0) or 0), leg(rule.get("price")))]
+        trigger_type = "single"
+        if (rule.get("gttType") or "").upper() == "OCO":
+            trigger_type = "two-leg"
+            pairs.append(
+                (float(rule.get("stoplosstriggerprice", 0) or 0), leg(rule.get("stoplossprice")))
+            )
+            pairs.sort(key=lambda pair: pair[0])
 
         normalised.append(
             {
@@ -237,13 +220,13 @@ def map_gtt_book(rules):
                 # returns it as "id". Fall back to the other spellings seen in
                 # the SmartAPI SDK rather than emitting a book row with no id.
                 "trigger_id": str(rule.get("id") or rule.get("gttid") or rule.get("ruleid") or ""),
-                "trigger_type": "single",
+                "trigger_type": trigger_type,
                 "status": _STATUS_MAP.get(status_raw, status_raw.lower()),
                 "symbol": oa_symbol or br_symbol,
                 "exchange": exchange,
-                "trigger_prices": [float(rule.get("triggerprice", 0) or 0)],
+                "trigger_prices": [trigger for trigger, _ in pairs],
                 "last_price": 0,  # Angel does not return LTP on GTT rules
-                "legs": [leg],
+                "legs": [leg_ for _, leg_ in pairs],
                 "created_at": rule.get("createddate", "") or "",
                 "updated_at": rule.get("updateddate", "") or "",
                 "expires_at": rule.get("expirydate", "") or "",
