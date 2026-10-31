@@ -1901,6 +1901,62 @@ def test_a_login_that_does_not_complete_puts_the_live_brokers_keys_back(stores, 
     assert os.environ["BROKER_API_KEY"] == "zkey123"
 
 
+def test_a_refused_callback_leaves_the_keys_of_a_login_under_way(stores, environment, monkeypatch):
+    """PINNED DEFECT (security review). Every callback that did not complete put
+    the logged-in broker's keys back, including a refused or forged one that
+    never took the slot, so it could overwrite the keys of another login in the
+    middle of its exchange. Only the request holding the slot restores."""
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("zerodha")
+    restored = []
+    monkeypatch.setattr(brlogin, "restore_logged_in_broker_keys", restored.append)
+    holder = broker_keys.hold_login_slot("fyers")
+    try:
+        broker_keys.use_broker_keys("fyers")
+        forged = _signed_in(_app()).get("/angel/callback?request_token=x")
+    finally:
+        broker_keys.release_login_slot(holder)
+
+    assert (
+        forged.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
+    assert restored == []
+    assert os.environ["BROKER_API_KEY"] == "FYAPP-100"
+
+
+def test_the_keys_of_a_login_under_way_are_never_restored_over(stores, environment):
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("zerodha")
+    holder = broker_keys.hold_login_slot("fyers")
+    try:
+        broker_keys.use_broker_keys("fyers")
+        broker_keys.restore_logged_in_broker_keys("angel")
+        during = os.environ["BROKER_API_KEY"]
+    finally:
+        broker_keys.release_login_slot(holder)
+
+    assert during == "FYAPP-100"
+
+
+def test_a_resume_waits_for_a_login_to_another_broker(stores, environment):
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("zerodha")
+    holder = broker_keys.hold_login_slot("fyers")
+    try:
+        broker_keys.use_broker_keys("fyers")
+        with _app().test_request_context("/"):
+            resumed = auth_bp_module._try_resume_broker_session(USER)
+        during = os.environ["BROKER_API_KEY"]
+    finally:
+        broker_keys.release_login_slot(holder)
+
+    assert resumed is None
+    assert during == "FYAPP-100"
+
+
 def test_a_completed_login_keeps_its_own_keys(stores, environment, completed):
     environment.write(ENV_ZERODHA)
     _save_fyers()

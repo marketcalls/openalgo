@@ -200,7 +200,9 @@ there. `utils/broker_keys.py` owns which keys a broker uses.
   (`auth_utils._hand_over_from_live_broker`), as in the desktop; a login that
   fails or is abandoned leaves it connected, and its keys are put back
   (`restore_logged_in_broker_keys`), because the callback wrote the new
-  broker's keys. The switch is refused while the old broker still runs Live
+  broker's keys. Only the request holding the login slot restores, and a
+  resume waits while another broker's login holds it: anything else writing
+  keys then would replace them under that login's exchange. The switch is refused while the old broker still runs Live
   automation (`utils/broker_switch.switch_refusal`: Live strategy module runs,
   Live OpenScript runs, and outside analyzer mode Python strategies and
   scalping protection), checked when the login starts and again when it

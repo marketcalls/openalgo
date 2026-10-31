@@ -569,8 +569,13 @@ def restore_logged_in_broker_keys(except_broker):
     logged-in broker may still be trading. When that login ends without
     completing (refused, failed, a form shown, abandoned), the logged-in
     broker gets its own keys back. Nothing is done when `except_broker` is
-    the logged-in one or none is.
+    the logged-in one or none is, and nothing while a login to another broker
+    than `except_broker` holds the slot: its keys are in place for its
+    exchange.
     """
+    pending = login_slot_broker()
+    if pending and pending != except_broker:
+        return
     stored = logged_in_broker()
     if not stored or stored == except_broker:
         return

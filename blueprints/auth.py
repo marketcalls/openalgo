@@ -266,7 +266,16 @@ def _try_resume_broker_session(username):
         # The stored session's broker may not be the one whose keys are in the
         # environment (a restart, or keys saved in OpenAlgo). Put its keys in
         # place before validating the token with them.
-        from utils.broker_keys import BrokerKeysRefused, use_broker_keys
+        from utils.broker_keys import BrokerKeysRefused, login_slot_broker, use_broker_keys
+
+        # A login to another broker is writing its keys for its exchange;
+        # putting this broker's keys in place now would replace them under it.
+        pending = login_slot_broker()
+        if pending and pending != broker:
+            logger.info(
+                f"Not resuming the {broker} session for {username}: a {pending} login is under way"
+            )
+            return None
 
         try:
             use_broker_keys(broker, check_live=False)

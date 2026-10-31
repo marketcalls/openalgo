@@ -103,9 +103,7 @@ def broker_callback(broker, para=None):
         logger.info(f"Broker login for {broker} refused: {exc}")
         return _refuse_login("broker_unavailable", str(exc), status=409)
     except BrokerLoginRefused:
-        logger.warning(
-            f"Refused a {broker} login answer that no login started from this browser"
-        )
+        logger.warning(f"Refused a {broker} login answer that no login started from this browser")
         if not had_user:
             session.pop("user", None)
         return _refuse_login(
@@ -118,9 +116,14 @@ def broker_callback(broker, para=None):
         # broker's keys, so unless it completed the login (and ended that
         # session), the logged-in broker gets its keys back. Then the slot is
         # released: it was held for this request only, however it ended.
-        if not g.pop("broker_login_completed", False):
+        # Only a request that took the slot wrote keys; restoring from any
+        # other (a refused or forged callback) would overwrite the keys of the
+        # login that holds the slot, mid-exchange.
+        completed = g.pop("broker_login_completed", False)
+        slot = g.pop("broker_login_slot", None)
+        if slot is not None and not completed:
             restore_logged_in_broker_keys(broker)
-        release_login_slot(g.pop("broker_login_slot", None))
+        release_login_slot(slot)
 
 
 def _broker_callback(broker, para=None):
@@ -1220,8 +1223,10 @@ def dhan_initiate_oauth():
     try:
         return _dhan_initiate_oauth()
     finally:
-        restore_logged_in_broker_keys("dhan")
-        release_login_slot(g.pop("broker_login_slot", None))
+        slot = g.pop("broker_login_slot", None)
+        if slot is not None:
+            restore_logged_in_broker_keys("dhan")
+        release_login_slot(slot)
 
 
 def _dhan_initiate_oauth():
