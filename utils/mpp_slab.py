@@ -6,6 +6,7 @@
 # with a price buffer based on configurable protection percentages.
 
 import math
+import re
 from typing import Optional
 
 from utils.logging import get_logger
@@ -45,10 +46,10 @@ def get_instrument_type_from_symbol(symbol: str) -> str:
         str: 'CE', 'PE', 'FUT', or 'EQ'
     """
     symbol_upper = symbol.upper()
-    if symbol_upper.endswith("CE"):
-        return "CE"
-    elif symbol_upper.endswith("PE"):
-        return "PE"
+    # Options end in a strike then CE/PE; cash names like RELIANCE end in CE by chance
+    option = re.search(r"\d(CE|PE)$", symbol_upper)
+    if option:
+        return option.group(1)
     elif symbol_upper.endswith("FUT"):
         return "FUT"
     else:
