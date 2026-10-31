@@ -115,6 +115,12 @@ STRATEGY_KINDS = ("batch", "signal")
 DIRECTIONS = ("both", "long_only", "short_only")
 STRATEGY_TYPES = ("intraday", "positional")
 RUN_MODES = ("live", "sandbox")
+
+#: What a Live run's broker column holds before the run knows its broker: ""
+#: from a batch start with no session, "live" from a signal run opened before
+#: the day's login. order_dispatch.UNBOUND_BROKERS is the same set.
+UNBOUND_RUN_BROKERS = ("", "live")
+
 STRATEGY_STATUSES = ("stopped", "running", "paused", "errored")
 TRIGGER_SOURCES = ("manual", "webhook", "scheduler")
 
@@ -352,6 +358,12 @@ class SmStrategyRun(Base):
     )
     mode = Column(String(10), nullable=False)
     broker = Column(String(50), nullable=False, default="")
+    # The broker account id the session carried when the run started, for the
+    # brokers whose login records one (auth.user_id). Every Live order the run
+    # sends is held to this broker and, when both are known, this account.
+    # NULL means not recorded: the run predates the column, or the broker's
+    # login names no account, and the run is then bound by broker alone.
+    broker_account = Column(String(255), nullable=True)
 
     started_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC).replace(tzinfo=None)
@@ -848,6 +860,37 @@ def count_live_running_strategies(user_id: str) -> int:
         db_session.remove()
 
 
+def live_run_brokers(user_id: str) -> list[str]:
+    """The brokers a user's running Live runs trade on, as each run recorded it.
+
+    Asked before a login to another broker: a run on one broker must not be
+    left behind by a switch, whatever the session and the login records say.
+    A run that has not recorded its broker yet is not listed.
+    """
+    try:
+        rows = (
+            db_session.query(SmStrategyRun.broker)
+            .join(SmStrategy, SmStrategyRun.id == SmStrategy.current_run_id)
+            .filter(
+                SmStrategy.user_id == user_id,
+                SmStrategy.status == "running",
+                SmStrategyRun.mode == "live",
+                SmStrategyRun.broker.isnot(None),
+                SmStrategyRun.broker != "",
+            )
+            .distinct()
+            .all()
+        )
+        return sorted(row[0] for row in rows)
+    except OperationalError as exc:
+        # No strategy table yet: nothing can be running.
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+    finally:
+        db_session.remove()
+
+
 def get_strategy(strategy_id: int, user_id: str) -> SmStrategy | None:
     """One strategy, scoped to its owner.
 
@@ -1169,6 +1212,7 @@ def create_run(
     trigger_source: str = "manual",
     webhook_event_id: int | None = None,
     resolved_expiries: dict | None = None,
+    broker_account: str | None = None,
 ) -> SmStrategyRun | None:
     """Open a new run for a strategy."""
     try:
@@ -1176,6 +1220,7 @@ def create_run(
             strategy_id=strategy_id,
             mode=mode,
             broker=broker or "",
+            broker_account=broker_account or None,
             trigger_source=trigger_source,
             webhook_event_id=webhook_event_id,
             resolved_expiries=resolved_expiries,
@@ -1187,6 +1232,38 @@ def create_run(
         db_session.rollback()
         logger.exception("Could not create a run for strategy %s", strategy_id)
         return None
+
+
+def bind_run_broker(run_id: int, broker: str, broker_account: str | None) -> bool:
+    """Record the broker of a Live run that started without one. Says whether it did.
+
+    A signal run opened while no broker was logged in records its mode in place
+    of a broker, and its first Live order is what binds it. Conditional, so
+    only the first caller binds and a run that already has a broker keeps it:
+    two orders racing on an unbound run cannot bind it to two brokers.
+    """
+    if not broker:
+        return False
+    try:
+        updated = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.mode == "live",
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.broker.in_(UNBOUND_RUN_BROKERS),
+            )
+            .update(
+                {"broker": broker, "broker_account": broker_account or None},
+                synchronize_session=False,
+            )
+        )
+        db_session.commit()
+        return updated == 1
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record the broker of run %s", run_id)
+        return False
 
 
 def finish_run(

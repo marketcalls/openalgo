@@ -90,13 +90,26 @@ def refusal_for_login(broker, username):
     """Why a login to `broker` may not go ahead, or None.
 
     A login to another broker than the one logged in now (or last, after a
-    logout) is refused while that broker still runs Live automation. Logging
-    back in to the same broker is always allowed.
+    logout) is refused while that broker still runs Live automation. A Live
+    strategy run records the broker it trades on, so a run on another broker
+    refuses the login too, whatever the session and the login records say.
+    Logging back in to the same broker is always allowed.
     """
     previous = previous_broker(username)
-    if not previous or previous == broker:
-        return None
-    return switch_refusal(previous, username)
+    if previous and previous != broker:
+        refusal = switch_refusal(previous, username)
+        if refusal:
+            return refusal
+    try:
+        from database.strategy_module_db import live_run_brokers
+
+        others = [run_broker for run_broker in live_run_brokers(username) if run_broker != broker]
+    except Exception:
+        logger.exception("Could not read the brokers of the running Live strategies")
+        return "OpenAlgo could not check which broker your Live strategies trade on. Try again."
+    if others:
+        return switch_refusal(others[0], username)
+    return None
 
 
 def switch_refusal(live_broker, username):

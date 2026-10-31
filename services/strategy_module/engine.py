@@ -30,7 +30,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, risk_adapter, session, state
+from services.strategy_module import (
+    broker_binding,
+    order_dispatch,
+    risk_adapter,
+    session,
+    state,
+)
 from services.strategy_module.audit_messages import leg_close_requested_message
 from services.strategy_module.symbol_resolver import resolve_leg
 from utils import real_threading
@@ -68,6 +74,18 @@ _STOP_REASON_FOR_REASON = {
     "combined_target": "overall_target",
     "lock_profit": "lock_profit",
 }
+
+# The tick events a breach writes again on every tick for as long as nothing
+# can be exited. Not repeated once a run's broker refusal has been reported.
+_REPEATING_BREACH_EVENTS = frozenset(
+    {
+        "leg_sl_hit",
+        "leg_target_hit",
+        "overall_sl_hit",
+        "overall_target_hit",
+        "lock_profit_triggered",
+    }
+)
 
 
 @dataclass
@@ -150,8 +168,19 @@ def _release_unactionable(run_id: int) -> bool:
         return True
 
 
+def _is_unactionable(run_id: int) -> bool:
+    """Whether ``run_id`` is currently recorded as unable to act."""
+    with _unactionable_lock:
+        return run_id in _unactionable_runs
+
+
 def _note_unactionable(
-    strategy_id: int, user_id: str, run_id: int, leg_exits: list, stop_reason: str | None
+    strategy_id: int,
+    user_id: str,
+    run_id: int,
+    leg_exits: list,
+    stop_reason: str | None,
+    reason: str | None = None,
 ) -> None:
     """Record that risk fired and could not be acted on.
 
@@ -168,18 +197,29 @@ def _note_unactionable(
     Recorded once per run per episode rather than per tick, because the tick
     that fired a stop is followed by every tick after it and the trail would be
     unreadable.
+
+    ``reason`` replaces the no-session wording when the session exists but is
+    on another broker or account than the run's, which is the same situation
+    for the position: nothing can be sent until the trader logs in to the right
+    one, and the prices still arrive from the session that is logged in.
     """
     if not (leg_exits or stop_reason):
         return
     if not _claim_unactionable(run_id):
         return
-    logger.warning("Run %s has risk to act on but no broker session; positions left open", run_id)
+    logger.warning(
+        "Run %s has risk to act on but cannot reach its broker; positions left open", run_id
+    )
     _emit(
         strategy_id,
         user_id,
         "leg_exit_rejected",
-        "Risk triggered but there is no broker session, so nothing could be exited. "
-        "Positions are still open. Log in to restore the session.",
+        (
+            f"Risk triggered and the positions are still open. {reason}"
+            if reason
+            else "Risk triggered but there is no broker session, so nothing could be "
+            "exited. Positions are still open. Log in to restore the session."
+        ),
         run_id=run_id,
         severity="critical",
     )
@@ -324,6 +364,9 @@ def start_run(
             strategy_id=strategy_id,
             mode=mode,
             broker=_broker_for(api_key, mode),
+            # With the broker, the account: every Live order this run sends is
+            # held to both, so a later login elsewhere cannot receive them.
+            broker_account=_broker_account_for(user_id, mode),
             trigger_source=trigger_source,
             webhook_event_id=webhook_event_id,
             resolved_expiries={
@@ -460,7 +503,12 @@ def _unsubscribe_run(run_id: int) -> None:
 
 
 def _broker_for(api_key: str, mode: str) -> str:
-    """The broker a run is bound to, snapshotted at start."""
+    """The broker a run is bound to, snapshotted at start.
+
+    Not a label. ``order_dispatch`` refuses every later Live order, cancel and
+    status read of the run whose session is on another broker, so a trader who
+    logs in elsewhere mid-run cannot have this run's exits sent there.
+    """
     if mode == "sandbox":
         return "sandbox"
     try:
@@ -471,6 +519,22 @@ def _broker_for(api_key: str, mode: str) -> str:
     except Exception:
         logger.exception("Could not read the broker for a live run")
         return ""
+
+
+def _broker_account_for(user_id: str, mode: str) -> str | None:
+    """The broker account a Live run is bound to, when the session names one."""
+    if mode != "live":
+        return None
+    return order_dispatch.session_account(user_id)
+
+
+def _binding_for(
+    run_id: int, mode: str, api_key: str, user_id: str
+) -> order_dispatch.BrokerBinding | None:
+    """The broker a Live run's orders must go to. None for a sandbox run."""
+    if mode != "live":
+        return None
+    return broker_binding.for_run(run_id, api_key=api_key, user_id=user_id)
 
 
 def _resolve_all_legs(
@@ -689,6 +753,7 @@ def _place_entries(
     outcomes: list[dict[str, Any]] = []
     progress = placement_progress if placement_progress is not None else {}
     dispatch_attempted = progress.setdefault("dispatch_attempted", set())
+    binding = _binding_for(run_id, mode, api_key, user_id)
 
     for leg in ordered:
         if leg.get("expiry_fallback"):
@@ -780,7 +845,9 @@ def _place_entries(
         # the failed-start path must retain it as possible exposure rather than
         # misclassifying it as an undispatched placeholder.
         dispatch_attempted.add(position_ref)
-        result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+        result = order_dispatch.dispatch_order(
+            mode=mode, api_key=api_key, order=order, binding=binding
+        )
 
         acknowledged = _record_acknowledgement(
             row_id, result, strategy["id"], user_id, run_id, leg["leg_id"]
@@ -1275,6 +1342,11 @@ def _exit_legs(
         for leg in unfilled_legs
     ]
 
+    # The broker every exit below belongs to: the run's, never the session's.
+    # A refusal for a session on another broker releases the claim like any
+    # other refusal, so the leg stays open, priced and exitable.
+    binding = _binding_for(run_id, mode, api_key, user_id) if targets else None
+
     # Dispatch outside the lock. See the module docstring.
     outcomes: list[dict[str, Any]] = []
     for leg, exit_owner in targets:
@@ -1389,7 +1461,9 @@ def _exit_legs(
                 continue
             exit_claim_id = row_id
 
-        result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+        result = order_dispatch.dispatch_order(
+            mode=mode, api_key=api_key, order=order, binding=binding
+        )
 
         if row_id is not None:
             _record_acknowledgement(row_id, result, strategy["id"], user_id, run_id, leg["leg_id"])
@@ -1450,6 +1524,7 @@ def _cancel_and_reconcile_working_entries(
     run_id: int,
     mode: str,
     api_key: str,
+    binding: order_dispatch.BrokerBinding | None = None,
 ) -> None:
     """Cancel each accepted working entry, then fold one broker status fact.
 
@@ -1480,6 +1555,7 @@ def _cancel_and_reconcile_working_entries(
             mode=mode,
             api_key=api_key,
             broker_order_id=broker_order_id,
+            binding=binding,
         )
         if not cancellation.ok:
             logger.warning(
@@ -1493,6 +1569,7 @@ def _cancel_and_reconcile_working_entries(
             mode=mode,
             api_key=api_key,
             broker_order_id=broker_order_id,
+            binding=binding,
         )
         if status.ok and status.order is not None:
             order_events.apply_order_snapshot(broker_order_id, status.order)
@@ -1509,6 +1586,7 @@ def _reconcile_working_exits(
     run_id: int,
     mode: str,
     api_key: str,
+    binding: order_dispatch.BrokerBinding | None = None,
 ) -> None:
     """Fold one broker fact for each accepted exit still awaiting a frame.
 
@@ -1537,6 +1615,7 @@ def _reconcile_working_exits(
             mode=mode,
             api_key=api_key,
             broker_order_id=broker_order_id,
+            binding=binding,
         )
         if status.ok and status.order is not None:
             order_events.apply_order_snapshot(broker_order_id, status.order)
@@ -1635,22 +1714,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     api_key = _api_key_for(user_id)
     if not api_key:
         if not still_held:
-            persisted_reason = store.get_run(run_id).stop_requested_reason or reason
-            finalised = _finalise(
-                run_id,
-                strategy_id,
-                user_id,
-                persisted_reason,
-                f"Run stopped ({persisted_reason})",
-            )
-            if finalised:
-                return {"ok": True, "stop_pending": False, "exits": []}
-            return {
-                "ok": False,
-                "stop_pending": True,
-                "error": "The run is flat but its final stop could not be persisted; retry the stop",
-                "exits": [],
-            }
+            return _finish_flat_stop(run_id, strategy_id, user_id, reason)
 
         if _claim_unactionable(run_id):
             _emit(
@@ -1669,14 +1733,42 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             "exits": [],
         }
 
+    # Held to the broker the run started on, before any cancel, status read or
+    # exit row. Logged in to another broker or account, every one of those
+    # would be refused anyway, and the durable stop is retried every few
+    # seconds: asking first keeps that to one notice instead of a refused order
+    # row per leg per retry. Nothing is sent and nothing is finalised while
+    # anything is held; the stop stays pending and completes once the trader
+    # logs back in to the run's broker.
+    refusal = (
+        broker_binding.refusal_for_run(run_id, api_key=api_key, user_id=user_id)
+        if run_mode == "live"
+        else None
+    )
+    if refusal:
+        if not still_held:
+            # Flat: finishing the run sends nothing to any broker.
+            return _finish_flat_stop(run_id, strategy_id, user_id, reason)
+        if _claim_unactionable(run_id):
+            _emit(
+                strategy_id,
+                user_id,
+                "run_stop_failed",
+                f"Stop remains pending and the positions are still open. {refusal}",
+                run_id=run_id,
+                severity="critical",
+            )
+        return {"ok": False, "stop_pending": True, "error": refusal, "exits": []}
+
     _note_actionable_again(strategy_id, user_id, run_id)
+    binding = _binding_for(run_id, run_mode, api_key, user_id)
 
     # A working entry is possible future exposure, not a position to reverse
     # with a full-size market exit. Cancel it through the immutable run mode,
     # then reconcile a broker fact before deciding what remains. Every broker,
     # database and event call here is outside the run lock.
-    _reconcile_working_exits(run_id, run_mode, api_key)
-    _cancel_and_reconcile_working_entries(run_id, run_mode, api_key)
+    _reconcile_working_exits(run_id, run_mode, api_key, binding)
+    _cancel_and_reconcile_working_entries(run_id, run_mode, api_key, binding)
 
     current_row = store.get_run(run_id)
     if current_row is not None and current_row.stopped_at is not None:
@@ -1790,6 +1882,26 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             "exits": exits,
         }
     return {"ok": True, "stop_pending": False, "exits": exits}
+
+
+def _finish_flat_stop(run_id: int, strategy_id: int, user_id: str, reason: str) -> dict[str, Any]:
+    """Finalise a stop that holds nothing, so needs no broker. The stop contract."""
+    persisted_reason = store.get_run(run_id).stop_requested_reason or reason
+    finalised = _finalise(
+        run_id,
+        strategy_id,
+        user_id,
+        persisted_reason,
+        f"Run stopped ({persisted_reason})",
+    )
+    if finalised:
+        return {"ok": True, "stop_pending": False, "exits": []}
+    return {
+        "ok": False,
+        "stop_pending": True,
+        "error": "The run is flat but its final stop could not be persisted; retry the stop",
+        "exits": [],
+    }
 
 
 def reconcile_pending_stop(run_id: int) -> dict[str, Any] | None:
@@ -2081,6 +2193,23 @@ def _daily_loss_breached(
     )
 
 
+def _tick_broker_refusal(run_id: int, run_mode: str, user_id: str, acting: bool) -> str | None:
+    """Why this tick's decisions cannot reach the run's broker, or None.
+
+    Asked only when the tick has something to send, or when the run is already
+    waiting to act again: a quiet tick on a healthy run costs nothing extra.
+    """
+    if run_mode != "live":
+        return None
+    if not acting and not _is_unactionable(run_id):
+        return None
+    api_key = _api_key_for(user_id)
+    if not api_key:
+        # The paths below already report a missing key, with their own words.
+        return None
+    return broker_binding.refusal_for_run(run_id, api_key=api_key, user_id=user_id)
+
+
 def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -> None:
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
@@ -2234,9 +2363,24 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     # Lock released. Everything below reaches the database or the broker.
     _push_delta(run_id)
 
+    # A Live run logged in elsewhere keeps receiving prices from that session
+    # and keeps firing, tick after tick. Everything it would send is refused,
+    # so it is said once, below, and nothing is sent, written or stop-requested
+    # until the run's own broker is back. A stop or target still breached then
+    # fires on the next tick, as it would have. Once said, the breach events
+    # that would repeat on every tick in between are not written again.
+    refusal = _tick_broker_refusal(run_id, run_mode, user_id, bool(leg_exits or stop_reason))
+    repeating = refusal is not None and _is_unactionable(run_id)
+
     for kind, message, extra in events:
+        if repeating and kind in _REPEATING_BREACH_EVENTS:
+            continue
         severity = extra.pop("severity", "info")
         _emit(strategy["id"], user_id, kind, message, run_id=run_id, severity=severity, **extra)
+
+    if refusal:
+        _note_unactionable(strategy["id"], user_id, run_id, leg_exits, stop_reason, reason=refusal)
+        return
 
     if stop_reason:
         # A strategy-level breach closes everything, so the per-leg exits it

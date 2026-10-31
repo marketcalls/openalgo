@@ -333,6 +333,17 @@ a defect that reversed a real position:
   switching to analyze mode while a live run held real positions sent every exit
   to the sandbox, which reports success. `force_live=True` opts out. Anything
   executing a position it opened must pass it.
+- **A position's orders go to the broker that holds it.** A trader can log out
+  of one broker and in to another, so resolving the broker when an exit is sent
+  sent a short's cover to the new broker, opening a position there and leaving
+  the first one unmanaged. A Live strategy run records its broker, and its
+  account when the login names one (`SmStrategyRun.broker`, `broker_account`);
+  every order, cancel and status read it makes carries that binding
+  (`services/strategy_module/broker_binding.py`), and `order_dispatch` refuses
+  a call whose session is on another broker or account before sending
+  anything. The run stays open and managed until the trader logs back in to
+  its broker, and a login to another broker is refused while it runs
+  (`broker_switch.refusal_for_login`).
 
 The same shape applies wherever a stop is finalised: a stop whose exit orders
 were refused must leave the run **open and managed**, because the position is

@@ -537,8 +537,11 @@ def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
             mode=run_mode,
             api_key=api_key,
             broker_order_id=broker_order_id,
+            # The retry was placed at the run's broker; cancel it only there.
+            binding=engine._binding_for(run_id, run_mode, api_key, user_id),
         )
-        error = result.error or "the broker refused cancellation"
+        # Without its full stop: it is quoted mid-sentence below.
+        error = (result.error or "the broker refused cancellation").rstrip(".")
     if result is not None and result.ok:
         return True
 

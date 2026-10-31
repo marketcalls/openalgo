@@ -48,14 +48,14 @@ Feature: Strategy module and risk management
     And carry is NRML on derivatives and CNC on cash
     And the literal product sent is persisted with the order
 
-  # Source: test/test_strategy_module_order_dispatch.py:284
+  # Source: test/test_strategy_module_order_dispatch.py:290
   Scenario: A run mode cannot be diverted by the analyzer toggle
     Given a live run is holding broker positions
     When the platform analyzer toggle changes
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:547, test/test_strategy_module_engine.py:318, test/test_strategy_module_scheduler.py:730
+  # Source: services/strategy_module/engine.py:611, test/test_strategy_module_engine.py:318, test/test_strategy_module_scheduler.py:732
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
