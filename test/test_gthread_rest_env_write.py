@@ -33,6 +33,7 @@ import pytest
 from dotenv import dotenv_values
 from flask import Flask
 
+import utils.broker_keys as broker_keys
 import utils.env_check as env_check
 from blueprints import broker_credentials
 
@@ -57,6 +58,9 @@ def env_file(tmp_path, monkeypatch):
     path = tmp_path / ".env"
     path.write_bytes(ENV_TEXT.encode("utf-8"))
     monkeypatch.setattr(broker_credentials, "get_env_path", lambda: str(path))
+    # The save asks utils.broker_keys which broker .env names (its keys go to
+    # .env; any other broker's are saved in OpenAlgo), so it reads this file too.
+    monkeypatch.setattr(broker_keys, "env_file_path", lambda: path)
     monkeypatch.setenv("VALID_BROKERS", "zerodha,dhan")
     return path
 
@@ -144,11 +148,13 @@ def test_a_save_racing_another_env_writer_keeps_both(env_file, monkeypatch):
     assert values["MCP_HTTP_ENABLED"] == "TRUE"
 
 
-def test_a_single_save_writes_what_it_always_wrote(env_file):
+def test_a_single_save_of_the_env_broker_writes_what_it_always_wrote(env_file):
+    """Keys for the broker .env names, and the server settings, go to .env as
+    before. Choosing another broker saves its keys in OpenAlgo instead, so
+    REDIRECT_URL is no longer rewritten (test/test_broker_keys.py)."""
     status, body = _post(
         {
             "broker_api_key": "abc:::def",
-            "redirect_url": "http://127.0.0.1:5000/dhan/callback",
             "ngrok_allow": False,
             "websocket_url": "wss://algo.example.com/ws",
         }
@@ -157,7 +163,6 @@ def test_a_single_save_writes_what_it_always_wrote(env_file):
     assert body["status"] == "success"
     assert body["updated_fields"] == [
         "BROKER_API_KEY",
-        "REDIRECT_URL",
         "NGROK_ALLOW",
         "WEBSOCKET_URL",
     ]
@@ -165,7 +170,7 @@ def test_a_single_save_writes_what_it_always_wrote(env_file):
 
     text = env_file.read_text(encoding="utf-8")
     assert "BROKER_API_KEY = 'abc:::def'\n" in text
-    assert "REDIRECT_URL = 'http://127.0.0.1:5000/dhan/callback'\n" in text
+    assert "REDIRECT_URL = 'http://127.0.0.1:5000/zerodha/callback'\n" in text
     assert text.endswith("NGROK_ALLOW = 'FALSE'\n")
     assert text.startswith("# OpenAlgo settings\n")
     assert "BROKER_API_SECRET = 'old-secret'\n" in text
@@ -204,7 +209,7 @@ def test_nothing_to_update_is_a_400(env_file):
 
 def test_a_missing_env_file_is_a_500_as_before(env_file):
     env_file.unlink()
-    status, body = _post({"broker_api_key": "new-key"})
+    status, body = _post({"host_server": "https://algo.example.com"})
     assert status == 500
     assert body["message"] == "Failed to read .env file: Environment file not found"
 
@@ -250,11 +255,14 @@ def test_under_eventlet_two_greenlet_saves_keep_both_values(tmp_path):
         dotenv.main.load_dotenv = dotenv.load_dotenv
 
         import inspect, time
+        from pathlib import Path
         from flask import Flask
+        import utils.broker_keys as broker_keys
         import utils.env_check as env_check
         from blueprints import broker_credentials
 
         broker_credentials.get_env_path = lambda: {str(env_path)!r}
+        broker_keys.env_file_path = lambda: Path({str(env_path)!r})
         original_replace = env_check._atomic_replace_text
         def slow_replace(path, content):
             eventlet.sleep(0.05)  # yield inside the lock

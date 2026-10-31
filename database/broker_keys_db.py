@@ -18,6 +18,9 @@ OpenAlgo Desktop binds its AES-GCM ciphertexts. The rotations decrypt and
 re-encrypt the whole plaintext, so the binding survives them. Nothing here
 returns a secret to a caller that only needs to show it: the masked view lives
 in the blueprint.
+
+The active broker (one row) is the broker the login page and Profile show as
+current, as in OpenAlgo Desktop; the broker login started tables sit here too.
 """
 
 import hashlib
@@ -59,6 +62,20 @@ class BrokerKey(Base):
     api_secret_market = Column(Text, nullable=False, default="")
     redirect_url = Column(String(500), nullable=False, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ActiveBroker(Base):
+    """The broker the broker login page and Profile treat as the current one.
+
+    A single row, as OpenAlgo Desktop keeps its active broker: choosing another
+    broker on either page changes it. With no row, the .env broker is current.
+    """
+
+    __tablename__ = "active_broker"
+
+    id = Column(Integer, primary_key=True)
+    broker = Column(String(50), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -105,7 +122,7 @@ class StoredBrokerKeys:
 
 
 def init_db():
-    """Create the broker keys table."""
+    """Create the broker keys, active broker and broker login tables."""
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Broker Keys DB", logger)
@@ -253,47 +270,37 @@ def save_broker_keys(broker, values, redirect_url=None):
         db_session.remove()
 
 
-def clear_broker_key_fields(broker, fields):
-    """Empty some stored fields of a broker, such as its market data keys.
-
-    Args:
-        broker: The broker id.
-        fields: Field names from KEY_FIELDS other than api_key.
-
-    Returns:
-        bool: True when the row exists and was updated.
-    """
+def get_active_broker():
+    """The broker chosen last on the broker login page or in Profile, or None."""
     try:
-        row = BrokerKey.query.filter_by(broker=broker).first()
-        if row is None:
-            return False
-        for field in fields:
-            if field in KEY_FIELDS and field != "api_key":
-                setattr(row, field, "")
-        row.updated_at = datetime.utcnow()
-        db_session.commit()
-        return True
-    except Exception:
-        db_session.rollback()
-        logger.exception(f"Could not clear keys for {broker}")
-        return False
+        row = ActiveBroker.query.order_by(ActiveBroker.id).first()
+        return row.broker if row else None
+    except Exception as exc:
+        if not _table_missing(exc):
+            logger.exception("Could not read the active broker")
+        return None
     finally:
         db_session.remove()
 
 
-def delete_broker_keys(broker):
-    """Remove a broker's stored keys.
+def set_active_broker(broker):
+    """Make a broker the current one.
 
     Returns:
-        bool: True when a row was removed.
+        bool: True when it was stored.
     """
     try:
-        deleted = BrokerKey.query.filter_by(broker=broker).delete()
+        row = ActiveBroker.query.order_by(ActiveBroker.id).first()
+        if row is None:
+            db_session.add(ActiveBroker(id=1, broker=broker))
+        else:
+            row.broker = broker
+            row.updated_at = datetime.utcnow()
         db_session.commit()
-        return bool(deleted)
+        return True
     except Exception:
         db_session.rollback()
-        logger.exception(f"Could not remove the keys for {broker}")
+        logger.exception(f"Could not make {broker} the active broker")
         return False
     finally:
         db_session.remove()

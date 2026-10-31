@@ -229,7 +229,7 @@ log_message "WEBSOCKET_URL:      $CURRENT_WEBSOCKET_URL" "$BLUE"
 if [ -n "$CURRENT_REDIRECT_URL" ]; then
     log_message "REDIRECT_URL:       $CURRENT_REDIRECT_URL" "$BLUE"
 else
-    log_message "REDIRECT_URL:       (empty, brokers are set up in OpenAlgo under Broker Keys)" "$BLUE"
+    log_message "REDIRECT_URL:       (empty, brokers are set up in OpenAlgo under Profile > Broker)" "$BLUE"
 fi
 log_message "CORS_ALLOWED_ORIGINS: $CURRENT_CORS_ORIGINS" "$BLUE"
 log_message "" ""
@@ -342,10 +342,11 @@ if [ -n "$BROKER_NAME" ]; then
     log_message "Update your broker developer portal redirect URL to:" "$YELLOW"
     log_message "  https://$NEW_DOMAIN/$BROKER_NAME/callback" "$GREEN"
 fi
-# Redirect URLs saved under Broker Keys live in the database, not in .env
-log_message "Brokers saved under Broker Keys keep their old redirect URL. After this" "$YELLOW"
-log_message "change, update each one on the Broker Keys page and at the broker's" "$YELLOW"
-log_message "developer console." "$YELLOW"
+# Brokers saved in OpenAlgo live in the database. Saved with this server's own
+# address, their redirect URL follows HOST_SERVER, which this script moved.
+log_message "Brokers saved in Profile > Broker now use the new domain, unless another" "$YELLOW"
+log_message "redirect URL was saved for them. Register the new URL at each broker's" "$YELLOW"
+log_message "developer console, or its login will fail." "$YELLOW"
 log_message "" ""
 log_message "Note: The deployment directory ($SELECTED_DEPLOY) and" "$YELLOW"
 log_message "service name ($SERVICE_NAME) will NOT be renamed." "$YELLOW"
@@ -733,13 +734,12 @@ if [ -n "$BROKER_NAME" ]; then
     log_message "" ""
 fi
 
-# Redirect URLs saved under Broker Keys live in the database; this script
-# cannot change them.
-log_message "Brokers saved under Broker Keys:" "$YELLOW"
-log_message "  Sign in at https://$NEW_DOMAIN, open Broker Keys and set the redirect URL" "$YELLOW"
-log_message "  of each saved broker to the new domain, for example" "$YELLOW"
-log_message "  https://$NEW_DOMAIN/zerodha/callback. Register the same URL at that" "$YELLOW"
-log_message "  broker's developer console, or its login will fail." "$YELLOW"
+# Brokers saved in OpenAlgo live in the database. Saved with this server's own
+# address, their redirect URL follows HOST_SERVER, which this script moved.
+log_message "Brokers saved in Profile > Broker:" "$YELLOW"
+log_message "  They now use the new domain, for example https://$NEW_DOMAIN/zerodha/callback," "$YELLOW"
+log_message "  unless another redirect URL was saved for them. Register the new URL at" "$YELLOW"
+log_message "  each broker's developer console, or its login will fail." "$YELLOW"
 log_message "" ""
 
 log_message "Your OpenAlgo instance is now available at:" "$GREEN"

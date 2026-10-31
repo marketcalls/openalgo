@@ -10,7 +10,6 @@ import {
   FileWarning,
   FolderCheck,
   Key,
-  KeyRound,
   Lock,
   Mail,
   Moon,
@@ -57,6 +56,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { defaultOrigin, initialProfileTab } from '@/lib/brokerProfiles'
 import { type AlertCategories, type ToastPosition, useAlertStore } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
 import { type ThemeColor, type ThemeMode, useThemeStore } from '@/stores/themeStore'
@@ -122,6 +122,11 @@ interface BrokerCredentials {
   broker_api_key_market_raw_length: number
   broker_api_secret_market: string
   broker_api_secret_market_raw_length: number
+  // Keys saved in OpenAlgo report only whether they are set, never a length.
+  broker_api_key_set?: boolean
+  broker_api_secret_set?: boolean
+  broker_api_key_market_set?: boolean
+  broker_api_secret_market_set?: boolean
   redirect_url: string
   current_broker: string
   valid_brokers: string[]
@@ -267,7 +272,8 @@ export default function ProfilePage() {
   const user = useAuthStore((s) => s.user)
   const { mode, color, appMode, setMode, setColor } = useThemeStore()
   const alertStore = useAlertStore()
-  const [activeTab, setActiveTab] = useState('account')
+  // The broker page links here with ?tab=broker.
+  const [activeTab, setActiveTab] = useState(() => initialProfileTab('account'))
   const [isLoading, setIsLoading] = useState(true)
   const [profileData, setProfileData] = useState<ProfileData | null>(null)
 
@@ -425,10 +431,10 @@ export default function ProfilePage() {
   }
 
   const getRedirectUrl = (broker: string): string => {
-    // Extract host from current redirect URL or use default
-    const currentUrl = brokerCredentials?.redirect_url || 'http://127.0.0.1:5000'
+    // Extract host from current redirect URL, or the address the app is served from
+    const currentUrl = brokerCredentials?.redirect_url || defaultOrigin()
     const match = currentUrl.match(/^(https?:\/\/[^/]+)/)
-    const host = match ? match[1] : 'http://127.0.0.1:5000'
+    const host = match ? match[1] : defaultOrigin()
     return `${host}/${broker}/callback`
   }
 
@@ -448,44 +454,25 @@ export default function ProfilePage() {
         status: string
         message: string
         restart_required?: boolean
+        broker_switched?: boolean
       }>('/api/broker/credentials', formData)
 
       if (response.data.status === 'success') {
         showToast.success(response.data.message, 'admin')
-        // Update local state to reflect saved values (don't re-fetch since env vars won't update until restart)
-        if (brokerCredentials) {
-          setBrokerCredentials({
-            ...brokerCredentials,
-            current_broker: selectedBroker || brokerCredentials.current_broker,
-            redirect_url:
-              selectedBroker !== brokerCredentials.current_broker
-                ? getRedirectUrl(selectedBroker)
-                : brokerCredentials.redirect_url,
-            // Update masked values to show something was changed.
-            // Use a FIXED-length mask (prefix + 8 asterisks) so the rendered
-            // value cannot leak the secret's true length and cannot overflow
-            // the column layout. Mirrors blueprints/broker_credentials.py:mask_secret.
-            broker_api_key: brokerApiKey
-              ? `${brokerApiKey.slice(0, 6)}${'*'.repeat(8)}`
-              : brokerCredentials.broker_api_key,
-            broker_api_key_raw_length: brokerApiKey
-              ? brokerApiKey.length
-              : brokerCredentials.broker_api_key_raw_length,
-            broker_api_secret: brokerApiSecret
-              ? `${brokerApiSecret.slice(0, 4)}${'*'.repeat(8)}`
-              : brokerCredentials.broker_api_secret,
-            broker_api_secret_raw_length: brokerApiSecret
-              ? brokerApiSecret.length
-              : brokerCredentials.broker_api_secret_raw_length,
-          })
-        }
         // Clear form fields
         setBrokerApiKey('')
         setBrokerApiSecret('')
         setBrokerApiKeyMarket('')
         setBrokerApiSecretMarket('')
-        // Show restart dialog
-        setShowRestartDialog(true)
+        // Show what the server now holds; the page never builds a mask itself.
+        await fetchBrokerCredentials()
+        // Keys saved in OpenAlgo apply at once; .env changes need a restart.
+        // After a broker switch the trader logs in to the new broker.
+        if (response.data.broker_switched) {
+          window.location.assign('/broker')
+        } else if (response.data.restart_required) {
+          setShowRestartDialog(true)
+        }
       } else {
         showToast.error(response.data.message || 'Failed to save credentials', 'admin')
       }
@@ -933,35 +920,13 @@ export default function ProfilePage() {
 
         {/* Broker Tab */}
         <TabsContent value="broker" className="space-y-6">
-          {/* Keys for several brokers live on their own page, which also works
-              before any broker login. The .env form below is unchanged. */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <KeyRound className="h-5 w-5" />
-                Broker keys saved in OpenAlgo
-              </CardTitle>
-              <CardDescription>
-                Save keys for several brokers and choose which one to use each time you log in. The
-                .env broker settings below still come first for the broker they set.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="outline" asChild>
-                <Link to="/broker/keys">
-                  <KeyRound className="h-4 w-4 mr-2" />
-                  Manage broker keys
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
-
           <Alert>
             <Key className="h-4 w-4" />
             <AlertTitle>Broker API Credentials</AlertTitle>
             <AlertDescription>
-              Update your broker API credentials. Changes require an application restart to take
-              effect. You will be logged out after saving.
+              Update your broker API credentials. Keys for the broker named in your .env file are
+              saved there and need a restart. Keys for any other broker are saved in OpenAlgo and
+              apply at once.
             </AlertDescription>
           </Alert>
 
@@ -1005,7 +970,8 @@ export default function ProfilePage() {
                   </code>
                 </div>
               </div>
-              {(brokerCredentials?.broker_api_key_market_raw_length ?? 0) > 0 && (
+              {((brokerCredentials?.broker_api_key_market_raw_length ?? 0) > 0 ||
+                brokerCredentials?.broker_api_key_market_set) && (
                 <div className="grid grid-cols-2 gap-4 pt-2">
                   <div className="space-y-2 min-w-0">
                     <Label>Market API Key</Label>
@@ -1082,7 +1048,9 @@ export default function ProfilePage() {
                   <p className="text-xs text-muted-foreground">
                     {(brokerCredentials?.broker_api_key_raw_length ?? 0) > 0
                       ? `Current: ${brokerCredentials?.broker_api_key_raw_length} chars`
-                      : 'Not currently set'}
+                      : brokerCredentials?.broker_api_key_set
+                        ? 'Currently set'
+                        : 'Not currently set'}
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -1096,7 +1064,9 @@ export default function ProfilePage() {
                   <p className="text-xs text-muted-foreground">
                     {(brokerCredentials?.broker_api_secret_raw_length ?? 0) > 0
                       ? `Current: ${brokerCredentials?.broker_api_secret_raw_length} chars`
-                      : 'Not currently set'}
+                      : brokerCredentials?.broker_api_secret_set
+                        ? 'Currently set'
+                        : 'Not currently set'}
                   </p>
                 </div>
               </div>

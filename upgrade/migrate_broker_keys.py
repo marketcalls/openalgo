@@ -2,12 +2,14 @@
 """
 Migration: Broker Keys and session sign-out
 
-Adds three tables to the main database:
+Adds four tables to the main database:
 
-- broker_keys: the API keys a trader saves in OpenAlgo, one set per broker,
-  every key and secret encrypted. The trader logs in to one broker at a time
-  and chooses which on the broker login page. The .env file still comes
-  first: a broker it sets keys for always uses them.
+- broker_keys: the API keys a trader saves in OpenAlgo (Profile > Broker), one
+  set per broker, every key and secret encrypted. The trader logs in to one
+  broker at a time. The .env file still comes first: a broker it sets keys
+  for always uses them.
+- active_broker: the broker chosen last on the broker login page or in
+  Profile, as OpenAlgo Desktop keeps its active broker. One row.
 - session_revocations: when a user last ended every session (a logout, a
   password change or a reset), so a copy of the session cookie on another
   device stops working at that moment.
@@ -39,7 +41,7 @@ sys.path.insert(0, PROJECT_ROOT)
 # sqlite3 default of 5s (GitHub issue #1726).
 import _pragmas  # noqa: F401,E402
 
-TABLES = ("broker_keys", "session_revocations", "broker_login_states")
+TABLES = ("broker_keys", "active_broker", "session_revocations", "broker_login_states")
 
 
 def resolve_sqlite_path(db_url):
@@ -100,9 +102,14 @@ def model_tables():
         list: SQLAlchemy Table objects, in TABLES order.
     """
     from database.auth_db import SessionRevocation
-    from database.broker_keys_db import BrokerKey, BrokerLoginState
+    from database.broker_keys_db import ActiveBroker, BrokerKey, BrokerLoginState
 
-    return [BrokerKey.__table__, SessionRevocation.__table__, BrokerLoginState.__table__]
+    return [
+        BrokerKey.__table__,
+        ActiveBroker.__table__,
+        SessionRevocation.__table__,
+        BrokerLoginState.__table__,
+    ]
 
 
 def missing_tables(engine):

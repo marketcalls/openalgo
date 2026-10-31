@@ -308,6 +308,22 @@ def configured_brokers():
     return out
 
 
+def active_broker():
+    """The current broker, as OpenAlgo Desktop has one.
+
+    The one chosen last on the broker login page or in Profile while it is
+    still configured, else the .env broker, else the first broker with saved
+    keys. None when nothing is configured.
+    """
+    from database.broker_keys_db import get_active_broker
+
+    names = [b["broker"] for b in configured_brokers()]
+    chosen = get_active_broker()
+    if chosen in names:
+        return chosen
+    return names[0] if names else None
+
+
 def _never_expires(broker):
     """Whether a broker's session runs past the daily rollover (crypto, or the flag)."""
     if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
@@ -489,8 +505,8 @@ def _refuse_another_broker(broker):
     live = live_broker()
     if live and live != broker:
         raise BrokerKeysRefused(
-            f"OpenAlgo is logged in to {broker_title(live)}. End that session on the "
-            f"broker login page first, then choose {broker_title(broker)}."
+            f"OpenAlgo is logged in to {broker_title(live)}. Choose {broker_title(broker)} "
+            "on the broker login page to end that session and switch to it."
         )
     pending = login_slot_broker()
     if pending and pending != broker:
@@ -504,7 +520,7 @@ def _resolve_or_refuse(broker):
     if keys is None:
         raise BrokerKeysRefused(
             f"No API key is saved for {broker_title(broker)}. "
-            "Add it under Broker Keys, then try again."
+            "Add it in Profile > Broker, then try again."
         )
     return keys
 

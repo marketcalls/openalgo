@@ -1226,7 +1226,7 @@ _NEW_ENV_SECRETS = {
 }
 
 #: Broker lines a new .env leaves empty: the trader adds broker keys in
-#: OpenAlgo after signing in (Broker Keys).
+#: OpenAlgo after signing in (Profile > Broker).
 _NEW_ENV_EMPTY = (
     "BROKER_API_KEY",
     "BROKER_API_SECRET",
@@ -1317,7 +1317,7 @@ def create_env_from_sample(env_path: str, sample_path: str) -> bool:
 
     print("Created .env from .sample.env with new security keys (APP_KEY, API_KEY_PEPPER,")
     print("FERNET_SALT). Keep it private and back it up: those keys protect your data.")
-    print("No broker is set in it. Sign in to OpenAlgo and add your broker keys under Broker Keys.")
+    print("No broker is set in it. Sign in to OpenAlgo and add your broker keys in Profile > Broker.")
     return True
 
 
@@ -1377,7 +1377,7 @@ def load_and_check_env_variables() -> None:
     required_vars = [
         "ENV_CONFIG_VERSION",  # Version tracking for configuration compatibility
         # BROKER_API_KEY, BROKER_API_SECRET and REDIRECT_URL are optional: an
-        # install may keep its broker keys in OpenAlgo instead (Broker Keys).
+        # install may keep its broker keys in OpenAlgo instead (Profile > Broker).
         "APP_KEY",
         "API_KEY_PEPPER",  # Added API_KEY_PEPPER as it's required for security
         "DATABASE_URL",
@@ -1427,7 +1427,7 @@ def load_and_check_env_variables() -> None:
     if not env_sets_broker:
         print(
             "No broker is set in .env. Sign in to OpenAlgo and add your broker keys "
-            "under Broker Keys."
+            "in Profile > Broker."
         )
 
     # Extract broker name from redirect URL for validation

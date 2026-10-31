@@ -9,7 +9,6 @@ const PAGE_TITLES: Record<string, string> = {
   '/reset-password': 'Reset Password',
   '/download': 'Download',
   '/broker': 'Select Broker',
-  '/broker/keys': 'Broker Keys',
   '/dashboard': 'Dashboard',
   '/positions': 'Positions',
   '/orderbook': 'Order Book',

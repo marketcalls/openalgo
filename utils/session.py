@@ -88,7 +88,7 @@ def mark_signed_in():
     measured against, before a broker login exists and after it. It is always
     later than the last revocation: a clock that ticks coarsely (about 15 ms on
     Windows with Python 3.12) could otherwise stamp a sign-in with the very
-    instant a logout elsewhere, or this request's own end-session, recorded,
+    instant a logout elsewhere, or this request's own broker switch, recorded,
     and the new sign-in would read as ended.
     """
     now = datetime.now(pytz.UTC)
@@ -443,8 +443,8 @@ def check_session_validity(f):
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
             # Only an expired broker session is torn down. A sign-in that has
-            # not reached a broker login yet (the broker login and Broker Keys
-            # pages) is not expired, just not far enough for this route: it is
+            # not reached a broker login yet (the broker login page, Profile)
+            # is not expired, just not far enough for this route: it is
             # refused and kept, and it never held the broker token, so it must
             # not revoke it. Tearing it down signed the trader out whenever
             # those pages touched a route like this, such as the error reporter.
@@ -478,6 +478,28 @@ def check_session_validity(f):
             return redirect(url_for("auth.login"))
         logger.debug("Session validated successfully")
         return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def check_signed_in(f):
+    """Admit a trader signed in to OpenAlgo, with or without a broker login.
+
+    For Profile, where a new install adds its first broker's keys before any
+    broker login, as OpenAlgo Desktop allows. A session with a broker login
+    gets the full check_session_validity; one without is admitted while its
+    sign-in stands (end_session_if_signed_out); anyone else is refused the
+    same way check_session_validity refuses.
+    """
+    validated = check_session_validity(f)
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if session.get("logged_in"):
+            return validated(*args, **kwargs)
+        if "user" in session and not end_session_if_signed_out():
+            return f(*args, **kwargs)
+        return validated(*args, **kwargs)
 
     return decorated_function
 

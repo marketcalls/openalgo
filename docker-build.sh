@@ -41,7 +41,7 @@ print_info() {
 
 # True when .env names a broker in REDIRECT_URL. Empty, or the "<broker>"
 # placeholder of an unchanged .sample.env, means no broker: the trader sets up
-# brokers in OpenAlgo (Broker Keys) instead. The backend reads it the same way.
+# brokers in OpenAlgo (Profile > Broker) instead. The backend reads it the same way.
 env_sets_broker() {
     grep -qE "^[[:space:]]*REDIRECT_URL[[:space:]]*=[[:space:]]*['\"]?[^'\"[:space:]#]" .env 2>/dev/null \
         && ! grep -qE "^[[:space:]]*REDIRECT_URL[[:space:]]*=.*<broker>" .env 2>/dev/null
@@ -139,12 +139,12 @@ check_env_file() {
     # Check critical variables
     if grep -q "YOUR_BROKER_API_KEY" .env 2>/dev/null; then
         print_info "The broker lines in .env still hold the sample placeholders, so no broker is set"
-        print_info "there. Add your broker in OpenAlgo under Broker Keys after you sign in."
+        print_info "there. Add your broker in OpenAlgo under Profile > Broker after you sign in."
     fi
 
     # Display broker configuration (without secrets)
     if ! env_sets_broker; then
-        print_info "No broker in .env. Sign in to OpenAlgo and add your broker keys under Broker Keys."
+        print_info "No broker in .env. Sign in to OpenAlgo and add your broker keys in Profile > Broker."
     elif grep -q "REDIRECT_URL.*fyers" .env; then
         print_info "Detected broker: Fyers"
     elif grep -q "REDIRECT_URL.*zerodha" .env; then
@@ -370,7 +370,7 @@ show_access_info() {
 
     echo -e "\n${BLUE}Configured Broker:${NC}"
     if ! env_sets_broker; then
-        echo -e "  ${YELLOW}None in .env. Sign in to OpenAlgo and add your broker keys under Broker Keys,${NC}"
+        echo -e "  ${YELLOW}None in .env. Sign in to OpenAlgo and add your broker keys in Profile > Broker,${NC}"
         echo -e "  ${YELLOW}then register the redirect URL shown there in your broker's developer console.${NC}"
     elif grep -q "fyers" .env 2>/dev/null; then
         echo -e "  ${GREEN}Fyers${NC}"

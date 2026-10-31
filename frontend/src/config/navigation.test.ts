@@ -78,13 +78,6 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Action Center')
       expect(labels.indexOf('Action Center')).toBe(labels.indexOf('API Key') + 1)
     })
-
-    it('reaches the broker keys page, which sits outside the main layout', () => {
-      // /broker/keys renders outside Layout, so it has no navbar of its own;
-      // once a broker is logged in this entry is the way to it.
-      const entry = profileMenuItems.find((item) => item.label === 'Broker Keys')
-      expect(entry?.href).toBe('/broker/keys')
-    })
   })
 
   describe('isActiveRoute', () => {

@@ -469,7 +469,7 @@ for ((i=1; i<=INSTANCES; i++)); do
         # IMPORTANT: Order matters! Update domain BEFORE ports
 
         # 1. No broker in .env: the trader adds broker keys in OpenAlgo after
-        #    signing in (Broker Keys). VALID_BROKERS keeps the full list of brokers
+        #    signing in (Profile > Broker). VALID_BROKERS keeps the full list of brokers
         #    keys can be saved for.
         sudo sed -i \
             -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
@@ -815,7 +815,7 @@ for ((i=1; i<=INSTANCES; i++)); do
 done
 
 log_message "\n NEXT STEP:" "$YELLOW"
-log_message "Visit each domain, sign in, open Broker Keys and add that instance's broker keys." "$GREEN"
+log_message "Visit each domain, sign in, open Profile > Broker and add that instance's broker keys." "$GREEN"
 log_message "The page shows the redirect URL to register in your broker's developer console." "$GREEN"
 
 log_message "\n USEFUL COMMANDS:" "$YELLOW"

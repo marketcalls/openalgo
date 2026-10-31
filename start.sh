@@ -341,7 +341,7 @@ EOF
         echo "and kept in $KEYS_DIR. Attach a persistent volume at $KEYS_DIR, or set all"
         echo "three as environment variables, so a redeploy keeps your data readable."
         echo "No broker is needed here: sign in to OpenAlgo and add your broker keys"
-        echo "under Broker Keys."
+        echo "in Profile > Broker."
         echo "============================================"
         exit 1
     fi

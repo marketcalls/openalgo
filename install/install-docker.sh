@@ -388,7 +388,7 @@ else
     $SUDO cp .sample.env .env
 
     # No broker in .env: the trader adds broker keys in OpenAlgo after signing in
-    # (Broker Keys). VALID_BROKERS keeps the full list of brokers keys can be saved for.
+    # (Profile > Broker). VALID_BROKERS keeps the full list of brokers keys can be saved for.
     $SUDO sed -i \
         -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
         -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
@@ -1047,7 +1047,7 @@ fi
 log "\nNext Steps:" "$YELLOW"
 log "1. Visit https://$DOMAIN to access OpenAlgo" "$GREEN"
 log "2. Create your admin account and login" "$GREEN"
-log "3. Open Broker Keys and add your broker's keys. The page shows the redirect URL to register in your broker's developer console." "$GREEN"
+log "3. Open Profile > Broker and add your broker's keys. The page shows the redirect URL to register in your broker's developer console." "$GREEN"
 
 log "\nUseful Commands:" "$YELLOW"
 log "View status:  openalgo-status" "$BLUE"

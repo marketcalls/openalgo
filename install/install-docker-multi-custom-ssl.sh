@@ -781,7 +781,7 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
                     if [ -n "$EXISTING_BROKER" ]; then
                         log "Loaded: Broker=$EXISTING_BROKER" "$GREEN"
                     else
-                        log "Loaded: no broker in .env (brokers are set up in OpenAlgo under Broker Keys)" "$GREEN"
+                        log "Loaded: no broker in .env (brokers are set up in OpenAlgo in Profile > Broker)" "$GREEN"
                     fi
 
                     # Per-instance options (Enter keeps what the instance has)
@@ -1329,7 +1329,7 @@ for i in "${!CONF_DOMAINS[@]}"; do
         PEPPER=$(generate_hex)
 
         # No broker in .env: the trader adds broker keys in OpenAlgo after
-        # signing in (Broker Keys). VALID_BROKERS keeps the full list of
+        # signing in (Profile > Broker). VALID_BROKERS keeps the full list of
         # brokers keys can be saved for.
         sed -i \
             -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \

@@ -1,15 +1,14 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { brokerQueryKeys } from '@/api/brokerKeys'
 import BrokerSelect from './BrokerSelect'
 
 /**
- * The broker login page lists the brokers the server says are configured and
- * asks the server to start the login. It never sees a broker API key and
- * never builds a broker's sign-in address itself.
+ * The broker login page, as OpenAlgo Desktop has it: one dropdown of every
+ * configured broker, the active one preselected, picking another makes it
+ * active, and the server starts the login. The page never sees a broker key
+ * and never builds a broker's sign-in address itself.
  */
 
 interface FetchCall {
@@ -17,33 +16,54 @@ interface FetchCall {
   init?: RequestInit
 }
 
+type Answer = { status: number; body: unknown }
+
 const CONFIG = {
   status: 'success',
   broker_name: 'zerodha',
   broker_api_key: null,
   redirect_url: 'http://127.0.0.1:5000/zerodha/callback',
-  brokers: [
-    { broker: 'zerodha', name: 'Zerodha', source: 'env' },
-    { broker: 'angel', name: 'Angel One', source: 'saved' },
-  ],
-  live_broker: null,
+}
+
+const CONFIGURED = {
+  status: 'success',
+  data: {
+    brokers: [
+      { name: 'zerodha', active: true },
+      { name: 'angel', active: false },
+    ],
+    active: 'zerodha',
+  },
+}
+
+const NOT_CONFIGURED = {
+  status: 'error',
+  code: 'BROKER_NOT_CONFIGURED',
+  message: 'Choose your broker and add its API key in Profile, Broker Configuration.',
 }
 
 let calls: FetchCall[] = []
-let client: QueryClient
-let respond: (url: string, init?: RequestInit) => { status: number; body: unknown }
+let respond: (url: string, init?: RequestInit) => Answer
 
 function reply(status: number, body: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
 }
 
 function serve(overrides: {
-  config?: { status: number; body: unknown }
-  login?: { status: number; body: unknown }
+  config?: Answer
+  configured?: Answer
+  login?: Answer
+  credentials?: Answer
 }) {
   respond = (url) => {
     if (url === '/auth/csrf-token') return { status: 200, body: { csrf_token: 'csrf-123' } }
     if (url === '/auth/broker-config') return overrides.config ?? { status: 200, body: CONFIG }
+    if (url === '/api/broker/configured') {
+      return overrides.configured ?? { status: 200, body: CONFIGURED }
+    }
+    if (url === '/api/broker/credentials') {
+      return overrides.credentials ?? { status: 200, body: { status: 'success', message: 'ok' } }
+    }
     if (url === '/auth/broker/login') {
       return (
         overrides.login ?? {
@@ -70,7 +90,7 @@ beforeEach(() => {
     })
   )
   Object.defineProperty(window, 'location', {
-    value: { href: '' },
+    value: { href: '', origin: 'http://127.0.0.1:5000', search: '' },
     writable: true,
     configurable: true,
   })
@@ -83,77 +103,126 @@ afterAll(() => {
 })
 
 function renderPage(path = '/broker') {
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/broker" element={<BrokerSelect />} />
-          <Route path="/login" element={<div>Login page</div>} />
-          <Route path="/broker/keys" element={<div>Broker keys page</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/broker" element={<BrokerSelect />} />
+        <Route path="/login" element={<div>Login page</div>} />
+      </Routes>
+    </MemoryRouter>
   )
 }
 
-function configReads() {
-  return calls.filter((c) => c.url === '/auth/broker-config')
-}
-
-async function connectButton() {
-  return screen.findByRole('button', { name: /Connect Account/i })
+function callsTo(url: string) {
+  return calls.filter((c) => c.url === url)
 }
 
 describe('BrokerSelect', () => {
-  it('lists every configured broker and marks the one set in .env', async () => {
+  it('lists every configured broker, the active one preselected', async () => {
     renderPage()
 
     const trigger = await screen.findByRole('combobox')
-    // The preselected broker is the server's broker_name.
-    expect(trigger).toHaveTextContent('Zerodha (from .env)')
+    expect(trigger).toHaveTextContent('Zerodha')
 
     await userEvent.click(trigger)
-    expect(await screen.findByRole('option', { name: 'Zerodha (from .env)' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Zerodha' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Angel One' })).toBeInTheDocument()
+    // Only configured brokers, not the whole catalogue.
+    expect(screen.queryByRole('option', { name: 'Fyers' })).not.toBeInTheDocument()
+  })
+
+  it('makes a picked broker the active one, then reads the list again', async () => {
+    renderPage()
+
+    await userEvent.click(await screen.findByRole('combobox'))
+    await userEvent.click(await screen.findByRole('option', { name: 'Angel One' }))
+
+    await waitFor(() => expect(callsTo('/auth/broker-config')).toHaveLength(2))
+    const [save] = callsTo('/api/broker/credentials')
+    expect(save.init?.method).toBe('POST')
+    expect((save.init?.headers as Record<string, string>)['X-CSRFToken']).toBe('csrf-123')
+    expect((save.init?.body as FormData).get('redirect_url')).toBe(
+      'http://127.0.0.1:5000/angel/callback'
+    )
+    expect(callsTo('/api/broker/configured')).toHaveLength(2)
+  })
+
+  it('shows the server sentence when the switch is refused', async () => {
+    const refusal = 'A login to Zerodha is under way. Wait for it to finish, then try again.'
+    serve({ credentials: { status: 409, body: { status: 'error', message: refusal } } })
+    renderPage()
+
+    await userEvent.click(await screen.findByRole('combobox'))
+    await userEvent.click(await screen.findByRole('option', { name: 'Angel One' }))
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+    expect(callsTo('/auth/broker-config')).toHaveLength(1)
   })
 
   it('asks the server to start the login and goes where it says', async () => {
     renderPage()
 
-    await userEvent.click(await connectButton())
+    await userEvent.click(await screen.findByRole('button', { name: /Connect Account/i }))
 
     await waitFor(() => {
       expect(window.location.href).toBe('https://kite.trade/connect/login?api_key=x')
     })
-    const login = calls.find((c) => c.url === '/auth/broker/login')
-    expect(login?.init?.method).toBe('POST')
-    expect(JSON.parse(String(login?.init?.body))).toEqual({ broker: 'zerodha' })
-    expect((login?.init?.headers as Record<string, string>)['X-CSRFToken']).toBe('csrf-123')
+    const [login] = callsTo('/auth/broker/login')
+    expect(login.init?.method).toBe('POST')
+    expect(JSON.parse(String(login.init?.body))).toEqual({ broker: 'zerodha' })
+    expect((login.init?.headers as Record<string, string>)['X-CSRFToken']).toBe('csrf-123')
     // Still held while the browser leaves for the broker: no second click.
     expect(screen.getByRole('button', { name: /Connecting/i })).toBeDisabled()
   })
 
   it('shows the server sentence when the login is refused', async () => {
-    const refusal =
-      'OpenAlgo is logged in to Angel One. Log out first, then log in to another broker.'
+    const refusal = 'No API key is saved for Zerodha. Add it in Profile > Broker, then try again.'
     serve({ login: { status: 409, body: { status: 'error', message: refusal } } })
     renderPage()
 
-    await userEvent.click(await connectButton())
+    await userEvent.click(await screen.findByRole('button', { name: /Connect Account/i }))
 
     expect(await screen.findByText(refusal)).toBeInTheDocument()
     expect(window.location.href).toBe('')
+    expect(screen.getByRole('button', { name: /Connect Account/i })).toBeEnabled()
   })
 
-  it('turns a known callback error code into its fixed sentence', async () => {
-    renderPage('/broker?error=login_not_started')
+  it('sends a trader with no broker configured to Profile', async () => {
+    serve({
+      config: { status: 404, body: NOT_CONFIGURED },
+      configured: { status: 200, body: { status: 'success', data: { brokers: [], active: null } } },
+    })
+    renderPage()
 
-    expect(
-      await screen.findByText(
-        'This broker login was not started from OpenAlgo, or it took longer than 10 minutes. Start the broker login again.'
-      )
-    ).toBeInTheDocument()
+    const button = await screen.findByRole('link', { name: 'Configure broker' })
+    expect(button).toHaveAttribute('href', '/profile?tab=broker')
+    expect(screen.getByText(NOT_CONFIGURED.message)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Configure another broker' })).not.toBeInTheDocument()
+  })
+
+  it('links to Profile to configure another broker', async () => {
+    renderPage()
+
+    const link = await screen.findByRole('link', { name: 'Configure another broker' })
+    expect(link).toHaveAttribute('href', '/profile?tab=broker')
+    expect(screen.queryByRole('link', { name: 'Configure broker' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    [
+      'login_not_started',
+      'This broker login was not started from OpenAlgo, or it took longer than 10 minutes. Start the broker login again.',
+    ],
+    [
+      'broker_unavailable',
+      'The broker login could not start. Check its keys in Profile > Broker, then try again.',
+    ],
+    ['form_expired', 'This login form has expired. Reload the page and try again.'],
+    ['login_failed', 'The broker login did not complete. Try again.'],
+  ])('turns the callback error code %s into its fixed sentence', async (code, sentence) => {
+    renderPage(`/broker?error=${code}`)
+
+    expect(await screen.findByText(sentence)).toBeInTheDocument()
   })
 
   it('never puts the query text on the page', async () => {
@@ -163,76 +232,8 @@ describe('BrokerSelect', () => {
     expect(
       await screen.findByText('The broker login did not complete. Try again.')
     ).toBeInTheDocument()
-    expect(screen.queryByText(/account is blocked/i)).not.toBeInTheDocument()
     expect(document.body.textContent).not.toContain('1800 000 000')
-  })
-
-  it('sends a trader with no broker set up to add keys', async () => {
-    serve({ config: { status: 200, body: { ...CONFIG, broker_name: null, brokers: [] } } })
-    renderPage()
-
-    const link = await screen.findByRole('link', { name: /Add broker keys/i })
-    expect(link).toHaveAttribute('href', '/broker/keys')
-    expect(screen.getByText('No broker is set up yet')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Connect Account/i })).not.toBeInTheDocument()
-  })
-
-  it('links to the broker keys page below the form', async () => {
-    renderPage()
-
-    const link = await screen.findByRole('link', { name: 'Manage broker keys' })
-    expect(link).toHaveAttribute('href', '/broker/keys')
-  })
-
-  it('says another device holds a different broker', async () => {
-    serve({ config: { status: 200, body: { ...CONFIG, live_broker: 'angel' } } })
-    renderPage()
-
-    expect(
-      await screen.findByText(/OpenAlgo is logged in to Angel One on another device/)
-    ).toBeInTheDocument()
-  })
-
-  it('ends the other device session only after the trader confirms', async () => {
-    let live: string | null = 'angel'
-    respond = (url) => {
-      if (url === '/auth/csrf-token') return { status: 200, body: { csrf_token: 'csrf-123' } }
-      if (url === '/auth/broker-config') {
-        return { status: 200, body: { ...CONFIG, live_broker: live } }
-      }
-      if (url === '/auth/broker/end-session') {
-        live = null
-        return {
-          status: 200,
-          body: {
-            status: 'success',
-            message: 'Logged out of Angel One. Choose a broker to log in.',
-          },
-        }
-      }
-      return { status: 404, body: {} }
-    }
-    renderPage()
-    // The keys page's cached badges must go stale too once the session ends.
-    client.setQueryData(brokerQueryKeys.keys(), { brokers: [], live_broker: 'angel' })
-
-    await userEvent.click(await screen.findByRole('button', { name: 'End the Angel One session' }))
-    // The first click only asks; nothing is sent until the trader confirms.
-    expect(calls.some((c) => c.url === '/auth/broker/end-session')).toBe(false)
-    await userEvent.click(await screen.findByRole('button', { name: 'End the session' }))
-
-    expect(
-      await screen.findByText('Logged out of Angel One. Choose a broker to log in.')
-    ).toBeInTheDocument()
-    const ended = calls.find((c) => c.url === '/auth/broker/end-session')
-    expect(ended?.init?.method).toBe('POST')
-    expect((ended?.init?.headers as Record<string, string>)['X-CSRFToken']).toBe('csrf-123')
-    await waitFor(() => {
-      expect(screen.queryByText(/on another device/)).not.toBeInTheDocument()
-    })
-    // The list was read again, not patched by hand.
-    expect(configReads()).toHaveLength(2)
-    expect(client.getQueryState(brokerQueryKeys.keys())?.isInvalidated).toBe(true)
+    expect(screen.queryByText(/account is blocked/i)).not.toBeInTheDocument()
   })
 
   it('sends a visitor who is not signed in to the login page', async () => {
@@ -240,21 +241,5 @@ describe('BrokerSelect', () => {
     renderPage()
 
     expect(await screen.findByText('Login page')).toBeInTheDocument()
-    // A 401 answers the same the second time; it is not retried.
-    expect(configReads()).toHaveLength(1)
-  })
-
-  it('retries a failed broker list once, then says it could not load', async () => {
-    serve({ config: { status: 500, body: { status: 'error' } } })
-    renderPage()
-
-    expect(
-      await screen.findByText(
-        'The broker list could not be loaded. Reload the page to try again.',
-        undefined,
-        { timeout: 4000 }
-      )
-    ).toBeInTheDocument()
-    expect(configReads()).toHaveLength(2)
   })
 })
