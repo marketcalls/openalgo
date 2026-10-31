@@ -160,7 +160,7 @@ do_setup() {
         sed -i "s/OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
     fi
     # No broker in .env: the trader adds broker keys in OpenAlgo after signing
-    # in (Profile > Broker). VALID_BROKERS keeps the full list of brokers keys can
+    # in (Broker Configuration). VALID_BROKERS keeps the full list of brokers keys can
     # be saved for.
     local sed_inplace
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -205,7 +205,7 @@ do_setup() {
     echo "  Strategies:     $OPENALGO_DIR/strategies/"
     echo "  Logs:           $OPENALGO_DIR/log/"
     echo ""
-    echo "  Next step: once OpenAlgo is running, sign in, open Profile > Broker and add"
+    echo "  Next step: once OpenAlgo is running, sign in, open Broker Configuration and add"
     echo "  your broker's keys. The page shows the redirect URL to register in"
     echo "  your broker's developer console."
     echo ""

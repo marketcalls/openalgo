@@ -7,7 +7,7 @@ from threading import Thread
 
 import pytz
 from flask import current_app as app
-from flask import jsonify, redirect, request, session, url_for
+from flask import g, jsonify, redirect, request, session, url_for
 
 from database.auth_db import get_feed_token as db_get_feed_token
 from utils.ip_helper import get_real_ip
@@ -486,13 +486,48 @@ def _download_master_contract(broker):
     return master_contract_status
 
 
+def _hand_over_from_live_broker(username, broker):
+    """End the live session of another broker now that a login to `broker` completed.
+
+    One broker is logged in at a time, as in OpenAlgo Desktop: the old session
+    ends here, when the new login has completed, never earlier, so a login
+    that fails or is abandoned leaves the logged-in broker connected. Refused
+    while the old broker still runs Live automation (utils/broker_switch.py).
+
+    Returns:
+        str | None: Why the login cannot complete, or None.
+    """
+    from utils.broker_keys import live_broker
+
+    live = live_broker()
+    if not live or live == broker:
+        return None
+    from utils.broker_switch import switch_refusal
+
+    refusal = switch_refusal(live, username)
+    if refusal:
+        return refusal
+    from blueprints.auth import end_broker_session_for_switch
+
+    end_broker_session_for_switch(username, live, broker)
+    return None
+
+
 def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
     """
     Handles common tasks after successful authentication.
+    - Ends another broker's live session (one broker at a time)
     - Sets session parameters
     - Stores auth token in the database
     - Initiates asynchronous master contract download (smart: skips if downloaded after 8 AM IST)
     """
+    refusal = _hand_over_from_live_broker(user_session_key, broker)
+    if refusal is not None:
+        logger.info(f"Login to {broker} not completed: {refusal}")
+        if is_ajax_request():
+            return jsonify({"status": "error", "message": refusal}), 409
+        return redirect(login_error_address("switch_refused", broker))
+
     # Set session parameters
     session["logged_in"] = True
     # NOTE: do NOT store the broker auth_token in the Flask session. Flask's
@@ -556,6 +591,8 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     )
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
+        # The callback keeps this broker's keys in place (brlogin.broker_callback).
+        g.broker_login_completed = True
 
         # Smart download: Check if we need to download or can use cached data.
         # The check reads only the last download time and broker, which
@@ -600,6 +637,23 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
             return redirect(url_for("auth.broker_login"))
 
 
+def login_error_address(code, broker=None):
+    """Where a refused or failed broker login sends the browser.
+
+    Select Broker shows a fixed sentence for the code, on that broker's card
+    when the address names it (``&broker=<id>``), as OpenAlgo Desktop does.
+    The broker defaults to the one in the callback's route.
+    """
+    from urllib.parse import quote
+
+    if broker is None and request.view_args:
+        broker = request.view_args.get("broker")
+    address = f"/broker?error={quote(code, safe='')}"
+    if broker and re.fullmatch(r"[a-z0-9_]+", broker):
+        address += f"&broker={broker}"
+    return address
+
+
 def handle_auth_failure(error_message, forward_url="broker.html"):
     """
     Handles common tasks after failed authentication.
@@ -612,7 +666,7 @@ def handle_auth_failure(error_message, forward_url="broker.html"):
         # For OAuth callbacks, back to broker selection, which shows a fixed
         # sentence for the code. The broker's own message stays in the log:
         # it can carry text a trader cannot act on.
-        return redirect("/broker?error=login_failed")
+        return redirect(login_error_address("login_failed"))
 
 
 def get_feed_token():

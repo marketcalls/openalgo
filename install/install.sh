@@ -947,7 +947,7 @@ else
     sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
 
     # No broker in .env: the trader adds broker keys in OpenAlgo after signing in
-    # (Profile > Broker). VALID_BROKERS keeps the full list of brokers keys can be saved for.
+    # (Broker Configuration). VALID_BROKERS keeps the full list of brokers keys can be saved for.
     sudo sed -i \
         -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
         -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
@@ -1454,7 +1454,7 @@ log_message "Installation Log: $LOG_FILE" "$BLUE"
 
 log_message "\nNext Steps:" "$YELLOW"
 log_message "1. Visit https://$DOMAIN to access your OpenAlgo instance" "$GREEN"
-log_message "2. Sign in, open Profile > Broker and add your broker's keys. The page shows the redirect URL to register in your broker's developer console." "$GREEN"
+log_message "2. Sign in, open Broker Configuration and add your broker's keys. The page shows the redirect URL to register in your broker's developer console." "$GREEN"
 log_message "3. Review the logs using: sudo journalctl -u $SERVICE_NAME" "$GREEN"
 log_message "4. Monitor the application status: sudo systemctl status $SERVICE_NAME" "$GREEN"
 

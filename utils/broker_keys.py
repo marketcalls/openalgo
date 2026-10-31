@@ -178,6 +178,19 @@ def broker_type(broker):
         return ""
 
 
+@functools.lru_cache(maxsize=64)
+def broker_exchanges(broker):
+    """A broker's supported exchanges from its plugin.json, () if unknown."""
+    if not broker or not _BROKER_ID.fullmatch(broker):
+        return ()
+    try:
+        plugin = PROJECT_ROOT / "broker" / broker / "plugin.json"
+        listed = json.loads(plugin.read_text(encoding="utf-8")).get("supported_exchanges") or ()
+        return tuple(str(e) for e in listed)
+    except (OSError, ValueError):
+        return ()
+
+
 def default_redirect_url(broker):
     """The callback address OpenAlgo serves for a broker on this host."""
     host = (os.getenv("HOST_SERVER") or "http://127.0.0.1:5000").strip().rstrip("/")
@@ -306,22 +319,6 @@ def configured_brokers():
             {"broker": stored.broker, "name": broker_title(stored.broker), "source": "saved"}
         )
     return out
-
-
-def active_broker():
-    """The current broker, as OpenAlgo Desktop has one.
-
-    The one chosen last on the broker login page or in Profile while it is
-    still configured, else the .env broker, else the first broker with saved
-    keys. None when nothing is configured.
-    """
-    from database.broker_keys_db import get_active_broker
-
-    names = [b["broker"] for b in configured_brokers()]
-    chosen = get_active_broker()
-    if chosen in names:
-        return chosen
-    return names[0] if names else None
 
 
 def _never_expires(broker):
@@ -501,13 +498,12 @@ def login_slot_broker():
 
 
 def _refuse_another_broker(broker):
-    """Refuse while another broker is logged in or its login is under way."""
-    live = live_broker()
-    if live and live != broker:
-        raise BrokerKeysRefused(
-            f"OpenAlgo is logged in to {broker_title(live)}. Choose {broker_title(broker)} "
-            "on the broker login page to end that session and switch to it."
-        )
+    """Refuse while a login to another broker is under way.
+
+    A broker that is merely logged in does not refuse: logging in to another
+    one ends its session when that login completes (auth_utils.
+    _hand_over_from_live_broker), as in OpenAlgo Desktop.
+    """
     pending = login_slot_broker()
     if pending and pending != broker:
         raise BrokerKeysRefused(
@@ -520,7 +516,7 @@ def _resolve_or_refuse(broker):
     if keys is None:
         raise BrokerKeysRefused(
             f"No API key is saved for {broker_title(broker)}. "
-            "Add it in Profile > Broker, then try again."
+            "Add it under Broker Configuration, then try again."
         )
     return keys
 
@@ -532,8 +528,8 @@ def keys_for_login(broker):
     written: the keys go in place at the callback, under the login slot.
 
     Raises:
-        BrokerKeysRefused: While another broker is logged in or its login is
-            under way, or when no key is configured for this one.
+        BrokerKeysRefused: While a login to another broker is under way, or
+            when no key is configured for this one.
     """
     _refuse_another_broker(broker)
     return _resolve_or_refuse(broker)
@@ -547,9 +543,9 @@ def use_broker_keys(broker, check_live=True):
 
     Args:
         broker: The broker id.
-        check_live: Refuse when another broker is logged in or its login is
-            under way. False only where the broker passed is the one already
-            logged in (startup, resume, the websocket proxy).
+        check_live: Refuse while a login to another broker is under way. False
+            only where the broker passed is the one already logged in
+            (startup, resume, the websocket proxy).
 
     Returns:
         BrokerKeys: The keys now in place.
@@ -564,6 +560,26 @@ def use_broker_keys(broker, check_live=True):
         where = "the .env file" if keys.source == "env" else "the keys saved in OpenAlgo"
         logger.info(f"Using {where} for {broker_title(broker)}")
     return keys
+
+
+def restore_logged_in_broker_keys(except_broker):
+    """Put the logged-in broker's keys back after a login to another one ended.
+
+    A login writes its broker's keys before the broker answers, while the
+    logged-in broker may still be trading. When that login ends without
+    completing (refused, failed, a form shown, abandoned), the logged-in
+    broker gets its own keys back. Nothing is done when `except_broker` is
+    the logged-in one or none is.
+    """
+    stored = logged_in_broker()
+    if not stored or stored == except_broker:
+        return
+    try:
+        use_broker_keys(stored, check_live=False)
+    except BrokerKeysRefused:
+        logger.warning(
+            f"Could not put back the keys of {broker_title(stored)}: none are configured any more."
+        )
 
 
 def apply_logged_in_broker_keys():

@@ -33,7 +33,6 @@ import pytest
 from dotenv import dotenv_values
 from flask import Flask
 
-import utils.broker_keys as broker_keys
 import utils.env_check as env_check
 from blueprints import broker_credentials
 
@@ -58,9 +57,6 @@ def env_file(tmp_path, monkeypatch):
     path = tmp_path / ".env"
     path.write_bytes(ENV_TEXT.encode("utf-8"))
     monkeypatch.setattr(broker_credentials, "get_env_path", lambda: str(path))
-    # The save asks utils.broker_keys which broker .env names (its keys go to
-    # .env; any other broker's are saved in OpenAlgo), so it reads this file too.
-    monkeypatch.setattr(broker_keys, "env_file_path", lambda: path)
     monkeypatch.setenv("VALID_BROKERS", "zerodha,dhan")
     return path
 
@@ -103,7 +99,7 @@ def test_two_saves_at_once_keep_both_values(env_file, monkeypatch):
         statuses.append(_post(payload)[0])
 
     threads = [
-        threading.Thread(target=save, args=({"broker_api_key": "new-key"},)),
+        threading.Thread(target=save, args=({"websocket_url": "wss://algo.example.com/ws"},)),
         threading.Thread(target=save, args=({"host_server": "https://algo.example.com"},)),
     ]
     for thread in threads:
@@ -113,7 +109,7 @@ def test_two_saves_at_once_keep_both_values(env_file, monkeypatch):
 
     assert statuses == [200, 200]
     values = dotenv_values(env_file)
-    assert values["BROKER_API_KEY"] == "new-key"
+    assert values["WEBSOCKET_URL"] == "wss://algo.example.com/ws"
     assert values["HOST_SERVER"] == "https://algo.example.com"
     assert values["BROKER_API_SECRET"] == "old-secret"
 
@@ -131,7 +127,7 @@ def test_a_save_racing_another_env_writer_keeps_both(env_file, monkeypatch):
 
     def save():
         barrier.wait()
-        _post({"broker_api_secret": "new-secret"})
+        _post({"host_server": "https://new.example.com"})
 
     def other_writer():
         barrier.wait()
@@ -144,61 +140,56 @@ def test_a_save_racing_another_env_writer_keeps_both(env_file, monkeypatch):
         thread.join(10)
 
     values = dotenv_values(env_file)
-    assert values["BROKER_API_SECRET"] == "new-secret"
+    assert values["HOST_SERVER"] == "https://new.example.com"
     assert values["MCP_HTTP_ENABLED"] == "TRUE"
 
 
-def test_a_single_save_of_the_env_broker_writes_what_it_always_wrote(env_file):
-    """Keys for the broker .env names, and the server settings, go to .env as
-    before. Choosing another broker saves its keys in OpenAlgo instead, so
-    REDIRECT_URL is no longer rewritten (test/test_broker_keys.py)."""
+def test_a_single_save_writes_what_it_always_wrote(env_file):
+    """The Profile server settings go to .env as before. Broker keys are saved on
+    Broker Configuration instead (test/test_broker_keys.py)."""
     status, body = _post(
         {
-            "broker_api_key": "abc:::def",
             "ngrok_allow": False,
+            "host_server": "https://algo.example.com",
             "websocket_url": "wss://algo.example.com/ws",
         }
     )
     assert status == 200
     assert body["status"] == "success"
-    assert body["updated_fields"] == [
-        "BROKER_API_KEY",
-        "NGROK_ALLOW",
-        "WEBSOCKET_URL",
-    ]
+    assert body["updated_fields"] == ["NGROK_ALLOW", "HOST_SERVER", "WEBSOCKET_URL"]
     assert body["restart_required"] is True
 
     text = env_file.read_text(encoding="utf-8")
-    assert "BROKER_API_KEY = 'abc:::def'\n" in text
-    assert "REDIRECT_URL = 'http://127.0.0.1:5000/zerodha/callback'\n" in text
+    assert "HOST_SERVER = 'https://algo.example.com'\n" in text
+    assert "WEBSOCKET_URL = 'wss://algo.example.com/ws'\n" in text
     assert text.endswith("NGROK_ALLOW = 'FALSE'\n")
     assert text.startswith("# OpenAlgo settings\n")
     assert "BROKER_API_SECRET = 'old-secret'\n" in text
 
 
 def test_a_value_with_a_single_quote_is_double_quoted_as_before(env_file):
-    status, _ = _post({"broker_api_secret": "it's-secret"})
+    status, _ = _post({"host_server": "https://it's.example.com"})
     assert status == 200
-    assert dotenv_values(env_file)["BROKER_API_SECRET"] == "it's-secret"
+    assert dotenv_values(env_file)["HOST_SERVER"] == "https://it's.example.com"
 
 
 def test_crlf_line_endings_are_kept(env_file):
     env_file.write_bytes(ENV_TEXT.replace("\n", "\r\n").encode("utf-8"))
-    assert _post({"broker_api_key": "crlf-key"})[0] == 200
+    assert _post({"host_server": "https://crlf.example.com"})[0] == 200
     raw = env_file.read_bytes()
-    assert b"BROKER_API_KEY = 'crlf-key'\r\n" in raw
+    assert b"HOST_SERVER = 'https://crlf.example.com'\r\n" in raw
     assert raw.count(b"\r\n") == raw.count(b"\n")
 
 
 def test_a_line_break_in_a_value_is_refused_and_nothing_is_written(env_file):
-    status, body = _post({"broker_api_key": "abc\nAPP_KEY = 'forged'"})
+    status, body = _post({"host_server": "https://a.example.com\nAPP_KEY = 'forged'"})
     assert status == 400
     assert "line break" in body["message"]
     assert env_file.read_bytes() == ENV_TEXT.encode("utf-8")
 
 
 def test_a_validation_failure_writes_nothing(env_file):
-    status, _ = _post({"broker_api_key": "new-key", "host_server": "algo.example.com"})
+    status, _ = _post({"websocket_url": "wss://ok.example.com", "host_server": "algo.example.com"})
     assert status == 400
     assert env_file.read_bytes() == ENV_TEXT.encode("utf-8")
 
@@ -255,14 +246,11 @@ def test_under_eventlet_two_greenlet_saves_keep_both_values(tmp_path):
         dotenv.main.load_dotenv = dotenv.load_dotenv
 
         import inspect, time
-        from pathlib import Path
         from flask import Flask
-        import utils.broker_keys as broker_keys
         import utils.env_check as env_check
         from blueprints import broker_credentials
 
         broker_credentials.get_env_path = lambda: {str(env_path)!r}
-        broker_keys.env_file_path = lambda: Path({str(env_path)!r})
         original_replace = env_check._atomic_replace_text
         def slow_replace(path, content):
             eventlet.sleep(0.05)  # yield inside the lock
@@ -277,11 +265,11 @@ def test_under_eventlet_two_greenlet_saves_keep_both_values(tmp_path):
             return result[1] if isinstance(result, tuple) else 200
 
         started = time.monotonic()
-        a = eventlet.spawn(post, {{"broker_api_key": "green-key"}})
+        a = eventlet.spawn(post, {{"websocket_url": "wss://green.example.com/ws"}})
         b = eventlet.spawn(post, {{"host_server": "https://green.example.com"}})
         assert a.wait() == 200 and b.wait() == 200
         values = dotenv.dotenv_values({str(env_path)!r})
-        assert values["BROKER_API_KEY"] == "green-key", values
+        assert values["WEBSOCKET_URL"] == "wss://green.example.com/ws", values
         assert values["HOST_SERVER"] == "https://green.example.com", values
         assert time.monotonic() - started < 5
         print("OK")

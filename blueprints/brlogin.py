@@ -9,11 +9,17 @@ from flask import Blueprint, g, jsonify, make_response, redirect, request, sessi
 from flask import current_app as app
 
 from limiter import limiter  # Import the limiter instance
-from utils.auth_utils import handle_auth_failure, handle_auth_success, is_ajax_request
+from utils.auth_utils import (
+    handle_auth_failure,
+    handle_auth_success,
+    is_ajax_request,
+    login_error_address,
+)
 from utils.broker_keys import (
     BrokerKeysRefused,
     hold_login_slot,
     release_login_slot,
+    restore_logged_in_broker_keys,
     use_broker_keys,
 )
 from utils.broker_login import (
@@ -58,7 +64,7 @@ def _refuse_login(code, message, status=403):
     )
     if is_ajax_request() or from_our_form:
         return jsonify({"status": "error", "code": code, "message": message}), status
-    return redirect(f"/broker?error={code}")
+    return redirect(login_error_address(code))
 
 
 def _form_csrf_ok():
@@ -108,7 +114,12 @@ def broker_callback(broker, para=None):
             "10 minutes. Start the broker login again.",
         )
     finally:
-        # The login held the broker slot for this request only, however it ended.
+        # Another broker may still be logged in: this request wrote its own
+        # broker's keys, so unless it completed the login (and ended that
+        # session), the logged-in broker gets its keys back. Then the slot is
+        # released: it was held for this request only, however it ended.
+        if not g.pop("broker_login_completed", False):
+            restore_logged_in_broker_keys(broker)
         release_login_slot(g.pop("broker_login_slot", None))
 
 
@@ -1209,6 +1220,7 @@ def dhan_initiate_oauth():
     try:
         return _dhan_initiate_oauth()
     finally:
+        restore_logged_in_broker_keys("dhan")
         release_login_slot(g.pop("broker_login_slot", None))
 
 

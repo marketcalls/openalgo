@@ -51,6 +51,7 @@ from sqlalchemy import (
     UniqueConstraint,
     exists,
 )
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
@@ -819,6 +820,32 @@ def list_strategies(user_id: str, status: str | None = None, q: str | None = Non
     except Exception:
         logger.exception("Could not list strategies for %s", user_id)
         return []
+
+
+def count_live_running_strategies(user_id: str) -> int:
+    """How many of a user's strategies are running a Live run now.
+
+    Asked before the logged-in broker's session ends for a switch: a Live run
+    places its orders through that session.
+    """
+    try:
+        return (
+            db_session.query(SmStrategy)
+            .join(SmStrategyRun, SmStrategyRun.id == SmStrategy.current_run_id)
+            .filter(
+                SmStrategy.user_id == user_id,
+                SmStrategy.status == "running",
+                SmStrategyRun.mode == "live",
+            )
+            .count()
+        )
+    except OperationalError as exc:
+        # No strategy table yet: nothing can be running.
+        if "no such table" in str(exc).lower():
+            return 0
+        raise
+    finally:
+        db_session.remove()
 
 
 def get_strategy(strategy_id: int, user_id: str) -> SmStrategy | None:

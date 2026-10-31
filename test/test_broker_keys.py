@@ -29,7 +29,9 @@ import database.auth_db as auth_db
 import database.broker_keys_db as keys_db
 import utils.broker_keys as broker_keys
 import utils.broker_login as broker_login
+import utils.broker_switch as broker_switch
 from blueprints import brlogin
+from blueprints.broker_config import broker_config_bp
 from blueprints.broker_credentials import broker_credentials_bp
 from database.engine_factory import create_db_engine
 from utils.session import end_session_if_signed_out, last_rollover_boundary
@@ -79,11 +81,15 @@ def stores(tmp_path, monkeypatch):
     auth_session, auth_query = _swap_store(monkeypatch, auth_db, engine)
     keys_session, keys_query = _swap_store(monkeypatch, keys_db, engine)
     auth_db._session_revocation_cache.invalidate()
+    # Tests store broker sessions directly, not through upsert_auth, which is
+    # what drops this cache in the app.
+    broker_keys.forget_logged_in_broker()
     broker_login.clear_pending_logins()
     try:
         yield SimpleNamespace(engine=engine, auth=auth_session, keys=keys_session)
     finally:
         auth_db._session_revocation_cache.invalidate()
+        broker_keys.forget_logged_in_broker()
         broker_login.clear_pending_logins()
         auth_db.Base.query = auth_query
         keys_db.Base.query = keys_query
@@ -139,6 +145,7 @@ def _logged_in(broker, fresh=True):
         )
     )
     auth_db.db_session.commit()
+    broker_keys.forget_logged_in_broker()
 
 
 def _app(csrf=False):
@@ -148,6 +155,7 @@ def _app(csrf=False):
     app.register_blueprint(auth_bp_module.auth_bp)
     app.register_blueprint(brlogin.brlogin_bp)
     app.register_blueprint(broker_credentials_bp)
+    app.register_blueprint(broker_config_bp)
     if csrf:
         from flask_wtf.csrf import CSRFProtect
 
@@ -174,6 +182,23 @@ def _signed_in(app, **extra):
 
 def _csrf(client):
     return client.get("/auth/csrf-token").get_json()["csrf_token"]
+
+
+JSON = {"Accept": "application/json"}
+
+
+def _probe(client):
+    """Whether a browser is still signed in to OpenAlgo: 200, or 401 when it is not."""
+    return client.get("/api/broker/list", headers=JSON).status_code
+
+
+_REAL_BLOCKERS = broker_switch._blockers
+
+
+@pytest.fixture(autouse=True)
+def _nothing_runs(monkeypatch):
+    """No Live automation, unless a test says otherwise (broker_switch._blockers)."""
+    monkeypatch.setattr(broker_switch, "_blockers", lambda username: (0, 0, 0, 0))
 
 
 # --------------------------------------------------------------------------
@@ -274,16 +299,23 @@ def test_key_layouts_are_checked():
 # --------------------------------------------------------------------------
 
 
-def test_another_live_broker_blocks_the_switch(stores, environment):
+def test_the_logged_in_broker_gets_its_keys_back(stores, environment):
+    """A login to another broker writes that broker's keys while the logged-in
+    one may still trade; when it does not complete, they are put back."""
     environment.write(ENV_ZERODHA)
     _save_fyers()
     _logged_in("zerodha")
 
-    with pytest.raises(broker_keys.BrokerKeysRefused) as refused:
-        broker_keys.use_broker_keys("fyers")
+    broker_keys.use_broker_keys("fyers")
+    during = os.environ["BROKER_API_KEY"]
+    broker_keys.restore_logged_in_broker_keys("fyers")
+    after = os.environ["BROKER_API_KEY"]
+    broker_keys.use_broker_keys("fyers")
+    broker_keys.restore_logged_in_broker_keys("zerodha")
 
-    assert "logged in to Zerodha" in str(refused.value)
-    assert os.environ["BROKER_API_KEY"] == "zkey123"
+    assert (during, after) == ("FYAPP-100", "zkey123")
+    # Nothing to put back for the broker that is itself logged in.
+    assert os.environ["BROKER_API_KEY"] == "FYAPP-100"
 
 
 def test_the_live_broker_itself_and_startup_are_allowed(stores, environment):
@@ -445,213 +477,300 @@ def test_a_missing_table_is_not_an_error(tmp_path, monkeypatch, caplog):
 
 
 # --------------------------------------------------------------------------
-# Profile > Broker: the current broker, saving keys and switching
+# Broker Configuration and Select Broker, as OpenAlgo Desktop has them
 # --------------------------------------------------------------------------
 
 
-def _save(client, **form):
-    """POST the Profile Broker form."""
-    return client.post("/api/broker/credentials", data=form)
+def _put(client, broker, sign_out=False, **form):
+    query = "?sign_out=true" if sign_out else ""
+    return client.put(f"/api/broker/credentials/{broker}{query}", json=form)
 
 
-def test_the_profile_api_needs_an_openalgo_sign_in(stores, environment):
+def _forget(client, broker, sign_out=False):
+    query = "?sign_out=true" if sign_out else ""
+    return client.delete(f"/api/broker/credentials/{broker}{query}")
+
+
+def _listed(client):
+    data = client.get("/api/broker/list").get_json()["data"]
+    return data, {b["id"]: b for b in data["brokers"]}
+
+
+def test_the_broker_pages_need_an_openalgo_sign_in(stores, environment):
     client = _app().test_client()
-    json_only = {"Accept": "application/json"}
 
-    assert client.get("/api/broker/credentials", headers=json_only).status_code == 401
-    assert client.get("/api/broker/configured", headers=json_only).status_code == 401
-    assert _save(client, broker_api_key="k").status_code in (302, 401)
-
-
-def test_the_profile_api_works_before_any_broker_login(stores, environment):
-    """A new install adds its first broker in Profile, before any broker login,
-    as OpenAlgo Desktop allows."""
-    client = _signed_in(_app())
-
-    assert client.get("/api/broker/credentials").status_code == 200
-    assert client.get("/api/broker/configured").get_json()["data"] == {
-        "brokers": [],
-        "active": None,
-    }
+    assert client.get("/api/broker/list", headers=JSON).status_code == 401
+    assert client.put("/api/broker/credentials/fyers", json={}, headers=JSON).status_code == 401
+    assert client.delete("/api/broker/credentials/fyers", headers=JSON).status_code == 401
 
 
-def test_the_current_broker_is_shown_without_its_secrets(stores, environment):
+def test_every_broker_is_listed_before_any_broker_login(stores, environment):
+    """A new install adds its first broker here, before any broker login."""
+    data, brokers = _listed(_signed_in(_app()))
+
+    assert data["logged_in"] is None and data["switch_refusal"] is None
+    assert sorted(brokers) == sorted(broker_keys.enabled_brokers())
+    assert not any(b["configured"] or b["active"] for b in brokers.values())
+    fyers = brokers["fyers"]
+    assert fyers["name"] == "Fyers" and fyers["sign_in"] == "redirect"
+    assert [f["label"] for f in fyers["fields"]] == ["App ID", "App Secret"]
+    assert fyers["redirect_url"] == fyers["redirect_url_automatic"]
+    assert fyers["redirect_url"] == "http://127.0.0.1:5000/fyers/callback"
+    assert "NSE" in fyers["exchanges"]
+    # A form broker has no redirect URL.
+    assert brokers["angel"]["redirect_url"] is None
+
+
+def test_the_list_never_returns_a_secret(stores, environment):
     environment.write(ENV_ZERODHA)
     _save_fyers()
-    client = _signed_in(_app())
 
-    env_view = client.get("/api/broker/credentials")
-    keys_db.set_active_broker("fyers")
-    saved_view = client.get("/api/broker/credentials")
+    response = _signed_in(_app()).get("/api/broker/list")
+    brokers = {b["id"]: b for b in response.get_json()["data"]["brokers"]}
 
-    for response in (env_view, saved_view):
-        body = response.get_data(as_text=True)
-        for secret in ("fyers-secret-value", "FYAPP-100", "zsecret456", "zkey123"):
-            assert secret not in body
-    env_data, saved_data = env_view.get_json()["data"], saved_view.get_json()["data"]
-    assert (env_data["current_broker"], env_data["source"]) == ("zerodha", "env")
-    # A secret shows no character of itself; the API key, a client id, a prefix.
-    assert env_data["broker_api_secret"] == "********"
-    assert env_data["broker_api_key"] == "zkey12********"
-    # .env values report their length, as this page always has.
-    assert env_data["broker_api_secret_raw_length"] == len("zsecret456")
-    assert (saved_data["current_broker"], saved_data["source"]) == ("fyers", "saved")
-    assert saved_data["broker_api_key"] == "FYAPP-********"
-    assert saved_data["broker_api_secret"] == "********"
-    # A key saved in OpenAlgo: whether it is set, never how long it is.
-    assert saved_data["broker_api_secret_set"] is True
-    assert saved_data["broker_api_secret_raw_length"] == 0
-    assert saved_data["broker_api_key_market_set"] is False
+    body = response.get_data(as_text=True)
+    for secret in ("fyers-secret-value", "FYAPP-100", "zsecret456", "zkey123"):
+        assert secret not in body
+    saved = {b: {f["key"]: f["saved"] for f in brokers[b]["fields"]} for b in ("zerodha", "fyers")}
+    # An API key shows a prefix, a secret no character of itself.
+    assert saved["zerodha"] == {"api_key": "zkey12********", "api_secret": "********"}
+    assert saved["fyers"] == {"api_key": "FYAPP-********", "api_secret": "********"}
+    assert (brokers["zerodha"]["source"], brokers["fyers"]["source"]) == ("env", "saved")
+    assert response.headers["Cache-Control"] == "no-store"
 
 
-def test_the_configured_list_puts_env_first_and_marks_the_active_broker(stores, environment):
+def test_the_list_names_the_logged_in_broker_and_why_it_cannot_switch(
+    stores, environment, monkeypatch
+):
     environment.write(ENV_ZERODHA)
     _save_fyers()
-    client = _signed_in(_app())
+    _logged_in("zerodha")
+    monkeypatch.setattr(broker_switch, "_blockers", lambda username: (0, 1, 0, 0))
 
-    before = client.get("/api/broker/configured").get_json()["data"]
-    keys_db.set_active_broker("fyers")
-    after = client.get("/api/broker/configured").get_json()["data"]
+    data, brokers = _listed(_signed_in(_app()))
 
-    assert before == {
-        "brokers": [{"name": "zerodha", "active": True}, {"name": "fyers", "active": False}],
-        "active": "zerodha",
-    }
-    assert after["active"] == "fyers"
-    assert [b["active"] for b in after["brokers"]] == [False, True]
+    assert data["logged_in"] == "zerodha"
+    assert brokers["zerodha"]["active"] and not brokers["fyers"]["active"]
+    assert data["switch_refusal"].startswith("Zerodha still has 1 running Live OpenScript run.")
 
 
 @pytest.mark.parametrize(
-    "form, expected",
+    "broker, form, expected, status",
     [
+        ("fyers", {"api_key": "k\nREDIRECT_URL=x", "api_secret": "s"}, "line break", 400),
+        ("fyers", {"api_key": "k" * 2000, "api_secret": "s"}, "longer than", 400),
+        ("dhan", {"api_key": "plain", "api_secret": "s"}, "client_id:::api_key", 400),
         (
-            {"redirect_url": "http://127.0.0.1:5000/upstox/callback", "broker_api_key": "k"},
-            "Invalid broker",
-        ),
-        (
+            "fyers",
             {
-                "redirect_url": "http://127.0.0.1:5000/fyers/callback",
-                "broker_api_key": "k\nREDIRECT_URL=x",
+                "api_key": "k",
+                "api_secret": "s",
+                "redirect_url": "https://x.example/zerodha/callback",
             },
-            "line break",
+            "ending in /fyers/callback",
+            400,
         ),
         (
-            {"redirect_url": "http://127.0.0.1:5000/dhan/callback", "broker_api_key": "plain"},
-            "client_id:::api_key",
+            "fyers",
+            {"api_key": "k", "api_secret": "s", "redirect_url": "javascript:x/fyers/callback"},
+            "full address",
+            400,
         ),
         (
-            {"redirect_url": "javascript:alert(1)//fyers/callback", "broker_api_key": "k"},
-            "Invalid redirect URL",
+            "angel",
+            {"api_key": "k", "redirect_url": "https://x.example/angel/callback"},
+            "does not use a redirect URL",
+            400,
         ),
-        (
-            {"redirect_url": "http://127.0.0.1:5000/fyers/callback", "broker_api_key": "k" * 2000},
-            "longer than",
-        ),
-        ({"broker_api_key": "k"}, "Choose your broker"),
-        ({"redirect_url": "http://127.0.0.1:5000/fyers/callback"}, "Enter the API key for Fyers"),
+        ("fyers", {"api_key": "k"}, "Enter the App Secret to save Fyers.", 400),
+        ("fyers", {}, "Nothing to save", 400),
+        ("upstox-x", {"api_key": "k"}, "Choose a broker from the list.", 404),
     ],
 )
-def test_saving_refuses_bad_input(stores, environment, form, expected):
-    response = _save(_signed_in(_app()), **form)
+def test_saving_refuses_bad_input(stores, environment, broker, form, expected, status):
+    response = _put(_signed_in(_app()), broker, **form)
 
-    assert response.status_code == 400
+    assert response.status_code == status
     assert expected in response.get_json()["message"]
     assert keys_db.list_broker_keys() == []
-    assert keys_db.get_active_broker() is None
 
 
-def test_choosing_another_broker_saves_its_keys_in_openalgo_and_makes_it_current(
-    stores, environment
-):
-    """Desktop parity: picking a broker in Profile and saving stores its keys
-    and makes it the active broker. Nothing is written to .env and nothing
-    needs a restart."""
+def test_saving_a_broker_keeps_its_keys_in_openalgo(stores, environment):
+    """Nothing is written to .env and nothing needs a restart."""
     environment.write(ENV_ZERODHA)
     before = environment.file.read_bytes()
     client = _signed_in(_app())
 
-    response = _save(
-        client,
-        redirect_url="http://127.0.0.1:5000/fyers/callback",
-        broker_api_key="FYAPP-100",
-        broker_api_secret="fyers-secret-value",
-    )
+    saved = _put(client, "fyers", api_key="FYAPP-100", api_secret="fyers-secret-value")
+    kept = _put(client, "fyers", api_secret="fyers-secret-2")
+    _, brokers = _listed(client)
 
-    body = response.get_json()
-    assert response.status_code == 200
-    assert (body["broker_switched"], body["restart_required"]) == (True, False)
-    assert body["signed_out_of"] is None
-    assert broker_keys.resolve("fyers").api_secret == "fyers-secret-value"
-    assert broker_keys.active_broker() == "fyers"
+    assert saved.get_json() == {
+        "status": "success",
+        "message": "Saved your Fyers settings.",
+        "signed_out": False,
+    }
+    assert kept.status_code == 200
+    stored = broker_keys.resolve("fyers")
+    assert (stored.api_key, stored.api_secret) == ("FYAPP-100", "fyers-secret-2")
+    assert brokers["fyers"]["configured"] and not brokers["fyers"]["active"]
     assert environment.file.read_bytes() == before
 
 
-def test_saving_the_env_brokers_keys_writes_env_as_before(stores, environment):
+def test_saving_the_env_brokers_keys_writes_env(stores, environment):
+    """The broker .env names keeps its keys there, and .env still comes first."""
     environment.write(ENV_ZERODHA)
-    client = _signed_in(_app())
 
-    response = _save(client, broker_api_secret="new-zerodha-secret")
+    response = _put(_signed_in(_app()), "zerodha", api_secret="new-zerodha-secret")
 
-    body = response.get_json()
     assert response.status_code == 200
-    assert (body["broker_switched"], body["restart_required"]) == (False, True)
     assert "BROKER_API_SECRET = 'new-zerodha-secret'" in environment.file.read_text()
     assert keys_db.get_broker_keys("zerodha") is None
+    assert broker_keys.resolve("zerodha").api_secret == "new-zerodha-secret"
 
 
-def test_the_redirect_url_follows_the_host_unless_the_trader_set_one(
-    stores, environment, monkeypatch
-):
+def test_the_redirect_url_is_automatic_or_the_traders_own(stores, environment, monkeypatch):
     client = _signed_in(_app())
-    default = "http://127.0.0.1:5000/fyers/callback"
     custom = "https://trade.example.com/fyers/callback"
 
-    _save(client, redirect_url=default, broker_api_key="FYAPP-100")
+    _put(client, "fyers", api_key="FYAPP-100", api_secret="s", redirect_url="")
     monkeypatch.setenv("HOST_SERVER", "https://new.example.com")
-    assert broker_keys.resolve("fyers").redirect_url == "https://new.example.com/fyers/callback"
+    automatic = broker_keys.resolve("fyers").redirect_url
+    _put(client, "fyers", redirect_url=custom)
+    kept = broker_keys.resolve("fyers").redirect_url
+    _put(client, "fyers", api_secret="s2")
+    still = broker_keys.resolve("fyers").redirect_url
+    # "Use automatic" sends the automatic address itself.
+    _put(client, "fyers", redirect_url="https://new.example.com/fyers/callback")
+    _, brokers = _listed(client)
 
-    _save(client, redirect_url=custom, broker_api_secret="s1")
-    _save(client, broker_api_secret="s2")
-    assert broker_keys.resolve("fyers").redirect_url == custom
+    assert automatic == "https://new.example.com/fyers/callback"
+    assert kept == still == custom
+    assert keys_db.get_broker_keys("fyers").redirect_url == ""
+    assert brokers["fyers"]["redirect_url_is_default"] is True
 
 
-def test_the_logged_in_brokers_keys_cannot_change(stores, environment):
+def test_new_keys_for_the_logged_in_broker_end_its_session_once_confirmed(
+    stores, environment, monkeypatch
+):
+    """A session belongs to the keys it signed in with."""
+    monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
     _save_fyers()
-    keys_db.set_active_broker("fyers")
+    _logged_in("fyers")
+    client = _signed_in(_app())
+
+    asked = _put(client, "fyers", api_secret="new-secret")
+    unchanged = keys_db.get_broker_keys("fyers").api_secret
+    confirmed = _put(client, "fyers", sign_out=True, api_secret="new-secret")
+
+    assert asked.status_code == 409
+    assert "confirm to save them" in asked.get_json()["message"]
+    assert unchanged == "fyers-secret-value"
+    assert confirmed.get_json()["signed_out"] is True
+    assert confirmed.get_json()["message"] == (
+        "Saved your Fyers keys and ended its session. Log in again to use them."
+    )
+    assert keys_db.get_broker_keys("fyers").api_secret == "new-secret"
+    assert broker_keys.live_broker() is None
+    assert _probe(client) == 200
+
+
+def test_a_redirect_url_alone_leaves_the_session_running(stores, environment):
+    _save_fyers()
     _logged_in("fyers")
 
-    changed = _save(_signed_in(_app()), broker_api_secret="new")
+    response = _put(
+        _signed_in(_app()), "fyers", redirect_url="https://t.example.com/fyers/callback"
+    )
 
-    assert changed.status_code == 409
-    assert "Log out of OpenAlgo" in changed.get_json()["message"]
-    assert keys_db.get_broker_keys("fyers").api_secret == "fyers-secret-value"
+    assert response.get_json()["signed_out"] is False
+    assert broker_keys.live_broker() == "fyers"
 
 
-def test_a_login_under_way_holds_off_a_switch(stores, environment):
+def test_forgetting_a_broker(stores, environment, monkeypatch):
+    monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
     environment.write(ENV_ZERODHA)
     _save_fyers()
-    holder = broker_keys.hold_login_slot("zerodha")
+    keys_db.save_broker_keys("upstox", {"api_key": "up", "api_secret": "us"}, None)
+    monkeypatch.setenv("VALID_BROKERS", "zerodha,fyers,upstox")
+    _logged_in("fyers")
+    client = _signed_in(_app())
+
+    env_broker = _forget(client, "zerodha")
+    plain = _forget(client, "upstox")
+    again = _forget(client, "upstox")
+    asked = _forget(client, "fyers")
+    confirmed = _forget(client, "fyers", sign_out=True)
+
+    assert env_broker.status_code == 400 and ".env file" in env_broker.get_json()["message"]
+    assert plain.get_json() == {
+        "status": "success",
+        "message": "Forgot your Upstox keys.",
+        "signed_out": False,
+    }
+    assert again.status_code == 404
+    assert asked.status_code == 409
+    assert confirmed.get_json()["message"] == "Signed out of Fyers and forgot its keys."
+    assert keys_db.get_broker_keys("fyers") is None
+    assert broker_keys.live_broker() is None
+
+
+def test_live_automation_keeps_the_logged_in_broker(stores, environment, monkeypatch):
+    """Ending the session for new keys or a forget is refused like a switch."""
+    _save_fyers()
+    _logged_in("fyers")
+    monkeypatch.setattr(broker_switch, "_blockers", lambda username: (0, 0, 1, 0))
+    client = _signed_in(_app())
+
+    saved = _put(client, "fyers", sign_out=True, api_secret="new")
+    forgot = _forget(client, "fyers", sign_out=True)
+
+    assert saved.status_code == forgot.status_code == 409
+    assert "1 running Python strategy" in saved.get_json()["message"]
+    assert keys_db.get_broker_keys("fyers").api_secret == "fyers-secret-value"
+    assert broker_keys.live_broker() == "fyers"
+
+
+def test_a_login_under_way_holds_off_its_keys(stores, environment):
+    _save_fyers()
+    holder = broker_keys.hold_login_slot("fyers")
     try:
-        refused = _save(_signed_in(_app()), redirect_url="http://127.0.0.1:5000/fyers/callback")
+        client = _signed_in(_app())
+        saved = _put(client, "fyers", api_secret="new")
+        forgot = _forget(client, "fyers")
     finally:
         broker_keys.release_login_slot(holder)
 
-    assert refused.status_code == 409
-    assert "A login to Zerodha is under way" in refused.get_json()["message"]
-    assert broker_keys.active_broker() == "zerodha"
+    assert saved.status_code == forgot.status_code == 409
+    assert "A login to Fyers is under way" in saved.get_json()["message"]
+    assert keys_db.get_broker_keys("fyers").api_secret == "fyers-secret-value"
 
 
 def test_writes_need_the_csrf_token(stores, environment):
     client = _signed_in(_app(csrf=True))
-    form = {"redirect_url": "http://127.0.0.1:5000/fyers/callback", "broker_api_key": "FYAPP-100"}
+    form = {"api_key": "FYAPP-100", "api_secret": "s"}
 
-    refused = _save(client, **form)
-    accepted = client.post(
-        "/api/broker/credentials", data=form, headers={"X-CSRFToken": _csrf(client)}
+    refused = _put(client, "fyers", **form)
+    accepted = client.put(
+        "/api/broker/credentials/fyers", json=form, headers={"X-CSRFToken": _csrf(client)}
     )
+    forget_refused = _forget(client, "fyers")
 
-    assert refused.status_code == 400
+    assert refused.status_code == 400 and forget_refused.status_code == 400
     assert accepted.status_code == 200
+
+
+def test_profile_server_settings_still_save_to_env(stores, environment):
+    environment.write(ENV_ZERODHA)
+    client = _signed_in(_app())
+
+    saved = client.post("/api/broker/credentials", data={"host_server": "https://algo.example.com"})
+    keys = client.post("/api/broker/credentials", data={"broker_api_key": "k"})
+
+    assert saved.get_json()["restart_required"] is True
+    assert "HOST_SERVER = 'https://algo.example.com'" in environment.file.read_text()
+    # Keys are saved on Broker Configuration, not here.
+    assert keys.status_code == 400
 
 
 # --------------------------------------------------------------------------
@@ -665,33 +784,41 @@ def completed(monkeypatch):
     calls = []
 
     def fake_success(auth_token, user, broker, **kwargs):
+        from flask import g
+
         calls.append((auth_token, user, broker))
+        g.broker_login_completed = True
         return "logged in"
 
     monkeypatch.setattr(brlogin, "handle_auth_success", fake_success)
     return calls
 
 
-def test_the_broker_config_names_the_active_broker_and_carries_no_key(stores, environment):
-    """The login page's answer, as OpenAlgo Desktop gives it."""
-    app = _app()
-    client = _signed_in(app)
-    nothing = client.get("/auth/broker-config")
-    environment.write(ENV_ZERODHA)
-    _save_fyers()
+def test_open_dashboard_joins_the_live_session(stores, environment, monkeypatch):
+    """On the web the logged-in broker may have been logged in to on another
+    device, so Open Dashboard on its card joins that session first."""
+    from flask import jsonify
 
-    env_first = client.get("/auth/broker-config").get_json()
-    keys_db.set_active_broker("fyers")
-    chosen = client.get("/auth/broker-config").get_json()
+    joined = []
 
-    assert app.test_client().get("/auth/broker-config").status_code == 401
-    assert nothing.status_code == 404
-    assert nothing.get_json()["code"] == "BROKER_NOT_CONFIGURED"
-    assert (env_first["broker_name"], env_first["broker_api_key"]) == ("zerodha", None)
-    assert chosen["broker_name"] == "fyers"
-    assert chosen["redirect_url"] == "http://127.0.0.1:5000/fyers/callback"
-    for body in (env_first, chosen):
-        assert "zkey123" not in str(body) and "FYAPP-100" not in str(body)
+    def fake_resume(username):
+        joined.append(username)
+        return jsonify({"status": "success", "redirect": "/dashboard"})
+
+    _logged_in("zerodha")
+    client = _signed_in(_app())
+    monkeypatch.setattr(auth_bp_module, "_try_resume_broker_session", fake_resume)
+    resumed = client.post("/auth/broker/resume")
+    monkeypatch.setattr(auth_bp_module, "_try_resume_broker_session", lambda username: None)
+    ended = client.post("/auth/broker/resume")
+
+    assert resumed.get_json()["status"] == "success" and joined == [USER]
+    assert ended.status_code == 409
+    assert (
+        ended.get_json()["message"] == "That broker session has ended. Log in to the broker again."
+    )
+    assert _app().test_client().post("/auth/broker/resume").status_code == 401
+    assert _signed_in(_app(csrf=True)).post("/auth/broker/resume").status_code == 400
 
 
 def test_the_server_builds_the_sign_in_address(stores, environment):
@@ -708,15 +835,29 @@ def test_the_server_builds_the_sign_in_address(stores, environment):
         assert sess["broker_login"]["broker"] == "fyers"
 
 
-def test_starting_a_login_is_refused_while_another_broker_is_live(stores, environment):
+def test_a_login_to_another_broker_starts_unless_live_automation_runs(
+    stores, environment, monkeypatch
+):
+    """Desktop parity: logging in to another broker is allowed while one is
+    live (its session ends when the new login completes), and refused while
+    the live broker still runs Live automation."""
     environment.write(ENV_ZERODHA)
     _save_fyers()
     _logged_in("zerodha")
+    client = _signed_in(_app())
 
-    response = _signed_in(_app()).post("/auth/broker/login", json={"broker": "fyers"})
+    started = client.post("/auth/broker/login", json={"broker": "fyers"})
+    monkeypatch.setattr(broker_switch, "_blockers", lambda username: (1, 0, 0, 2))
+    refused = client.post("/auth/broker/login", json={"broker": "fyers"})
 
-    assert response.status_code == 409
-    assert "to end that session and switch to it" in response.get_json()["message"]
+    assert started.status_code == 200
+    assert os.environ["BROKER_API_KEY"] == "zkey123"
+    assert refused.status_code == 409
+    assert refused.get_json()["message"] == (
+        "Zerodha still has 1 running Live strategy and 2 positions under scalping "
+        "protection. They are not moved to another broker. First stop the strategies "
+        "and protection, then switch. Nothing was changed."
+    )
 
 
 def test_starting_a_login_needs_a_listed_broker(stores, environment):
@@ -738,10 +879,25 @@ def test_an_answer_no_login_started_is_refused(stores, environment, completed):
     response = _signed_in(app).get("/zerodha/callback?request_token=attacker")
 
     assert response.status_code == 302
-    assert response.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        response.headers["Location"]
+        .split("&broker=")[0]
+        .endswith("/broker?error=login_not_started")
+    )
     assert completed == []
     # Refused before the code ever reaches the broker.
     assert exchanged == []
+
+
+def test_a_refusal_names_the_broker_so_its_card_shows_it(stores, environment, completed):
+    """Select Broker shows the sentence on that broker's card, as OpenAlgo Desktop does."""
+    environment.write(ENV_ZERODHA)
+    app = _app()
+    app.broker_auth_functions = {"zerodha_auth": lambda code: ("t", None)}
+
+    response = _signed_in(app).get("/zerodha/callback?request_token=x")
+
+    assert response.headers["Location"] == "/broker?error=login_not_started&broker=zerodha"
 
 
 def test_a_sign_in_that_starts_at_the_callback_needs_a_started_login(stores, environment):
@@ -756,7 +912,9 @@ def test_a_sign_in_that_starts_at_the_callback_needs_a_started_login(stores, env
     client.post("/auth/broker/login", json={"broker": "angel"})
     started = client.get("/angel/callback")
 
-    assert linked.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        linked.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert started.headers["Location"].endswith("/broker/angel/totp")
 
 
@@ -772,7 +930,9 @@ def test_a_started_login_completes_once(stores, environment, completed):
 
     assert first.get_data(as_text=True) == "logged in"
     assert completed == [("zkey123:access", USER, "zerodha")]
-    assert replay.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        replay.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
 
 
 def test_the_callback_runs_with_the_saved_keys(stores, environment, completed):
@@ -806,7 +966,9 @@ def test_a_state_broker_answer_is_checked_against_its_state(stores, environment,
     # Another signed-in browser carrying a state it made up.
     wrong = _signed_in(app).get("/fyers/callback?auth_code=c&state=guessed")
 
-    assert wrong.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        wrong.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert completed == []
 
 
@@ -867,8 +1029,12 @@ def test_an_xts_post_without_the_state_is_refused(xts, completed):
     missing = _xts_post(stranger)
     guessed = _xts_post(stranger, state="guessed")
 
-    assert missing.headers["Location"].endswith("/broker?error=login_not_started")
-    assert guessed.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        missing.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
+    assert (
+        guessed.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     with stranger.session_transaction() as sess:
         assert "user" not in sess and "logged_in" not in sess
     assert completed == []
@@ -882,7 +1048,9 @@ def test_an_xts_post_with_the_state_completes_once(xts, completed):
 
     assert accepted.get_data(as_text=True) == "logged in"
     assert completed == [("ce-token", USER, "compositedge")]
-    assert replay.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        replay.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
 
 
 def test_a_login_form_post_needs_the_csrf_token(stores, environment):
@@ -918,14 +1086,14 @@ def test_a_revocation_ends_every_earlier_sign_in(stores, environment):
     environment.write(ENV_ZERODHA)
     app = _app()
     other_device = _signed_in(app)
-    assert other_device.get("/auth/broker-config").status_code == 200
+    assert _probe(other_device) == 200
 
     auth_db.revoke_all_sessions(USER)
 
-    assert other_device.get("/auth/broker-config").status_code == 401
+    assert _probe(other_device) == 401
     with other_device.session_transaction() as sess:
         assert "user" not in sess
-    assert _signed_in(app).get("/auth/broker-config").status_code == 200
+    assert _probe(_signed_in(app)) == 200
 
 
 def test_a_revoked_broker_session_is_no_longer_valid(stores, environment):
@@ -952,9 +1120,9 @@ def test_a_broker_less_sign_in_ends_at_the_rollover(stores, environment):
     with legacy.session_transaction() as sess:
         sess["user"] = USER
 
-    assert stale.get("/auth/broker-config").status_code == 401
-    assert legacy.get("/auth/broker-config").status_code == 401
-    assert _signed_in(app).get("/auth/broker-config").status_code == 200
+    assert _probe(stale) == 401
+    assert _probe(legacy) == 401
+    assert _probe(_signed_in(app)) == 200
 
 
 def test_logout_and_password_changes_record_the_revocation(stores, environment, monkeypatch):
@@ -1036,7 +1204,7 @@ def test_the_migration_adds_its_tables_once(tmp_path):
 
     status = _migrate(db_file, "--status")
     assert status.returncode == 0, status.stdout + status.stderr
-    assert "Would create 4 table(s)." in status.stdout
+    assert "Would create 3 table(s)." in status.stdout
 
     first = _migrate(db_file)
     again = _migrate(db_file)
@@ -1047,7 +1215,6 @@ def test_the_migration_adds_its_tables_once(tmp_path):
         names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert {
         "broker_keys",
-        "active_broker",
         "session_revocations",
         "broker_login_states",
         "ix_broker_keys_broker",
@@ -1078,9 +1245,9 @@ def test_the_migration_adds_only_what_is_missing(tmp_path):
     status = _migrate(db_file, "--status")
     applied = _migrate(db_file)
 
-    assert "Would create 3 table(s)." in status.stdout
+    assert "Would create 2 table(s)." in status.stdout
     assert "broker_keys            present" in status.stdout
-    assert "[OK] Created active_broker" in applied.stdout
+    assert "[OK] Created session_revocations" in applied.stdout
     assert "Created broker_keys" not in applied.stdout
     with closing(sqlite3.connect(db_file)) as conn:
         assert conn.execute("SELECT broker, api_key FROM broker_keys").fetchall() == [
@@ -1139,7 +1306,7 @@ def test_startup_accepts_an_env_without_a_broker(tmp_path):
     result = _run_startup_check(tmp_path, "")
 
     assert "STARTED" in result.stdout, result.stdout + result.stderr
-    assert "add your broker keys in Profile > Broker" in result.stdout
+    assert "add your broker keys in Broker Configuration" in result.stdout
 
 
 def _bare_install(tmp_path):
@@ -1322,10 +1489,10 @@ def test_startup_never_changes_an_existing_envs_keys_or_broker(tmp_path):
     assert hashlib.sha256((root / ".env").read_bytes()).hexdigest() == settled
 
 
-def test_using_switching_and_saving_other_brokers_never_writes_the_env_file(stores, environment):
+def test_using_saving_and_forgetting_other_brokers_never_writes_the_env_file(stores, environment):
     """Broker keys reach the plugins through the process environment only; the
-    .env file is read, never written, by using a broker, switching between
-    brokers or saving another broker's keys."""
+    .env file is read, never written, by using a broker, saving or forgetting
+    another broker's keys, or starting a login."""
     environment.write(ENV_ZERODHA)
     _save_fyers()
     before = environment.file.read_bytes()
@@ -1333,9 +1500,9 @@ def test_using_switching_and_saving_other_brokers_never_writes_the_env_file(stor
 
     broker_keys.use_broker_keys("fyers")
     broker_keys.use_broker_keys("zerodha")
-    _save(client, redirect_url="http://127.0.0.1:5000/fyers/callback", broker_api_secret="other")
-    _save(client, redirect_url="http://127.0.0.1:5000/zerodha/callback")
-    client.post("/auth/broker/login", json={"broker": "fyers"})
+    _put(client, "fyers", api_secret="other")
+    _forget(client, "fyers")
+    client.post("/auth/broker/login", json={"broker": "zerodha"})
 
     assert environment.file.read_bytes() == before
 
@@ -1400,7 +1567,9 @@ def test_an_expired_login_is_refused(stores, environment, completed):
 
     answer = client.get("/zerodha/callback?request_token=ok")
 
-    assert answer.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        answer.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert completed == []
 
 
@@ -1447,42 +1616,67 @@ def test_a_copied_sample_env_starts_with_fresh_keys_and_no_broker(tmp_path):
     assert dotenv_values(root / ".env") == keys
 
 
-def test_choosing_another_broker_ends_the_live_session(stores, environment, monkeypatch):
-    """Desktop parity: choosing another broker (on the broker login page or in
-    Profile) ends the live session of the old one, on every device, with the
-    same teardown as a logout there."""
+def _hand_over(broker, **session_values):
+    """Run the completion hand-over as a login to `broker` from this browser."""
+    from utils.auth_utils import _hand_over_from_live_broker
+
+    with _app().test_request_context("/"):
+        from flask import session
+
+        session["user"] = USER
+        session.update(session_values)
+        refusal = _hand_over_from_live_broker(USER, broker)
+        return refusal, dict(session)
+
+
+def test_a_completed_login_to_another_broker_ends_the_live_session(
+    stores, environment, monkeypatch
+):
+    """Desktop parity: the old session ends when the new login completes, on
+    every device; the browser that logged in stays signed in."""
     monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
     environment.write(ENV_ZERODHA)
     _save_fyers()
     _logged_in("zerodha")
     app = _app()
     other_device = _signed_in(app, logged_in=True, login_time=datetime.now(IST).isoformat())
-    this_browser = _signed_in(app)
 
-    refused = this_browser.post("/auth/broker/login", json={"broker": "fyers"})
-    switched = _save(this_browser, redirect_url="http://127.0.0.1:5000/fyers/callback")
+    refusal, this_session = _hand_over("fyers")
 
-    assert refused.status_code == 409
-    assert switched.status_code == 200
-    assert switched.get_json()["signed_out_of"] == "zerodha"
-    assert broker_keys.active_broker() == "fyers"
+    assert refusal is None
     assert broker_keys.live_broker() is None
     assert auth_db.Auth.query.filter_by(name=USER).one().is_revoked is True
-    assert other_device.get("/auth/broker-config").status_code == 401
-    started = this_browser.post("/auth/broker/login", json={"broker": "fyers"})
-    assert started.status_code == 200
+    assert _probe(other_device) == 401
+    with app.test_request_context("/"):
+        from flask import session
+
+        session.update(this_session)
+        from utils.session import sign_in_revoked
+
+        assert sign_in_revoked() is False
 
 
-def test_switching_brokers_needs_a_sign_in_and_the_csrf_token(stores, environment):
+def test_a_login_that_would_strand_live_automation_does_not_complete(
+    stores, environment, monkeypatch
+):
+    """Checked again when the login completes: the old broker stays logged in,
+    and the trader is sent back to its card with the reason."""
     environment.write(ENV_ZERODHA)
     _save_fyers()
     _logged_in("zerodha")
-    form = {"redirect_url": "http://127.0.0.1:5000/fyers/callback"}
+    monkeypatch.setattr(broker_switch, "_blockers", lambda username: (2, 0, 0, 0))
+    from utils.auth_utils import handle_auth_success
 
-    assert _save(_app().test_client(), **form).status_code in (302, 401)
-    assert _save(_signed_in(_app(csrf=True)), **form).status_code == 400
+    refusal, _ = _hand_over("fyers")
+    with _app().test_request_context("/fyers/callback"):
+        from flask import session
+
+        session["user"] = USER
+        answer = handle_auth_success("fy-token", USER, "fyers")
+
+    assert refusal.startswith("Zerodha still has 2 running Live strategies.")
+    assert answer.headers["Location"] == "/broker?error=switch_refused&broker=fyers"
     assert broker_keys.live_broker() == "zerodha"
-    assert broker_keys.active_broker() == "zerodha"
 
 
 def test_a_logged_in_crypto_broker_keeps_its_session_past_the_rollover(
@@ -1528,16 +1722,19 @@ def _password_changed_today(broker):
 def test_a_password_change_does_not_free_the_broker_slot(stores, environment):
     """PINNED DEFECT (review). A password change clears every device session but
     leaves the broker token live; the slot was judged by device sessions alone,
-    so Connect on another broker wrote its keys under the live session."""
+    so a login to another broker wrote its keys under the live session."""
     environment.write(ENV_ZERODHA)
     _save_fyers()
     _password_changed_today("zerodha")
 
     assert auth_db.get_active_sessions(USER) == []
-    assert broker_keys.live_broker() == "zerodha"
-    refused = _signed_in(_app()).post("/auth/broker/login", json={"broker": "fyers"})
+    client = _signed_in(_app())
+    started = client.post("/auth/broker/login", json={"broker": "fyers"})
+    listed = client.get("/api/broker/list").get_json()["data"]
 
-    assert refused.status_code == 409
+    # Still the logged-in broker, and starting another login wrote nothing.
+    assert listed["logged_in"] == "zerodha"
+    assert started.status_code == 200
     assert os.environ["BROKER_API_KEY"] == "zkey123"
 
 
@@ -1589,24 +1786,134 @@ def test_a_sign_in_is_never_stamped_at_or_before_the_last_revocation(stores, env
         assert sign_in_revoked() is False
 
 
-def test_a_switch_keeps_the_browser_that_asked_signed_in(stores, environment, monkeypatch):
-    """Switching from Profile on the device that is logged in: its broker
-    session ends with every other, and it goes on to the broker login page
-    still signed in to OpenAlgo."""
-    monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
+def test_what_counts_as_live_automation(tmp_path, monkeypatch):
+    """Strategy module runs in Live mode, OpenScript runs started Live, and while
+    the platform is live, running Python strategies and protected positions."""
+    import database.settings_db as settings_db
+    import database.strategy_module_db as sm
+    import services.openscript_run_config as run_config
+    import services.openscript_running as running
+
+    engine = create_db_engine(f"sqlite:///{(tmp_path / 'sm.db').as_posix()}")
+    session, previous = _swap_store(monkeypatch, sm, engine)
+    try:
+        for i, (status, mode) in enumerate(
+            [("running", "live"), ("running", "sandbox"), ("stopped", "live")]
+        ):
+            strategy = sm.SmStrategy(
+                user_id=USER,
+                name=f"s{i}",
+                universe_tab="index",
+                underlying="NIFTY",
+                underlying_exchange="NSE_INDEX",
+                webhook_token_hash=f"{i:064d}",
+                status=status,
+            )
+            session.add(strategy)
+            session.flush()
+            run = sm.SmStrategyRun(strategy_id=strategy.id, mode=mode)
+            session.add(run)
+            session.flush()
+            strategy.current_run_id = run.id
+        session.commit()
+        modes = {"a": "live", "b": "sandbox", "c": ""}
+        monkeypatch.setattr(running, "all_running", lambda: dict.fromkeys(modes, {}))
+        monkeypatch.setattr(run_config, "run_mode_of", lambda name: modes[name])
+        python_host = SimpleNamespace(snapshot_running_strategies=lambda: [("1", "x"), ("2", "y")])
+        monitor = SimpleNamespace(protected_count=lambda: 3)
+        scalping = SimpleNamespace(get_scalping_risk_monitor=lambda: monitor)
+        monkeypatch.setitem(sys.modules, "blueprints.python_strategy", python_host)
+        monkeypatch.setitem(sys.modules, "services.scalping_risk_monitor_service", scalping)
+
+        monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: False)
+        live_platform = _REAL_BLOCKERS(USER)
+        monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: True)
+        analyzer = _REAL_BLOCKERS(USER)
+    finally:
+        sm.Base.query = previous
+        session.remove()
+        engine.dispose()
+
+    # An OpenScript run with no recorded mode follows the platform.
+    assert live_platform == (1, 2, 2, 3)
+    assert analyzer == (1, 1, 0, 0)
+
+
+def test_no_strategy_table_means_none_running(tmp_path, monkeypatch):
+    import database.strategy_module_db as sm
+
+    engine = create_db_engine(f"sqlite:///{(tmp_path / 'empty.db').as_posix()}")
+    from sqlalchemy.orm import scoped_session, sessionmaker
+
+    monkeypatch.setattr(sm, "db_session", scoped_session(sessionmaker(bind=engine)))
+    previous = sm.Base.__dict__["query"]
+    sm.Base.query = sm.db_session.query_property()
+    try:
+        assert sm.count_live_running_strategies(USER) == 0
+    finally:
+        sm.Base.query = previous
+        engine.dispose()
+
+
+def test_a_check_that_cannot_run_refuses_the_switch(monkeypatch):
+    def broken(username):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(broker_switch, "_blockers", broken)
+
+    assert broker_switch.switch_refusal("zerodha", USER) == (
+        "OpenAlgo could not check whether anything still runs on Zerodha. "
+        "Nothing was changed. Try again."
+    )
+
+
+def test_a_login_to_the_logged_in_broker_ends_nothing(stores, environment):
+    environment.write(ENV_ZERODHA)
+    _logged_in("zerodha")
+
+    refusal, _ = _hand_over("zerodha")
+
+    assert refusal is None
+    assert broker_keys.live_broker() == "zerodha"
+
+
+def test_a_login_that_does_not_complete_puts_the_live_brokers_keys_back(stores, environment):
+    """The callback of a login to another broker writes that broker's keys
+    while the logged-in one may still trade; refused, failed or only showing a
+    form, the logged-in broker gets its keys back."""
     environment.write(ENV_ZERODHA)
     _save_fyers()
     _logged_in("zerodha")
-    this_browser = _signed_in(
-        _app(), logged_in=True, broker="zerodha", login_time=datetime.now(IST).isoformat()
-    )
+    broker_keys.use_broker_keys("zerodha")
+    app = _app()
+    seen = {}
 
-    switched = _save(this_browser, redirect_url="http://127.0.0.1:5000/fyers/callback")
+    def failing_exchange(code):
+        seen["key"] = os.getenv("BROKER_API_KEY")
+        return None, "Invalid auth code"
 
-    assert switched.status_code == 200
-    assert this_browser.get("/auth/broker-config").get_json()["broker_name"] == "fyers"
-    with this_browser.session_transaction() as sess:
-        assert sess["user"] == USER and "logged_in" not in sess
+    app.broker_auth_functions = {"fyers_auth": failing_exchange}
+    client = _signed_in(app)
+    url = client.post("/auth/broker/login", json={"broker": "fyers"}).get_json()["url"]
+    client.get(f"/fyers/callback?auth_code=c&state={url.rsplit('state=', 1)[1]}")
+
+    assert seen["key"] == "FYAPP-100"
+    assert os.environ["BROKER_API_KEY"] == "zkey123"
+
+
+def test_a_completed_login_keeps_its_own_keys(stores, environment, completed):
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("zerodha")
+    app = _app()
+    app.broker_auth_functions = {"fyers_auth": lambda code: ("fy-token", None)}
+    client = _signed_in(app)
+    url = client.post("/auth/broker/login", json={"broker": "fyers"}).get_json()["url"]
+
+    client.get(f"/fyers/callback?auth_code=c&state={url.rsplit('state=', 1)[1]}")
+
+    assert completed == [("fy-token", USER, "fyers")]
+    assert os.environ["BROKER_API_KEY"] == "FYAPP-100"
 
 
 def test_a_password_change_ends_every_other_sign_in(stores, environment, monkeypatch):
@@ -1676,7 +1983,9 @@ def test_an_answer_whose_login_was_used_up_meanwhile_is_refused(stores, environm
     app.broker_auth_functions = {"zerodha_auth": exchange_while_the_other_answer_wins}
     answer = client.get("/zerodha/callback?request_token=ok")
 
-    assert answer.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        answer.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert completed == []
 
 
@@ -1696,7 +2005,9 @@ def test_an_answer_replayed_with_the_earlier_cookie_is_refused(stores, environme
     replay = replay_browser.get("/zerodha/callback?request_token=ok")
 
     assert first.get_data(as_text=True) == "logged in"
-    assert replay.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        replay.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert completed == [("zkey123:access", USER, "zerodha")]
 
 
@@ -1736,7 +2047,9 @@ def test_dhan_consent_needs_a_started_login(stores, environment, monkeypatch):
     client = _signed_in(_app())
 
     linked = client.get("/dhan/initiate-oauth")
-    assert linked.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        linked.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert asked == []
 
     client.post("/auth/broker/login", json={"broker": "dhan"})
@@ -1773,7 +2086,9 @@ def test_iifl_capital_carries_the_state_and_its_answer_is_checked(
         f"/iiflcapital/callback?state={state}", data={"authCode": "a1", "clientId": "c1"}
     )
 
-    assert forged.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        forged.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert answered.get_data(as_text=True) == "logged in"
     assert [c[2] for c in completed] == ["iiflcapital"]
 
@@ -1798,8 +2113,12 @@ def test_a_state_broker_answer_needs_its_state_even_in_the_browser_that_started(
     missing = client.get("/fyers/callback?auth_code=attacker")
     right = client.get(f"/fyers/callback?auth_code=mine&state={state}")
 
-    assert wrong.headers["Location"].endswith("/broker?error=login_not_started")
-    assert missing.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        wrong.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
+    assert (
+        missing.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert right.get_data(as_text=True) == "logged in"
     # Refused before the code ever reaches the broker.
     assert exchanged == ["mine"]
@@ -1821,7 +2140,9 @@ def test_an_iifl_capital_answer_without_its_state_never_completes(
 
     answer = client.get("/iiflcapital/callback?authCode=attacker&clientId=c")
 
-    assert answer.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        answer.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
     assert completed == []
 
 
@@ -1845,7 +2166,9 @@ def test_an_rmoney_login_still_starts_at_the_callback(stores, environment, monke
     with client.session_transaction() as sess:
         state = sess["broker_login"]["state"]
     assert return_url.endswith(f"/rmoney/callback?state={state}")
-    assert other.headers["Location"].endswith("/broker?error=login_not_started")
+    assert (
+        other.headers["Location"].split("&broker=")[0].endswith("/broker?error=login_not_started")
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1895,7 +2218,12 @@ def test_a_login_under_way_keeps_another_brokers_login_out(stores, environment, 
     client.get("/zerodha/callback?request_token=ok")
 
     assert during["start"] == 409
-    assert during["answer"].headers["Location"].endswith("/broker?error=broker_unavailable")
+    assert (
+        during["answer"]
+        .headers["Location"]
+        .split("&broker=")[0]
+        .endswith("/broker?error=broker_unavailable")
+    )
     assert during["key"] == "zkey123"
     assert completed == [("zkey123:access", USER, "zerodha")]
     assert os.environ["BROKER_API_KEY"] == "zkey123"

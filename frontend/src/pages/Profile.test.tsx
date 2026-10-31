@@ -1,13 +1,15 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { BrokerList } from '@/api/broker-config'
+import { brokerEntry, brokerList, saved } from '@/test/brokerList'
 import ProfilePage from './Profile'
 
 /**
- * The Broker tab, as OpenAlgo Desktop has it: the current broker's keys, and a
- * form that saves keys for the chosen broker. Choosing another broker makes it
- * the active one and sends the trader to log in to it.
+ * The Broker tab, as OpenAlgo Desktop has it: a summary of the brokers with
+ * links to Select Broker and Broker Configuration, where keys are edited. The
+ * web's own server settings (ngrok, Host Server, WebSocket URL) stay here.
  */
 
 const get = vi.fn()
@@ -21,30 +23,23 @@ vi.mock('@/api/client', () => ({
   fetchCSRFToken: async () => 'csrf-123',
 }))
 
-const SAVED_IN_OPENALGO = {
-  broker_api_key: 'angel1********',
-  broker_api_key_raw_length: 0,
-  broker_api_key_set: true,
-  broker_api_secret: '********',
-  broker_api_secret_raw_length: 0,
-  broker_api_secret_set: true,
-  broker_api_key_market: '',
-  broker_api_key_market_raw_length: 0,
-  broker_api_key_market_set: false,
-  broker_api_secret_market: '',
-  broker_api_secret_market_raw_length: 0,
-  broker_api_secret_market_set: false,
-  redirect_url: 'http://127.0.0.1:5000/angel/callback',
-  current_broker: 'angel',
+const SERVER_SETTINGS = {
+  broker_api_key: '',
+  broker_api_secret: '',
+  redirect_url: '',
+  current_broker: '',
   valid_brokers: ['angel', 'zerodha'],
   ngrok_allow: false,
   host_server: 'http://127.0.0.1:5000',
   websocket_url: 'ws://127.0.0.1:8765',
+  server_status: {
+    flask: { host: '127.0.0.1', port: '5000' },
+    websocket: { host: '127.0.0.1', port: '8765' },
+    zmq: { host: '127.0.0.1', port: '5555' },
+  },
 }
 
-let credentials: Record<string, unknown>
-
-function serveCredentials() {
+function serve(list: BrokerList) {
   get.mockImplementation(async (url: string) => {
     if (url === '/auth/profile-data') {
       return {
@@ -55,37 +50,22 @@ function serveCredentials() {
       }
     }
     if (url === '/api/broker/credentials') {
-      return { data: { status: 'success', data: credentials } }
+      return { data: { status: 'success', data: SERVER_SETTINGS } }
     }
     return { data: { status: 'error' } }
   })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      url === '/api/broker/list'
+        ? new Response(JSON.stringify({ status: 'success', data: list }))
+        : new Response('{}', { status: 404 })
+    )
+  )
 }
 
-function credentialReads() {
-  return get.mock.calls.filter(([url]) => url === '/api/broker/credentials').length
-}
-
-const assign = vi.fn()
-const realLocation = window.location
-
-beforeEach(() => {
-  get.mockReset()
-  post.mockReset()
-  assign.mockReset()
-  credentials = { ...SAVED_IN_OPENALGO }
-  serveCredentials()
-  // The broker page links here with ?tab=broker.
-  Object.defineProperty(window, 'location', {
-    value: { href: '', origin: 'http://127.0.0.1:5000', search: '?tab=broker', assign },
-    writable: true,
-    configurable: true,
-  })
-})
-afterAll(() => {
-  Object.defineProperty(window, 'location', { value: realLocation, configurable: true })
-})
-
-function renderPage() {
+function renderBrokerTab() {
+  window.history.pushState({}, '', '/profile?tab=broker')
   return render(
     <MemoryRouter initialEntries={['/profile?tab=broker']}>
       <ProfilePage />
@@ -93,116 +73,77 @@ function renderPage() {
   )
 }
 
-describe('Profile broker tab', () => {
-  it('opens on the tab the broker page links to', async () => {
-    renderPage()
+beforeEach(() => {
+  get.mockReset()
+  post.mockReset()
+})
 
-    expect(await screen.findByText('Current Configuration')).toBeInTheDocument()
+afterEach(() => {
+  vi.unstubAllGlobals()
+  window.history.pushState({}, '', '/')
+})
+
+describe('Profile broker summary', () => {
+  it('shows the logged-in broker and the configured ones, with links to both pages', async () => {
+    serve(
+      brokerList([
+        { ...saved(brokerEntry('zerodha', 'Zerodha', 'redirect'), {}), active: true },
+        saved(brokerEntry('fyers', 'Fyers', 'redirect'), {}),
+        brokerEntry('angel', 'Angel One', 'form'),
+      ])
+    )
+    renderBrokerTab()
+    await waitFor(() => expect(screen.getByTestId('broker-logged-in')).toHaveTextContent('Zerodha'))
+    await waitFor(() =>
+      expect(screen.getByTestId('broker-configured')).toHaveTextContent('FyersZerodha')
+    )
+    expect(screen.getByRole('link', { name: 'Select Broker' })).toHaveAttribute('href', '/broker')
+    expect(screen.getByRole('link', { name: 'Broker Configuration' })).toHaveAttribute(
+      'href',
+      '/broker/config'
+    )
+    // No key form here any more.
+    expect(screen.queryByRole('button', { name: /save broker credentials/i })).toBeNull()
+    expect(screen.queryByPlaceholderText(/enter new api key/i)).toBeNull()
   })
 
-  it('says a key saved in OpenAlgo is set, without a length', async () => {
-    renderPage()
-
-    expect(await screen.findAllByText('Currently set')).toHaveLength(2)
-    expect(screen.queryByText(/chars/)).not.toBeInTheDocument()
+  it('says when no broker is logged in and none is configured', async () => {
+    serve(brokerList([brokerEntry('fyers', 'Fyers', 'redirect')]))
+    renderBrokerTab()
+    await waitFor(() =>
+      expect(screen.getByTestId('broker-logged-in')).toHaveTextContent('No broker logged in')
+    )
+    expect(screen.getByTestId('broker-configured')).toHaveTextContent('None yet')
   })
 
-  it('shows the length of a key read from .env, and a key that is not set', async () => {
-    credentials = {
-      ...SAVED_IN_OPENALGO,
-      broker_api_key: 'zkey12********',
-      broker_api_key_raw_length: 16,
-      broker_api_secret: '',
-      broker_api_secret_raw_length: 0,
-      broker_api_secret_set: false,
-      current_broker: 'zerodha',
+  it('says changes apply when they are saved on the Broker Configuration page', async () => {
+    serve(brokerList([]))
+    renderBrokerTab()
+    expect(await screen.findByText(/changes apply as soon as you save/i)).toBeInTheDocument()
+    expect(screen.queryByText(/require an application restart/i)).toBeNull()
+  })
+})
+
+describe('Profile server settings', () => {
+  it('saves the server settings only, and asks for the restart they need', async () => {
+    serve(brokerList([]))
+    post.mockResolvedValue({
+      data: { status: 'success', message: 'Saved', restart_required: true },
+    })
+    renderBrokerTab()
+    const ws = await screen.findByPlaceholderText('ws://127.0.0.1:8765')
+    await userEvent.clear(ws)
+    await userEvent.click(ws)
+    await userEvent.paste('ws://127.0.0.1:8766')
+    await userEvent.click(screen.getByRole('button', { name: /save ngrok settings/i }))
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    const [url, payload] = post.mock.calls[0]
+    expect(url).toBe('/api/broker/credentials')
+    // Server settings only: no broker key ever leaves this page.
+    for (const key of Object.keys(payload as object)) {
+      expect(['ngrok_allow', 'host_server', 'websocket_url']).toContain(key)
     }
-    renderPage()
-
-    expect(await screen.findByText('Current: 16 chars')).toBeInTheDocument()
-    expect(screen.getByText('Not currently set')).toBeInTheDocument()
-  })
-
-  it('reads the saved keys again after a save, and needs no restart for them', async () => {
-    post.mockResolvedValue({
-      data: {
-        status: 'success',
-        message: 'Saved.',
-        restart_required: false,
-        broker_switched: false,
-      },
-    })
-    renderPage()
-
-    // One paste, not a keystroke per character: each re-renders the whole page.
-    await userEvent.click(await screen.findByPlaceholderText('Enter new API key'))
-    await userEvent.paste('new-angel-key')
-    await userEvent.click(screen.getByRole('button', { name: /Save Broker Credentials/i }))
-
-    await waitFor(() => expect(credentialReads()).toBe(2))
-    const form = post.mock.calls[0][1] as FormData
-    expect(post.mock.calls[0][0]).toBe('/api/broker/credentials')
-    expect(form.get('broker_api_key')).toBe('new-angel-key')
-    expect(form.get('redirect_url')).toBeNull()
-    expect(screen.queryByText('Restart Required')).not.toBeInTheDocument()
-    expect(assign).not.toHaveBeenCalled()
-    // The typed key is cleared and never shown back.
-    expect(screen.queryByDisplayValue('new-angel-key')).not.toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('new-ang')
-  })
-
-  it('asks for a restart when the keys went to .env', async () => {
-    post.mockResolvedValue({
-      data: { status: 'success', message: 'Saved.', restart_required: true },
-    })
-    renderPage()
-
-    await userEvent.click(await screen.findByPlaceholderText('Enter new API key'))
-    await userEvent.paste('k')
-    await userEvent.click(screen.getByRole('button', { name: /Save Broker Credentials/i }))
-
+    expect(payload).toMatchObject({ websocket_url: 'ws://127.0.0.1:8766' })
     expect(await screen.findByText('Restart Required')).toBeInTheDocument()
-  })
-
-  it('gives a first broker on a server the address the app is served from', async () => {
-    // No broker saved yet: nothing to take the host from.
-    credentials = { ...SAVED_IN_OPENALGO, redirect_url: '', current_broker: '' }
-    Object.defineProperty(window, 'location', {
-      value: { href: '', origin: 'https://algo.example.com', search: '?tab=broker', assign },
-      writable: true,
-      configurable: true,
-    })
-    post.mockResolvedValue({
-      data: { status: 'success', message: 'Saved.', broker_switched: true },
-    })
-    renderPage()
-
-    await userEvent.click((await screen.findAllByRole('combobox'))[0])
-    await userEvent.click(await screen.findByRole('option', { name: 'Zerodha' }))
-    await userEvent.click(screen.getByPlaceholderText('Enter new API key'))
-    await userEvent.paste('zkey')
-    await userEvent.click(screen.getByRole('button', { name: /Save Broker Credentials/i }))
-
-    await waitFor(() => expect(post).toHaveBeenCalled())
-    const form = post.mock.calls[0][1] as FormData
-    expect(form.get('redirect_url')).toBe('https://algo.example.com/zerodha/callback')
-  })
-
-  it('sends the trader to log in after choosing another broker', async () => {
-    post.mockResolvedValue({
-      data: { status: 'success', message: 'Saved.', broker_switched: true },
-    })
-    renderPage()
-
-    await userEvent.click((await screen.findAllByRole('combobox'))[0])
-    await userEvent.click(await screen.findByRole('option', { name: 'Zerodha' }))
-    await userEvent.click(screen.getByPlaceholderText('Enter new API key'))
-    await userEvent.paste('zkey')
-    await userEvent.click(screen.getByRole('button', { name: /Save Broker Credentials/i }))
-
-    await waitFor(() => expect(assign).toHaveBeenCalledWith('/broker'))
-    const form = post.mock.calls[0][1] as FormData
-    expect(form.get('redirect_url')).toBe('http://127.0.0.1:5000/zerodha/callback')
-    expect(screen.queryByText('Restart Required')).not.toBeInTheDocument()
   })
 })

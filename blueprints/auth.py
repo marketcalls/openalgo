@@ -120,40 +120,6 @@ def get_csrf_token():
     return jsonify({"csrf_token": token})
 
 
-@auth_bp.route("/broker-config", methods=["GET"])
-def get_broker_config():
-    """The active broker, for the broker login page, as OpenAlgo Desktop answers.
-
-    The active broker is the one chosen last on that page or in Profile, else
-    the .env broker (utils.broker_keys.active_broker). No key is returned: the
-    login is started by POST /auth/broker/login, which builds the broker's
-    sign-in address on the server.
-    """
-    if "user" not in session:
-        return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
-
-    from utils.broker_keys import active_broker, resolve
-
-    broker = active_broker()
-    if not broker:
-        return jsonify(
-            {
-                "status": "error",
-                "code": "BROKER_NOT_CONFIGURED",
-                "message": "Choose your broker and add its API key in Profile, Broker Configuration.",
-            }
-        ), 404
-    keys = resolve(broker)
-    return jsonify(
-        {
-            "status": "success",
-            "broker_name": broker,
-            "broker_api_key": None,
-            "redirect_url": keys.redirect_url if keys else None,
-        }
-    )
-
-
 @auth_bp.route("/broker/login", methods=["POST"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
@@ -161,11 +127,15 @@ def start_broker_login():
     """Start a login to one broker and return the address that begins it.
 
     A CSRF-checked POST, so another site cannot start a login in the trader's
-    browser. The server checks the broker may be used now (only one broker is
-    logged in at a time), reads its keys, records a pending login for this
-    browser and builds the broker's sign-in address. The keys go into the
-    environment only at the callback, under the login slot. The callback
-    accepts the broker's answer only for a login started here.
+    browser. The server checks the broker may be used now, reads its keys,
+    records a pending login for this browser and builds the broker's sign-in
+    address. The keys go into the environment only at the callback, under the
+    login slot. The callback accepts the broker's answer only for a login
+    started here.
+
+    Another broker may be logged in: its session ends when this login
+    completes, as in OpenAlgo Desktop. Refused up front while that broker
+    still runs Live automation (utils/broker_switch.py).
     """
     if "user" not in session:
         return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
@@ -189,6 +159,15 @@ def start_broker_login():
     except BrokerKeysRefused as exc:
         return jsonify({"status": "error", "message": str(exc)}), 409
 
+    from utils.broker_keys import live_broker
+    from utils.broker_switch import switch_refusal
+
+    live = live_broker()
+    if live and live != broker:
+        refusal = switch_refusal(live, session["user"])
+        if refusal:
+            return jsonify({"status": "error", "message": refusal}), 409
+
     from utils.broker_login import BrokerLoginRefused
 
     try:
@@ -198,6 +177,32 @@ def start_broker_login():
             {"status": "error", "message": "The broker login could not be started. Try again."}
         ), 500
     return jsonify({"status": "success", "url": url})
+
+
+@auth_bp.route("/broker/resume", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def resume_broker_session():
+    """Join the broker session that is logged in now, from Select Broker.
+
+    Open Dashboard on the logged-in broker's card. That session may have been
+    opened on another device, so this browser joins it the way a sign-in does
+    (_try_resume_broker_session): the stored token is checked with the broker
+    first. A CSRF-checked POST.
+    """
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
+    if session.get("logged_in"):
+        return jsonify({"status": "success", "redirect": "/dashboard"})
+    resumed = _try_resume_broker_session(session["user"])
+    if resumed is None:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "That broker session has ended. Log in to the broker again.",
+            }
+        ), 409
+    return resumed
 
 
 @auth_bp.route("/check-setup", methods=["GET"])
@@ -1384,25 +1389,34 @@ def _end_broker_session(username, message):
     socketio.emit("active_sessions_update", {"count": 0, "sessions": []})
 
 
-def end_broker_session_for_switch(username, live, chosen):
-    """End the live broker session because the trader chose another broker.
+def end_broker_session_keeping_this_browser(username, message):
+    """End the broker session on every device; this browser stays signed in.
 
-    What OpenAlgo Desktop does when the active broker changes: the old
-    broker's session is logged out on every device. This browser asked for
-    it, so it stays signed in to OpenAlgo and goes on to log in to the chosen
-    broker; every other device signs in again.
+    The same teardown as a logout, for an end this browser asked for: the
+    trader goes on to log in to a broker, so only the other devices sign in
+    to OpenAlgo again.
     """
-    from utils.broker_keys import broker_title
-
-    _end_broker_session(
-        username,
-        f"OpenAlgo was logged out of {broker_title(live)} because "
-        f"{broker_title(chosen)} was chosen on another device.",
-    )
+    _end_broker_session(username, message)
     session.pop("logged_in", None)
     session.pop("broker", None)
     mark_signed_in()
-    logger.info(f"Ended the {live} broker session for {username} to switch to {chosen}")
+
+
+def end_broker_session_for_switch(username, live, chosen):
+    """End the live broker session because a login to another broker completed.
+
+    As OpenAlgo Desktop does when the logged-in broker changes: the old
+    broker's session is logged out on every device, at the moment the new
+    login has completed.
+    """
+    from utils.broker_keys import broker_title
+
+    end_broker_session_keeping_this_browser(
+        username,
+        f"OpenAlgo was logged out of {broker_title(live)} because a login to "
+        f"{broker_title(chosen)} completed.",
+    )
+    logger.info(f"Ended the {live} broker session for {username}: {chosen} is logged in now")
 
 
 @auth_bp.route("/logout", methods=["GET", "POST"])

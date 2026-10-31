@@ -1,326 +1,361 @@
-import { BookOpen, ExternalLink, Info, Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { BookOpen, Info, Loader2, Search, Settings } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router'
+import {
+  BrokerConfigError,
+  type BrokerEntry,
+  brokerConfigApi,
+  brokerStatus,
+  sortBrokers,
+} from '@/api/broker-config'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { BrokerSwitchConfirm } from '@/components/auth/BrokerSwitchConfirm'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
 import {
   BROKER_SETUP_PATH,
-  type ConfiguredBroker,
-  fetchConfiguredBrokers,
+  brokerConfigPath,
+  fetchLiveBroker,
+  resumeBrokerSession,
   startBrokerLogin,
-  switchActiveBroker,
 } from '@/lib/brokerProfiles'
 import { useAuthStore } from '@/stores/authStore'
+import { useBrokerStore } from '@/stores/brokerStore'
 
-// All supported brokers with their display names and auth types
-const allBrokers = [
-  { id: 'fivepaisa', name: '5 Paisa', authType: 'totp' },
-  { id: 'fivepaisaxts', name: '5 Paisa (XTS)', authType: 'totp' },
-  { id: 'aliceblue', name: 'Alice Blue', authType: 'totp' },
-  { id: 'angel', name: 'Angel One', authType: 'totp' },
-  { id: 'arrow', name: 'Arrow', authType: 'oauth' },
-  { id: 'compositedge', name: 'CompositEdge', authType: 'oauth' },
-  { id: 'dhan', name: 'Dhan', authType: 'oauth' },
-  { id: 'deltaexchange', name: 'Delta Exchange', authType: 'totp' },
-  { id: 'indmoney', name: 'IndMoney', authType: 'totp' },
-  { id: 'dhan_sandbox', name: 'Dhan (Sandbox)', authType: 'totp' },
-  { id: 'definedge', name: 'Definedge', authType: 'totp' },
-  { id: 'firstock', name: 'Firstock', authType: 'totp' },
-  { id: 'flattrade', name: 'Flattrade', authType: 'oauth' },
-  { id: 'motilal', name: 'Motilal Oswal', authType: 'totp' },
-  { id: 'fyers', name: 'Fyers', authType: 'oauth' },
-  { id: 'groww', name: 'Groww', authType: 'totp' },
-  { id: 'hdfcsecurities', name: 'HDFC Securities', authType: 'oauth' },
-  { id: 'hdfcsky', name: 'HDFC Sky', authType: 'oauth' },
-  { id: 'ibulls', name: 'Ibulls', authType: 'totp' },
-  { id: 'iifl', name: 'IIFL', authType: 'totp' },
-  { id: 'iiflcapital', name: 'IIFL Capital', authType: 'oauth' },
-  { id: 'jainamxts', name: 'JainamXts', authType: 'totp' },
-  { id: 'kotak', name: 'Kotak Securities', authType: 'totp' },
-  { id: 'mstock', name: 'mStock by Mirae Asset', authType: 'totp' },
-  { id: 'nubra', name: 'Nubra', authType: 'totp' },
-  { id: 'paytm', name: 'Paytm Money', authType: 'oauth' },
-  { id: 'pocketful', name: 'Pocketful', authType: 'oauth' },
-  { id: 'rmoney', name: 'RMoney', authType: 'oauth' },
-  { id: 'rupeezy', name: 'Rupeezy', authType: 'oauth' },
-  { id: 'sahi', name: 'Sahi', authType: 'totp' },
-  { id: 'samco', name: 'Samco', authType: 'totp' },
-  { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
-  { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
-  { id: 'tradesmart', name: 'TradeSmart', authType: 'oauth' },
-  { id: 'upstox', name: 'Upstox', authType: 'oauth' },
-  { id: 'wisdom', name: 'Wisdom Capital', authType: 'totp' },
-  { id: 'zebu', name: 'Zebu', authType: 'totp' },
-  { id: 'zerodha', name: 'Zerodha', authType: 'oauth' },
-] as const
+/**
+ * Select Broker, a card per broker, as OpenAlgo Desktop has it.
+ *
+ * Keys can be saved for many brokers; one broker is logged in at a time.
+ * "Login with" asks the server to start the sign-in (the broker's own site,
+ * the in-app form, or one action with the saved keys). Logging in to another
+ * broker while one is live asks first; the server ends that session only
+ * when the new sign-in completes.
+ */
 
-interface BrokerConfig {
-  broker_name: string
-  redirect_url: string
+/** Brokers whose market data needs a paid data subscription. */
+const DATA_SUBSCRIPTION_NOTE: Record<string, string> = {
+  zerodha: 'Zerodha requires an active Kite Connect data subscription for market data access.',
+  dhan: 'Dhan requires an active Data API subscription for market data access.',
 }
 
 /**
- * The message for a refused broker callback, which lands here as
- * /broker?error=<code>. Only these fixed sentences are ever shown: the query
- * string is set by whoever built the link, so its text never reaches the page.
+ * The sentence for a refused broker login, which comes back here as
+ * /broker?error=<code>&broker=<id>. Only these fixed sentences are shown: the
+ * query string is set by whoever built the link, so its text never reaches
+ * the page.
  */
-const CALLBACK_ERRORS: Record<string, string> = {
+const LOGIN_ERRORS: Record<string, string> = {
   login_not_started:
     'This broker login was not started from OpenAlgo, or it took longer than 10 minutes. Start the broker login again.',
-  broker_unavailable:
-    'The broker login could not start. Check its keys in Profile > Broker, then try again.',
   form_expired: 'This login form has expired. Reload the page and try again.',
-  login_failed: 'The broker login did not complete. Try again.',
+  broker_unavailable:
+    'This broker could not be logged in to right now. Check its keys under Broker Configuration, then try again.',
+  // A login that completed while the logged-in broker still ran Live
+  // automation: that broker stays logged in.
+  switch_refused:
+    'The broker you are logged in to still runs Live strategies or protection, so it stayed logged in. Stop them first, then switch.',
+}
+const LOGIN_FAILED = 'The broker login did not complete. Try again.'
+
+function loginErrorMessage(code: string): string {
+  return Object.hasOwn(LOGIN_ERRORS, code) ? LOGIN_ERRORS[code] : LOGIN_FAILED
 }
 
-function callbackErrorMessage(code: string | null): string | null {
-  if (code === null) return null
-  return Object.hasOwn(CALLBACK_ERRORS, code)
-    ? CALLBACK_ERRORS[code]
-    : 'The broker login did not complete. Try again.'
+function StatusBadge({ broker }: { broker: BrokerEntry }) {
+  const status = brokerStatus(broker)
+  if (status === 'Active') return <Badge className="bg-green-600 text-white">Active</Badge>
+  if (status === 'Configured') return <Badge variant="secondary">Configured</Badge>
+  return <Badge variant="outline">Not Configured</Badge>
 }
 
 export default function BrokerSelect() {
   const { user } = useAuthStore()
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const [selectedBroker, setSelectedBroker] = useState<string>('')
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(() =>
-    callbackErrorMessage(searchParams.get('error'))
-  )
-  const [brokerConfig, setBrokerConfig] = useState<BrokerConfig | null>(null)
-  // Every broker with saved keys, so the trader can switch here.
-  const [configured, setConfigured] = useState<ConfiguredBroker[]>([])
-  const [reloadKey, setReloadKey] = useState(0)
+  const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [filter, setFilter] = useState('')
+  const [starting, setStarting] = useState<string | null>(null)
+  // The reason a sign-in failed, shown on that broker's card.
+  const [cardError, setCardError] = useState<{ broker: string; message: string } | null>(null)
+  const [pageError, setPageError] = useState<string | null>(null)
+  // A login waiting for the trader to confirm ending the live session.
+  const [pendingLogin, setPendingLogin] = useState<{ from: string; to: string } | null>(null)
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refetch after a broker switch.
+  const list = useQuery({
+    queryKey: ['broker-list'],
+    queryFn: brokerConfigApi.list,
+    staleTime: 0,
+    retry: false,
+  })
+
+  // A broker sign-in that failed comes back here with a code for the reason
+  // (`/broker?error=...&broker=...`).
   useEffect(() => {
-    // Fetch broker configuration
-    const fetchBrokerConfig = async () => {
-      try {
-        const response = await fetch('/auth/broker-config', {
-          credentials: 'include',
-        })
-        // Signed out of OpenAlgo: the broker list belongs to a signed-in trader.
-        if (response.status === 401) {
-          navigate('/login', { replace: true })
-          return
-        }
-        const data = await response.json()
+    const code = searchParams.get('error')
+    if (!code) return
+    const message = loginErrorMessage(code)
+    const broker = searchParams.get('broker')
+    if (broker) setCardError({ broker, message })
+    else setPageError(message)
+    // Shown once: a reload does not bring the old reason back.
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setSearchParams])
 
-        if (data.status === 'success') {
-          setBrokerConfig(data)
-          // Auto-select the configured broker
-          setSelectedBroker(data.broker_name)
-        } else {
-          setBrokerConfig(null)
-          setError(data.message || 'Failed to load broker configuration')
-        }
-      } catch {
-        setError('Failed to load broker configuration')
-      } finally {
-        setIsLoading(false)
-      }
+  useEffect(() => {
+    if (list.error instanceof BrokerConfigError && list.error.status === 401) {
+      navigate('/login', { replace: true })
     }
+  }, [list.error, navigate])
 
-    fetchBrokerConfig()
-    fetchConfiguredBrokers().then(setConfigured)
-  }, [reloadKey])
+  const brokers = useMemo(() => sortBrokers(list.data?.brokers ?? []), [list.data])
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return brokers
+    return brokers.filter((b) => b.name.toLowerCase().includes(q) || b.id.includes(q))
+  }, [brokers, filter])
+  const nameOf = (id: string) => brokers.find((b) => b.id === id)?.name ?? id
 
-  // Picking another configured broker makes it the active one.
-  const handleBrokerChange = async (broker: string) => {
-    setSelectedBroker(broker)
-    if (!broker || broker === brokerConfig?.broker_name) return
-    setError(null)
-    setIsLoading(true)
-    const refusal = await switchActiveBroker(broker)
-    if (refusal) {
-      setError(refusal)
-      setIsLoading(false)
-      return
+  // A card error for a broker that is not listed shows at the top instead.
+  useEffect(() => {
+    if (cardError && list.data && !list.data.brokers.some((b) => b.id === cardError.broker)) {
+      setPageError(cardError.message)
+      setCardError(null)
     }
-    setReloadKey((k) => k + 1)
-  }
+  }, [cardError, list.data])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-
-    if (!selectedBroker) {
-      setError('Please select a broker')
-      return
-    }
-
-    if (!brokerConfig) {
-      setError('Broker configuration not loaded')
-      return
-    }
-
-    setIsSubmitting(true)
-    setError(null)
-
-    // The server builds the sign-in address (the API key never reaches the page).
-    const started = await startBrokerLogin(selectedBroker)
+  // Ask the server to start the sign-in; it answers with where it begins.
+  const startSignIn = async (broker: BrokerEntry) => {
+    setStarting(broker.id)
+    setCardError(null)
+    setPageError(null)
+    // This sign-in may replace the logged-in broker's session: an answer
+    // about the old session's capabilities still in flight must never be
+    // applied after it.
+    useBrokerStore.getState().clearCapabilities()
+    const started = await startBrokerLogin(broker.id)
     if (started.error !== undefined) {
-      setError(started.error)
-      setIsSubmitting(false)
+      setCardError({ broker: broker.id, message: started.error })
+      setStarting(null)
+      // Refused: the server says which broker is logged in now, not what
+      // this page assumed.
+      await refresh()
+      void useBrokerStore.getState().fetchCapabilities()
       return
     }
-
-    // Use setTimeout to ensure state updates complete before navigation
-    setTimeout(() => {
-      window.location.href = started.url
-    }, 100)
+    window.location.href = started.url
   }
 
-  if (isLoading) {
+  // One broker at a time. Logging in to another is confirmed first; the
+  // server ends the live session only when the new sign-in completes, so
+  // one that fails or is abandoned leaves the logged-in broker connected.
+  const handleLogin = async (broker: BrokerEntry) => {
+    const live = await fetchLiveBroker(list.data?.logged_in ?? null)
+    if (live && live !== broker.id) {
+      // Live automation or unsettled orders on the logged-in broker refuse
+      // the switch outright (the server enforces it too): say why instead
+      // of offering the confirm.
+      const refusal = list.data?.switch_refusal
+      if (refusal) {
+        setCardError({ broker: broker.id, message: refusal })
+        await refresh()
+        return
+      }
+      setPendingLogin({ from: live, to: broker.id })
+      return
+    }
+    await startSignIn(broker)
+  }
+
+  const confirmLogin = async () => {
+    const pending = pendingLogin
+    setPendingLogin(null)
+    const broker = brokers.find((b) => b.id === pending?.to)
+    if (!pending || !broker) return
+    await startSignIn(broker)
+  }
+
+  // On the web the live broker may have been logged in from another device:
+  // this browser joins that session before opening the dashboard.
+  const openDashboard = async (broker: BrokerEntry) => {
+    setStarting(broker.id)
+    setCardError(null)
+    const refusal = await resumeBrokerSession()
+    if (refusal) {
+      setCardError({ broker: broker.id, message: refusal })
+      setStarting(null)
+      await refresh()
+      return
+    }
+    window.location.href = '/dashboard'
+  }
+
+  // Read the broker list again (which broker is logged in, which are saved).
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['broker-list'] })
+  }
+
+  if (list.isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin" />
+        <Loader2 className="h-8 w-8 animate-spin" aria-label="Loading brokers" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center py-8 px-4">
-      <div className="container max-w-6xl">
-        <div className="flex flex-col lg:flex-row items-center justify-between gap-8 lg:gap-16">
-          {/* Right side broker form - Shown first on mobile */}
-          <Card className="w-full max-w-md shadow-xl order-1 lg:order-2">
-            <CardHeader className="text-center">
-              <div className="flex justify-center mb-4">
-                <img src="/logo.png" alt="OpenAlgo" className="h-20 w-20" />
-              </div>
-              <CardTitle className="text-2xl">Connect Your Trading Account</CardTitle>
-              <CardDescription>
-                Welcome, <span className="font-medium">{user?.username}</span>!
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {error && (
-                <Alert variant="destructive" className="mb-4">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              {/* No broker configured yet: its keys are added in Profile. */}
-              {!brokerConfig && !isLoading && (
-                <Button asChild variant="outline" className="w-full mb-4">
-                  <a href={BROKER_SETUP_PATH}>Configure broker</a>
-                </Button>
-              )}
-
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="broker-select" className="block text-center">
-                    Login with your Broker
-                  </Label>
-                  <Select
-                    value={selectedBroker}
-                    onValueChange={handleBrokerChange}
-                    disabled={isSubmitting}
-                  >
-                    <SelectTrigger id="broker-select" className="w-full">
-                      <SelectValue placeholder="Select a Broker" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allBrokers
-                        // Every configured broker, not only the active one.
-                        .filter(
-                          (broker) =>
-                            broker.id === brokerConfig?.broker_name ||
-                            configured.some((c) => c.name === broker.id)
-                        )
-                        .map((broker) => (
-                          <SelectItem key={broker.id} value={broker.id}>
-                            {broker.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {(selectedBroker === 'zerodha' || selectedBroker === 'dhan') && (
-                  <Alert className="border-amber-500/50 bg-amber-500/10">
-                    <Info className="h-4 w-4 text-amber-500" />
-                    <AlertDescription className="text-amber-700 dark:text-amber-400">
-                      {selectedBroker === 'zerodha'
-                        ? 'Zerodha requires an active Kite Connect data subscription for market data access.'
-                        : 'Dhan requires an active Data API subscription for market data access.'}
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                <Button type="submit" className="w-full" disabled={!selectedBroker || isSubmitting}>
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                      Connect Account
-                    </>
-                  )}
-                </Button>
-              </form>
-
-              {/* Add or edit another broker's keys, then pick it above. */}
-              {brokerConfig && (
-                <div className="mt-4 text-center text-sm">
-                  <a
-                    href={BROKER_SETUP_PATH}
-                    className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
-                  >
-                    Configure another broker
-                  </a>
-                </div>
-              )}
-
-              <div className="mt-6 text-center text-sm">
-                <BrokerAuthSignOut />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Left side content - Shown second on mobile */}
-          <div className="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
-            <h1 className="text-4xl lg:text-5xl font-bold mb-6">
-              Connect Your <span className="text-primary">Broker</span>
-            </h1>
-            <p className="text-lg lg:text-xl mb-8 text-muted-foreground">
-              Link your trading account to start executing trades through OpenAlgo's algorithmic
-              trading platform.
+    <div className="min-h-screen bg-background py-8 px-4">
+      <div className="container mx-auto max-w-6xl space-y-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Select Broker</h1>
+            <p className="text-sm text-muted-foreground">
+              {user?.username ? (
+                <>
+                  Welcome, <span className="font-medium">{user.username}</span>.{' '}
+                </>
+              ) : null}
+              Save keys for as many brokers as you like; one broker is logged in at a time.
             </p>
-
-            <Alert className="mb-6">
-              <BookOpen className="h-4 w-4" />
-              <AlertTitle>Need Help?</AlertTitle>
-              <AlertDescription>Check our documentation for broker setup guides.</AlertDescription>
-            </Alert>
-
-            <div className="flex justify-center lg:justify-start gap-4">
-              <Button variant="outline" asChild>
-                <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">
-                  <BookOpen className="mr-2 h-4 w-4" />
-                  Documentation
-                </a>
-              </Button>
-            </div>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            <Button asChild variant="outline" size="sm">
+              <Link to={BROKER_SETUP_PATH}>
+                <Settings className="mr-2 h-4 w-4" />
+                Broker Configuration
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">
+                <BookOpen className="mr-2 h-4 w-4" />
+                Documentation
+              </a>
+            </Button>
+            <BrokerAuthSignOut />
           </div>
         </div>
+
+        {(pageError || list.error) && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              {pageError ??
+                (list.error instanceof Error
+                  ? list.error.message
+                  : 'Could not load your brokers. Try again.')}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <div className="relative max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            aria-label="Search brokers"
+            placeholder="Search brokers"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+
+        {shown.length === 0 && !list.error && (
+          <p className="text-sm text-muted-foreground">No broker matches "{filter}".</p>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {shown.map((broker) => {
+            const error = cardError?.broker === broker.id ? cardError.message : null
+            const note = DATA_SUBSCRIPTION_NOTE[broker.id]
+            return (
+              <Card
+                key={broker.id}
+                data-testid={`broker-card-${broker.id}`}
+                className="flex flex-col transition-shadow hover:shadow-md"
+              >
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="text-lg">{broker.name}</CardTitle>
+                    <StatusBadge broker={broker} />
+                  </div>
+                  <CardDescription>
+                    {broker.exchanges.length > 0
+                      ? `Exchanges: ${broker.exchanges.join(', ')}`
+                      : 'Exchanges: not listed'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="mt-auto space-y-3">
+                  {note && (broker.configured || broker.active) && (
+                    <p className="flex gap-2 text-xs text-amber-700 dark:text-amber-400">
+                      <Info className="h-4 w-4 shrink-0" />
+                      {note}
+                    </p>
+                  )}
+                  {error && (
+                    <Alert variant="destructive" role="alert">
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>
+                  )}
+                  {broker.active ? (
+                    <Button
+                      className="w-full"
+                      onClick={() => openDashboard(broker)}
+                      disabled={starting !== null}
+                    >
+                      {starting === broker.id ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Opening...
+                        </>
+                      ) : (
+                        'Open Dashboard'
+                      )}
+                    </Button>
+                  ) : broker.configured ? (
+                    <Button
+                      className="w-full"
+                      onClick={() => handleLogin(broker)}
+                      disabled={starting !== null}
+                    >
+                      {starting === broker.id ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        `Login with ${broker.name}`
+                      )}
+                    </Button>
+                  ) : (
+                    <Button asChild variant="outline" className="w-full">
+                      <Link to={brokerConfigPath(broker.id)}>Configure</Link>
+                    </Button>
+                  )}
+                  {broker.configured && (
+                    <div className="text-center text-xs">
+                      <Link
+                        to={brokerConfigPath(broker.id)}
+                        className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                        aria-label={`Edit ${broker.name} keys`}
+                      >
+                        Edit keys
+                      </Link>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
       </div>
+
+      <BrokerSwitchConfirm
+        from={pendingLogin ? nameOf(pendingLogin.from) : null}
+        to={pendingLogin ? nameOf(pendingLogin.to) : ''}
+        onCancel={() => setPendingLogin(null)}
+        onConfirm={confirmLogin}
+      />
     </div>
   )
 }
