@@ -16,7 +16,7 @@ contract, no quotes, no orders. Build it first.
 
 ### NUANCE — the keys change while the process runs; read them at call time
 
-A trader can save keys for several brokers in OpenAlgo (Profile > Broker,
+A trader can save keys for several brokers in OpenAlgo (Broker Configuration,
 `database/broker_keys_db.py`) and log in to one at a time. `.env` still comes
 first: a broker that `.env` names in `REDIRECT_URL` with a `BROKER_API_KEY`
 always uses the `.env` keys; every other broker uses its saved keys.
@@ -34,7 +34,7 @@ multi-broker keys release (`broker/fivepaisa/api/_fivepaisa_keys`). Read at call
 time, and parse the composite where you use it.
 
 Credentials your broker needs beyond those five (`BROKER_CLIENT_ID`,
-`BROKER_VENDOR_CODE`, partner ids) are not saved in Profile > Broker. Read them with
+`BROKER_VENDOR_CODE`, partner ids) are not saved in Broker Configuration. Read them with
 a default, and say in the broker's docs that they stay in `.env`.
 
 ### NUANCE — the arity is NOT fixed at one argument
@@ -185,6 +185,7 @@ it yourself.
 | `frontend/src/pages/BrokerSelect.tsx` | `allBrokers[]` entry (display name and auth type) for the broker login page (then `npm run build`) |
 | `utils/broker_login.py` | how the login starts: `CALLBACK_START_BROKERS` or a `login_url()` branch; `STATE_BROKERS` and `BROKER_SITE_POST_BROKERS` when they apply — see the login-variant section below |
 | `utils/broker_keys.py` | `BROKER_NAMES` display name, used in messages a trader reads |
+| `utils/broker_setup_guide.py` | the Broker Configuration entry: the broker's name, `sign_in` kind (redirect, form or saved_keys, as this server's login flow does it), the key fields with the broker's own labels and a hint each, the sentence on how its login works, and the redirect hint. Port it from OpenAlgo Desktop's `setup_guide.rs` entry when one exists; without an entry the page shows generic fields |
 | `websocket_proxy/__init__.py` | import + `register_adapter("<name>", <Name>WebSocketAdapter)` + `__all__` |
 | `services/order_update_service.py` | `_BROKER_FACTORIES` entry, if the broker has an order-update feed |
 | `blueprints/brlogin.py` | an `elif broker == "<name>"` branch (see above) |
@@ -282,7 +283,7 @@ it, so the secondary maps do drift.
 The installers no longer ask for a broker or keep a list of them. Every fresh
 install, server or Docker, writes `.env` with empty broker lines and takes
 `VALID_BROKERS` unchanged from `.sample.env`; the trader adds broker keys in
-Profile > Broker after signing in. A first `uv run app.py` with no `.env` does
+Broker Configuration after signing in. A first `uv run app.py` with no `.env` does
 the same through `utils/env_check.create_env_from_sample`. So a new broker
 reaches every install path through **`.sample.env`'s `VALID_BROKERS`**, plus the
 `start.sh` fallback below. Do not add a broker prompt or list back to an
@@ -367,7 +368,7 @@ makes `.env` set no broker at all.
 
 XTS brokers also need `BROKER_API_KEY_MARKET` / `BROKER_API_SECRET_MARKET`.
 
-The same five values can instead be saved per broker in Profile > Broker,
+The same five values can instead be saved per broker in Broker Configuration,
 each with its own redirect URL (default `{HOST_SERVER}/<broker>/callback`).
 `.env` comes first for the broker it names; a `.env` with an empty
 `REDIRECT_URL` sets no broker and the trader adds keys in OpenAlgo. If your

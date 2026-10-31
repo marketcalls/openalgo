@@ -152,14 +152,20 @@ changed** (real login, ~3 AM rollover, logout/revoke).
 
 ### Broker keys: .env first, one broker at a time, read when called
 
-A trader saves keys for several brokers in Profile > Broker
-(`database/broker_keys_db.py`) and logs in to one at a time. The screens match
-OpenAlgo Desktop's: Profile's Broker tab saves the keys of the broker chosen
-there, the broker login page lists the configured brokers, and choosing one on
-either page makes it the active broker (`active_broker()`, one row). Profile
-opens before any broker login (`check_signed_in`, the Layout pre-broker paths),
-because a new install adds its first broker there. `utils/broker_keys.py` owns
-which keys a broker uses.
+A trader saves keys for several brokers (`database/broker_keys_db.py`) and
+logs in to one at a time. **The screens are OpenAlgo Desktop's, and stay so**:
+Select Broker (`/broker`, a card per broker with search, Login with, Configure,
+Edit keys, Open Dashboard and the switch confirm), Broker Configuration
+(`/broker/config`, the keys of the broker chosen there, Forget this broker) and
+the summary on Profile's Broker tab. Port a desktop change to these pages
+rather than inventing a web variant; the deliberate differences are the
+server-started login, the fixed error sentences and Open Dashboard joining a
+session from another device (`/auth/broker/resume`). The pages keep no broker
+list: `GET /api/broker/list` serves every VALID_BROKERS broker with the fields,
+hints and sign-in sentence of `utils/broker_setup_guide.py` (desktop's setup
+guide, adjusted where the web signs in differently). They open before any
+broker login (`check_signed_in`), because a new install adds its first broker
+there. `utils/broker_keys.py` owns which keys a broker uses.
 
 - **Stored like the broker tokens.** The auth_db Fernet, so a new encrypted
   column goes into both rotation lists (`env_check._migrate_fernet_db` and
@@ -189,14 +195,22 @@ which keys a broker uses.
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or
   a broker login recorded since the rollover, which a password change does not
-  clear), a login to a different broker is refused and the live broker's saved
-  keys cannot be changed, because its orders read the same variables. Choosing
-  another broker ends that session first, on every device, as the desktop does
-  (`end_broker_session_for_switch`); the browser that chose stays signed in. Whether a session outlives the rollover follows the logged-in
-  broker (`logged_in_broker()`, from the stored session), never the environment,
-  which changes as soon as a login is started.
-- **Saving keys follows the same rule.** Profile writes the `.env` broker's
-  keys to `.env` (read at startup, so a restart applies them) and every other
+  clear), it is the logged-in broker. A login to another broker may start, and
+  the old session ends only when that login completes, on every device
+  (`auth_utils._hand_over_from_live_broker`), as in the desktop; a login that
+  fails or is abandoned leaves it connected, and its keys are put back
+  (`restore_logged_in_broker_keys`), because the callback wrote the new
+  broker's keys. The switch is refused while the old broker still runs Live
+  automation (`utils/broker_switch.switch_refusal`: Live strategy module runs,
+  Live OpenScript runs, and outside analyzer mode Python strategies and
+  scalping protection), checked when the login starts and again when it
+  completes. New keys for the logged-in broker, or forgetting it, end its
+  session only with `sign_out=true`, which the page sends after the trader
+  confirms. Whether a session outlives the rollover follows the logged-in
+  broker (`logged_in_broker()`, from the stored session), never the
+  environment, which changes as soon as a login reaches its callback.
+- **Saving keys follows the same rule.** Broker Configuration writes the `.env`
+  broker's keys to `.env` (read from the file at each login) and every other
   broker's to the database, where they apply at once. The page never shows a
   character of a secret.
 - **The `.env` broker comes from the file, not from `os.environ`.** After a

@@ -281,7 +281,7 @@ See the capability list in `references/cross-broker-reference.md`.
 
 1. **Research** — API docs, pick the family template, read the common contracts, inspect a live `symtoken`, download the broker SDK.
 2. **`plugin.json` + `api/auth_api.py`** — get login working end-to-end first. Nothing else can be tested until a token is stored.
-3. **Platform wiring** — `VALID_BROKERS` in `.sample.env` and the `start.sh` fallback (installers take it from `.sample.env`), `frontend/src/pages/BrokerSelect.tsx`, `utils/broker_login.py` (how the login starts and how its answer is checked), `utils/broker_keys.BROKER_NAMES`, `websocket_proxy/__init__.py`, `brlogin.py` branch. See `references/auth-and-login.md`. Without this the broker will not even appear in the dropdown, or its login answer is refused.
+3. **Platform wiring** — `VALID_BROKERS` in `.sample.env` and the `start.sh` fallback (installers take it from `.sample.env`), `frontend/src/pages/BrokerSelect.tsx`, `utils/broker_login.py` (how the login starts and how its answer is checked), `utils/broker_keys.BROKER_NAMES`, `utils/broker_setup_guide.py` (its Broker Configuration fields and sign-in sentence), `websocket_proxy/__init__.py`, `brlogin.py` branch. See `references/auth-and-login.md`. Without this the broker will not even appear in the dropdown, or its login answer is refused.
 4. **`database/master_contract_db.py`** — symbols must exist before quotes/orders can be tested. Validate offline against the live symtoken reference.
 5. **`mapping/` + `api/data.py`** — quotes, depth, history.
 6. **`api/order_api.py` + `mapping/order_data.py`** — orders and books.

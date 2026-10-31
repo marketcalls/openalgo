@@ -345,7 +345,7 @@ uv run app.py
 ```
 
 On the first start OpenAlgo creates `.env` with new security keys and no broker;
-sign in and add your broker keys in Profile > Broker. To keep the broker in
+sign in and add your broker keys in Broker Configuration. To keep the broker in
 `.env` instead, copy `.sample.env` to `.env` and fill in the broker lines first.
 
 The application will be available at `http://127.0.0.1:5000`

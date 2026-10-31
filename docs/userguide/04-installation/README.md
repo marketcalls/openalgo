@@ -235,9 +235,9 @@ cd openalgo
 ```
 
 No broker goes into `.env`: once OpenAlgo is running, sign in, open
-**Profile > Broker**, choose your broker and add its keys. The redirect URL to register in your broker's developer console is
+**Broker Configuration**, choose your broker and add its keys. The redirect URL to register in your broker's developer console is
 `https://<your-domain>/<broker>/callback` (for example `/zerodha/callback`);
-Profile > Broker shows it once the broker is saved.
+Broker Configuration shows it when you choose the broker.
 
 Access at `http://localhost:5000`
 
@@ -349,7 +349,7 @@ FLASK_PORT=5000
 APP_KEY=your-secret-key-here
 API_KEY_PEPPER=your-pepper-here
 
-# Broker: leave these empty and add your broker in Profile > Broker after
+# Broker: leave these empty and add your broker in Broker Configuration after
 # signing in. A broker set here is used first.
 BROKER_API_KEY=''
 BROKER_API_SECRET=''
@@ -422,9 +422,9 @@ For production use, deploy OpenAlgo on an Ubuntu server using the automated `ins
 #### Broker Setup (After Installation)
 
 The installer does not ask for your broker. After installation, sign in to
-OpenAlgo, open **Profile > Broker**, choose your broker and add its API key and
+OpenAlgo, open **Broker Configuration**, choose your broker and add its API key and
 secret. The redirect URL to register in your broker's developer console follows
-your domain and broker (Profile > Broker shows it once the broker is saved):
+your domain and broker (Broker Configuration shows it when you choose the broker):
 
 ```
 # Example: domain is yourdomain.com, broker is zerodha
@@ -464,7 +464,7 @@ The script will prompt you for:
 - Whether to enable Remote MCP (optional)
 - Whether to set up fail2ban (optional, default No)
 
-The installer no longer asks for your broker. After installation, sign in to OpenAlgo, open **Profile > Broker**, choose your broker and add its keys. Register `https://<your-domain>/<broker>/callback` in your broker's developer console; Profile > Broker shows it once the broker is saved.
+The installer no longer asks for your broker. After installation, sign in to OpenAlgo, open **Broker Configuration**, choose your broker and add its keys. Register `https://<your-domain>/<broker>/callback` in your broker's developer console; Broker Configuration shows it when you choose the broker.
 
 If OpenAlgo is already installed, the installer asks whether to back up the existing folder. On yes it stops the running service, moves the folder to `/var/python/openalgo_backup_<date>`, and copies its `.env` (security keys, broker settings), `db/` (your data), `strategies/` (your scripts, their settings, indicators and OpenScript files) and `keys/` unchanged into the new installation; files that ship with OpenAlgo come from the new copy, and logs stay in the backup folder. On no it warns that the folder's `.env` and `db/` are deleted with it and cannot be recovered, and deletes it only if you type `DELETE`; anything else stops the installation without changing anything.
 
@@ -675,7 +675,7 @@ The script will prompt you for:
 - Email for SSL notifications
 - Whether to enable Remote MCP and fail2ban (both optional)
 
-It does not ask for your broker: add it in **Profile > Broker** after you sign in.
+It does not ask for your broker: add it in **Broker Configuration** after you sign in.
 
 ### What the Script Does
 
@@ -851,7 +851,7 @@ cd openalgo
 ./docker-build.sh
 ```
 
-Then sign in, open **Profile > Broker**, choose your broker and add its keys.
+Then sign in, open **Broker Configuration**, choose your broker and add its keys.
 
 ### Securing Your Raspberry Pi
 

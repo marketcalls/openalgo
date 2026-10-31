@@ -38,10 +38,10 @@
 
 ### Broker Setup (After Installation)
 The installer does not ask for your broker. After installation, sign in to
-OpenAlgo, open **Profile > Broker**, choose your broker and add its keys.
+OpenAlgo, open **Broker Configuration**, choose your broker and add its keys.
 The redirect URL to register in your broker's developer console is
 `https://<your-domain>/<broker>/callback` (for example `/zerodha/callback`);
-Profile > Broker shows it once the broker is saved.
+Broker Configuration shows it when you choose the broker.
 
 - Supported brokers:
   ```
