@@ -3651,7 +3651,8 @@ def test_a_background_pin_belongs_to_its_token_read_not_to_a_time(
 
 def _ui_app(monkeypatch):
     """The app with the order routes, analyzer off, and every broker request recorded."""
-    import restx_api  # noqa: F401  (before the service modules, as the strategy tests do)
+    # restx_api before the service modules, as the strategy tests do.
+    import restx_api  # noqa: F401, I001
     import blueprints.orders as orders
 
     sent = []
