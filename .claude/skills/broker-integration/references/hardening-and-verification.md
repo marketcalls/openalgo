@@ -116,10 +116,10 @@ Then run the **`fd-audit`** skill on the whole change.
 **General**
 - [ ] NO hardcoded market timings in the broker folder
 - [ ] all REST via the shared pooled httpx client; explicit timeout on big downloads
-- [ ] broker id added to `.sample.env` VALID_BROKERS + the `start.sh` fallback + READMEs + `frontend/src/lib/brokers.ts` + `utils/broker_login.py` + `utils/broker_keys.BROKER_NAMES` + websocket_proxy registration (the installers carry no broker list any more; they take VALID_BROKERS from `.sample.env`)
+- [ ] broker id added to `.sample.env` VALID_BROKERS + the `start.sh` fallback + READMEs + `frontend/src/pages/BrokerSelect.tsx` + `utils/broker_login.py` + `utils/broker_keys.BROKER_NAMES` + websocket_proxy registration (the installers carry no broker list any more; they take VALID_BROKERS from `.sample.env`)
 - [ ] `start.sh` (repo root, the Docker `CMD`) — the `${VALID_BROKERS:-...}` fallback. **Functional, not cosmetic**: missing here means the broker is unavailable on cloud/Railway deploys while every bare-metal install works
 - [ ] `install/Docker-install-readme.md` table row added (markdown table, not a comma list)
-- [ ] login start: `allBrokers[]` entry in `frontend/src/lib/brokers.ts` **and** the broker in `CALLBACK_START_BROKERS` or a `login_url()` branch in `utils/broker_login.py`; `STATE_BROKERS` / `BROKER_SITE_POST_BROKERS` where its answer needs them
+- [ ] login start: `allBrokers[]` entry in `frontend/src/pages/BrokerSelect.tsx` **and** the broker in `CALLBACK_START_BROKERS` or a `login_url()` branch in `utils/broker_login.py`; `STATE_BROKERS` / `BROKER_SITE_POST_BROKERS` where its answer needs them
 - [ ] credentials read at call time, never at module import (keys change when the trader switches brokers; see `auth-and-login.md`)
 - [ ] a real login completed end to end: the callback refuses an answer it cannot match to a started login
 - [ ] frontend: if form-login, a `brokerConfigs` entry **and** a `brokerNames` entry in `BrokerTOTP.tsx` (unconfigured brokers silently fall back to a userid/password/totp `default` that may be the wrong fields)

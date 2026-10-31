@@ -16,7 +16,7 @@ contract, no quotes, no orders. Build it first.
 
 ### NUANCE — the keys change while the process runs; read them at call time
 
-A trader can save keys for several brokers in OpenAlgo (Broker Keys page,
+A trader can save keys for several brokers in OpenAlgo (Profile > Broker,
 `database/broker_keys_db.py`) and log in to one at a time. `.env` still comes
 first: a broker that `.env` names in `REDIRECT_URL` with a `BROKER_API_KEY`
 always uses the `.env` keys; every other broker uses its saved keys.
@@ -30,11 +30,11 @@ constant such as `BROKER_API_KEY = os.getenv("BROKER_API_KEY")`, or a
 `.split(":::")` at module level, keeps the value from whichever broker was in
 place when the module was first imported, and a composite split at import
 crashes the import itself for any other broker. 5paisa did both until the
-Broker Keys release (`broker/fivepaisa/api/_fivepaisa_keys`). Read at call
+multi-broker keys release (`broker/fivepaisa/api/_fivepaisa_keys`). Read at call
 time, and parse the composite where you use it.
 
 Credentials your broker needs beyond those five (`BROKER_CLIENT_ID`,
-`BROKER_VENDOR_CODE`, partner ids) are not saved by Broker Keys. Read them with
+`BROKER_VENDOR_CODE`, partner ids) are not saved in Profile > Broker. Read them with
 a default, and say in the broker's docs that they stay in `.env`.
 
 ### NUANCE — the arity is NOT fixed at one argument
@@ -182,7 +182,7 @@ it yourself.
 | File | What |
 | --- | --- |
 | `.sample.env` + `.env` | add to `VALID_BROKERS` |
-| `frontend/src/lib/brokers.ts` | `allBrokers[]` entry (display name and auth type), shared by the broker login page and Broker Keys (then `npm run build`) |
+| `frontend/src/pages/BrokerSelect.tsx` | `allBrokers[]` entry (display name and auth type) for the broker login page (then `npm run build`) |
 | `utils/broker_login.py` | how the login starts: `CALLBACK_START_BROKERS` or a `login_url()` branch; `STATE_BROKERS` and `BROKER_SITE_POST_BROKERS` when they apply — see the login-variant section below |
 | `utils/broker_keys.py` | `BROKER_NAMES` display name, used in messages a trader reads |
 | `websocket_proxy/__init__.py` | import + `register_adapter("<name>", <Name>WebSocketAdapter)` + `__all__` |
@@ -201,7 +201,7 @@ login only when the answer belongs to a login started that way
 an account of its choosing. Each pending login is used once and lasts ten
 minutes.
 
-**1. `frontend/src/lib/brokers.ts` — `allBrokers[]`.** The display name and auth
+**1. `frontend/src/pages/BrokerSelect.tsx` — `allBrokers[]`.** The display name and auth
 type. Always required.
 
 **2. `utils/broker_login.py` — how the login starts.** Always required. Three
@@ -271,7 +271,7 @@ flow.
 sync — keep it that way:
 
 ```bash
-grep -c "id: '" frontend/src/lib/brokers.ts     # must match VALID_BROKERS count
+grep -c "id: '" frontend/src/pages/BrokerSelect.tsx     # must match VALID_BROKERS count
 ```
 
 `brokerNames` already carries a stale `jmfinancial` entry with no plugin behind
@@ -281,8 +281,8 @@ it, so the secondary maps do drift.
 
 The installers no longer ask for a broker or keep a list of them. Every fresh
 install, server or Docker, writes `.env` with empty broker lines and takes
-`VALID_BROKERS` unchanged from `.sample.env`; the trader adds broker keys on the
-Broker Keys page after signing in. A first `uv run app.py` with no `.env` does
+`VALID_BROKERS` unchanged from `.sample.env`; the trader adds broker keys in
+Profile > Broker after signing in. A first `uv run app.py` with no `.env` does
 the same through `utils/env_check.create_env_from_sample`. So a new broker
 reaches every install path through **`.sample.env`'s `VALID_BROKERS`**, plus the
 `start.sh` fallback below. Do not add a broker prompt or list back to an
@@ -335,7 +335,7 @@ every validation list has it. After adding a broker, check every place at once:
 
 ```bash
 grep -rn "<newbroker>" install/ start.sh .sample.env README.md \
-  frontend/src/lib/brokers.ts utils/broker_login.py utils/broker_keys.py \
+  frontend/src/pages/BrokerSelect.tsx utils/broker_login.py utils/broker_keys.py \
   websocket_proxy/__init__.py
 ```
 
@@ -349,7 +349,7 @@ Runtime modules (`websocket_proxy/server.py`, `utils/env_check.py`,
 
 Flask serves the pre-built `frontend/dist/`, and CI rebuilds it **only on
 `main`**. On your feature branch the committed dist predates your
-`frontend/src/lib/brokers.ts` edit, so the login dropdown filters against a broker list
+`frontend/src/pages/BrokerSelect.tsx` edit, so the login dropdown filters against a broker list
 that doesn't contain your broker and renders empty. This is not a backend bug:
 run `cd frontend && npm install && npm run build` locally (the output is
 gitignored — don't commit it; CI produces the canonical dist after merge), then
@@ -367,7 +367,7 @@ makes `.env` set no broker at all.
 
 XTS brokers also need `BROKER_API_KEY_MARKET` / `BROKER_API_SECRET_MARKET`.
 
-The same five values can instead be saved per broker on the Broker Keys page,
+The same five values can instead be saved per broker in Profile > Broker,
 each with its own redirect URL (default `{HOST_SERVER}/<broker>/callback`).
 `.env` comes first for the broker it names; a `.env` with an empty
 `REDIRECT_URL` sets no broker and the trader adds keys in OpenAlgo. If your

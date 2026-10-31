@@ -152,9 +152,14 @@ changed** (real login, ~3 AM rollover, logout/revoke).
 
 ### Broker keys: .env first, one broker at a time, read when called
 
-A trader can save keys for several brokers on the Broker Keys page
-(`database/broker_keys_db.py`) and log in to one at a time.
-`utils/broker_keys.py` owns which keys a broker uses.
+A trader saves keys for several brokers in Profile > Broker
+(`database/broker_keys_db.py`) and logs in to one at a time. The screens match
+OpenAlgo Desktop's: Profile's Broker tab saves the keys of the broker chosen
+there, the broker login page lists the configured brokers, and choosing one on
+either page makes it the active broker (`active_broker()`, one row). Profile
+opens before any broker login (`check_signed_in`, the Layout pre-broker paths),
+because a new install adds its first broker there. `utils/broker_keys.py` owns
+which keys a broker uses.
 
 - **Stored like the broker tokens.** The auth_db Fernet, so a new encrypted
   column goes into both rotation lists (`env_check._migrate_fernet_db` and
@@ -184,11 +189,16 @@ A trader can save keys for several brokers on the Broker Keys page
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or
   a broker login recorded since the rollover, which a password change does not
-  clear), a login to a different broker is refused, and the live broker's saved
-  keys cannot be changed or removed, because its orders read the same
-  variables. Whether a session outlives the rollover follows the logged-in
+  clear), a login to a different broker is refused and the live broker's saved
+  keys cannot be changed, because its orders read the same variables. Choosing
+  another broker ends that session first, on every device, as the desktop does
+  (`end_broker_session_for_switch`); the browser that chose stays signed in. Whether a session outlives the rollover follows the logged-in
   broker (`logged_in_broker()`, from the stored session), never the environment,
   which changes as soon as a login is started.
+- **Saving keys follows the same rule.** Profile writes the `.env` broker's
+  keys to `.env` (read at startup, so a restart applies them) and every other
+  broker's to the database, where they apply at once. The page never shows a
+  character of a secret.
 - **The `.env` broker comes from the file, not from `os.environ`.** After a
   switch the environment holds the saved broker's keys, so `env_file_values()`
   reads `.env` itself. Tests point `env_file_path` at their own file (the suite
@@ -216,8 +226,8 @@ address, or its logins are refused; a broker that redirects back needs nothing,
 the cookie carries the match.
 
 Sessions are signed cookies, so ending one is recorded rather than deleted:
-a logout of a broker-logged-in session, a password change, a reset and
-`/auth/broker/end-session` call `revoke_all_sessions`, and every
+a logout of a broker-logged-in session, a password change, a reset and a
+switch that ends another broker's session call `revoke_all_sessions`, and every
 sign-in from before that instant is cleared on its next request
 (`end_session_if_signed_out`, and `is_session_valid` for Socket.IO). A sign-in
 that never reached a broker login ends at the daily rollover.

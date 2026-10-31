@@ -34,7 +34,7 @@ chmod +x docker-run.sh
 
 1. Sets up in the **current directory** (where the script is located)
 2. Downloads configuration template from GitHub
-3. Generates secure APP_KEY and API_KEY_PEPPER, and leaves the broker empty. It does not ask for your broker: once OpenAlgo is running, sign in, open **Broker Keys** and add your broker's keys. The page shows the redirect URL to register in your broker's developer console.
+3. Generates secure APP_KEY and API_KEY_PEPPER, and leaves the broker empty. It does not ask for your broker: once OpenAlgo is running, sign in, open **Profile > Broker**, choose your broker and add its keys. Register `https://<your-domain>/<broker>/callback` in your broker's developer console; Profile > Broker shows it once the broker is saved.
 4. Keeps an existing `.env` exactly as it is (keys and broker settings included); `setup` never overwrites it
 5. Pulls and starts the Docker container
 6. **Runs database migrations automatically** on startup
@@ -121,7 +121,7 @@ These brokers require **additional market data credentials**:
 - rmoney
 - wisdom
 
-Add them together with the broker's API key and secret on the **Broker Keys** page after you sign in.
+Add them together with the broker's API key and secret in **Profile > Broker** after you sign in.
 
 ---
 
@@ -183,7 +183,7 @@ The script will ask you for:
 - Whether to set up fail2ban (optional, default No)
 - Confirmation to proceed
 
-It does not ask for your broker. After installation, sign in, open **Broker Keys** and add your broker's keys; the page shows the redirect URL to register in your broker's developer console. Reinstalling over an existing `/opt/openalgo` keeps its `.env` and keys.
+It does not ask for your broker. After installation, sign in, open **Profile > Broker**, choose your broker and add its keys. Register `https://<your-domain>/<broker>/callback` in your broker's developer console; Profile > Broker shows it once the broker is saved. Reinstalling over an existing `/opt/openalgo` keeps its `.env` and keys.
 
 ### What the Script Does
 
@@ -530,7 +530,7 @@ sudo rm -rf /var/lib/docker
 | Zebu | `zebu` | No |
 | Zerodha | `zerodha` | No |
 
-**Note:** XTS API brokers also need market data API credentials, added on the **Broker Keys** page.
+**Note:** XTS API brokers also need market data API credentials, added in **Profile > Broker**.
 
 ### System Requirements
 
@@ -591,7 +591,7 @@ A: Yes, the script supports both root domains and subdomains.
 A: Not with this script. Each installation assumes it's the only instance.
 
 **Q: How do I change my broker after installation?**
-A: Sign in, open **Broker Keys** and add or change the broker's keys there. A broker set in `/opt/openalgo/.env` (older installs) still works; edit it and run `sudo docker compose restart`.
+A: Sign in, open **Profile > Broker**, choose the broker and add or change its keys there. A broker set in `/opt/openalgo/.env` (older installs) still works; edit it and run `sudo docker compose restart`.
 
 **Q: Is my broker data secure?**
 A: Yes, all data is encrypted in transit (HTTPS/WSS) and stored locally on your server.
