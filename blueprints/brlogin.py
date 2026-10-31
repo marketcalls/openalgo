@@ -5,12 +5,17 @@ import json
 import os
 
 import jwt
-from flask import Blueprint, jsonify, make_response, redirect, request, session, url_for
+from flask import Blueprint, g, jsonify, make_response, redirect, request, session, url_for
 from flask import current_app as app
 
 from limiter import limiter  # Import the limiter instance
 from utils.auth_utils import handle_auth_failure, handle_auth_success, is_ajax_request
-from utils.broker_keys import BrokerKeysRefused, use_broker_keys
+from utils.broker_keys import (
+    BrokerKeysRefused,
+    hold_login_slot,
+    release_login_slot,
+    use_broker_keys,
+)
 from utils.broker_login import (
     BrokerLoginRefused,
     has_pending_login,
@@ -102,6 +107,9 @@ def broker_callback(broker, para=None):
             "This broker login was not started from OpenAlgo, or it took longer than "
             "10 minutes. Start the broker login again.",
         )
+    finally:
+        # The login held the broker slot for this request only, however it ended.
+        release_login_slot(g.pop("broker_login_slot", None))
 
 
 def _broker_callback(broker, para=None):
@@ -150,6 +158,9 @@ def _broker_callback(broker, para=None):
     # OpenAlgo) before any of its code reads them. Refused while another broker
     # is logged in. The keys are kept: anything this login stores with them
     # uses these, not whatever the environment holds by the time it returns.
+    # The slot keeps another broker's login from replacing them before this
+    # login's token is stored.
+    g.broker_login_slot = hold_login_slot(broker)
     keys = use_broker_keys(broker)
 
     broker_auth_functions = app.broker_auth_functions
@@ -1195,6 +1206,13 @@ def _broker_callback(broker, para=None):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def dhan_initiate_oauth():
     """Handle Dhan OAuth initiation"""
+    try:
+        return _dhan_initiate_oauth()
+    finally:
+        release_login_slot(g.pop("broker_login_slot", None))
+
+
+def _dhan_initiate_oauth():
     # Check if user is not in session first
     if "user" not in session:
         return redirect(url_for("auth.login"))
@@ -1208,6 +1226,7 @@ def dhan_initiate_oauth():
             "10 minutes. Start the broker login again.",
         )
     try:
+        g.broker_login_slot = hold_login_slot("dhan")
         use_broker_keys("dhan")
     except BrokerKeysRefused as exc:
         return _refuse_login("broker_unavailable", str(exc), status=409)

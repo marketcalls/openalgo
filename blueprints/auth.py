@@ -173,14 +173,15 @@ def start_broker_login():
 
     A CSRF-checked POST, so another site cannot start a login in the trader's
     browser. The server checks the broker may be used now (only one broker is
-    logged in at a time), puts its keys in place, records a pending login for
-    this browser and builds the broker's sign-in address. The callback accepts
-    the broker's answer only for a login started here.
+    logged in at a time), reads its keys, records a pending login for this
+    browser and builds the broker's sign-in address. The keys go into the
+    environment only at the callback, under the login slot. The callback
+    accepts the broker's answer only for a login started here.
     """
     if "user" not in session:
         return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
 
-    from utils.broker_keys import BrokerKeysRefused, enabled_brokers, use_broker_keys
+    from utils.broker_keys import BrokerKeysRefused, enabled_brokers, keys_for_login
     from utils.broker_login import start_broker_login as begin_login
 
     data = request.get_json(silent=True) or {}
@@ -195,7 +196,7 @@ def start_broker_login():
             return jsonify({"status": "success", "url": "/dashboard"})
 
     try:
-        keys = use_broker_keys(broker)
+        keys = keys_for_login(broker)
     except BrokerKeysRefused as exc:
         return jsonify({"status": "error", "message": str(exc)}), 409
 

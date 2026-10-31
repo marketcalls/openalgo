@@ -65,6 +65,12 @@ _broker_keys.env_file_path = lambda: Path(__file__).resolve().parent / "__no_env
 _broker_keys._STARTUP_VALUES = dict.fromkeys(_broker_keys.ENV_VARS.values())
 
 
+@pytest.fixture(autouse=True)
+def _free_the_broker_login_slot():
+    """A test that stops while a login holds the broker slot must not refuse the next one's."""
+    _broker_keys._slot.update(broker=None, holders=set(), until=0.0)
+
+
 # These are manual diagnostics, not pytest modules. test_bot_web.py starts the
 # Telegram bot from its module body. The WebSocket scripts require a live proxy,
 # operator API key and timed terminal interaction; their ``test_*`` helpers take

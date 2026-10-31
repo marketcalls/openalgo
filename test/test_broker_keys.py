@@ -1381,8 +1381,8 @@ def test_a_logged_in_crypto_broker_keeps_its_session_past_the_rollover(
     """Delta Exchange trades around the clock. The installer turns the daily
     expiry off when it is chosen at install time; a crypto broker whose keys are
     saved in OpenAlgo never passed the installer, so the logged-in broker
-    decides. Starting (or abandoning) a Delta login decides nothing: the
-    environment changes then, the stored session does not."""
+    decides. An abandoned Delta login decides nothing: its callback put Delta's
+    keys in the environment, but the stored session is unchanged."""
     from utils.session import is_session_expiry_disabled
 
     monkeypatch.delenv("DISABLE_SESSION_EXPIRY", raising=False)
@@ -1391,7 +1391,7 @@ def test_a_logged_in_crypto_broker_keeps_its_session_past_the_rollover(
     keys_db.save_broker_keys("deltaexchange", {"api_key": "d-key", "api_secret": "d-sec"}, None)
     broker_keys.forget_logged_in_broker()
 
-    _signed_in(_app()).post("/auth/broker/login", json={"broker": "deltaexchange"})
+    broker_keys.use_broker_keys("deltaexchange")
     assert os.environ["BROKER_API_KEY"] == "d-key"
     assert is_session_expiry_disabled() is False
 
@@ -1659,6 +1659,201 @@ def test_iifl_capital_carries_the_state_and_its_answer_is_checked(
     assert forged.headers["Location"].endswith("/broker?error=login_not_started")
     assert answered.get_data(as_text=True) == "logged in"
     assert [c[2] for c in completed] == ["iiflcapital"]
+
+
+def test_a_state_broker_answer_needs_its_state_even_in_the_browser_that_started(
+    stores, environment, completed
+):
+    """PINNED DEFECT (review). The browser marker alone let any code through for
+    a broker that echoes the state: with a login pending for Fyers, a link
+    carrying someone else's code and a wrong or missing state completed it."""
+    _save_fyers()
+    exchanged = []
+    app = _app()
+    app.broker_auth_functions = {
+        "fyers_auth": lambda code: exchanged.append(code) or ("fy-token", None)
+    }
+    client = _signed_in(app)
+    url = client.post("/auth/broker/login", json={"broker": "fyers"}).get_json()["url"]
+    state = url.rsplit("state=", 1)[1]
+
+    wrong = client.get("/fyers/callback?auth_code=attacker&state=guessed")
+    missing = client.get("/fyers/callback?auth_code=attacker")
+    right = client.get(f"/fyers/callback?auth_code=mine&state={state}")
+
+    assert wrong.headers["Location"].endswith("/broker?error=login_not_started")
+    assert missing.headers["Location"].endswith("/broker?error=login_not_started")
+    assert right.get_data(as_text=True) == "logged in"
+    # Refused before the code ever reaches the broker.
+    assert exchanged == ["mine"]
+    assert completed == [("fy-token", USER, "fyers")]
+
+
+def test_an_iifl_capital_answer_without_its_state_never_completes(
+    stores, environment, completed, monkeypatch
+):
+    """IIFL Capital starts at the callback with no state, so a stateless request
+    from the browser that pressed Connect gets in; an answer without the state
+    must still not complete the login."""
+    monkeypatch.setenv("VALID_BROKERS", "iiflcapital")
+    keys_db.save_broker_keys("iiflcapital", {"api_key": "iifl-app", "api_secret": "iifl-sec"}, None)
+    app = _app()
+    app.broker_auth_functions = {"iiflcapital_auth": lambda code, client: ("iifl-token", None)}
+    client = _signed_in(app)
+    client.post("/auth/broker/login", json={"broker": "iiflcapital"})
+
+    answer = client.get("/iiflcapital/callback?authCode=attacker&clientId=c")
+
+    assert answer.headers["Location"].endswith("/broker?error=login_not_started")
+    assert completed == []
+
+
+def test_an_rmoney_login_still_starts_at_the_callback(stores, environment, monkeypatch):
+    """RMoney's callback builds its sign-in address when opened with no answer,
+    which carries no state yet: the browser that pressed Connect gets in, with
+    its own state on the return address, and any other browser does not."""
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    monkeypatch.setenv("VALID_BROKERS", "rmoney")
+    keys_db.save_broker_keys("rmoney", {"api_key": "rm-app", "api_secret": "rm-sec"}, None)
+    app = _app()
+    app.broker_auth_functions = {"rmoney_auth": lambda *args: (None, None)}
+    client = _signed_in(app)
+    client.post("/auth/broker/login", json={"broker": "rmoney"})
+
+    other = _signed_in(app).get("/rmoney/callback")
+    start = client.get("/rmoney/callback")
+
+    return_url = unquote(parse_qs(urlparse(start.headers["Location"]).query)["returnURL"][0])
+    with client.session_transaction() as sess:
+        state = sess["broker_login"]["state"]
+    assert return_url.endswith(f"/rmoney/callback?state={state}")
+    assert other.headers["Location"].endswith("/broker?error=login_not_started")
+
+
+# --------------------------------------------------------------------------
+# One login at a time writes its keys: the broker login slot
+# --------------------------------------------------------------------------
+
+
+def test_starting_a_login_leaves_the_keys_in_place(stores, environment):
+    """Starting a login only builds the sign-in address. It used to write the
+    keys too, which let a second device's start replace them underneath a
+    login that was still exchanging its code."""
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    broker_keys.use_broker_keys("zerodha")
+
+    response = _signed_in(_app()).post("/auth/broker/login", json={"broker": "fyers"})
+
+    assert response.status_code == 200
+    assert os.environ["BROKER_API_KEY"] == "zkey123"
+
+
+def test_a_login_under_way_keeps_another_brokers_login_out(stores, environment, completed):
+    """PINNED DEFECT (review). Two devices logging in to different brokers at
+    once: while one callback exchanged its code, the other put its own keys in
+    place, and the first stored its token alongside the second broker's keys."""
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    app = _app()
+    other = _signed_in(app)
+    url = other.post("/auth/broker/login", json={"broker": "fyers"}).get_json()["url"]
+    state = url.rsplit("state=", 1)[1]
+    during = {}
+
+    def zerodha_exchange(code):
+        # The other device starts and answers while this exchange is under way.
+        during["start"] = other.post("/auth/broker/login", json={"broker": "fyers"}).status_code
+        during["answer"] = other.get(f"/fyers/callback?auth_code=c&state={state}")
+        during["key"] = os.getenv("BROKER_API_KEY")
+        return "access", None
+
+    app.broker_auth_functions = {
+        "zerodha_auth": zerodha_exchange,
+        "fyers_auth": lambda code: ("fy-token", None),
+    }
+    client = _signed_in(app)
+    client.post("/auth/broker/login", json={"broker": "zerodha"})
+    client.get("/zerodha/callback?request_token=ok")
+
+    assert during["start"] == 409
+    assert during["answer"].headers["Location"].endswith("/broker?error=broker_unavailable")
+    assert during["key"] == "zkey123"
+    assert completed == [("zkey123:access", USER, "zerodha")]
+    assert os.environ["BROKER_API_KEY"] == "zkey123"
+    # The slot is free again once that login has finished.
+    assert other.post("/auth/broker/login", json={"broker": "fyers"}).status_code == 200
+
+
+def test_a_login_that_fails_gives_the_slot_back(stores, environment):
+    environment.write(ENV_ZERODHA)
+    app = _app()
+    client = _signed_in(app)
+
+    app.broker_auth_functions = {"zerodha_auth": lambda code: (None, "Invalid request token")}
+    client.post("/auth/broker/login", json={"broker": "zerodha"})
+    client.get("/zerodha/callback?request_token=bad")
+    assert broker_keys.login_slot_broker() is None
+
+    def broken(code):
+        raise RuntimeError("the broker did not answer")
+
+    app.broker_auth_functions = {"zerodha_auth": broken}
+    client.post("/auth/broker/login", json={"broker": "zerodha"})
+    try:
+        client.get("/zerodha/callback?request_token=ok")
+    except RuntimeError:
+        pass
+    assert broker_keys.login_slot_broker() is None
+
+
+def test_a_stuck_login_holds_the_slot_for_a_while_only(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(broker_keys, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    stuck = broker_keys.hold_login_slot("zerodha")
+    with pytest.raises(broker_keys.BrokerKeysRefused, match="A login to Zerodha is under way"):
+        broker_keys.hold_login_slot("fyers")
+
+    now[0] += broker_keys.LOGIN_SLOT_SECONDS + 1
+    fyers = broker_keys.hold_login_slot("fyers")
+    # The stuck login finishing late frees nothing of the one that took over.
+    broker_keys.release_login_slot(stuck)
+    assert broker_keys.login_slot_broker() == "fyers"
+    broker_keys.release_login_slot(fyers)
+    assert broker_keys.login_slot_broker() is None
+
+
+def test_logins_racing_for_the_slot_let_exactly_one_broker_in():
+    """Logins to the same broker share the slot; another broker waits for all of them."""
+    import threading
+
+    barrier = threading.Barrier(8)
+    held = []
+    lock = threading.Lock()
+
+    def take(broker):
+        barrier.wait()
+        try:
+            holder = broker_keys.hold_login_slot(broker)
+        except broker_keys.BrokerKeysRefused:
+            return
+        with lock:
+            held.append((broker, holder))
+
+    threads = [threading.Thread(target=take, args=(b,)) for b in ("zerodha", "fyers") * 4]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(held) == 4
+    assert len({broker for broker, _ in held}) == 1
+    for _, holder in held[:-1]:
+        broker_keys.release_login_slot(holder)
+    assert broker_keys.login_slot_broker() == held[-1][0]
+    broker_keys.release_login_slot(held[-1][1])
+    assert broker_keys.login_slot_broker() is None
 
 
 def test_a_link_to_another_brokers_callback_leaves_a_logged_in_session_alone(stores, environment):

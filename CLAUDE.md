@@ -176,7 +176,11 @@ A trader can save keys for several brokers on the Broker Keys page
   proxy process before an adapter starts (it is a separate process under
   gunicorn and Docker, so the app's writes never reach it). A broker plugin
   must read its keys when called, never into a module constant: the
-  environment can name another broker than it did at import.
+  environment can name another broker than it did at import. A login holds
+  the broker slot (`hold_login_slot`) from writing its keys until its token
+  is stored, and starting a login writes nothing (`keys_for_login`): two
+  devices logging in to different brokers at once otherwise stored one
+  broker's token alongside the other's keys.
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or
   a broker login recorded since the rollover, which a password change does not
@@ -196,7 +200,9 @@ The login page POSTs the broker to `/auth/broker/login` (CSRF-checked); the
 server builds the sign-in address (`utils/broker_login.login_url`) and records a
 pending login for that browser. The callback completes a login only for an
 answer that matches one: the browser brings its own marker back in its session,
-or the answer carries the state the server issued. The two XTS brokers post
+or, for a broker in `STATE_BROKERS`, the answer carries the state issued for
+it. Those brokers are matched by the state alone: the marker proves only that
+the browser started some login, so it never completes theirs. The two XTS brokers post
 back across sites without the cookie, so their state rides on the return
 address, as OpenAlgo Desktop does. Pending logins live in the
 `broker_login_states` table as SHA-256 digests (so a restart mid-login is

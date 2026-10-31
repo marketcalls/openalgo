@@ -81,6 +81,10 @@ CALLBACK_START_BROKERS = frozenset(
 #: carry it on the return address; the others echo the OAuth state parameter.
 STATE_BROKERS = frozenset({"fyers", "pocketful", "compositedge", "rmoney", "iiflcapital"})
 
+#: The state brokers whose login starts with a GET to the callback, before
+#: any state exists: the callback builds their sign-in address itself.
+_STATE_CALLBACK_START_BROKERS = frozenset({"rmoney", "iiflcapital"})
+
 _SESSION_KEY = "broker_login"
 _SAFE_URL_VALUE = re.compile(r"[A-Za-z0-9._~:/-]+")
 
@@ -206,7 +210,7 @@ def state_for(broker):
 def start_broker_login(keys):
     """Record a pending login for this browser and return where it starts.
 
-    Call inside a request, after the broker's keys are in place.
+    Call inside a request, with the keys from keys_for_login().
 
     Args:
         keys: The broker's BrokerKeys.
@@ -233,22 +237,31 @@ def has_pending_login(broker, state=None):
     login for is never exchanged, and a link from another site cannot make
     OpenAlgo ask a broker to send the trader an OTP.
 
+    A broker that brings back the state it was given is matched by that state
+    alone. This browser's marker proves only that it started some login, not
+    that this answer belongs to it, so it counts only for the start of the
+    logins the callback begins itself, which carry no state yet.
+
     Args:
         broker: The broker the request is for.
         state: The state the broker brought back, if any.
     """
+    if broker in STATE_BROKERS:
+        if state:
+            return find_login_state(broker, state=state) is not None
+        if broker not in _STATE_CALLBACK_START_BROKERS:
+            return False
     marker = _marker(broker)
-    if marker and find_login_state(broker, nonce=marker["nonce"]):
-        return True
-    if state and broker in STATE_BROKERS:
-        return find_login_state(broker, state=state) is not None
-    return False
+    return bool(marker) and find_login_state(broker, nonce=marker["nonce"]) is not None
 
 
 def verify_broker_return(broker, state=None):
     """Accept a broker's answer only for a login this server started.
 
-    Consumes the pending login it matches, so an answer is accepted once.
+    Consumes the pending login it matches, so an answer is accepted once. An
+    answer from a broker in STATE_BROKERS must bring back the state of the
+    login it belongs to; any other answer must come to the browser that
+    started the login.
 
     Args:
         broker: The broker the answer is for.
@@ -259,14 +272,14 @@ def verify_broker_return(broker, state=None):
     """
     marker = _marker(broker)
     session.pop(_SESSION_KEY, None)
-    if marker:
+    if broker in STATE_BROKERS:
+        state_id = find_login_state(broker, state=state) if state else None
+    elif marker:
         state_id = find_login_state(broker, nonce=marker["nonce"])
-        if state_id is not None and consume_login_state(state_id):
-            return
-    if state and broker in STATE_BROKERS:
-        state_id = find_login_state(broker, state=state)
-        if state_id is not None and consume_login_state(state_id):
-            return
+    else:
+        state_id = None
+    if state_id is not None and consume_login_state(state_id):
+        return
     raise BrokerLoginRefused(broker)
 
 

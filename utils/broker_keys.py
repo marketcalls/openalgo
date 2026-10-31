@@ -32,6 +32,7 @@ import functools
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -107,6 +108,16 @@ BROKER_NAMES = {
 }
 
 _apply_lock = Lock()
+
+#: Longest a login holds the broker slot, in case its request never returns.
+#: A token exchange takes seconds; a stuck one must not keep every other
+#: broker out until a restart.
+LOGIN_SLOT_SECONDS = 120
+
+# The broker whose login is writing its keys and storing its token. In memory:
+# production runs one worker process, and only it serves broker logins.
+_slot_lock = Lock()
+_slot = {"broker": None, "holders": set(), "until": 0.0}
 
 # The logged-in broker, read on every request through the session-expiry
 # check, so it is cached briefly; a login or logout changes it rarely.
@@ -421,14 +432,108 @@ def _apply(keys):
     return changed
 
 
+def hold_login_slot(broker):
+    """Hold the broker slot while a login writes its keys and stores its token.
+
+    The environment holds one broker's keys, so a login exchanging its code
+    keeps every other broker's login from writing theirs until its token is
+    stored: otherwise that token would be stored and used with the other
+    broker's keys. Logins to the same broker share the slot. Release it with
+    release_login_slot() when the request ends, however it ends.
+
+    Returns:
+        object: The holder to release.
+
+    Raises:
+        BrokerKeysRefused: While a login to another broker holds the slot.
+    """
+    holder = object()
+    now = time.monotonic()
+    with _slot_lock:
+        held = _slot["broker"]
+        busy = bool(_slot["holders"]) and _slot["until"] > now
+        other = held if busy and held != broker else None
+        if other is None:
+            if held != broker or not busy:
+                _slot["holders"] = set()
+            _slot["broker"] = broker
+            _slot["holders"].add(holder)
+            _slot["until"] = now + LOGIN_SLOT_SECONDS
+    if other:
+        raise BrokerKeysRefused(
+            f"A login to {broker_title(other)} is under way. Wait for it to finish, then try again."
+        )
+    return holder
+
+
+def release_login_slot(holder):
+    """Give back a holder from hold_login_slot(). None is ignored."""
+    if holder is None:
+        return
+    with _slot_lock:
+        _slot["holders"].discard(holder)
+        if not _slot["holders"]:
+            _slot.update(broker=None, until=0.0)
+
+
+def login_slot_broker():
+    """The broker whose login holds the slot, or None."""
+    with _slot_lock:
+        if _slot["holders"] and _slot["until"] > time.monotonic():
+            return _slot["broker"]
+    return None
+
+
+def _refuse_another_broker(broker):
+    """Refuse while another broker is logged in or its login is under way."""
+    live = live_broker()
+    if live and live != broker:
+        raise BrokerKeysRefused(
+            f"OpenAlgo is logged in to {broker_title(live)}. End that session on the "
+            f"broker login page first, then choose {broker_title(broker)}."
+        )
+    pending = login_slot_broker()
+    if pending and pending != broker:
+        raise BrokerKeysRefused(
+            f"A login to {broker_title(pending)} is under way. Wait for it to finish, then try again."
+        )
+
+
+def _resolve_or_refuse(broker):
+    keys = resolve(broker)
+    if keys is None:
+        raise BrokerKeysRefused(
+            f"No API key is saved for {broker_title(broker)}. "
+            "Add it under Broker Keys, then try again."
+        )
+    return keys
+
+
+def keys_for_login(broker):
+    """The keys a login to this broker starts with, leaving the environment alone.
+
+    Starting a login only builds the broker's sign-in address, so nothing is
+    written: the keys go in place at the callback, under the login slot.
+
+    Raises:
+        BrokerKeysRefused: While another broker is logged in or its login is
+            under way, or when no key is configured for this one.
+    """
+    _refuse_another_broker(broker)
+    return _resolve_or_refuse(broker)
+
+
 def use_broker_keys(broker, check_live=True):
     """Put a broker's keys in place for the code about to call it.
 
+    A login holds the slot (hold_login_slot) before calling this, so no other
+    broker's login can replace the keys before its token is stored.
+
     Args:
         broker: The broker id.
-        check_live: Refuse when another broker is logged in. False only where
-            the broker passed is the one already logged in (startup, resume,
-            the websocket proxy).
+        check_live: Refuse when another broker is logged in or its login is
+            under way. False only where the broker passed is the one already
+            logged in (startup, resume, the websocket proxy).
 
     Returns:
         BrokerKeys: The keys now in place.
@@ -437,18 +542,8 @@ def use_broker_keys(broker, check_live=True):
         BrokerKeysRefused: With a message for the trader.
     """
     if check_live:
-        live = live_broker()
-        if live and live != broker:
-            raise BrokerKeysRefused(
-                f"OpenAlgo is logged in to {broker_title(live)}. End that session on the "
-                f"broker login page first, then choose {broker_title(broker)}."
-            )
-    keys = resolve(broker)
-    if keys is None:
-        raise BrokerKeysRefused(
-            f"No API key is saved for {broker_title(broker)}. "
-            "Add it under Broker Keys, then try again."
-        )
+        _refuse_another_broker(broker)
+    keys = _resolve_or_refuse(broker)
     if _apply(keys):
         where = "the .env file" if keys.source == "env" else "the keys saved in OpenAlgo"
         logger.info(f"Using {where} for {broker_title(broker)}")
