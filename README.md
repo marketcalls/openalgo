@@ -340,13 +340,13 @@ cd openalgo
 # Install UV package manager
 pip install uv
 
-# Configure environment
-cp .sample.env .env
-# Edit .env with your broker API credentials as per documentation
-
 # Run the application using UV
 uv run app.py
 ```
+
+On the first start OpenAlgo creates `.env` with new security keys and no broker;
+sign in and add your broker keys on the Broker Keys page. To keep the broker in
+`.env` instead, copy `.sample.env` to `.env` and fill in the broker lines first.
 
 The application will be available at `http://127.0.0.1:5000`
 

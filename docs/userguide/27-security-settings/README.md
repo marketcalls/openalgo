@@ -44,8 +44,10 @@ Exposing Flask directly while trusting proxy headers allows clients to spoof the
 ## API Keys and Credentials
 
 - OpenAlgo API keys are stored as hashes with the installation's pepper.
-- Broker configuration values live in `.env`; protect that file and never commit it.
+- Broker configuration values live in `.env` or on the Broker Keys page; protect `.env` and never commit it. Keys saved on Broker Keys are encrypted with the same key as broker tokens, so a pepper or salt rotation re-encrypts them too, and they are never returned in full.
 - Broker session tokens use the application's encrypted token store.
+- A broker login is started by the server and its answer is accepted only from the browser that started it, once, within 10 minutes. See [06 - Broker Connection](../06-broker-connection/README.md).
+- Logging out, changing the password or resetting it ends the sign-in on every device, including a copied session cookie.
 - Regenerate an OpenAlgo API key if it is exposed, then update every client that used it.
 
 API keys do not have per-key permission checkboxes in the current application. Possession of a valid key authorizes the REST operations exposed by that instance, subject to endpoint validation, mode, Action Center policy, and rate limits.

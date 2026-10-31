@@ -150,6 +150,72 @@ changed** (real login, ~3 AM rollover, logout/revoke).
 - **Gate the teardown on a real token change.** `upsert_auth` compares the new token / feed-token / broker / revoke flag against the stored row using **decrypted plaintext** — Fernet ciphertext is non-deterministic, so never compare encrypted blobs. If nothing material changed, clear the cheap in-process caches and return early, leaving the live feed up. Only a genuine change (or `revoke=True`) runs the ZMQ-publish + `cleanup_pools_for_user` path.
 - **Why:** without the gate, a same-day 2nd-device login kills the 1st device's stream until it refreshes (Shoonya), and on single-active-session Finvasia/Noren brokers the disconnect churn drops the broker token entirely (Flattrade "broker session expired"). See issue #1591. The teardown itself is the #1394/#765/#851 fix — keep it, just keep it gated. Broker-agnostic.
 
+### Broker keys: .env first, one broker at a time, read when called
+
+A trader can save keys for several brokers on the Broker Keys page
+(`database/broker_keys_db.py`) and log in to one at a time.
+`utils/broker_keys.py` owns which keys a broker uses.
+
+- **Stored like the broker tokens.** The auth_db Fernet, so a new encrypted
+  column goes into both rotation lists (`env_check._migrate_fernet_db` and
+  `upgrade/rotate_pepper.py`) or a rotation strands it. Each value is bound to
+  its broker and field inside the authenticated plaintext, so a ciphertext
+  moved to another row or column reads as not saved. A read says whether a
+  secret is set and never a character or the length of it.
+
+- **`.env` comes first.** The broker `.env` names in `REDIRECT_URL` with a
+  `BROKER_API_KEY` always uses the `.env` keys, even if keys are saved for it;
+  saved keys serve every other broker, and all of them when `.env` sets none.
+  About 4,75,000 installs log in from `.env`, and their broker resolves to the
+  values already in the environment, so nothing is written for them. Keep it
+  that way; `.env` is being phased out by migration, not by breaking it.
+- **The keys reach the plugins through the environment.** About 140 broker
+  files call `os.getenv("BROKER_API_KEY")`, so `use_broker_keys(broker)` writes
+  the five variables before that broker's code runs: at the callback, on a
+  session resume, at startup for the logged-in broker, and in the websocket
+  proxy process before an adapter starts (it is a separate process under
+  gunicorn and Docker, so the app's writes never reach it). A broker plugin
+  must read its keys when called, never into a module constant: the
+  environment can name another broker than it did at import.
+- **One broker at a time.** While the stored broker token is unrevoked and was
+  signed in to during the current trading day (a device session from today, or
+  a broker login recorded since the rollover, which a password change does not
+  clear), a login to a different broker is refused, and the live broker's saved
+  keys cannot be changed or removed, because its orders read the same
+  variables. Whether a session outlives the rollover follows the logged-in
+  broker (`logged_in_broker()`, from the stored session), never the environment,
+  which changes as soon as a login is started.
+- **The `.env` broker comes from the file, not from `os.environ`.** After a
+  switch the environment holds the saved broker's keys, so `env_file_values()`
+  reads `.env` itself. Tests point `env_file_path` at their own file (the suite
+  default is a file that does not exist).
+
+### A broker login is started by the server and its answer is checked
+
+The login page POSTs the broker to `/auth/broker/login` (CSRF-checked); the
+server builds the sign-in address (`utils/broker_login.login_url`) and records a
+pending login for that browser. The callback completes a login only for an
+answer that matches one: the browser brings its own marker back in its session,
+or the answer carries the state the server issued. The two XTS brokers post
+back across sites without the cookie, so their state rides on the return
+address, as OpenAlgo Desktop does. Pending logins live in the
+`broker_login_states` table as SHA-256 digests (so a restart mid-login is
+harmless and a copy of the table completes nothing); each is used once, by a
+delete only one caller can win, lasts ten minutes, and at most 16 are open. A POST from OpenAlgo's own login form must carry its CSRF token. Before this, any request token that
+arrived while a trader was signed in completed a login, and an XTS post-back
+logged the admin in with no password at all. A broker whose answer arrives
+without the browser's cookie (a POST from its own site) must be in
+`BROKER_SITE_POST_BROKERS` and `STATE_BROKERS` with the state on its return
+address, or its logins are refused; a broker that redirects back needs nothing,
+the cookie carries the match.
+
+Sessions are signed cookies, so ending one is recorded rather than deleted:
+a logout of a broker-logged-in session, a password change, a reset and
+`/auth/broker/end-session` call `revoke_all_sessions`, and every
+sign-in from before that instant is cleared on its next request
+(`end_session_if_signed_out`, and `is_session_valid` for Socket.IO). A sign-in
+that never reached a broker login ends at the daily rollover.
+
 ### Risk rules live in services/risk/ and are never reimplemented
 
 One place decides whether a position has hit its stop, taken its target, earned
@@ -754,5 +820,15 @@ to `main` after every successful push.
 - **Feature branches** CI has not built may carry stale or missing `dist/`. Build locally or rebase onto recent `main`.
 - **A local build on a branch cut from `main` rewrites tracked files under `frontend/dist/`.** Never stage them (`git add -A -- . ':!frontend/dist'`); `git checkout -- frontend/dist` restores them. A user testing a branch with `uv run app.py` needs that local build, and the commit still carries source only.
 
-Config lives in `.env` (copy from `.sample.env`); `VALID_BROKERS` gates which
-broker plugins load, and plugins are discovered at startup only.
+Config lives in `.env`; `VALID_BROKERS` gates which broker plugins load, and
+plugins are discovered at startup only. A first start with no `.env` creates it
+from `.sample.env` (`utils/env_check.create_env_from_sample`) with fresh
+`APP_KEY`, `API_KEY_PEPPER` and `FERNET_SALT`, owner-only permissions and no
+broker, so a fresh download runs with `uv run app.py` alone. It never does so
+when `db/openalgo.db` exists: new keys would make every stored secret
+unreadable. A `.env` copied from `.sample.env` unchanged starts too: the
+placeholder keys are replaced on first start (`_generate_keys_on_first_run`,
+`_ensure_fernet_salt`) and the `<broker>` placeholder means no broker in
+`.env`. An existing `.env` keeps its real keys and broker values: startup only
+ever replaces the public placeholders. A new placeholder secret in `.sample.env` belongs in
+`_NEW_ENV_SECRETS`, or a fresh install starts with the public placeholder.
