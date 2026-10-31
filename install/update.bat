@@ -245,24 +245,19 @@ REM Step 3: Check environment configuration
 REM ========================================
 echo [Step 3/5] Checking environment configuration...
 
+REM Never create .env here. OpenAlgo creates it on its next start, with new
+REM security keys, only when there is no database yet: over an existing
+REM database new keys would make every stored secret unreadable.
 if not exist "%OPENALGO_DIR%\.env" (
-    echo   [WARNING] No .env file found. Creating from .sample.env...
-    if exist "%OPENALGO_DIR%\.sample.env" (
-        copy /y "%OPENALGO_DIR%\.sample.env" "%OPENALGO_DIR%\.env" >nul
-
-        REM Generate fresh APP_KEY and API_KEY_PEPPER. Without this, the new .env
-        REM would carry the public sample placeholders — the app's startup check
-        REM would then auto-rotate them, but generating here keeps update.bat
-        REM symmetric with the other install scripts.
-        for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set NEW_APP_KEY=%%i
-        for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set NEW_PEPPER=%%i
-        powershell -Command "(Get-Content '%OPENALGO_DIR%\.env') -replace 'OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE', '!NEW_APP_KEY!' | Set-Content '%OPENALGO_DIR%\.env'"
-        powershell -Command "(Get-Content '%OPENALGO_DIR%\.env') -replace 'OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE', '!NEW_PEPPER!' | Set-Content '%OPENALGO_DIR%\.env'"
-        echo   [OK] Generated fresh APP_KEY and API_KEY_PEPPER in .env
-
-        echo   [ACTION REQUIRED] Please edit .env with your broker credentials and settings.
+    REM Any database counts: install-multi.sh names them db\openalgoN.db
+    if exist "%OPENALGO_DIR%\db\*.db" (
+        echo   [WARNING] No .env file found, but this install has a database.
+        echo   Restore your .env from a backup before starting OpenAlgo. A new .env
+        echo   would carry new security keys and make your saved password, API key
+        echo   and broker keys unreadable.
     ) else (
-        echo   [ERROR] .sample.env not found. Cannot create .env.
+        echo   [OK] No .env file yet. OpenAlgo creates one with new security keys
+        echo   on its next start. Add your broker keys in OpenAlgo after you sign in.
     )
 ) else (
     echo   [OK] Environment file exists.

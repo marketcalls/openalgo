@@ -16,7 +16,7 @@
 #   status   - Show container status
 #   shell    - Open bash shell in container
 #   migrate  - Run database migrations manually
-#   setup    - Re-run setup (regenerate keys, edit .env)
+#   setup    - Create .env if there is none yet (an existing .env is kept)
 #   help     - Show this help
 #
 # Prerequisites:
@@ -39,12 +39,6 @@ SAMPLE_ENV_URL="https://raw.githubusercontent.com/marketcalls/openalgo/main/.sam
 # Use the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENALGO_DIR="$SCRIPT_DIR"
-
-# XTS Brokers that require market data credentials
-XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
-
-# Valid brokers list
-VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 
 # Banner
 echo ""
@@ -94,26 +88,6 @@ check_docker() {
     fi
 }
 
-# Validate broker name
-validate_broker() {
-    local broker=$1
-    if [[ ",$VALID_BROKERS," == *",$broker,"* ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Check if broker is XTS based
-is_xts_broker() {
-    local broker=$1
-    if [[ ",$XTS_BROKERS," == *",$broker,"* ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 # Setup function
 do_setup() {
     log_info "Setting up OpenAlgo in $OPENALGO_DIR..."
@@ -129,14 +103,17 @@ do_setup() {
         fi
     fi
 
-    # Check if .env already exists
-    if [ -f "$OPENALGO_DIR/$ENV_FILE" ]; then
-        log_warn ".env file already exists at $OPENALGO_DIR/$ENV_FILE"
-        read -p "Do you want to overwrite it? (y/n): " OVERWRITE
-        if [[ ! "$OVERWRITE" =~ ^[Yy]$ ]]; then
-            log_info "Setup cancelled. Using existing .env file."
-            return 0
-        fi
+    # Docker creates a folder named .env when the file is missing at container start
+    if [ -d "$OPENALGO_DIR/$ENV_FILE" ]; then
+        log_error ".env is a folder, not a file. Docker created it because the .env file was missing."
+        echo "Delete the empty .env folder in $OPENALGO_DIR, then run this script again to create the file."
+        return 1
+    fi
+
+    # An existing .env is never replaced: its keys protect the saved data.
+    if [ -e "$OPENALGO_DIR/$ENV_FILE" ]; then
+        log_ok "Kept the existing .env and its keys ($OPENALGO_DIR/$ENV_FILE). It was not changed."
+        return 0
     fi
 
     # Download sample.env from GitHub
@@ -182,6 +159,22 @@ do_setup() {
         sed -i "s/OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE/$APP_KEY/g" "$OPENALGO_DIR/$ENV_FILE"
         sed -i "s/OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE/$API_KEY_PEPPER/g" "$OPENALGO_DIR/$ENV_FILE"
     fi
+    # No broker in .env: the trader adds broker keys in OpenAlgo after signing
+    # in (Broker Keys). VALID_BROKERS keeps the full list of brokers keys can
+    # be saved for.
+    local sed_inplace
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed_inplace=(sed -i '')
+    else
+        sed_inplace=(sed -i)
+    fi
+    "${sed_inplace[@]}" \
+        -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
+        -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
+        -e "s|^BROKER_API_KEY_MARKET *=.*|BROKER_API_KEY_MARKET = ''|" \
+        -e "s|^BROKER_API_SECRET_MARKET *=.*|BROKER_API_SECRET_MARKET = ''|" \
+        -e "s|^REDIRECT_URL *=.*|REDIRECT_URL = ''|" \
+        "$OPENALGO_DIR/$ENV_FILE"
     # .env is now bind-mounted read+write into the container so auto-rotation
     # of compromised APP_KEY/API_KEY_PEPPER (utils/env_check.py) can run.
     # Container runs as appuser (UID 1000); chown UID 1000 + chmod 600 gives
@@ -201,113 +194,20 @@ do_setup() {
     fi
     log_ok "Secure keys generated and saved."
 
-    # Get broker configuration
-    echo ""
-    echo -e "${BLUE}  ========================================${NC}"
-    echo -e "${BLUE}  Broker Configuration${NC}"
-    echo -e "${BLUE}  ========================================${NC}"
-    echo ""
-    echo "  Valid brokers:"
-    echo "  fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge,"
-    echo "  definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,"
-    echo "  groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,"
-    echo "  mstock, nubra, paytm, pocketful, rmoney, rupeezy, sahi, samco, shoonya,"
-    echo "  tradejini, tradesmart, upstox, wisdom, zebu, zerodha"
-    echo ""
-
-    # Get broker name with validation
-    while true; do
-        read -p "Enter broker name (e.g., zerodha, fyers, angel): " BROKER_NAME
-        if validate_broker "$BROKER_NAME"; then
-            break
-        else
-            log_error "Invalid broker: $BROKER_NAME"
-            echo "Please enter a valid broker name from the list above."
-        fi
-    done
-    log_ok "Broker: $BROKER_NAME"
-
-    # Get broker API credentials
-    echo ""
-    read -p "Enter your $BROKER_NAME API Key: " BROKER_API_KEY
-    read -p "Enter your $BROKER_NAME API Secret: " BROKER_API_SECRET
-
-    if [ -z "$BROKER_API_KEY" ]; then
-        log_error "API Key is required!"
-        return 1
-    fi
-
-    if [ -z "$BROKER_API_SECRET" ]; then
-        log_error "API Secret is required!"
-        return 1
-    fi
-
-    # Check if XTS broker (requires market data credentials)
-    IS_XTS=0
-    if is_xts_broker "$BROKER_NAME"; then
-        IS_XTS=1
-        echo ""
-        log_info "$BROKER_NAME is an XTS-based broker."
-        echo "       Additional market data credentials are required."
-        echo ""
-        read -p "Enter Market Data API Key: " BROKER_API_KEY_MARKET
-        read -p "Enter Market Data API Secret: " BROKER_API_SECRET_MARKET
-
-        if [ -z "$BROKER_API_KEY_MARKET" ]; then
-            log_error "Market Data API Key is required for XTS brokers!"
-            return 1
-        fi
-        if [ -z "$BROKER_API_SECRET_MARKET" ]; then
-            log_error "Market Data API Secret is required for XTS brokers!"
-            return 1
-        fi
-    fi
-
-    # Update .env with broker configuration
-    echo ""
-    log_info "Updating broker configuration..."
-
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS sed syntax
-        sed -i '' "s/BROKER_API_KEY = 'YOUR_BROKER_API_KEY'/BROKER_API_KEY = '$BROKER_API_KEY'/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i '' "s/BROKER_API_SECRET = 'YOUR_BROKER_API_SECRET'/BROKER_API_SECRET = '$BROKER_API_SECRET'/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i '' "s|<broker>|$BROKER_NAME|g" "$OPENALGO_DIR/$ENV_FILE"
-
-        if [ "$IS_XTS" -eq 1 ]; then
-            sed -i '' "s/BROKER_API_KEY_MARKET = 'YOUR_BROKER_MARKET_API_KEY'/BROKER_API_KEY_MARKET = '$BROKER_API_KEY_MARKET'/g" "$OPENALGO_DIR/$ENV_FILE"
-            sed -i '' "s/BROKER_API_SECRET_MARKET = 'YOUR_BROKER_MARKET_API_SECRET'/BROKER_API_SECRET_MARKET = '$BROKER_API_SECRET_MARKET'/g" "$OPENALGO_DIR/$ENV_FILE"
-        fi
-    else
-        # Linux sed syntax
-        sed -i "s/BROKER_API_KEY = 'YOUR_BROKER_API_KEY'/BROKER_API_KEY = '$BROKER_API_KEY'/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i "s/BROKER_API_SECRET = 'YOUR_BROKER_API_SECRET'/BROKER_API_SECRET = '$BROKER_API_SECRET'/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i "s|<broker>|$BROKER_NAME|g" "$OPENALGO_DIR/$ENV_FILE"
-
-        if [ "$IS_XTS" -eq 1 ]; then
-            sed -i "s/BROKER_API_KEY_MARKET = 'YOUR_BROKER_MARKET_API_KEY'/BROKER_API_KEY_MARKET = '$BROKER_API_KEY_MARKET'/g" "$OPENALGO_DIR/$ENV_FILE"
-            sed -i "s/BROKER_API_SECRET_MARKET = 'YOUR_BROKER_MARKET_API_SECRET'/BROKER_API_SECRET_MARKET = '$BROKER_API_SECRET_MARKET'/g" "$OPENALGO_DIR/$ENV_FILE"
-        fi
-    fi
-
-    log_ok "Broker configuration saved."
-
     echo ""
     echo -e "${GREEN}  ========================================${NC}"
     echo -e "${GREEN}  Setup Complete!${NC}"
     echo -e "${GREEN}  ========================================${NC}"
     echo ""
-    echo "  Broker:         $BROKER_NAME"
-    if [ "$IS_XTS" -eq 1 ]; then
-        echo "  Type:           XTS API (with market data)"
-    fi
     echo "  Data directory: $OPENALGO_DIR"
     echo "  Config file:    $OPENALGO_DIR/$ENV_FILE"
     echo "  Database:       $OPENALGO_DIR/db/"
     echo "  Strategies:     $OPENALGO_DIR/strategies/"
     echo "  Logs:           $OPENALGO_DIR/log/"
     echo ""
-    echo "  Redirect URL for broker portal:"
-    echo "  http://127.0.0.1:5000/$BROKER_NAME/callback"
+    echo "  Next step: once OpenAlgo is running, sign in, open Broker Keys and add"
+    echo "  your broker's keys. The page shows the redirect URL to register in"
+    echo "  your broker's developer console."
     echo ""
     echo "  Documentation: https://docs.openalgo.in"
     echo ""
@@ -564,7 +464,7 @@ do_help() {
     echo "  status   Show container status"
     echo "  shell    Open bash shell in container"
     echo "  migrate  Run database migrations manually"
-    echo "  setup    Re-run setup (regenerate keys, edit .env)"
+    echo "  setup    Create .env if there is none yet (an existing .env is kept)"
     echo "  help     Show this help"
     echo ""
     echo "Quick Start:"

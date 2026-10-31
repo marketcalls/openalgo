@@ -126,27 +126,124 @@ generate_hex() {
     python3 -c "import secrets; print(secrets.token_hex(32))"
 }
 
-# Function to validate broker name
-validate_broker() {
-    local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+# ---------------------------------------------------------------------------
+# Optional fail2ban for this server. Asked once on a fresh install, default No.
+# It guards SSH logins to the server and nothing else: OpenAlgo has its own IP
+# ban for the app, and nginx jails are left off on purpose, because the nginx
+# rate limit also covers the webhook paths and a burst of alerts would get the
+# sender banned. Nothing in this step may stop the installation.
+# This block is repeated in each server installer on purpose: they are
+# downloaded and run on their own, before the repository (and install/lib) exists.
+# ---------------------------------------------------------------------------
+FAIL2BAN_WANTED="false"
+FAIL2BAN_JAIL_FILE="/etc/fail2ban/jail.d/openalgo.conf"
+FAIL2BAN_AUTH_LOG="/var/log/auth.log"
 
-    if [[ ",$valid_brokers," == *",$broker,"* ]]; then
+# Only an interactive run is asked; a piped or unattended run means No
+fail2ban_can_ask() {
+    [ -t 0 ]
+}
+
+ask_fail2ban() {
+    FAIL2BAN_WANTED="false"
+    if ! command -v apt-get >/dev/null 2>&1; then
+        log_message "fail2ban: skipped, this server has no apt-get." "$YELLOW"
         return 0
-    else
-        return 1
+    fi
+    fail2ban_can_ask || return 0
+    local answer=""
+    read -r -p "Set up fail2ban to block repeated failed logins on this server? [y/N]: " answer || answer=""
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) FAIL2BAN_WANTED="true" ;;
+    esac
+    return 0
+}
+
+# A real IP address, as Python's ipaddress module reads one
+fail2ban_valid_ip() {
+    [ -n "$1" ] && command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "$1" >/dev/null 2>&1
+}
+
+# The address of the SSH session running this installer, or nothing. A
+# terminal multiplexer or a local console leaves other text where the address
+# would be (for example "tmux(12345).%0" or ":0"); that is not used.
+fail2ban_ssh_client_ip() {
+    local ip="${SSH_CLIENT%% *}"
+    if [ -z "$ip" ]; then
+        ip="${SSH_CONNECTION%% *}"
+    fi
+    if [ -z "$ip" ]; then
+        # sudo drops SSH_CLIENT; this terminal's login record may still have it
+        ip=$(who -m 2>/dev/null | sed -n 's/.*(\([^)]*\)).*/\1/p' | head -n 1)
+    fi
+    # [2001:db8::1] and fe80::1%eth0 forms
+    ip="${ip#\[}"
+    ip="${ip%\]}"
+    ip="${ip%%\%*}"
+    if fail2ban_valid_ip "$ip"; then
+        printf '%s' "$ip"
     fi
 }
 
-# Function to check if broker is XTS based
-is_xts_broker() {
-    local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
-    if [[ ",$xts_brokers," == *",$broker,"* ]]; then
+setup_fail2ban() {
+    [ "$FAIL2BAN_WANTED" = "true" ] || return 0
+    log_message "\n=== Setting up fail2ban ===" "$BLUE"
+    if ! sudo apt-get install -y fail2ban; then
+        log_message "Warning: fail2ban could not be installed. The installation continues without it." "$YELLOW"
         return 0
-    else
-        return 1
     fi
+
+    local ssh_ip ignore conf
+    ssh_ip=$(fail2ban_ssh_client_ip)
+    ignore="127.0.0.1/8 ::1"
+    if [ -n "$ssh_ip" ]; then
+        ignore="$ignore $ssh_ip"
+    fi
+
+    conf="# Written by the OpenAlgo installer. Running it again replaces this file.
+[sshd]
+enabled = true
+maxretry = 5
+findtime = 10m
+bantime = 1h
+ignoreip = $ignore"
+    # Without rsyslog (Debian 12) SSH logins are only in the journal
+    if [ ! -f "$FAIL2BAN_AUTH_LOG" ]; then
+        sudo apt-get install -y python3-systemd >/dev/null 2>&1 || true
+        conf="$conf
+backend = systemd"
+    fi
+
+    if ! printf '%s\n' "$conf" | sudo tee "$FAIL2BAN_JAIL_FILE" >/dev/null; then
+        log_message "Warning: could not write $FAIL2BAN_JAIL_FILE. The installation continues without fail2ban." "$YELLOW"
+        return 0
+    fi
+    if ! { sudo systemctl enable fail2ban >/dev/null 2>&1 && sudo systemctl restart fail2ban; }; then
+        log_message "Warning: fail2ban did not start (see: sudo journalctl -u fail2ban). The installation continues." "$YELLOW"
+        return 0
+    fi
+    # fail2ban needs a moment after a restart before it answers
+    local tries=0
+    until sudo fail2ban-client status >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 10 ]; then
+            log_message "Warning: fail2ban is installed but not answering (see: sudo fail2ban-client status). The installation continues." "$YELLOW"
+            return 0
+        fi
+        sleep 1
+    done
+
+    log_message "fail2ban is on for SSH logins (jail: sshd)." "$GREEN"
+    log_message "An address is banned for 1 hour after 5 failed SSH logins within 10 minutes." "$BLUE"
+    if [ -n "$ssh_ip" ]; then
+        log_message "The address you are installing from ($ssh_ip) and this server itself are never banned." "$BLUE"
+    else
+        log_message "Your SSH address could not be detected, so it is not exempt; only this server itself is." "$YELLOW"
+        log_message "To exempt it, add it to the ignoreip line in $FAIL2BAN_JAIL_FILE and run: sudo systemctl restart fail2ban" "$YELLOW"
+    fi
+    log_message "To unban an address: sudo fail2ban-client set sshd unbanip <ip>" "$BLUE"
+    return 0
 }
 
 # Function to check timezone
@@ -200,12 +297,6 @@ ZMQ_PORT_BASE=5555
 
 # Arrays to store instance configurations
 declare -a DOMAINS
-declare -a BROKERS
-declare -a API_KEYS
-declare -a API_SECRETS
-declare -a API_KEYS_MARKET
-declare -a API_SECRETS_MARKET
-declare -a IS_XTS
 declare -a MCP_ENABLED_LIST
 
 # Collect information for all instances
@@ -230,54 +321,6 @@ for ((i=1; i<=INSTANCES; i++)); do
         break
     done
 
-    # Get broker
-    while true; do
-        log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
-        read -p "Enter broker name for instance $i: " broker
-        if validate_broker "$broker"; then
-            BROKERS+=("$broker")
-            break
-        else
-            log_message "Invalid broker name" "$RED"
-        fi
-    done
-
-    # Show redirect URL
-    log_message "\nRedirect URL for broker portal: https://${domain}/${broker}/callback" "$GREEN"
-    echo ""
-
-    # Get API credentials
-    read -p "Enter broker API key for instance $i: " api_key
-    read -p "Enter broker API secret for instance $i: " api_secret
-
-    if [ -z "$api_key" ] || [ -z "$api_secret" ]; then
-        log_message "Error: API credentials are required" "$RED"
-        exit 1
-    fi
-
-    API_KEYS+=("$api_key")
-    API_SECRETS+=("$api_secret")
-
-    # Check for XTS broker
-    if is_xts_broker "$broker"; then
-        IS_XTS+=("true")
-        log_message "\nThis broker ($broker) requires market data credentials" "$YELLOW"
-        read -p "Enter market data API key: " market_key
-        read -p "Enter market data API secret: " market_secret
-
-        if [ -z "$market_key" ] || [ -z "$market_secret" ]; then
-            log_message "Error: Market data credentials required for XTS brokers" "$RED"
-            exit 1
-        fi
-
-        API_KEYS_MARKET+=("$market_key")
-        API_SECRETS_MARKET+=("$market_secret")
-    else
-        IS_XTS+=("false")
-        API_KEYS_MARKET+=("")
-        API_SECRETS_MARKET+=("")
-    fi
-
     # Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
     # Same-domain mode — /mcp and /oauth/* are served from the same nginx
     # vhost as this instance's dashboard, so no extra config is required.
@@ -294,6 +337,9 @@ for ((i=1; i<=INSTANCES; i++)); do
 
     log_message "Instance $i configuration collected" "$GREEN"
 done
+
+# Optional fail2ban for this server (default No), asked once for all instances
+ask_fail2ban
 
 # System packages installation (one-time)
 log_message "\n=== INSTALLING SYSTEM PACKAGES ===" "$YELLOW"
@@ -329,18 +375,11 @@ log_message "\n=== INSTALLING INSTANCES ===" "$YELLOW"
 for ((i=1; i<=INSTANCES; i++)); do
     idx=$((i-1))
     DOMAIN="${DOMAINS[$idx]}"
-    BROKER="${BROKERS[$idx]}"
-    API_KEY="${API_KEYS[$idx]}"
-    API_SECRET="${API_SECRETS[$idx]}"
-    API_KEY_MARKET="${API_KEYS_MARKET[$idx]}"
-    API_SECRET_MARKET="${API_SECRETS_MARKET[$idx]}"
-    IS_XTS_INSTANCE="${IS_XTS[$idx]}"
     ENABLE_REMOTE_MCP="${MCP_ENABLED_LIST[$idx]}"
 
-    log_message "\n--- Installing Instance $i: $DOMAIN ($BROKER) ---" "$BLUE"
+    log_message "\n--- Installing Instance $i: $DOMAIN ---" "$BLUE"
 
     # Paths
-    DEPLOY_NAME="${DOMAIN/./-}-${BROKER}"
     INSTANCE_DIR="$BASE_DIR/openalgo$i"
     VENV_PATH="$INSTANCE_DIR/venv"
     SOCKET_FILE="$INSTANCE_DIR/openalgo.sock"
@@ -366,6 +405,12 @@ for ((i=1; i<=INSTANCES; i++)); do
         check_status "Failed to clone repository"
     else
         log_message "Directory exists, skipping clone" "$YELLOW"
+        # Stop the running instance before its virtual environment is rebuilt;
+        # its .env and database stay where they are
+        if sudo systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            log_message "Stopping the running $SERVICE_NAME service first..." "$BLUE"
+            sudo systemctl stop "$SERVICE_NAME"
+        fi
     fi
 
     # Create virtual environment
@@ -389,93 +434,101 @@ for ((i=1; i<=INSTANCES; i++)); do
     log_message "Configuring environment file..." "$BLUE"
     ENV_FILE="$INSTANCE_DIR/.env"
 
-    if [ -f "$ENV_FILE" ]; then
-        sudo mv "$ENV_FILE" "${ENV_FILE}.backup_$(date +%Y%m%d_%H%M%S)"
-    fi
+    if [ -e "$ENV_FILE" ]; then
+        log_message "Kept the existing .env and its keys for instance $i. It was not changed." "$GREEN"
+        if ! sudo grep -qE "^HOST_SERVER *= *'https://$DOMAIN'" "$ENV_FILE"; then
+            log_message "Note: that .env is set for a different domain than $DOMAIN; its HOST_SERVER and CORS were left as they are." "$YELLOW"
+        fi
+        # Report Remote MCP as the kept .env has it, not as answered earlier
+        if sudo grep -qiE "^[[:space:]]*MCP_HTTP_ENABLED[[:space:]]*=[[:space:]]*['\"]?true" "$ENV_FILE"; then
+            ENABLE_REMOTE_MCP="true"
+        else
+            ENABLE_REMOTE_MCP="false"
+        fi
+        MCP_ENABLED_LIST[idx]="$ENABLE_REMOTE_MCP"
+    else
+        sudo cp "$INSTANCE_DIR/.sample.env" "$ENV_FILE"
 
-    sudo cp "$INSTANCE_DIR/.sample.env" "$ENV_FILE"
+        # Generate keys
+        APP_KEY=$(generate_hex)
+        API_KEY_PEPPER=$(generate_hex)
 
-    # Generate keys
-    APP_KEY=$(generate_hex)
-    API_KEY_PEPPER=$(generate_hex)
+        # Database paths (unique per instance for complete isolation)
+        DB_PATH="sqlite:///db/openalgo${i}.db"
+        LATENCY_DB="sqlite:///db/latency${i}.db"
+        LOGS_DB="sqlite:///db/logs${i}.db"
+        HEALTH_DB="sqlite:///db/health${i}.db"
+        SANDBOX_DB="sqlite:///db/sandbox${i}.db"
+        HISTORIFY_DB="db/historify${i}.duckdb"
 
-    # Database paths (unique per instance for complete isolation)
-    DB_PATH="sqlite:///db/openalgo${i}.db"
-    LATENCY_DB="sqlite:///db/latency${i}.db"
-    LOGS_DB="sqlite:///db/logs${i}.db"
-    HEALTH_DB="sqlite:///db/health${i}.db"
-    SANDBOX_DB="sqlite:///db/sandbox${i}.db"
-    HISTORIFY_DB="db/historify${i}.duckdb"
+        # Session/CSRF cookie names
+        SESSION_COOKIE="session${i}"
+        CSRF_COOKIE="csrf_token${i}"
 
-    # Session/CSRF cookie names
-    SESSION_COOKIE="session${i}"
-    CSRF_COOKIE="csrf_token${i}"
+        # Update .env file
+        # IMPORTANT: Order matters! Update domain BEFORE ports
 
-    # Update .env file
-    # IMPORTANT: Order matters! Update broker and domain BEFORE ports
+        # 1. No broker in .env: the trader adds broker keys in OpenAlgo after
+        #    signing in (Broker Keys). VALID_BROKERS keeps the full list of brokers
+        #    keys can be saved for.
+        sudo sed -i \
+            -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
+            -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
+            -e "s|^BROKER_API_KEY_MARKET *=.*|BROKER_API_KEY_MARKET = ''|" \
+            -e "s|^BROKER_API_SECRET_MARKET *=.*|BROKER_API_SECRET_MARKET = ''|" \
+            -e "s|^REDIRECT_URL *=.*|REDIRECT_URL = ''|" \
+            "$ENV_FILE"
 
-    # 1. Replace broker placeholder first
-    sudo sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
+        # 2. Replace domain URLs (before port changes)
+        sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" "$ENV_FILE"
+        # Explicitly set HOST_SERVER in case the default value didn't match
+        sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" "$ENV_FILE"
+        sudo sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
 
-    # 2. Replace domain URLs (before port changes)
-    sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" "$ENV_FILE"
-    # Explicitly set HOST_SERVER in case the default value didn't match
-    sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" "$ENV_FILE"
-    sudo sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
+        # 3. Update ports (these stay as localhost for internal communication)
+        sudo sed -i "s|FLASK_PORT='[0-9]*'|FLASK_PORT='$FLASK_PORT'|g" "$ENV_FILE"
+        sudo sed -i "s|WEBSOCKET_PORT='[0-9]*'|WEBSOCKET_PORT='$WS_PORT'|g" "$ENV_FILE"
+        sudo sed -i "s|ZMQ_PORT='[0-9]*'|ZMQ_PORT='$ZMQ_PORT'|g" "$ENV_FILE"
 
-    # 3. Update ports (these stay as localhost for internal communication)
-    sudo sed -i "s|FLASK_PORT='[0-9]*'|FLASK_PORT='$FLASK_PORT'|g" "$ENV_FILE"
-    sudo sed -i "s|WEBSOCKET_PORT='[0-9]*'|WEBSOCKET_PORT='$WS_PORT'|g" "$ENV_FILE"
-    sudo sed -i "s|ZMQ_PORT='[0-9]*'|ZMQ_PORT='$ZMQ_PORT'|g" "$ENV_FILE"
+        # 4. Update WebSocket URL for production (secure WebSocket through nginx)
+        sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
 
-    # 4. Update WebSocket URL for production (secure WebSocket through nginx)
-    sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
+        # 5. Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
+        #    nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, and
+        #    ZMQ is an internal message bus that must never be exposed publicly.
 
-    # 5. Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
-    #    nginx on this host reverse-proxies /ws -> 127.0.0.1:WEBSOCKET_PORT, and
-    #    ZMQ is an internal message bus that must never be exposed publicly.
+        # 7. Update security keys
+        sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
+        sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" "$ENV_FILE"
 
-    # 6. Update API credentials
-    sudo sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
-    sudo sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
+        # Each instance runs gunicorn behind nginx (Unix socket bind). Trust the
+        # proxy's X-Forwarded-For / X-Real-IP for IP-based features.
+        sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
 
-    # 7. Update security keys
-    sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
-    sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" "$ENV_FILE"
+        # 8. Update database paths (unique per instance - ALL 6 databases)
+        sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
+        sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
+        sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
+        sudo sed -i "s|HEALTH_DATABASE_URL = '.*'|HEALTH_DATABASE_URL = '$HEALTH_DB'|g" "$ENV_FILE"
+        sudo sed -i "s|SANDBOX_DATABASE_URL = '.*'|SANDBOX_DATABASE_URL = '$SANDBOX_DB'|g" "$ENV_FILE"
+        sudo sed -i "s|HISTORIFY_DATABASE_URL = '.*'|HISTORIFY_DATABASE_URL = '$HISTORIFY_DB'|g" "$ENV_FILE"
 
-    # Each instance runs gunicorn behind nginx (Unix socket bind). Trust the
-    # proxy's X-Forwarded-For / X-Real-IP for IP-based features.
-    sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" "$ENV_FILE"
+        # 9. Update session/CSRF cookies (CRITICAL for instance isolation)
+        sudo sed -i "s|SESSION_COOKIE_NAME = '.*'|SESSION_COOKIE_NAME = '$SESSION_COOKIE'|g" "$ENV_FILE"
+        sudo sed -i "s|CSRF_COOKIE_NAME = '.*'|CSRF_COOKIE_NAME = '$CSRF_COOKIE'|g" "$ENV_FILE"
 
-    # 8. Update database paths (unique per instance - ALL 6 databases)
-    sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
-    sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
-    sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
-    sudo sed -i "s|HEALTH_DATABASE_URL = '.*'|HEALTH_DATABASE_URL = '$HEALTH_DB'|g" "$ENV_FILE"
-    sudo sed -i "s|SANDBOX_DATABASE_URL = '.*'|SANDBOX_DATABASE_URL = '$SANDBOX_DB'|g" "$ENV_FILE"
-    sudo sed -i "s|HISTORIFY_DATABASE_URL = '.*'|HISTORIFY_DATABASE_URL = '$HISTORIFY_DB'|g" "$ENV_FILE"
+        # 10. Update Flask host IP binding (internal only)
+        sudo sed -i "s|FLASK_HOST_IP='.*'|FLASK_HOST_IP='127.0.0.1'|g" "$ENV_FILE"
 
-    # 9. Update session/CSRF cookies (CRITICAL for instance isolation)
-    sudo sed -i "s|SESSION_COOKIE_NAME = '.*'|SESSION_COOKIE_NAME = '$SESSION_COOKIE'|g" "$ENV_FILE"
-    sudo sed -i "s|CSRF_COOKIE_NAME = '.*'|CSRF_COOKIE_NAME = '$CSRF_COOKIE'|g" "$ENV_FILE"
-
-    # 10. Update Flask host IP binding (internal only)
-    sudo sed -i "s|FLASK_HOST_IP='.*'|FLASK_HOST_IP='127.0.0.1'|g" "$ENV_FILE"
-
-    # 11. Enable Remote MCP if the operator opted in for this instance.
-    # Same-domain mode: /mcp and /oauth/* are served from the same nginx
-    # vhost as the dashboard. Other MCP_* keys (auto-approve, write scope,
-    # CORS allowlist) inherit their defaults from .sample.env — flip them
-    # later in the per-instance .env if you want stricter behavior.
-    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
-        sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" "$ENV_FILE"
-        sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" "$ENV_FILE"
-    fi
-
-    # XTS broker credentials
-    if [ "$IS_XTS_INSTANCE" = "true" ]; then
-        sudo sed -i "s|YOUR_BROKER_MARKET_API_KEY|$API_KEY_MARKET|g" "$ENV_FILE"
-        sudo sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$API_SECRET_MARKET|g" "$ENV_FILE"
+        # 11. Enable Remote MCP if the operator opted in for this instance.
+        # Same-domain mode: /mcp and /oauth/* are served from the same nginx
+        # vhost as the dashboard. Other MCP_* keys (auto-approve, write scope,
+        # CORS allowlist) inherit their defaults from .sample.env — flip them
+        # later in the per-instance .env if you want stricter behavior.
+        if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+            sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" "$ENV_FILE"
+            sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" "$ENV_FILE"
+        fi
     fi
 
     # Set permissions
@@ -679,7 +732,7 @@ EOL
     log_message "Creating systemd service..." "$BLUE"
     sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOL
 [Unit]
-Description=OpenAlgo Instance $i ($DOMAIN - $BROKER)
+Description=OpenAlgo Instance $i ($DOMAIN)
 After=network.target
 
 [Service]
@@ -721,7 +774,8 @@ EOL
     log_message "Starting service..." "$BLUE"
     sudo systemctl daemon-reload
     sudo systemctl enable $SERVICE_NAME
-    sudo systemctl start $SERVICE_NAME
+    # restart, not start: an instance that was running must load the new code
+    sudo systemctl restart $SERVICE_NAME
     check_status "Failed to start service"
 
     log_message "Instance $i installed successfully!" "$GREEN"
@@ -739,6 +793,8 @@ done
 log_message "\nReloading Nginx..." "$BLUE"
 sudo systemctl reload nginx
 
+setup_fail2ban
+
 # Summary
 log_message "\n╔════════════════════════════════════════════════════════╗" "$GREEN"
 log_message "║          MULTI-INSTANCE INSTALLATION COMPLETE          ║" "$GREEN"
@@ -749,7 +805,6 @@ for ((i=1; i<=INSTANCES; i++)); do
     idx=$((i-1))
     log_message "\nInstance $i:" "$BLUE"
     log_message "  Domain: https://${DOMAINS[$idx]}" "$GREEN"
-    log_message "  Broker: ${BROKERS[$idx]}" "$BLUE"
     log_message "  Service: openalgo$i" "$BLUE"
     log_message "  Directory: $BASE_DIR/openalgo$i" "$BLUE"
     if [ "${MCP_ENABLED_LIST[$idx]}" = "true" ]; then
@@ -758,6 +813,10 @@ for ((i=1; i<=INSTANCES; i++)); do
         log_message "  Remote MCP: Disabled" "$BLUE"
     fi
 done
+
+log_message "\n NEXT STEP:" "$YELLOW"
+log_message "Visit each domain, sign in, open Broker Keys and add that instance's broker keys." "$GREEN"
+log_message "The page shows the redirect URL to register in your broker's developer console." "$GREEN"
 
 log_message "\n USEFUL COMMANDS:" "$YELLOW"
 log_message "View all services: systemctl list-units 'openalgo*'" "$BLUE"

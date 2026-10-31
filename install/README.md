@@ -36,17 +36,18 @@
    - Go to SSL/TLS section
    - Set encryption mode to "Full (strict)"
 
-### Broker Setup (Required)
-- Choose your broker from the supported list:
+### Broker Setup (After Installation)
+The installer does not ask for your broker. After installation, sign in to
+OpenAlgo, open **Broker Keys** and add your broker's keys. The page shows the
+redirect URL to register in your broker's developer console.
+
+- Supported brokers:
   ```
   fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange, dhan, dhan_sandbox,
   firstock, flattrade, fyers, groww, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,
   mstock, nubra, paytm, pocketful, rmoney, rupeezy, sahi, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha
   ```
-- Obtain your broker's API credentials:
-  - API Key
-  - API Secret
-- XTS brokers also need market data credentials:
+- Keep your broker's API key and secret at hand for that step. XTS brokers also need market data credentials:
   - `fivepaisaxts`, `compositedge`, `ibulls`, `iifl`, `jainamxts`, `rmoney`, `wisdom`
 
 ## Installation Steps
@@ -78,8 +79,20 @@ sudo ./install.sh
 
 The script will interactively prompt you for:
 - Your domain name (supports both root domains and subdomains)
-- Broker selection
-- Broker API credentials
+- Whether to enable Remote MCP (optional)
+- Whether to set up fail2ban (optional, default No; see Security Notes)
+
+It does not ask for your broker. If OpenAlgo is already installed, the script
+asks whether to back up the existing folder:
+- **Yes:** the running `openalgo` service is stopped, the folder is moved to
+  `/var/python/openalgo_backup_<date>`, and its `.env` (security keys, broker
+  settings), `db/` (your data), `strategies/` (your scripts, their settings,
+  indicators and OpenScript files) and `keys/` are copied unchanged into the new
+  installation. Files that ship with OpenAlgo come from the new copy; logs stay
+  in the backup folder. The service is restarted on the new code at the end.
+- **No:** the script warns that the folder's `.env` and `db/` are deleted with it
+  and cannot be recovered, and deletes it only if you type `DELETE`. Anything else
+  stops the installation without changing anything.
 
 The installation process will:
 - **Detect your Linux distribution** and use appropriate package managers
@@ -107,12 +120,10 @@ Example of running multiple deployments:
 # First deployment
 sudo ./install.sh
 # Enter domain: trading1.yourdomain.com
-# Enter broker: fyers
 
 # Second deployment
 sudo ./install.sh
 # Enter domain: trading2.yourdomain.com
-# Enter broker: zerodha
 ```
 
 Each deployment will:
@@ -385,6 +396,33 @@ After installation completes, verify each deployment:
 
      # For Arch Linux
      sudo pacman -Syu
+     ```
+
+4. **fail2ban (optional)**
+   - On Debian and Ubuntu servers, `install.sh`, `install-multi.sh`, `install-docker.sh`
+     and `install-docker-multi-custom-ssl.sh` ask once: "Set up fail2ban to block
+     repeated failed logins on this server? [y/N]". The default is No, and an
+     unattended run is No. Updates never ask. Servers without `apt-get` skip it.
+   - On yes, the installer writes `/etc/fail2ban/jail.d/openalgo.conf` with the
+     `sshd` jail only. An address is banned for 1 hour after 5 failed SSH logins
+     within 10 minutes. Running the installer again rewrites the same file, so
+     nothing is duplicated.
+   - No nginx jails are enabled: the nginx rate limit also covers the webhook
+     paths, so a burst of TradingView alerts or a busy dashboard would get the
+     sender banned for an hour.
+   - `127.0.0.1/8` and `::1` are never banned. The SSH address you install from is
+     exempt too when the installer can detect it as a real IP address; the summary
+     says whether it did. When it cannot (for example inside tmux, or at a local
+     console), add your address to the `ignoreip` line yourself, or a run of failed
+     SSH logins from it can still get it banned.
+   - fail2ban protects the server's SSH only. OpenAlgo bans abusive addresses for
+     the app on its own. If fail2ban fails to install or start, the installer
+     prints a warning and carries on.
+   - Useful commands:
+     ```bash
+     sudo fail2ban-client status
+     sudo fail2ban-client status sshd
+     sudo fail2ban-client set sshd unbanip <ip>
      ```
 
 ## Post-Installation

@@ -15,7 +15,7 @@ REM   logs     - View container logs (live)
 REM   pull     - Pull latest image from Docker Hub
 REM   status   - Show container status
 REM   shell    - Open bash shell in container
-REM   setup    - Re-run setup (regenerate keys, edit .env)
+REM   setup    - Create .env if there is none yet (an existing .env is kept)
 REM   help     - Show this help
 REM
 REM Prerequisites:
@@ -35,12 +35,6 @@ set OPENALGO_DIR=%~dp0
 REM Remove trailing backslash
 if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
 set SETUP_FAILED=0
-
-REM XTS Brokers that require market data credentials
-set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom
-
-REM Valid brokers list
-set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha
 
 REM Banner
 echo.
@@ -95,14 +89,18 @@ if not exist "%OPENALGO_DIR%\db\" (
     )
 )
 
-REM Check if .env already exists
+REM Docker creates a folder named .env when the file is missing at container start
+if exist "%OPENALGO_DIR%\%ENV_FILE%\" (
+    echo [ERROR] .env is a folder, not a file. Docker created it because the .env file was missing.
+    echo Delete the empty .env folder in !OPENALGO_DIR!, then run docker-run.bat again to create the file.
+    set SETUP_FAILED=1
+    goto setup_end
+)
+
+REM An existing .env is never replaced: its keys protect the saved data.
 if exist "%OPENALGO_DIR%\%ENV_FILE%" (
-    echo [WARNING] .env file already exists at %OPENALGO_DIR%\%ENV_FILE%
-    set /p OVERWRITE="Do you want to overwrite it? (y/n): "
-    if /i not "!OVERWRITE!"=="y" (
-        echo [INFO] Setup cancelled. Using existing .env file.
-        goto setup_end
-    )
+    echo [OK] Kept the existing .env and its keys. It was not changed.
+    goto setup_end
 )
 
 REM Download sample.env from GitHub using curl.exe (not PowerShell alias)
@@ -147,111 +145,28 @@ REM Update .env file with generated keys
 echo [INFO] Updating configuration with secure keys...
 powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE', '%APP_KEY%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE', '%API_KEY_PEPPER%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+REM No broker in .env: the trader adds broker keys in OpenAlgo after signing in
+REM (Broker Keys). VALID_BROKERS keeps the full list of brokers keys can be saved for.
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY = ''YOUR_BROKER_API_KEY''', 'BROKER_API_KEY = ''''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET = ''YOUR_BROKER_API_SECRET''', 'BROKER_API_SECRET = ''''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY_MARKET = ''YOUR_BROKER_MARKET_API_KEY''', 'BROKER_API_KEY_MARKET = ''''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET_MARKET = ''YOUR_BROKER_MARKET_API_SECRET''', 'BROKER_API_SECRET_MARKET = ''''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'REDIRECT_URL = ''http://127.0.0.1:5000/<broker>/callback''', 'REDIRECT_URL = ''''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 echo [OK] Secure keys generated and saved.
-
-REM Get broker configuration
-echo.
-echo   ========================================
-echo   Broker Configuration
-echo   ========================================
-echo.
-echo   Valid brokers:
-echo   fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge,
-echo   definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,
-echo   groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,
-echo   mstock, nubra, paytm, pocketful, rmoney, rupeezy, sahi, samco, shoonya,
-echo   tradejini, tradesmart, upstox, wisdom, zebu, zerodha
-echo.
-
-:get_broker
-set /p BROKER_NAME="Enter broker name (e.g., zerodha, fyers, angel): "
-
-REM Validate broker name
-echo,%VALID_BROKERS%, | findstr /i /c:",%BROKER_NAME%," >nul
-if errorlevel 1 (
-    echo [ERROR] Invalid broker: %BROKER_NAME%
-    echo Please enter a valid broker name from the list above.
-    goto get_broker
-)
-
-echo [OK] Broker: %BROKER_NAME%
-
-REM Get broker API credentials
-echo.
-set /p BROKER_API_KEY="Enter your %BROKER_NAME% API Key: "
-set /p BROKER_API_SECRET="Enter your %BROKER_NAME% API Secret: "
-
-if "%BROKER_API_KEY%"=="" (
-    echo [ERROR] API Key is required!
-    set SETUP_FAILED=1
-    goto setup_end
-)
-
-if "%BROKER_API_SECRET%"=="" (
-    echo [ERROR] API Secret is required!
-    set SETUP_FAILED=1
-    goto setup_end
-)
-
-REM Check if XTS broker (requires market data credentials)
-set IS_XTS=0
-echo,%XTS_BROKERS%, | findstr /i /c:",%BROKER_NAME%," >nul
-if not errorlevel 1 (
-    set IS_XTS=1
-    echo.
-    echo [INFO] %BROKER_NAME% is an XTS-based broker.
-    echo        Additional market data credentials are required.
-    echo.
-    set /p BROKER_API_KEY_MARKET="Enter Market Data API Key: "
-    set /p BROKER_API_SECRET_MARKET="Enter Market Data API Secret: "
-
-    if "!BROKER_API_KEY_MARKET!"=="" (
-        echo [ERROR] Market Data API Key is required for XTS brokers!
-        set SETUP_FAILED=1
-        goto setup_end
-    )
-    if "!BROKER_API_SECRET_MARKET!"=="" (
-        echo [ERROR] Market Data API Secret is required for XTS brokers!
-        set SETUP_FAILED=1
-        goto setup_end
-    )
-)
-
-REM Update .env with broker configuration
-echo.
-echo [INFO] Updating broker configuration...
-
-REM Update broker credentials
-powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY = ''YOUR_BROKER_API_KEY''', 'BROKER_API_KEY = ''%BROKER_API_KEY%''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
-powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET = ''YOUR_BROKER_API_SECRET''', 'BROKER_API_SECRET = ''%BROKER_API_SECRET%''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
-
-REM Update redirect URL with broker name (replace <broker> placeholder)
-powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '<broker>', '%BROKER_NAME%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
-
-REM Update XTS market data credentials if applicable
-if "%IS_XTS%"=="1" (
-    powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY_MARKET = ''YOUR_BROKER_MARKET_API_KEY''', 'BROKER_API_KEY_MARKET = ''!BROKER_API_KEY_MARKET!''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
-    powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET_MARKET = ''YOUR_BROKER_MARKET_API_SECRET''', 'BROKER_API_SECRET_MARKET = ''!BROKER_API_SECRET_MARKET!''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
-)
-
-echo [OK] Broker configuration saved.
 echo.
 echo   ========================================
 echo   Setup Complete!
 echo   ========================================
 echo.
-echo   Broker:         %BROKER_NAME%
-if "%IS_XTS%"=="1" (
-    echo   Type:           XTS API [with market data]
-)
 echo   Data directory: %OPENALGO_DIR%
 echo   Config file:    %OPENALGO_DIR%\%ENV_FILE%
 echo   Database:       %OPENALGO_DIR%\db\
 echo   Strategies:     %OPENALGO_DIR%\strategies\
 echo   Logs:           %OPENALGO_DIR%\log\
 echo.
-echo   Redirect URL for broker portal:
-echo   http://127.0.0.1:5000/%BROKER_NAME%/callback
+echo   Next step: once OpenAlgo is running, sign in, open Broker Keys and add
+echo   your broker's keys. The page shows the redirect URL to register in
+echo   your broker's developer console.
 echo.
 echo   Documentation: https://docs.openalgo.in
 echo.
@@ -268,6 +183,13 @@ exit /b %SETUP_FAILED%
 :start
 echo [INFO] Starting OpenAlgo...
 echo.
+
+REM Docker creates a folder named .env when the file is missing at container start
+if exist "%OPENALGO_DIR%\%ENV_FILE%\" (
+    echo [ERROR] .env is a folder, not a file. Docker created it because the .env file was missing.
+    echo Delete the empty .env folder in !OPENALGO_DIR!, then run docker-run.bat again to create the file.
+    goto end
+)
 
 REM Check if setup is needed
 if not exist "%OPENALGO_DIR%\%ENV_FILE%" (
@@ -512,7 +434,7 @@ echo   pull     Pull latest image from Docker Hub
 echo   status   Show container status
 echo   shell    Open bash shell in container
 echo   migrate  Run database migrations manually
-echo   setup    Re-run setup (regenerate keys, edit .env)
+echo   setup    Create .env if there is none yet (an existing .env is kept)
 echo   help     Show this help
 echo.
 echo Quick Start:

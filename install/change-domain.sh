@@ -205,6 +205,10 @@ fi
 CURRENT_HOST_SERVER=$(sudo grep -oP "HOST_SERVER\s*=\s*'\K[^']+" "$ENV_FILE" 2>/dev/null)
 CURRENT_WEBSOCKET_URL=$(sudo grep -oP "WEBSOCKET_URL\s*=\s*'\K[^']+" "$ENV_FILE" 2>/dev/null)
 CURRENT_REDIRECT_URL=$(sudo grep -oP "REDIRECT_URL\s*=\s*'\K[^']+" "$ENV_FILE" 2>/dev/null)
+# The "<broker>" placeholder of an unchanged .sample.env names no broker
+case "$CURRENT_REDIRECT_URL" in
+    *"<broker>"*) CURRENT_REDIRECT_URL="" ;;
+esac
 CURRENT_CORS_ORIGINS=$(sudo grep -oP "CORS_ALLOWED_ORIGINS\s*=\s*'\K[^']+" "$ENV_FILE" 2>/dev/null)
 
 # ============================================
@@ -222,7 +226,11 @@ log_message "" ""
 log_message "--- .env Settings ---" "$YELLOW"
 log_message "HOST_SERVER:        $CURRENT_HOST_SERVER" "$BLUE"
 log_message "WEBSOCKET_URL:      $CURRENT_WEBSOCKET_URL" "$BLUE"
-log_message "REDIRECT_URL:       $CURRENT_REDIRECT_URL" "$BLUE"
+if [ -n "$CURRENT_REDIRECT_URL" ]; then
+    log_message "REDIRECT_URL:       $CURRENT_REDIRECT_URL" "$BLUE"
+else
+    log_message "REDIRECT_URL:       (empty, brokers are set up in OpenAlgo under Broker Keys)" "$BLUE"
+fi
 log_message "CORS_ALLOWED_ORIGINS: $CURRENT_CORS_ORIGINS" "$BLUE"
 log_message "" ""
 log_message "--- Nginx ---" "$YELLOW"
@@ -306,6 +314,7 @@ log_message "WEBSOCKET_URL:        wss://$CURRENT_DOMAIN/ws  -->  wss://$NEW_DOM
 if echo "$CURRENT_REDIRECT_URL" | grep -q "$CURRENT_DOMAIN"; then
     log_message "REDIRECT_URL:         .../$CURRENT_DOMAIN/...  -->  .../$NEW_DOMAIN/..." "$BLUE"
 fi
+log_message "Security keys and broker API keys in .env are never changed." "$BLUE"
 if echo "$CURRENT_CORS_ORIGINS" | grep -q "$CURRENT_DOMAIN"; then
     log_message "CORS_ALLOWED_ORIGINS: https://$CURRENT_DOMAIN  -->  https://$NEW_DOMAIN" "$BLUE"
 fi
@@ -333,6 +342,10 @@ if [ -n "$BROKER_NAME" ]; then
     log_message "Update your broker developer portal redirect URL to:" "$YELLOW"
     log_message "  https://$NEW_DOMAIN/$BROKER_NAME/callback" "$GREEN"
 fi
+# Redirect URLs saved under Broker Keys live in the database, not in .env
+log_message "Brokers saved under Broker Keys keep their old redirect URL. After this" "$YELLOW"
+log_message "change, update each one on the Broker Keys page and at the broker's" "$YELLOW"
+log_message "developer console." "$YELLOW"
 log_message "" ""
 log_message "Note: The deployment directory ($SELECTED_DEPLOY) and" "$YELLOW"
 log_message "service name ($SERVICE_NAME) will NOT be renamed." "$YELLOW"
@@ -383,8 +396,11 @@ log_message "Backup location: $BACKUP_DIR" "$GREEN"
 # ============================================
 log_message "\n[Step 3/6] Updating .env file..." "$BLUE"
 
-# Replace all occurrences of old domain with new domain in .env
-sudo sed -i "s|$CURRENT_DOMAIN|$NEW_DOMAIN|g" "$ENV_FILE"
+# Replace the old domain with the new one in .env, except on the security key
+# and broker key lines: a script never changes those. REDIRECT_URL is moved to
+# the new domain (its broker part is kept): that is what changing the domain
+# means, and the old address would break the broker login.
+sudo sed -i -E "/^[[:space:]]*([A-Z0-9_]*(KEY|SECRET|SALT|PEPPER|TOKEN|PASSWORD)|BROKER_[A-Z0-9_]*)[[:space:]]*=/!s|$CURRENT_DOMAIN|$NEW_DOMAIN|g" "$ENV_FILE"
 
 # Explicitly ensure critical variables are correct
 sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$NEW_DOMAIN'|g" "$ENV_FILE"
@@ -716,6 +732,15 @@ if [ -n "$BROKER_NAME" ]; then
     log_message "Without this change, broker login/authentication will fail!" "$RED"
     log_message "" ""
 fi
+
+# Redirect URLs saved under Broker Keys live in the database; this script
+# cannot change them.
+log_message "Brokers saved under Broker Keys:" "$YELLOW"
+log_message "  Sign in at https://$NEW_DOMAIN, open Broker Keys and set the redirect URL" "$YELLOW"
+log_message "  of each saved broker to the new domain, for example" "$YELLOW"
+log_message "  https://$NEW_DOMAIN/zerodha/callback. Register the same URL at that" "$YELLOW"
+log_message "  broker's developer console, or its login will fail." "$YELLOW"
+log_message "" ""
 
 log_message "Your OpenAlgo instance is now available at:" "$GREEN"
 log_message "  https://$NEW_DOMAIN" "$GREEN"

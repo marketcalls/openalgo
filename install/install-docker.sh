@@ -39,18 +39,124 @@ generate_hex() {
     python3 -c "import secrets; print(secrets.token_hex(32))"
 }
 
-# Function to validate broker
-validate_broker() {
-    local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
-    [[ ",$valid_brokers," == *",$broker,"* ]]
+# ---------------------------------------------------------------------------
+# Optional fail2ban for this server. Asked once on a fresh install, default No.
+# It guards SSH logins to the server and nothing else: OpenAlgo has its own IP
+# ban for the app, and nginx jails are left off on purpose, because the nginx
+# rate limit also covers the webhook paths and a burst of alerts would get the
+# sender banned. Nothing in this step may stop the installation.
+# This block is repeated in each server installer on purpose: they are
+# downloaded and run on their own, before the repository (and install/lib) exists.
+# ---------------------------------------------------------------------------
+FAIL2BAN_WANTED="false"
+FAIL2BAN_JAIL_FILE="/etc/fail2ban/jail.d/openalgo.conf"
+FAIL2BAN_AUTH_LOG="/var/log/auth.log"
+
+# Only an interactive run is asked; a piped or unattended run means No
+fail2ban_can_ask() {
+    [ -t 0 ]
 }
 
-# Function to check if broker is XTS based
-is_xts_broker() {
-    local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
-    [[ ",$xts_brokers," == *",$broker,"* ]]
+ask_fail2ban() {
+    FAIL2BAN_WANTED="false"
+    if ! command -v apt-get >/dev/null 2>&1; then
+        log "fail2ban: skipped, this server has no apt-get." "$YELLOW"
+        return 0
+    fi
+    fail2ban_can_ask || return 0
+    local answer=""
+    read -r -p "Set up fail2ban to block repeated failed logins on this server? [y/N]: " answer || answer=""
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) FAIL2BAN_WANTED="true" ;;
+    esac
+    return 0
+}
+
+# A real IP address, as Python's ipaddress module reads one
+fail2ban_valid_ip() {
+    [ -n "$1" ] && command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "$1" >/dev/null 2>&1
+}
+
+# The address of the SSH session running this installer, or nothing. A
+# terminal multiplexer or a local console leaves other text where the address
+# would be (for example "tmux(12345).%0" or ":0"); that is not used.
+fail2ban_ssh_client_ip() {
+    local ip="${SSH_CLIENT%% *}"
+    if [ -z "$ip" ]; then
+        ip="${SSH_CONNECTION%% *}"
+    fi
+    if [ -z "$ip" ]; then
+        # sudo drops SSH_CLIENT; this terminal's login record may still have it
+        ip=$(who -m 2>/dev/null | sed -n 's/.*(\([^)]*\)).*/\1/p' | head -n 1)
+    fi
+    # [2001:db8::1] and fe80::1%eth0 forms
+    ip="${ip#\[}"
+    ip="${ip%\]}"
+    ip="${ip%%\%*}"
+    if fail2ban_valid_ip "$ip"; then
+        printf '%s' "$ip"
+    fi
+}
+
+setup_fail2ban() {
+    [ "$FAIL2BAN_WANTED" = "true" ] || return 0
+    log "\n=== Setting up fail2ban ===" "$BLUE"
+    if ! $SUDO apt-get install -y fail2ban; then
+        log "Warning: fail2ban could not be installed. The installation continues without it." "$YELLOW"
+        return 0
+    fi
+
+    local ssh_ip ignore conf
+    ssh_ip=$(fail2ban_ssh_client_ip)
+    ignore="127.0.0.1/8 ::1"
+    if [ -n "$ssh_ip" ]; then
+        ignore="$ignore $ssh_ip"
+    fi
+
+    conf="# Written by the OpenAlgo installer. Running it again replaces this file.
+[sshd]
+enabled = true
+maxretry = 5
+findtime = 10m
+bantime = 1h
+ignoreip = $ignore"
+    # Without rsyslog (Debian 12) SSH logins are only in the journal
+    if [ ! -f "$FAIL2BAN_AUTH_LOG" ]; then
+        $SUDO apt-get install -y python3-systemd >/dev/null 2>&1 || true
+        conf="$conf
+backend = systemd"
+    fi
+
+    if ! printf '%s\n' "$conf" | $SUDO tee "$FAIL2BAN_JAIL_FILE" >/dev/null; then
+        log "Warning: could not write $FAIL2BAN_JAIL_FILE. The installation continues without fail2ban." "$YELLOW"
+        return 0
+    fi
+    if ! { $SUDO systemctl enable fail2ban >/dev/null 2>&1 && $SUDO systemctl restart fail2ban; }; then
+        log "Warning: fail2ban did not start (see: sudo journalctl -u fail2ban). The installation continues." "$YELLOW"
+        return 0
+    fi
+    # fail2ban needs a moment after a restart before it answers
+    local tries=0
+    until $SUDO fail2ban-client status >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 10 ]; then
+            log "Warning: fail2ban is installed but not answering (see: sudo fail2ban-client status). The installation continues." "$YELLOW"
+            return 0
+        fi
+        sleep 1
+    done
+
+    log "fail2ban is on for SSH logins (jail: sshd)." "$GREEN"
+    log "An address is banned for 1 hour after 5 failed SSH logins within 10 minutes." "$BLUE"
+    if [ -n "$ssh_ip" ]; then
+        log "The address you are installing from ($ssh_ip) and this server itself are never banned." "$BLUE"
+    else
+        log "Your SSH address could not be detected, so it is not exempt; only this server itself is." "$YELLOW"
+        log "To exempt it, add it to the ignoreip line in $FAIL2BAN_JAIL_FILE and run: sudo systemctl restart fail2ban" "$YELLOW"
+    fi
+    log "To unban an address: sudo fail2ban-client set sshd unbanip <ip>" "$BLUE"
+    return 0
 }
 
 # Start installation
@@ -110,52 +216,6 @@ while true; do
     break
 done
 
-# Get broker name
-while true; do
-    log "\nValid brokers:" "$BLUE"
-    echo "fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange,"
-    echo "dhan, dhan_sandbox, firstock, flattrade, fyers, groww, hdfcsecurities, hdfcsky, ibulls, iifl, iiflcapital,"
-    echo "indmoney, jainamxts, kotak, motilal, mstock, nubra, paytm, pocketful,"
-    echo "rmoney, rupeezy, sahi, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha,"
-    echo ""
-    read -p "Enter your broker name: " BROKER_NAME
-    if validate_broker "$BROKER_NAME"; then
-        break
-    else
-        log "Invalid broker name. Please choose from the list above." "$RED"
-    fi
-done
-
-# Show redirect URL
-log "\n=== Broker API Setup ===" "$YELLOW"
-log "Redirect URL for broker developer portal:" "$BLUE"
-log "https://$DOMAIN/$BROKER_NAME/callback" "$GREEN"
-log "\nUse this URL in your broker's developer portal to get API credentials." "$BLUE"
-echo ""
-
-# Get broker API credentials
-read -p "Enter your broker API key: " BROKER_API_KEY
-read -p "Enter your broker API secret: " BROKER_API_SECRET
-
-if [ -z "$BROKER_API_KEY" ] || [ -z "$BROKER_API_SECRET" ]; then
-    log "Error: Broker API credentials are required" "$RED"
-    exit 1
-fi
-
-# Check if XTS broker and get additional credentials
-BROKER_API_KEY_MARKET=""
-BROKER_API_SECRET_MARKET=""
-if is_xts_broker "$BROKER_NAME"; then
-    log "\nThis broker requires additional market data credentials." "$YELLOW"
-    read -p "Enter your broker market data API key: " BROKER_API_KEY_MARKET
-    read -p "Enter your broker market data API secret: " BROKER_API_SECRET_MARKET
-    
-    if [ -z "$BROKER_API_KEY_MARKET" ] || [ -z "$BROKER_API_SECRET_MARKET" ]; then
-        log "Error: Market data API credentials are required for XTS brokers" "$RED"
-        exit 1
-    fi
-fi
-
 # Get email for SSL certificate
 read -p "Enter your email for SSL certificate notifications: " ADMIN_EMAIL
 if [ -z "$ADMIN_EMAIL" ]; then
@@ -175,6 +235,9 @@ if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
     log "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
 fi
 
+# Optional fail2ban for this server (default No)
+ask_fail2ban
+
 # Generate security keys
 log "\nGenerating security keys..." "$BLUE"
 APP_KEY=$(generate_hex)
@@ -185,7 +248,6 @@ INSTALL_PATH="/opt/openalgo"
 
 log "\n=== Installation Summary ===" "$YELLOW"
 log "Domain: $DOMAIN" "$BLUE"
-log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
 log "Email: $ADMIN_EMAIL" "$BLUE"
 echo ""
@@ -238,10 +300,21 @@ log "Docker Compose version: $(docker compose version --short)" "$GREEN"
 
 # Clone OpenAlgo repository
 log "\n=== Cloning OpenAlgo Repository ===" "$BLUE"
+# An existing .env survives a reinstall: its keys protect the data in the
+# Docker volumes, which removing the folder below does not touch.
+KEPT_ENV_PATH="${INSTALL_PATH}.env.kept"
 if [ -d "$INSTALL_PATH" ]; then
     log "Warning: $INSTALL_PATH already exists" "$YELLOW"
     read -p "Remove existing installation? (y/n): " remove_existing
     if [[ $remove_existing =~ ^[Yy]$ ]]; then
+        # Stop the running container first; its data volumes are kept
+        if [ -f "$INSTALL_PATH/docker-compose.yaml" ]; then
+            log "Stopping the running OpenAlgo container first..." "$BLUE"
+            (cd "$INSTALL_PATH" && $SUDO docker compose down) || log "Warning: could not stop the running container; continuing." "$YELLOW"
+        fi
+        if [ -f "$INSTALL_PATH/.env" ]; then
+            $SUDO mv "$INSTALL_PATH/.env" "$KEPT_ENV_PATH"
+        fi
         $SUDO rm -rf $INSTALL_PATH
     else
         log "Installation cancelled" "$RED"
@@ -261,6 +334,9 @@ $SUDO git clone --filter=blob:none https://github.com/marketcalls/openalgo.git $
 check_status "Git clone failed"
 
 cd $INSTALL_PATH
+if [ -f "$KEPT_ENV_PATH" ]; then
+    $SUDO mv "$KEPT_ENV_PATH" .env
+fi
 
 # Create required directories
 log "\n=== Creating Required Directories ===" "$BLUE"
@@ -272,88 +348,127 @@ check_status "Directory creation failed"
 
 # Configure environment file
 log "\n=== Configuring Environment File ===" "$BLUE"
-$SUDO cp .sample.env .env
-
-# Update .env file
-$SUDO sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" .env
-$SUDO sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" .env
-$SUDO sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" .env
-$SUDO sed -i "s|<broker>|$BROKER_NAME|g" .env
-$SUDO sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" .env
-$SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" .env
-
-# Capture build-time git info for the diagnostics page (issue #1388).
-# .git/ is dockerignored, so the running container has no .git/HEAD to read —
-# we surface the values via env instead. Both lines are appended only when not
-# already present so re-runs of this script don't accumulate duplicates.
-GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "")
-if ! grep -qE "^OPENALGO_GIT_BRANCH\s*=" .env 2>/dev/null; then
-    echo "OPENALGO_GIT_BRANCH = '${GIT_BRANCH}'" | $SUDO tee -a .env > /dev/null
-fi
-if ! grep -qE "^OPENALGO_GIT_COMMIT\s*=" .env 2>/dev/null; then
-    echo "OPENALGO_GIT_COMMIT = '${GIT_COMMIT}'" | $SUDO tee -a .env > /dev/null
-fi
-
-# Container is published only on 127.0.0.1:5000 with nginx in front; trust the
-# proxy's X-Forwarded-For / X-Real-IP so IP-based features see the real client.
-$SUDO sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" .env
-
-# .env is bind-mounted read+write into the container at /app/.env so the
-# auto-rotation in utils/env_check.py can replace publicly-known APP_KEY /
-# API_KEY_PEPPER values on first run (see issue #1039 follow-up). The
-# container runs as `appuser` (UID 1000 from the Dockerfile), so chown the
-# file to UID 1000 and tighten to 0600 — only appuser can read or write it
-# from inside the container, and the file is no longer world-readable on
-# the host. Earlier versions used mode 644 because the mount was :ro and
-# 600 + root ownership made it unreadable to UID 1000 (issue #960). With
-# the mount switched to read-write and the file owned by UID 1000, 600 is
-# both safe and necessary.
-$SUDO chown 1000:1000 .env
-$SUDO chmod 600 .env
-
-# Update XTS market data credentials if applicable
-if is_xts_broker "$BROKER_NAME"; then
-    $SUDO sed -i "s|YOUR_BROKER_MARKET_API_KEY|$BROKER_API_KEY_MARKET|g" .env
-    $SUDO sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$BROKER_API_SECRET_MARKET|g" .env
-fi
-
-# Update WebSocket and host configurations
-$SUDO sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
-# WEBSOCKET_HOST / FLASK_HOST_IP must be 0.0.0.0 *inside* the container so the
-# Docker port mapping (-p host:container) can route traffic. nginx on the host
-# reverse-proxies /ws and / onto these ports over the Docker bridge.
-$SUDO sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
-$SUDO sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
-# ZMQ_HOST is NOT rewritten: ZeroMQ is an internal message bus between broker
-# adapters and the WS proxy, both of which run in the same container. Keeping
-# it on loopback prevents the raw tick feed from being reachable via any port
-# that might be accidentally exposed.
-# CORS: Add domain if not already present (preserves custom domains)
-# NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
-if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then
-    CURRENT_CORS=$(grep "CORS_ALLOWED_ORIGINS" .env | sed "s/.*= '\\(.*\\)'/\\1/")
-    if [ -n "$CURRENT_CORS" ]; then
-        NEW_CORS="$CURRENT_CORS,https://$DOMAIN"
-        NEW_CORS=$(echo "$NEW_CORS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
-        $SUDO sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = '$NEW_CORS'|g" .env
+ENV_KEPT="false"
+if [ -e .env ]; then
+    ENV_KEPT="true"
+    log "Kept the existing .env and its keys. Only its OPENALGO_GIT_BRANCH and OPENALGO_GIT_COMMIT lines are refreshed." "$GREEN"
+    if ! $SUDO grep -qE "^HOST_SERVER *= *'https://$DOMAIN'" .env; then
+        log "Note: that .env is set for a different domain than $DOMAIN; HOST_SERVER and CORS in it were left as they are." "$YELLOW"
     fi
-fi
+    # Report Remote MCP as the kept .env has it, not as answered above
+    if $SUDO grep -qiE "^[[:space:]]*MCP_HTTP_ENABLED[[:space:]]*=[[:space:]]*['\"]?true" .env; then
+        ENABLE_REMOTE_MCP="true"
+    else
+        ENABLE_REMOTE_MCP="false"
+    fi
+    # The diagnostics page shows these two; point them at the code just cloned.
+    # Edited in place (GNU sed on this Linux server), so no copy of .env is
+    # written anywhere else; a missing line is appended.
+    GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr -cd 'A-Za-z0-9._/-')
+    GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null | tr -cd '0-9a-f')
+    for GIT_KEY in BRANCH COMMIT; do
+        if [ "$GIT_KEY" = BRANCH ]; then GIT_VALUE=$GIT_BRANCH; else GIT_VALUE=$GIT_COMMIT; fi
+        if $SUDO grep -qE "^OPENALGO_GIT_${GIT_KEY}[[:space:]]*=" .env; then
+            $SUDO sed -i "s|^OPENALGO_GIT_${GIT_KEY}[[:space:]]*=.*|OPENALGO_GIT_${GIT_KEY} = '${GIT_VALUE}'|" .env
+        else
+            echo "OPENALGO_GIT_${GIT_KEY} = '${GIT_VALUE}'" | $SUDO tee -a .env > /dev/null
+        fi
+    done
+else
+    # No .env, but Docker may still hold the database of an earlier install in
+    # this folder (removing the folder does not remove its volumes). New keys
+    # would make that data unreadable, so stop and ask for the old .env.
+    DB_VOLUME="$(basename "$INSTALL_PATH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')_openalgo_db"
+    if $SUDO docker volume inspect "$DB_VOLUME" >/dev/null 2>&1; then
+        log "Error: there is no .env in $INSTALL_PATH, but Docker still holds the OpenAlgo database of an earlier install (volume $DB_VOLUME)." "$RED"
+        log "Put your old .env back at $INSTALL_PATH/.env and run this script again. New keys would make the saved passwords and broker keys unreadable." "$RED"
+        log "Or, to start over without that data: sudo docker volume rm $DB_VOLUME" "$YELLOW"
+        exit 1
+    fi
+    $SUDO cp .sample.env .env
 
-# CSP: Set connect sources with domain (delete-and-append avoids sed regex issues with nested quotes)
-# See: https://github.com/marketcalls/openalgo/issues/938
-$SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
-echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
+    # No broker in .env: the trader adds broker keys in OpenAlgo after signing in
+    # (Broker Keys). VALID_BROKERS keeps the full list of brokers keys can be saved for.
+    $SUDO sed -i \
+        -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
+        -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
+        -e "s|^BROKER_API_KEY_MARKET *=.*|BROKER_API_KEY_MARKET = ''|" \
+        -e "s|^BROKER_API_SECRET_MARKET *=.*|BROKER_API_SECRET_MARKET = ''|" \
+        -e "s|^REDIRECT_URL *=.*|REDIRECT_URL = ''|" \
+        .env
 
-# Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
-# /oauth/* are served from the same nginx vhost as the dashboard, no
-# extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
-# allowlist) inherit their defaults from .sample.env — flip them later
-# in .env if you want stricter behavior on a shared deployment.
-if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
-    $SUDO sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" .env
-    $SUDO sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" .env
-    log "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+    # Update .env file
+    $SUDO sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" .env
+    $SUDO sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" .env
+    $SUDO sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" .env
+
+    # Capture build-time git info for the diagnostics page (issue #1388).
+    # .git/ is dockerignored, so the running container has no .git/HEAD to read —
+    # we surface the values via env instead. Both lines are appended only when not
+    # already present so re-runs of this script don't accumulate duplicates.
+    GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+    if ! grep -qE "^OPENALGO_GIT_BRANCH\s*=" .env 2>/dev/null; then
+        echo "OPENALGO_GIT_BRANCH = '${GIT_BRANCH}'" | $SUDO tee -a .env > /dev/null
+    fi
+    if ! grep -qE "^OPENALGO_GIT_COMMIT\s*=" .env 2>/dev/null; then
+        echo "OPENALGO_GIT_COMMIT = '${GIT_COMMIT}'" | $SUDO tee -a .env > /dev/null
+    fi
+
+    # Container is published only on 127.0.0.1:5000 with nginx in front; trust the
+    # proxy's X-Forwarded-For / X-Real-IP so IP-based features see the real client.
+    $SUDO sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" .env
+
+    # .env is bind-mounted read+write into the container at /app/.env so the
+    # auto-rotation in utils/env_check.py can replace publicly-known APP_KEY /
+    # API_KEY_PEPPER values on first run (see issue #1039 follow-up). The
+    # container runs as `appuser` (UID 1000 from the Dockerfile), so chown the
+    # file to UID 1000 and tighten to 0600 — only appuser can read or write it
+    # from inside the container, and the file is no longer world-readable on
+    # the host. Earlier versions used mode 644 because the mount was :ro and
+    # 600 + root ownership made it unreadable to UID 1000 (issue #960). With
+    # the mount switched to read-write and the file owned by UID 1000, 600 is
+    # both safe and necessary.
+    $SUDO chown 1000:1000 .env
+    $SUDO chmod 600 .env
+
+    # Update WebSocket and host configurations
+    $SUDO sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
+    # WEBSOCKET_HOST / FLASK_HOST_IP must be 0.0.0.0 *inside* the container so the
+    # Docker port mapping (-p host:container) can route traffic. nginx on the host
+    # reverse-proxies /ws and / onto these ports over the Docker bridge.
+    $SUDO sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
+    $SUDO sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
+    # ZMQ_HOST is NOT rewritten: ZeroMQ is an internal message bus between broker
+    # adapters and the WS proxy, both of which run in the same container. Keeping
+    # it on loopback prevents the raw tick feed from being reachable via any port
+    # that might be accidentally exposed.
+    # CORS: Add domain if not already present (preserves custom domains)
+    # NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
+    if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then
+        CURRENT_CORS=$(grep "CORS_ALLOWED_ORIGINS" .env | sed "s/.*= '\\(.*\\)'/\\1/")
+        if [ -n "$CURRENT_CORS" ]; then
+            NEW_CORS="$CURRENT_CORS,https://$DOMAIN"
+            NEW_CORS=$(echo "$NEW_CORS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+            $SUDO sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = '$NEW_CORS'|g" .env
+        fi
+    fi
+
+    # CSP: Set connect sources with domain (delete-and-append avoids sed regex issues with nested quotes)
+    # See: https://github.com/marketcalls/openalgo/issues/938
+    $SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
+    echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
+
+    # Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
+    # /oauth/* are served from the same nginx vhost as the dashboard, no
+    # extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
+    # allowlist) inherit their defaults from .sample.env — flip them later
+    # in .env if you want stricter behavior on a shared deployment.
+    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+        $SUDO sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" .env
+        $SUDO sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" .env
+        log "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+    fi
 fi
 
 check_status "Environment configuration failed"
@@ -909,6 +1024,8 @@ systemctl reload nginx
 EOFSCRIPT
 $SUDO chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
+setup_fail2ban
+
 # Installation complete
 log "\n============================================" "$GREEN"
 log "OpenAlgo Docker Installation Complete!" "$GREEN"
@@ -916,7 +1033,6 @@ log "============================================" "$GREEN"
 
 log "\nInstallation Summary:" "$YELLOW"
 log "Domain: https://$DOMAIN" "$BLUE"
-log "Broker: $BROKER_NAME" "$BLUE"
 log "Installation Path: $INSTALL_PATH" "$BLUE"
 log "Container: openalgo-web" "$BLUE"
 if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
@@ -924,11 +1040,14 @@ if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
 else
     log "Remote MCP: Disabled" "$BLUE"
 fi
+if [ "$ENV_KEPT" = "true" ]; then
+    log "Settings: the existing .env was kept; Remote MCP above is what it says." "$BLUE"
+fi
 
 log "\nNext Steps:" "$YELLOW"
 log "1. Visit https://$DOMAIN to access OpenAlgo" "$GREEN"
 log "2. Create your admin account and login" "$GREEN"
-log "3. Configure your broker settings" "$GREEN"
+log "3. Open Broker Keys and add your broker's keys. The page shows the redirect URL to register in your broker's developer console." "$GREEN"
 
 log "\nUseful Commands:" "$YELLOW"
 log "View status:  openalgo-status" "$BLUE"
