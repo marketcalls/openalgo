@@ -10,26 +10,17 @@ Endpoints (all POST, all under ``/rest/secure/angelbroking/gtt/v1/``)::
     ruleDetails  one rule by id
     ruleList     paged list, filtered by a ``status`` array in the body
 
-No native OCO
--------------
-Angel's published GTT API has **no OCO / two-leg rule type**: ``createRule``
-takes exactly one ``triggerprice`` and one child order. OpenAlgo's OCO is
-therefore expressed as **two independent Angel rules** — the stop-loss leg and
-the target leg — and the pair is handed back to OpenAlgo as a single composite
-trigger id joined by ``-`` (:data:`_COMPOSITE_DELIMITER`)::
+Native OCO
+----------
+One OpenAlgo GTT is one Angel rule. An OCO is created with ``gttType: "OCO"``:
+the target leg rides in ``triggerprice``/``price`` and the stop-loss leg in
+``stoplosstriggerprice``/``stoplossprice``, and Angel cancels the other leg
+when one fires. The trigger id is Angel's rule id.
 
-    "<stoploss_rule_id>-<target_rule_id>"     e.g. "1234567-1234568"
-
-Angel rule ids are numeric, so the delimiter is unambiguous. ``modify`` and
-``cancel`` decode the composite back into both rule ids and act on each in
-turn, bailing out on the first failure. If the *second* leg fails while
-placing, the first (already created) rule is cancelled so no orphan trigger is
-left behind.
-
-Because Angel stores no link between the two rules, ``get_gtt_book`` reports
-them as two separate single-trigger rows — reconstructing the pair from
-(symbol, side, quantity, timestamp) would risk merging unrelated rules, which
-for a cancel would be a trading hazard. See :func:`map_gtt_book`.
+Before this, OpenAlgo built an OCO from two independent single rules and
+returned ``"<stoploss_rule_id>-<target_rule_id>"``. Angel did not link them, so
+both legs could fire and sell twice. Such composite ids can still be cancelled
+(both rules); modifying one is refused (cancel and re-place).
 
 Other Angel-specific quirks handled here:
 
@@ -39,7 +30,8 @@ Other Angel-specific quirks handled here:
   LIMIT, exactly as the zerodha module does.
 * ``cancelRule`` needs ``symboltoken`` + ``exchange``, but OpenAlgo's
   ``cancel_gtt_order(trigger_id, auth)`` only receives the id — so the rule is
-  looked up through ``ruleDetails`` first.
+  looked up through ``ruleDetails`` first. ``modify`` reads it too, to refuse
+  a SINGLE <-> OCO change Angel cannot make.
 * Headers (Bearer token, X-PrivateKey, X-ClientLocalIP, X-ClientPublicIP,
   X-MACAddress, X-UserType, X-SourceID) are built by the broker's existing
   :func:`broker.angel.api.order_api.get_api_response`, which is reused for
@@ -51,6 +43,7 @@ import json
 from broker.angel.api.order_api import get_api_response
 from broker.angel.mapping.gtt_data import (
     ACTIVE_GTT_STATUSES,
+    is_oco,
     map_gtt_book,
     transform_modify_gtt,
     transform_place_gtt,
@@ -64,8 +57,8 @@ logger = get_logger(__name__)
 
 _GTT_BASE = "/rest/secure/angelbroking/gtt/v1"
 
-# Delimiter used to fold the two Angel rule ids of an OpenAlgo OCO into one
-# trigger id. Angel rule ids are numeric, so "-" can never occur inside one.
+# Delimiter of the legacy two-rule OCO trigger id ("<sl_id>-<tg_id>"). Angel rule
+# ids are numeric, so "-" can never occur inside one.
 _COMPOSITE_DELIMITER = "-"
 
 # ruleList is paged. Angel's own sample uses count=10 (AB9018 is "Invalid Count
@@ -92,8 +85,7 @@ class _FakeResponse:
     """Minimal stand-in exposing ``.status`` / ``.status_code`` / ``.text``.
 
     Angel's shared :func:`get_api_response` returns the parsed body rather than
-    an httpx response, and an OCO place is two HTTP calls anyway, so
-    ``place_gtt_order`` always synthesises its response object.
+    an httpx response, so ``place_gtt_order`` synthesises its response object.
     """
 
     def __init__(self, status_code, text=""):
@@ -148,12 +140,12 @@ def _rule_id(response_data):
 
 
 def _encode_trigger_id(rule_ids):
-    """Join one or two Angel rule ids into an OpenAlgo trigger id."""
+    """Join Angel rule ids into an OpenAlgo trigger id (two only for a legacy OCO)."""
     return _COMPOSITE_DELIMITER.join(str(rid) for rid in rule_ids)
 
 
 def _decode_trigger_id(trigger_id):
-    """Split an OpenAlgo trigger id back into its Angel rule ids (1 or 2)."""
+    """Split an OpenAlgo trigger id back into its Angel rule ids (2 for a legacy OCO)."""
     return [part for part in str(trigger_id).split(_COMPOSITE_DELIMITER) if part]
 
 
@@ -299,10 +291,7 @@ def _cancel_rule(rule_id, symboltoken, exchange, auth):
 def place_gtt_order(data, auth):
     """Create a GTT on Angel. Returns ``(response, response_dict, trigger_id)``.
 
-    SINGLE places one ``createRule``. OCO places two — stop-loss leg first,
-    then target leg — and returns the composite ``"<sl_id>-<tg_id>"`` trigger
-    id. If the target leg fails, the already-created stop-loss rule is
-    cancelled before the error is returned, so a half-built OCO never survives.
+    SINGLE and OCO are each one ``createRule``; the trigger id is the rule id.
     """
     error = _prepare_market(data, auth)
     if error:
@@ -316,59 +305,40 @@ def place_gtt_order(data, auth):
         logger.error(message)
         return _FakeResponse(400), {"status": "error", "message": message}, None
 
-    bodies = transform_place_gtt(data, token)
+    response_data = _gtt_request("createRule", auth, transform_place_gtt(data, token))
+    if not _is_ok(response_data):
+        return (
+            _FakeResponse(_error_status(response_data), json.dumps(response_data)),
+            {
+                "status": "error",
+                "message": _error_message(response_data, "Failed to create GTT rule"),
+            },
+            None,
+        )
 
-    created_ids = []
-    last_response = {}
-    for leg_label, body in bodies:
-        response_data = _gtt_request("createRule", auth, body)
-        last_response = response_data
+    rule_id = _rule_id(response_data)
+    if not rule_id:
+        message = "Angel returned no rule id"
+        logger.error(f"{message}: {response_data}")
+        return (
+            _FakeResponse(502, json.dumps(response_data)),
+            {"status": "error", "message": message},
+            None,
+        )
 
-        if not _is_ok(response_data):
-            message = _error_message(response_data, f"Failed to create GTT rule ({leg_label})")
-            # Partial OCO: roll the already-created leg back so Angel is not
-            # left holding half of a two-leg trigger.
-            for done_id in created_ids:
-                logger.warning(
-                    f"Angel place_gtt: rolling back rule {done_id} after {leg_label} leg failed"
-                )
-                _cancel_rule(done_id, body["symboltoken"], body["exchange"], auth)
-            return (
-                _FakeResponse(_error_status(response_data), json.dumps(response_data)),
-                {"status": "error", "message": message},
-                None,
-            )
-
-        rule_id = _rule_id(response_data)
-        if not rule_id:
-            message = f"Angel returned no rule id for the {leg_label} leg"
-            logger.error(f"{message}: {response_data}")
-            for done_id in created_ids:
-                _cancel_rule(done_id, body["symboltoken"], body["exchange"], auth)
-            return (
-                _FakeResponse(502, json.dumps(response_data)),
-                {"status": "error", "message": message},
-                None,
-            )
-
-        created_ids.append(rule_id)
-
-    trigger_id = _encode_trigger_id(created_ids)
-    logger.info(f"Angel place_gtt created rule ids={created_ids}, trigger_id={trigger_id}")
-    return _FakeResponse(200, json.dumps(last_response)), last_response, trigger_id
+    logger.info(f"Angel place_gtt created rule id={rule_id}")
+    return _FakeResponse(200, json.dumps(response_data)), response_data, rule_id
 
 
 def modify_gtt_order(data, auth):
     """Modify an active GTT on Angel. Returns ``(response_dict, status_code)``.
 
-    ``data['trigger_id']`` is required and may be a composite OCO id, in which
-    case two ``modifyRule`` calls are issued (stop-loss leg then target leg)
-    and the first failure aborts the rest — Angel offers no atomic two-rule
-    modify, so a failure after the first leg leaves the pair half-updated; the
-    error message says which leg failed.
+    The rule is read back first: Angel cannot turn a SINGLE rule into an OCO or
+    back, and its ``symboltoken``/``exchange`` are what ``modifyRule`` needs.
+    A legacy two-rule OCO id is refused (cancel and re-place it).
 
     Angel's modify body cannot change ``transactiontype``, ``producttype`` or
-    ``tradingsymbol``; only price/quantity/trigger/disclosed quantity are
+    ``tradingsymbol``; only prices, quantity and disclosed quantity are
     editable. Those fields in ``data`` are ignored by the broker.
     """
     trigger_id = data.get("trigger_id")
@@ -376,19 +346,31 @@ def modify_gtt_order(data, auth):
         return {"status": "error", "message": "trigger_id is required"}, 400
 
     rule_ids = _decode_trigger_id(trigger_id)
-    if not rule_ids:
-        return {"status": "error", "message": "trigger_id is required"}, 400
-
-    trigger_type = (data.get("trigger_type") or "").upper()
-    expected = 2 if trigger_type == "OCO" else 1
-    if len(rule_ids) != expected:
+    if len(rule_ids) != 1:
         return (
             {
                 "status": "error",
                 "message": (
-                    f"trigger_id '{trigger_id}' maps to {len(rule_ids)} Angel rule(s) but "
-                    f"trigger_type={trigger_type or 'SINGLE'} needs {expected}. Angel cannot "
-                    f"convert a rule between SINGLE and OCO — cancel and re-place instead."
+                    f"trigger_id '{trigger_id}' is a legacy two-rule OCO; Angel cannot modify "
+                    f"it as one GTT. Cancel it and place a new OCO."
+                ),
+            },
+            400,
+        )
+
+    rule = _lookup_rule(rule_ids[0], auth)
+    if not rule:
+        return {"status": "error", "message": f"Could not fetch Angel GTT rule {trigger_id}"}, 404
+
+    stored_oco = (rule.get("gttType") or "").upper() == "OCO"
+    if stored_oco != is_oco(data):
+        stored, asked = ("OCO", "SINGLE") if stored_oco else ("SINGLE", "OCO")
+        return (
+            {
+                "status": "error",
+                "message": (
+                    f"GTT {trigger_id} is {stored} on Angel but the request is {asked}. Angel "
+                    f"cannot convert a rule between SINGLE and OCO — cancel and re-place instead."
                 ),
             },
             400,
@@ -398,41 +380,21 @@ def modify_gtt_order(data, auth):
     if error:
         return {"status": "error", "message": error}, 502
 
-    token = _resolve_token(data)
-    if not token:
-        # Fall back to whatever Angel already stored on the rule.
-        rule = _lookup_rule(rule_ids[0], auth)
-        token = (rule or {}).get("symboltoken")
-        if not token:
-            message = (
-                f"Could not resolve Angel symboltoken for "
-                f"{data.get('symbol')}/{data.get('exchange')}"
-            )
-            logger.error(message)
-            return {"status": "error", "message": message}, 400
+    token = rule.get("symboltoken") or _resolve_token(data)
+    response_data = _gtt_request("modifyRule", auth, transform_modify_gtt(data, token, rule_ids[0]))
+    if not _is_ok(response_data):
+        message = _error_message(response_data, "Failed to modify GTT rule")
+        return {"status": "error", "message": message}, _error_status(response_data)
 
-    bodies = transform_modify_gtt(data, token, rule_ids)
-
-    modified_ids = []
-    for leg_label, body in bodies:
-        response_data = _gtt_request("modifyRule", auth, body)
-        if not _is_ok(response_data):
-            message = _error_message(response_data, f"Failed to modify GTT rule ({leg_label})")
-            return (
-                {"status": "error", "message": f"{leg_label} leg: {message}"},
-                _error_status(response_data),
-            )
-        modified_ids.append(_rule_id(response_data) or body["id"])
-
-    return {"status": "success", "trigger_id": _encode_trigger_id(modified_ids)}, 200
+    return {"status": "success", "trigger_id": _rule_id(response_data) or rule_ids[0]}, 200
 
 
 def cancel_gtt_order(trigger_id, auth):
     """Cancel an active GTT on Angel. Returns ``(response_dict, status_code)``.
 
-    A composite OCO trigger id cancels both underlying rules, aborting on the
-    first failure (the surviving leg is reported in the error message so the
-    caller can retry it). Angel's ``cancelRule`` needs ``symboltoken`` +
+    A legacy two-rule OCO trigger id cancels both underlying rules, aborting on
+    the first failure (the surviving leg is reported in the error message so
+    the caller can retry it). Angel's ``cancelRule`` needs ``symboltoken`` +
     ``exchange``, which are not part of OpenAlgo's cancel contract, so each
     rule is first read back through ``ruleDetails``.
     """
