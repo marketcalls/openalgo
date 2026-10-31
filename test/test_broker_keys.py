@@ -3004,12 +3004,16 @@ def test_the_setup_guide_matches_where_each_login_goes(stores, environment, monk
     assert {"shoonya", "zebu", "angel", "fyers", "zerodha"} <= set(checked)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="start.sh runs in the Linux container; Windows only simulates POSIX mode bits",
+)
 def test_startup_keeps_the_security_keys_file_private(tmp_path):
     """AUDIT R13. start.sh created the keys file 0600, then opened every file
     under db with chmod -R 755. Runs start.sh's own permission block."""
     import stat
 
-    script = (ROOT / "start.sh").read_text()
+    script = (ROOT / "start.sh").read_text(encoding="utf-8")
     start = script.index('if [ -w "." ]; then\n    # Set more permissive permissions')
     block = script[start : script.index("\nfi\n", start) + 4]
     for name in ("db", "log", "strategies", "keys"):
@@ -3035,7 +3039,7 @@ def test_no_compose_file_creates_a_folder_named_env():
     when .env is missing; bind.create_host_path does."""
     import yaml
 
-    compose = yaml.safe_load((ROOT / "docker-compose.yaml").read_text())
+    compose = yaml.safe_load((ROOT / "docker-compose.yaml").read_text(encoding="utf-8"))
     binds = [
         v
         for service in compose["services"].values()
@@ -3044,7 +3048,7 @@ def test_no_compose_file_creates_a_folder_named_env():
     ]
     assert binds and all(v["bind"]["create_host_path"] is False for v in binds)
     for installer in ("install/install-docker.sh", "install/install-docker-multi-custom-ssl.sh"):
-        text = (ROOT / installer).read_text()
+        text = (ROOT / installer).read_text(encoding="utf-8")
         assert "./.env:/app/.env" not in text, installer
         assert "target: /app/.env\n        bind:\n          create_host_path: false" in text
 
