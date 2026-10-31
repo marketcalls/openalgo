@@ -56,6 +56,12 @@ Two more rules follow from the staging:
 - **Get the token first, then read the keys,** in any code that calls the
   broker with both. The token read is what pins the matching keys; a key read
   made before it gets the process's keys.
+- **Dispatch through the token's broker.** A UI route that picks its broker
+  module from `session["broker"]` gets a token only of that broker (and that
+  account, when both are known); in the middle of a switch it gets none and
+  must answer that the session ended. Code without a browser session uses
+  `get_auth_token_broker` and the broker it returns, never a broker chosen
+  separately.
 
 Credentials your broker needs beyond those five (`BROKER_CLIENT_ID`,
 `BROKER_VENDOR_CODE`, partner ids) are not saved in Broker Configuration. Read them with

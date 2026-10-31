@@ -85,13 +85,16 @@ def stores(tmp_path, monkeypatch):
     keys_session, keys_query = _swap_store(monkeypatch, keys_db, engine)
     auth_db._session_revocation_cache.invalidate()
     # Tests store broker sessions directly, not through upsert_auth, which is
-    # what drops this cache in the app.
+    # what drops these caches in the app: a token cached by one test must not
+    # answer the next one's read.
+    auth_db.auth_cache.clear()
     broker_keys.forget_logged_in_broker()
     broker_login.clear_pending_logins()
     try:
         yield SimpleNamespace(engine=engine, auth=auth_session, keys=keys_session)
     finally:
         auth_db._session_revocation_cache.invalidate()
+        auth_db.auth_cache.clear()
         broker_keys.forget_logged_in_broker()
         broker_login.clear_pending_logins()
         auth_db.Base.query = auth_query
@@ -3557,20 +3560,28 @@ def test_a_token_read_never_pins_a_later_configuration(
     }
     _reconfigure_at_the_pin(monkeypatch, app, change)
 
-    with app.test_request_context("/api/v1/funds", method="POST"):
-        if path == "api_key":
-            token, _broker = auth_db.get_auth_token_broker("platform-key")
-        else:
-            token = auth_db.get_auth_token(USER, bypass_cache=path == "fresh")
-        if token:
-            funds.get_margin_data(token)
+    if path == "api_key":
+        # An API caller goes by the broker it is handed with the token.
+        with app.test_request_context("/api/v1/funds", method="POST"):
+            token, broker = auth_db.get_auth_token_broker("platform-key")
+            pinned = os.getenv("BROKER_API_KEY")
+            if broker == "fyers":
+                funds.get_margin_data(token)
+        expected_key = {"fyers": ("FYAPP-100", "FYAPP-200"), "zerodha": ("zkey123",)}
+        assert broker is None or pinned in expected_key[broker], (broker, pinned)
+    else:
+        # A page or UI action of a browser logged in to Fyers dispatches
+        # through Fyers, whatever the token read finds.
+        with app.test_request_context("/api/v1/funds", method="POST"):
+            from flask import session
 
-    coherent = {
-        "FYAPP-100:tok",
-        "FYAPP-200:new-fyers-token",
-        "zkey123:zkey123:new-zerodha-token",
-    }
-    assert sent == [] or set(sent) <= coherent, sent
+            session.update(user=USER, logged_in=True, broker="fyers")
+            token = auth_db.get_auth_token(USER, bypass_cache=path == "fresh")
+            if token:
+                funds.get_margin_data(token)
+
+    coherent = {"FYAPP-100:tok", "FYAPP-200:new-fyers-token"}
+    assert set(sent) <= coherent, sent
     assert token != "tok" or sent == ["FYAPP-100:tok"]
 
 
@@ -3630,3 +3641,153 @@ def test_a_background_pin_belongs_to_its_token_read_not_to_a_time(
     contextvars.Context().run(slow_job)
 
     assert sent == ["FYAPP-100:tok"]
+
+
+# --------------------------------------------------------------------------
+# Re-audit of PR 2337 at d9b689ece, B01: a UI route picks its broker module
+# from the browser's session, so the token it reads must be that broker's.
+# --------------------------------------------------------------------------
+
+
+def _ui_app(monkeypatch):
+    """The app with the order routes, analyzer off, and every broker request recorded."""
+    import restx_api  # noqa: F401  (before the service modules, as the strategy tests do)
+    import blueprints.orders as orders
+
+    sent = []
+
+    def response(method, url, **kwargs):
+        sent.append((method, url, (kwargs.get("headers") or {}).get("Authorization")))
+        return SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {"code": 401, "s": "error", "message": "test transport"},
+            text="{}",
+            content=b"{}",
+            headers={},
+        )
+
+    transport = SimpleNamespace(
+        get=lambda url, **kw: response("GET", url, **kw),
+        post=lambda url, **kw: response("POST", url, **kw),
+        put=lambda url, **kw: response("PUT", url, **kw),
+        patch=lambda url, **kw: response("PATCH", url, **kw),
+        delete=lambda url, **kw: response("DELETE", url, **kw),
+        request=lambda method, url, **kw: response(method, url, **kw),
+    )
+    for name, module in list(sys.modules.items()):
+        if name.startswith(("broker.fyers", "broker.zerodha", "utils.httpx_client")) and hasattr(
+            module, "get_httpx_client"
+        ):
+            monkeypatch.setattr(module, "get_httpx_client", lambda: transport)
+        if name.startswith(("blueprints.", "services.", "database.settings_db")) and hasattr(
+            module, "get_analyze_mode"
+        ):
+            monkeypatch.setattr(module, "get_analyze_mode", lambda: False)
+        if name.startswith("services.") and hasattr(module, "bus"):
+            monkeypatch.setattr(module.bus, "publish", lambda *a, **k: None, raising=False)
+    import broker.fyers.api.funds as funds
+
+    monkeypatch.setattr(funds, "_cache", {})
+    monkeypatch.setattr(funds, "_rate_limit", {})
+    app = _app()
+    app.register_blueprint(orders.orders_bp)
+    app.broker_auth_functions = {
+        "fyers_auth": lambda code: ("new-fyers-token", None),
+        "zerodha_auth": lambda code: ("new-zerodha-token", None),
+    }
+    return app, sent
+
+
+_UI_ACTIONS = {
+    "dashboard": ("GET", "/auth/dashboard-data", None),
+    "cancel": ("POST", "/cancel_order", {"orderid": "old-fyers-order"}),
+    "cancel_all": ("POST", "/cancel_all_orders", {}),
+    "modify": (
+        "POST",
+        "/modify_order",
+        {"orderid": "old-fyers-order", "symbol": "SBIN", "exchange": "NSE", "action": "BUY",
+         "product": "MIS", "pricetype": "LIMIT", "price": "500", "quantity": "1"},
+    ),
+    "close_position": ("POST", "/close_position", {"symbol": "SBIN", "exchange": "NSE", "product": "MIS"}),
+    "close_all": ("POST", "/close_all_positions", {}),
+    "orderbook": ("GET", "/orderbook", None),
+}
+
+
+@pytest.mark.parametrize("action", sorted(_UI_ACTIONS))
+def test_a_ui_action_never_reaches_one_broker_with_another_brokers_session(
+    stores, environment, commit, monkeypatch, action
+):
+    """AUDIT B01. The browser is on Fyers; at its token read another device
+    forgets Fyers and logs in to Zerodha. The token read correctly moved to the
+    Zerodha session, but the route still dispatched through Fyers, so the
+    dashboard's funds call and a cancel went to Fyers carrying Zerodha's key
+    and token. Acceptable: the Fyers request intact, or no request at all. A
+    cancel of a Fyers order must never reach anyone with Zerodha's session."""
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("fyers")
+    broker_keys.use_broker_keys("fyers")
+    app, sent = _ui_app(monkeypatch)
+    browser = _signed_in(
+        app, logged_in=True, broker="fyers", login_time=datetime.now(IST).isoformat()
+    )
+    _reconfigure_at_the_pin(monkeypatch, app, "forget_then_switch")
+    method, path, body = _UI_ACTIONS[action]
+
+    if method == "GET":
+        browser.get(path, headers=JSON)
+    else:
+        browser.post(path, json=body, headers=JSON)
+
+    assert auth_db.Auth.query.filter_by(name=USER).one().broker == "zerodha"
+    for _method, url, authorization in sent:
+        assert "zerodha" not in (authorization or ""), (url, authorization)
+        assert "zkey123" not in (authorization or ""), (url, authorization)
+        assert authorization in (None, "FYAPP-100:tok"), (url, authorization)
+
+
+def test_a_browser_on_one_account_is_not_handed_another_accounts_token(stores):
+    """AUDIT B01, same broker: another device logged in to the same broker with
+    another account, which signs no device out. A page or action of this
+    browser, still on its own account, must not act with the other account's
+    token."""
+    auth_db.db_session.add(
+        auth_db.Auth(
+            name=USER, auth=auth_db.encrypt_token("token-of-B"), broker="dhan",
+            user_id="B", is_revoked=False,
+        )
+    )
+    auth_db.db_session.commit()
+
+    with _app().test_request_context("/cancel_order", method="POST"):
+        from flask import session
+
+        session.update(user=USER, logged_in=True, broker="dhan", USER_ID="A")
+        on_account_a = auth_db.get_auth_token(USER)
+        session["USER_ID"] = "B"
+        on_account_b = auth_db.get_auth_token(USER)
+
+    assert on_account_a is None
+    assert on_account_b == "token-of-B"
+
+
+def test_only_a_browser_on_a_broker_is_held_to_it(stores):
+    """The API, scheduler jobs and a browser before any broker login carry no
+    broker of their own: they get the stored session as before."""
+    auth_db.db_session.add(
+        auth_db.Auth(name=USER, auth=auth_db.encrypt_token("tok"), broker="fyers", is_revoked=False)
+    )
+    auth_db.db_session.commit()
+
+    outside = auth_db.get_auth_token(USER)
+    with _app().test_request_context("/api/v1/funds", method="POST"):
+        api_request = auth_db.get_auth_token(USER)
+    with _app().test_request_context("/broker"):
+        from flask import session
+
+        session.update(user=USER)
+        before_broker_login = auth_db.get_auth_token(USER)
+
+    assert outside == api_request == before_broker_login == "tok"

@@ -234,7 +234,15 @@ there. `utils/broker_keys.py` owns which keys a broker uses.
   with another's keys. A login's own staged keys are never replaced. A pin
   lasts to the end of the request (the auth blueprint's teardown drops it,
   app-wide); outside a request it lasts until that context's next token
-  read, never a timer. `use_broker_keys` drops its caller's pin. Tests reset
+  read, never a timer. In a request from a browser whose session is logged in
+  to a broker, the token must also be that broker's, and that account's when
+  both are known (`_browser_session_expects`): about ten blueprints (orders,
+  the dashboard, the option tools) pick their broker module from
+  `session["broker"]`, so a token of the broker another device switched to
+  would go to the wrong broker's endpoint. Such a request is refused; the
+  switch signed that browser out anyway. Code that needs the broker of the
+  token it reads uses `get_auth_token_broker` and dispatches through the
+  broker it is handed. `use_broker_keys` drops its caller's pin. Tests reset
   staging and the published record per test (`test/conftest.py`).
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or

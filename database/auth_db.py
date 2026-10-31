@@ -1061,25 +1061,62 @@ def _context_generation():
 _COHERENT_READ_ATTEMPTS = 3
 
 
+def _browser_session_expects():
+    """(broker, account) the browser session of this request is logged in to, or Nones.
+
+    A page or a UI action (the dashboard, cancel, close) picks its broker
+    module from the browser's session, not from the token it reads.
+    """
+    try:
+        from flask import has_request_context, session
+
+        if not has_request_context():
+            return None, None
+        broker = session.get("broker") or None
+        account = str(session.get("USER_ID") or "").strip() or None
+        return broker, account
+    except Exception:
+        logger.exception("Could not read the broker of this browser session")
+        return None, None
+
+
 def _read_coherently(read, refused):
     """A token read whose token and pinned keys belong to one configuration.
 
-    ``read()`` returns (result, token, broker). The keys or the stored session
-    moving between the read and the pin (a switch, a key change with its
-    sign-out, a forget) means the token read may belong to a configuration
-    that is no longer the process's: the read starts again and finds the new
-    session, or none. A token whose keys cannot be pinned is not returned:
-    a request is refused before it reaches the broker rather than sent with
-    keys that are not its token's.
+    ``read()`` returns (result, token, broker, account). The keys or the
+    stored session moving between the read and the pin (a switch, a key change
+    with its sign-out, a forget) means the token read may belong to a
+    configuration that is no longer the process's: the read starts again and
+    finds the new session, or none. A token whose keys cannot be pinned is not
+    returned: a request is refused before it reaches the broker rather than
+    sent with keys that are not its token's.
+
+    In a request from a browser whose session is logged in to a broker, the
+    token must be that broker's (and that account's, when both are known):
+    the route chose its broker module from the session, so a token of the
+    broker another device switched to would be sent to the wrong broker's
+    endpoint, Zerodha's credentials to Fyers. The switch signed that browser
+    out, so its next request is refused anyway; this one is refused here.
 
     Returns:
         The result, or ``refused``.
     """
+    expected_broker, expected_account = _browser_session_expects()
     for _ in range(_COHERENT_READ_ATTEMPTS):
         before = _context_generation()
-        result, token, broker = read()
+        result, token, broker, account = read()
         if not token:
             return result
+        if expected_broker and broker != expected_broker:
+            logger.warning(
+                "Refused a %s session to a request from a browser logged in to %s",
+                broker,
+                expected_broker,
+            )
+            return refused
+        if expected_account and account and str(account).strip() != expected_account:
+            logger.warning("Refused a session of another account than this browser's")
+            return refused
         if _pin_keys(broker) and _context_generation() == before:
             return result
         _unpin_keys()
@@ -1107,9 +1144,9 @@ def get_auth_token(name, bypass_cache: bool = False):
     def read():
         record = _auth_record(name, bypass_cache)
         if record is None:
-            return None, None, None
+            return None, None, None, None
         token = decrypt_token(record.auth)
-        return token, token, record.broker
+        return token, token, record.broker, record.user_id
 
     return _read_coherently(read, None)
 
@@ -1526,7 +1563,7 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
 
     def read():
         result = _auth_token_broker(provided_api_key, include_feed_token)
-        return result, result[0], result[-1]
+        return result, result[0], result[-1], None
 
     return _read_coherently(read, refused)
 
@@ -1633,15 +1670,15 @@ def get_session_identity(provided_api_key):
         try:
             row = Auth.query.populate_existing().filter_by(name=username).first()
             if row is None or row.is_revoked or not row.auth or not row.broker:
-                return (None, None, None), None, None
+                return (None, None, None), None, None, None
             token = decrypt_token(row.auth)
             account = str(row.user_id).strip() if row.user_id else None
         except Exception:
             logger.exception("Could not read the stored broker session")
-            return (None, None, None), None, None
+            return (None, None, None), None, None, None
         if not token:
-            return (None, None, None), None, None
-        return (token, row.broker, account or None), token, row.broker
+            return (None, None, None), None, None, None
+        return (token, row.broker, account or None), token, row.broker, account or None
 
     return _read_coherently(read, (None, None, None))
 
