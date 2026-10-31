@@ -71,6 +71,14 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] callback param spelling (`auth_code` / `request-token` / camelCase) handled in `brlogin.py`
 - [ ] feed_token/user_id brokers added to the explicit list in `brlogin.py`
 - [ ] `REDIRECT_URL` exactly matches the broker portal and ends `/<broker>/callback`
+- [ ] every success path in the branch returns `_complete_login(...)`, never `handle_auth_success` or `upsert_auth` directly (it uses up the pending login and runs the commit's checks)
+- [ ] the broker sends and returns a `state` when it can, and is in `STATE_BROKERS`; a broker that posts from its own site is also in `BROKER_SITE_POST_BROKERS` with the state on its return address
+- [ ] a form broker's POST carries the page's `csrf_token` and works only after a login started from Select Broker
+- [ ] an account the broker reports is taken from its own answer for the token or exchange, never a posted label or an unverified JWT claim; a different account is refused (`account_mismatch`), and a configured one it does not confirm too (`account_unverified`); the verified account is passed as `user_id`
+- [ ] a new refusal code has its fixed sentence in `LOGIN_ERRORS` (`frontend/src/pages/BrokerSelect.tsx`) and its test
+- [ ] no thread started inside the login reads the keys (it would read the process's, another broker's during a switch); token read before key read in any code that calls the broker with both
+- [ ] the callback's credential query parameter is masked by `utils/url_redaction._QUERY_CREDENTIAL` (checked with `.claude/skills/verify/redaction_check.py`)
+- [ ] the `utils/broker_setup_guide.py` `sign_in` kind matches where the login goes (`test_the_setup_guide_matches_where_each_login_goes` passes)
 
 **Master contract**
 - [ ] instrumenttype indices = **EQ** (there is no INDEX type)
@@ -116,14 +124,14 @@ Then run the **`fd-audit`** skill on the whole change.
 **General**
 - [ ] NO hardcoded market timings in the broker folder
 - [ ] all REST via the shared pooled httpx client; explicit timeout on big downloads
-- [ ] broker id added to `.sample.env` VALID_BROKERS + the `start.sh` fallback + READMEs + `frontend/src/pages/BrokerSelect.tsx` + `utils/broker_login.py` + `utils/broker_keys.BROKER_NAMES` + a `utils/broker_setup_guide.py` entry + websocket_proxy registration (the installers carry no broker list any more; they take VALID_BROKERS from `.sample.env`)
+- [ ] broker id added to `.sample.env` VALID_BROKERS + the `start.sh` fallback + READMEs + `utils/broker_login.py` + `utils/broker_keys.BROKER_NAMES` + a `utils/broker_setup_guide.py` entry + websocket_proxy registration (Select Broker lists brokers from `/api/broker/list`, so there is no frontend list; the installers carry none either and take VALID_BROKERS from `.sample.env`)
 - [ ] `start.sh` (repo root, the Docker `CMD`) — the `${VALID_BROKERS:-...}` fallback. **Functional, not cosmetic**: missing here means the broker is unavailable on cloud/Railway deploys while every bare-metal install works
 - [ ] `install/Docker-install-readme.md` table row added (markdown table, not a comma list)
-- [ ] login start: `allBrokers[]` entry in `frontend/src/pages/BrokerSelect.tsx` **and** the broker in `CALLBACK_START_BROKERS` or a `login_url()` branch in `utils/broker_login.py`; `STATE_BROKERS` / `BROKER_SITE_POST_BROKERS` where its answer needs them
+- [ ] login start: the broker in `CALLBACK_START_BROKERS` or a `login_url()` branch in `utils/broker_login.py`; `STATE_BROKERS` / `BROKER_SITE_POST_BROKERS` where its answer needs them
 - [ ] credentials read at call time, never at module import (keys change when the trader switches brokers; see `auth-and-login.md`)
 - [ ] a real login completed end to end: the callback refuses an answer it cannot match to a started login
-- [ ] frontend: if form-login, a `brokerConfigs` entry **and** a `brokerNames` entry in `BrokerTOTP.tsx` (unconfigured brokers silently fall back to a userid/password/totp `default` that may be the wrong fields)
-- [ ] verified with one sweep: `grep -rn "<newbroker>" install/ start.sh .sample.env README.md frontend/src/ utils/broker_login.py utils/broker_keys.py websocket_proxy/__init__.py`
+- [ ] frontend: if form-login, a `brokerFields` entry **and** a `brokerNames` entry in `BrokerTOTP.tsx` (unconfigured brokers silently fall back to a userid/password/totp `default` that may be the wrong fields)
+- [ ] verified with one sweep: `grep -rn "<newbroker>" install/ start.sh .sample.env README.md frontend/src/pages/BrokerTOTP.tsx utils/broker_login.py utils/broker_keys.py utils/broker_setup_guide.py websocket_proxy/__init__.py`
 - [ ] no emojis or icons anywhere (repo-wide rule)
 
 ## Live test plan (needs credentials + SEBI static-IP whitelisting)
