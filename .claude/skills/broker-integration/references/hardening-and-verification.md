@@ -79,6 +79,9 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] no thread started inside the login reads the keys (it would read the process's, another broker's during a switch); token read before key read in any code that calls the broker with both
 - [ ] the callback's credential query parameter is masked by `utils/url_redaction._QUERY_CREDENTIAL` (checked with `.claude/skills/verify/redaction_check.py`)
 - [ ] the `utils/broker_setup_guide.py` `sign_in` kind matches where the login goes (`test_the_setup_guide_matches_where_each_login_goes` passes)
+- [ ] any identity endpoint the login relies on was proven against a real account, and the account is reported on every login or never
+- [ ] sign-in address and setup-guide entry taken from OpenAlgo Desktop's `origin/master`, not a local checkout
+- [ ] login tests assert the endpoint and header that reached the transport, with races landed at the write (`upsert_auth`), not before the checks
 
 **Master contract**
 - [ ] instrumenttype indices = **EQ** (there is no INDEX type)

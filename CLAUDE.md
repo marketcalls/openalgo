@@ -116,6 +116,35 @@ uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
   `ThreadPoolExecutor-` thread made `test_gthread_brokers_a_quote_paths.py`
   fail at random. Record the pools the code under test builds and check their
   own threads, or match a `thread_name_prefix` only that code uses.
+- **Compare failures by name, and list them.** The job's `-rs` reports skips
+  only, so no `FAILED` line is printed and a grep for them compares two empty
+  lists, which once let "no new failures" stand for three runs. Add `-rf`
+  (`-rfs`) when you need the names, or read the `____ test_name ____` headers.
+
+### Tests for a race land the competing writer at the write
+
+The audits of the broker-keys work (PR 2337) found four races a test suite of
+150 had missed, because every test changed the state *before* the code's last
+check, where the check rightly refused. A race lives between the last check and
+the write, so stage it there:
+
+- **Patch the function that writes** (`utils.auth_utils.upsert_auth`, a
+  plugin's HTTP client) to run the competing action first and then the
+  original. A test that interleaves anywhere earlier proves only the check.
+- **A competing request runs in a context of its own:**
+  `contextvars.Context().run(lambda: client.get(...))`. The Flask test client
+  runs a request made inside a request on the outer one's app context, so the
+  two share `g` and every `ContextVar`; production requests never do, and the
+  inner request's teardown then undoes the outer one's state.
+- **Assert what reached the transport:** the endpoint and the header, not
+  only that the token and keys agree. A coherent pair sent to the wrong
+  broker's endpoint passed one such test.
+- **Clear module-level caches between tests** (`auth_db.auth_cache` and the
+  like): a token cached by one test answers the next one's read, and the race
+  under test never happens.
+- **Read repository files with `encoding="utf-8"`.** The Windows CI runner
+  decodes in cp1252, and the installers hold UTF-8. Mode-bit checks skip on
+  Windows, which only simulates them.
 
 ## Invariants — do not break these
 

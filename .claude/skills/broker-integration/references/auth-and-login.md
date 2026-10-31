@@ -240,6 +240,25 @@ to, `services/strategy_module/broker_binding.py`).
   `_xts_account_mismatch` are the patterns).
 - Most brokers report no account at login. Then there is nothing to check;
   say so in the broker's docs rather than implying a check.
+- **Prove the identity endpoint against a real account before relying on
+  it.** A check built from the docs alone either refuses every login (the
+  endpoint answers differently) or checks nothing (a field that is never
+  present). RMoney's `/user/profile` is the case in point: it is the XTS
+  endpoint for the purpose, it was written without a live account, and the
+  PR says so until a real login proves it. Brokers on one platform (XTS) do
+  not share endpoints or field names by default: confirm each broker and
+  version on its own.
+- **Report the account on every login, or never.** The account becomes the
+  session's `USER_ID` and a Live strategy run's `broker_account`, and both are
+  held to it: a run that recorded one refuses its orders while the current
+  session names none. A broker that reports the id only sometimes leaves runs
+  unmanaged until the next login that does.
+- **Decide what an unavailable comparison means, per broker.** When the
+  expected account cannot be read (RMoney and CompositEdge compare with the
+  market data keys' account, which needs the market data login to succeed),
+  the login either refuses or completes without the comparison. That is a
+  product decision, not a default: as of PR 2337 the XTS pair completes, and
+  the docs say so.
 
 ### Refusals a trader reads
 
@@ -293,6 +312,12 @@ completes a login only when the answer belongs to a login started that way
 (`verify_broker_return`, through `_complete_login`), so a link from someone
 else does not complete one. Each pending login is used once, lasts ten
 minutes, and is cancelled by every sign-out.
+
+**Port from OpenAlgo Desktop's current code.** Its sign-in addresses
+(`src-tauri/src/brokers/catalog.rs`) and setup guide (`setup_guide.rs`) are the
+reference for a broker the desktop already has. Read them from the desktop
+repository's `origin/master` (`git show origin/master:<path>`): a local
+checkout can be weeks behind, and a port from it once had to be redone.
 
 **1. `utils/broker_login.py` — how the login starts.** Always required. Three
 shapes:
@@ -466,7 +491,14 @@ feeds stubbed, `xts` and `dhan` set up those families):
   credentials never reach `authenticate_broker`;
 - for an account-reporting broker: a different account and an unreported one
   are refused, the configured one completes;
-- the setup-guide test above passes with your `GUIDES` entry.
+- the setup-guide test above passes with your `GUIDES` entry;
+- a race against the commit, landed **at the write** (`upsert_auth`): a
+  sign-out or a key change there stores nothing; and a page of a browser on
+  another broker, with your broker's session landing at its token read, sends
+  nothing to the wrong endpoint. Assert the URL and the header that reached
+  the transport, not only that the token and keys agree, and run the
+  competing request in its own context (`contextvars.Context().run`), as
+  `test/test_broker_keys.py` does.
 
 Then complete one real login: no mocked test proves the broker returns the
 state, the field names or the account the way its docs say.
