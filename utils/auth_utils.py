@@ -7,7 +7,7 @@ from threading import Thread
 
 import pytz
 from flask import current_app as app
-from flask import jsonify, redirect, request, session, url_for
+from flask import g, jsonify, redirect, request, session, url_for
 
 from database.auth_db import get_feed_token as db_get_feed_token
 from utils.ip_helper import get_real_ip
@@ -24,7 +24,7 @@ from database.master_contract_status_db import (
 from utils import real_threading
 from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
-from utils.session import get_session_expiry_time, set_session_login_time
+from utils.session import get_session_expiry_time, mark_signed_in, set_session_login_time
 
 logger = get_logger(__name__)
 
@@ -486,31 +486,248 @@ def _download_master_contract(broker):
     return master_contract_status
 
 
+def begin_broker_login(broker, exclusive=False):
+    """Hold the broker slot and stage this broker's keys for this request.
+
+    For a login's callback, and for a resume of the stored session
+    (`exclusive`: no login may start or commit while it is checked). The keys
+    are staged, not written to the process: every other request (the
+    logged-in broker's orders, funds and feed) keeps reading the process's
+    keys. They become the process's only when the login commits
+    (handle_auth_success). End with end_broker_login(), however the request
+    ends.
+
+    Returns:
+        BrokerKeys: The keys this login uses.
+
+    Raises:
+        BrokerKeysRefused: While another login holds the slot, or when no key
+            is configured for the broker.
+    """
+    from utils.broker_keys import hold_login_slot, stage_broker_keys
+
+    g.broker_login_slot = hold_login_slot(broker, exclusive=exclusive)
+    keys, g.broker_login_stage = stage_broker_keys(broker)
+    g.broker_login_keys = keys
+    return keys
+
+
+def end_broker_login():
+    """Drop what begin_broker_login() staged and give the slot back.
+
+    Nothing is put back: the process's keys changed only if the login
+    committed. Safe to call twice, and when nothing was begun.
+
+    Returns:
+        bool: Whether the login committed (handle_auth_success stored it).
+    """
+    from utils.broker_keys import release_login_slot, unstage_broker_keys
+
+    unstage_broker_keys(g.pop("broker_login_stage", None))
+    g.pop("broker_login_keys", None)
+    g.pop("broker_login_started_at", None)
+    g.pop("broker_publish_if", None)
+    completed = bool(g.pop("broker_login_completed", False))
+    release_login_slot(g.pop("broker_login_slot", None))
+    return completed
+
+
+def _commit_refusal(username, broker):
+    """Why a login to `broker` may not be stored now, as (error code, sentence), or None.
+
+    Checked before anything is written, so a refused login changes nothing:
+    the logged-in broker stays connected.
+
+    - The request lost its login slot: it ran past the slot's lease and a
+      login to another broker took over. It may only discard its result.
+    - The broker's keys changed while the login ran: its token belongs to
+      keys that are no longer saved.
+    - The trader was signed out (a logout, a password change or reset) after
+      this login started: a started login is not a way back in.
+    - The broker logged in before still runs Live automation, which would
+      otherwise trade through this one (utils/broker_switch.py).
+    - A resume validated an older session while a login committed.
+    """
+    from utils.broker_keys import (
+        broker_title,
+        keys_digest,
+        login_slot_held,
+        publication_generation,
+        resolve,
+    )
+    from utils.broker_switch import refusal_for_login
+
+    holder = g.get("broker_login_slot")
+    if holder is not None and not login_slot_held(holder):
+        return "login_failed", "This login took too long and another one took over. Log in again."
+    staged = g.get("broker_login_keys")
+    if staged is not None:
+        current = resolve(broker)
+        if current is None or keys_digest(current) != keys_digest(staged):
+            return (
+                "login_failed",
+                f"Your {broker_title(broker)} keys changed while this login was in progress. "
+                "Nothing was stored. Log in again.",
+            )
+    started = g.get("broker_login_started_at")
+    if started is not None:
+        from database.auth_db import get_pre_broker_revoked_at, get_sessions_revoked_at
+
+        revoked = get_sessions_revoked_at(username)
+        if not session.get("logged_in"):
+            pre_broker = get_pre_broker_revoked_at(username)
+            if pre_broker is not None and (revoked is None or pre_broker > revoked):
+                revoked = pre_broker
+        if revoked is not None and revoked >= started:
+            return (
+                "signed_out",
+                "Your OpenAlgo sign-in ended while this broker login was in progress. "
+                "Sign in and log in to the broker again.",
+            )
+    if session.get("user"):
+        # This browser's own sign-in, ended by a sign-out the started time above
+        # does not cover (one between its password sign-in and a resume).
+        from utils.session import sign_in_revoked
+
+        if sign_in_revoked():
+            return (
+                "signed_out",
+                "Your OpenAlgo sign-in ended while this broker login was in progress. "
+                "Sign in and log in to the broker again.",
+            )
+    refusal = refusal_for_login(broker, username)
+    if refusal:
+        return "switch_refused", refusal
+    publish_if = g.get("broker_publish_if")
+    if publish_if is not None and publication_generation() != publish_if:
+        return "login_failed", "Another broker login completed meanwhile. Log in again."
+    return None
+
+
+def _refused_login(refused, broker):
+    """The answer to a login whose commit was refused. Nothing was stored."""
+    code, message = refused
+    logger.info(f"Login to {broker} not stored: {message}")
+    if is_ajax_request():
+        return jsonify({"status": "error", "message": message}), 409
+    return redirect(login_error_address(code, broker))
+
+
 def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
     """
     Handles common tasks after successful authentication.
+    - Refuses to store a login that may not commit (_commit_refusal)
+    - Stores auth token in the database, then makes its keys the process's
+    - Ends another broker's live session on every other device (one broker at a time)
     - Sets session parameters
-    - Stores auth token in the database
     - Initiates asynchronous master contract download (smart: skips if downloaded after 8 AM IST)
-    """
-    # Set session parameters
-    session["logged_in"] = True
-    # NOTE: do NOT store the broker auth_token in the Flask session. Flask's
-    # default session is a signed-but-unencrypted client-side cookie, so any
-    # value placed here is readable by anyone who obtains the cookie (XSS,
-    # browser-extension, HAR/profile leak). The encrypted DB copy retrieved
-    # via get_auth_token() is the single source of truth for broker calls.
-    if feed_token:
-        session["FEED_TOKEN"] = feed_token  # Store feed token in session if available
-    if user_id:
-        session["USER_ID"] = user_id  # Store user ID in session if available
-    session["user_session_key"] = user_session_key
-    session["broker"] = broker
 
-    # Set session expiry and login time
-    app.config["PERMANENT_SESSION_LIFETIME"] = get_session_expiry_time()
-    session.permanent = True
-    set_session_login_time()  # Set the login timestamp
+    The old broker's session ends only once the new token is stored, so a
+    login that fails at any step leaves the logged-in broker connected.
+    """
+    refused = _commit_refusal(user_session_key, broker)
+    if refused is not None:
+        return _refused_login(refused, broker)
+
+    from database.auth_db import AuthCommitRefused, auth_commit_guard
+    from utils.broker_keys import (
+        live_broker,
+        publish_broker_keys,
+        published_snapshot,
+        resolve,
+        restore_published,
+    )
+
+    keys = g.get("broker_login_keys") or resolve(broker)
+    published = {}
+    after = []
+
+    def fence():
+        # The same checks again, under the commit guard and immediately before
+        # the token write: a sign-out, a key change or another login that
+        # landed since the checks above refuses the write instead of losing
+        # to it.
+        refusal = _commit_refusal(user_session_key, broker)
+        if refusal is not None:
+            return refusal
+        # Then this broker's keys become the process's, before its token can
+        # be read: a request reading the new token reads the new keys. A
+        # resume publishes only if no other keys were published while it ran.
+        if keys is not None:
+            published["snapshot"] = published_snapshot()
+            if not publish_broker_keys(keys, if_generation=g.get("broker_publish_if")):
+                published.pop("snapshot")
+                return "login_failed", "Another broker login completed meanwhile. Log in again."
+        return None
+
+    with auth_commit_guard():
+        previous = live_broker()
+        try:
+            inserted_id = upsert_auth(
+                user_session_key,
+                auth_token,
+                broker,
+                feed_token=feed_token,
+                user_id=user_id,
+                fence=fence,
+                defer=after,
+            )
+        except AuthCommitRefused as exc:
+            return _refused_login((exc.code, exc.message), broker)
+        except Exception:
+            logger.exception(f"Could not store the {broker} session for {user_session_key}")
+            inserted_id = None
+        if not inserted_id:
+            # Published, then not stored: the keys go back to the token that is.
+            if "snapshot" in published:
+                restore_published(published["snapshot"])
+            logger.error(f"Failed to upsert auth token for user {user_session_key}")
+            if is_ajax_request():
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "Failed to store authentication token. Please try again.",
+                    }
+                ), 500
+            return redirect(url_for("auth.broker_login"))
+        logger.info(f"Database record upserted with ID: {inserted_id}")
+
+        # One broker at a time: the session of the broker logged in before ends
+        # on every other device, in the same commit as this one is stored.
+        if previous and previous != broker:
+            from blueprints.auth import end_broker_session_for_switch
+
+            end_broker_session_for_switch(user_session_key, previous, broker, after=after)
+
+        # This browser's sign-in dates from this commit, so a sign-out after it
+        # ends it, a session the XTS post-back opens without a cookie included.
+        mark_signed_in()
+
+        # Set session parameters
+        session["logged_in"] = True
+        # NOTE: do NOT store the broker auth_token in the Flask session. Flask's
+        # default session is a signed-but-unencrypted client-side cookie, so any
+        # value placed here is readable by anyone who obtains the cookie (XSS,
+        # browser-extension, HAR/profile leak). The encrypted DB copy retrieved
+        # via get_auth_token() is the single source of truth for broker calls.
+        if feed_token:
+            session["FEED_TOKEN"] = feed_token  # Store feed token in session if available
+        if user_id:
+            session["USER_ID"] = user_id  # Store user ID in session if available
+        session["user_session_key"] = user_session_key
+        session["broker"] = broker
+
+        # Set session expiry and login time
+        app.config["PERMANENT_SESSION_LIFETIME"] = get_session_expiry_time(broker)
+        session.permanent = True
+        set_session_login_time()  # Set the login timestamp
+
+    # The feed teardown and the notices, once the guard is released.
+    for effect in after:
+        try:
+            effect()
+        except Exception:
+            logger.exception(f"Could not finish the switch to {broker}")
 
     # Register active session for multi-device tracking
     import secrets
@@ -550,54 +767,56 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     except Exception:
         pass  # Don't block login if logging fails
 
-    # Store auth token in database
-    inserted_id = upsert_auth(
-        user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id
-    )
-    if inserted_id:
-        logger.info(f"Database record upserted with ID: {inserted_id}")
+    # The callback keeps this broker's keys staged until it ends; they are
+    # published above.
+    g.broker_login_completed = True
 
-        # Smart download: Check if we need to download or can use cached data.
-        # The check reads only the last download time and broker, which
-        # resetting the status row does not touch, so it can come first.
-        should_download, reason = should_download_master_contract(broker)
-        logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
+    # Smart download: Check if we need to download or can use cached data.
+    # The check reads only the last download time and broker, which
+    # resetting the status row does not touch, so it can come first.
+    should_download, reason = should_download_master_contract(broker)
+    logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
 
-        if should_download:
-            # Initialize the status row and start the download in a background
-            # thread, unless one for this broker is already running. That one
-            # owns the row, so it is reset only once this download's claim is
-            # won: resetting it first would leave it pending after the running
-            # download had already reported success.
-            try_start_master_contract_download(broker, reset_status=True)
-        else:
-            # Use cached data - load the existing master contract - unless a
-            # download for this broker is running, for the same reason as above.
-            logger.info(f"Skipping download for {broker}: {reason}")
-            try_start_cached_master_contract_load(broker)
-
-        # Return JSON for AJAX requests (React), redirect for OAuth callbacks
-        if is_ajax_request():
-            return jsonify(
-                {
-                    "status": "success",
-                    "message": "Authentication successful",
-                    "redirect": "/dashboard",
-                }
-            ), 200
-        else:
-            return redirect(url_for("dashboard_bp.dashboard"))
+    if should_download:
+        # Initialize the status row and start the download in a background
+        # thread, unless one for this broker is already running. That one
+        # owns the row, so it is reset only once this download's claim is
+        # won: resetting it first would leave it pending after the running
+        # download had already reported success.
+        try_start_master_contract_download(broker, reset_status=True)
     else:
-        logger.error(f"Failed to upsert auth token for user {user_session_key}")
-        if is_ajax_request():
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to store authentication token. Please try again.",
-                }
-            ), 500
-        else:
-            return redirect(url_for("auth.broker_login"))
+        # Use cached data - load the existing master contract - unless a
+        # download for this broker is running, for the same reason as above.
+        logger.info(f"Skipping download for {broker}: {reason}")
+        try_start_cached_master_contract_load(broker)
+
+    # Return JSON for AJAX requests (React), redirect for OAuth callbacks
+    if is_ajax_request():
+        return jsonify(
+            {
+                "status": "success",
+                "message": "Authentication successful",
+                "redirect": "/dashboard",
+            }
+        ), 200
+    return redirect(url_for("dashboard_bp.dashboard"))
+
+
+def login_error_address(code, broker=None):
+    """Where a refused or failed broker login sends the browser.
+
+    Select Broker shows a fixed sentence for the code, on that broker's card
+    when the address names it (``&broker=<id>``), as OpenAlgo Desktop does.
+    The broker defaults to the one in the callback's route.
+    """
+    from urllib.parse import quote
+
+    if broker is None and request.view_args:
+        broker = request.view_args.get("broker")
+    address = f"/broker?error={quote(code, safe='')}"
+    if broker and re.fullmatch(r"[a-z0-9_]+", broker):
+        address += f"&broker={broker}"
+    return address
 
 
 def handle_auth_failure(error_message, forward_url="broker.html"):
@@ -609,8 +828,10 @@ def handle_auth_failure(error_message, forward_url="broker.html"):
     if is_ajax_request():
         return jsonify({"status": "error", "message": error_message}), 401
     else:
-        # For OAuth callbacks, redirect to broker selection with error
-        return redirect(url_for("auth.broker_login"))
+        # For OAuth callbacks, back to broker selection, which shows a fixed
+        # sentence for the code. The broker's own message stays in the log:
+        # it can carry text a trader cannot act on.
+        return redirect(login_error_address("login_failed"))
 
 
 def get_feed_token():

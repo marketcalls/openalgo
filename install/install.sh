@@ -182,44 +182,128 @@ generate_hex() {
     $PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))"
 }
 
+# ---------------------------------------------------------------------------
+# Optional fail2ban for this server. Asked once on a fresh install, default No.
+# It guards SSH logins to the server and nothing else: OpenAlgo has its own IP
+# ban for the app, and nginx jails are left off on purpose, because the nginx
+# rate limit also covers the webhook paths and a burst of alerts would get the
+# sender banned. Nothing in this step may stop the installation.
+# This block is repeated in each server installer on purpose: they are
+# downloaded and run on their own, before the repository (and install/lib) exists.
+# ---------------------------------------------------------------------------
+FAIL2BAN_WANTED="false"
+FAIL2BAN_JAIL_FILE="/etc/fail2ban/jail.d/openalgo.conf"
+FAIL2BAN_AUTH_LOG="/var/log/auth.log"
 
+# Only an interactive run is asked; a piped or unattended run means No
+fail2ban_can_ask() {
+    [ -t 0 ]
+}
 
-
-# Function to validate broker name
-validate_broker() {
-    local broker=$1
-
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
-
-    if [[ ",$valid_brokers," == *",$broker,"* ]]; then
+ask_fail2ban() {
+    FAIL2BAN_WANTED="false"
+    if ! command -v apt-get >/dev/null 2>&1; then
+        log_message "fail2ban: skipped, this server has no apt-get." "$YELLOW"
         return 0
-    else
-        return 1
+    fi
+    fail2ban_can_ask || return 0
+    local answer=""
+    read -r -p "Set up fail2ban to block repeated failed logins on this server? [y/N]: " answer || answer=""
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) FAIL2BAN_WANTED="true" ;;
+    esac
+    return 0
+}
+
+# A real IP address, as Python's ipaddress module reads one
+fail2ban_valid_ip() {
+    [ -n "$1" ] && command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "$1" >/dev/null 2>&1
+}
+
+# The address of the SSH session running this installer, or nothing. A
+# terminal multiplexer or a local console leaves other text where the address
+# would be (for example "tmux(12345).%0" or ":0"); that is not used.
+fail2ban_ssh_client_ip() {
+    local ip="${SSH_CLIENT%% *}"
+    if [ -z "$ip" ]; then
+        ip="${SSH_CONNECTION%% *}"
+    fi
+    if [ -z "$ip" ]; then
+        # sudo drops SSH_CLIENT; this terminal's login record may still have it
+        ip=$(who -m 2>/dev/null | sed -n 's/.*(\([^)]*\)).*/\1/p' | head -n 1)
+    fi
+    # [2001:db8::1] and fe80::1%eth0 forms
+    ip="${ip#\[}"
+    ip="${ip%\]}"
+    ip="${ip%%\%*}"
+    if fail2ban_valid_ip "$ip"; then
+        printf '%s' "$ip"
     fi
 }
 
-# Function to check if broker is XTS based
-is_xts_broker() {
-    local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
-    if [[ ",$xts_brokers," == *",$broker,"* ]]; then
+setup_fail2ban() {
+    [ "$FAIL2BAN_WANTED" = "true" ] || return 0
+    log_message "\n=== Setting up fail2ban ===" "$BLUE"
+    if ! sudo apt-get install -y fail2ban; then
+        log_message "Warning: fail2ban could not be installed. The installation continues without it." "$YELLOW"
         return 0
-    else
-        return 1
     fi
+
+    local ssh_ip ignore conf
+    ssh_ip=$(fail2ban_ssh_client_ip)
+    ignore="127.0.0.1/8 ::1"
+    if [ -n "$ssh_ip" ]; then
+        ignore="$ignore $ssh_ip"
+    fi
+
+    conf="# Written by the OpenAlgo installer. Running it again replaces this file.
+[sshd]
+enabled = true
+maxretry = 5
+findtime = 10m
+bantime = 1h
+ignoreip = $ignore"
+    # Without rsyslog (Debian 12) SSH logins are only in the journal
+    if [ ! -f "$FAIL2BAN_AUTH_LOG" ]; then
+        sudo apt-get install -y python3-systemd >/dev/null 2>&1 || true
+        conf="$conf
+backend = systemd"
+    fi
+
+    if ! printf '%s\n' "$conf" | sudo tee "$FAIL2BAN_JAIL_FILE" >/dev/null; then
+        log_message "Warning: could not write $FAIL2BAN_JAIL_FILE. The installation continues without fail2ban." "$YELLOW"
+        return 0
+    fi
+    if ! { sudo systemctl enable fail2ban >/dev/null 2>&1 && sudo systemctl restart fail2ban; }; then
+        log_message "Warning: fail2ban did not start (see: sudo journalctl -u fail2ban). The installation continues." "$YELLOW"
+        return 0
+    fi
+    # fail2ban needs a moment after a restart before it answers
+    local tries=0
+    until sudo fail2ban-client status >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 10 ]; then
+            log_message "Warning: fail2ban is installed but not answering (see: sudo fail2ban-client status). The installation continues." "$YELLOW"
+            return 0
+        fi
+        sleep 1
+    done
+
+    log_message "fail2ban is on for SSH logins (jail: sshd)." "$GREEN"
+    log_message "An address is banned for 1 hour after 5 failed SSH logins within 10 minutes." "$BLUE"
+    if [ -n "$ssh_ip" ]; then
+        log_message "The address you are installing from ($ssh_ip) and this server itself are never banned." "$BLUE"
+    else
+        log_message "Your SSH address could not be detected, so it is not exempt; only this server itself is." "$YELLOW"
+        log_message "To exempt it, add it to the ignoreip line in $FAIL2BAN_JAIL_FILE and run: sudo systemctl restart fail2ban" "$YELLOW"
+    fi
+    log_message "To unban an address: sudo fail2ban-client set sshd unbanip <ip>" "$BLUE"
+    return 0
 }
 
-# Function to check if broker is crypto based (24/7 markets, no auto-logout)
-# Uses space-delimited boundary matching for exact broker ID checks
-is_crypto_broker() {
-    local broker=$1
-    local crypto_brokers=" deltaexchange "
-    if [[ $crypto_brokers == *" $broker "* ]]; then
-        return 0
-    else
-        return 1
-    fi
-}
+
+
 
 # Function to check and handle existing files/directories
 handle_existing() {
@@ -443,57 +527,6 @@ while true; do
     break
 done
 
-# Get broker name
-while true; do
-
-    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha" "$BLUE"
-
-    read -p "Enter your broker name: " BROKER_NAME
-    if validate_broker "$BROKER_NAME"; then
-        break
-    else
-        log_message "Invalid broker name. Please choose from the list above." "$RED"
-    fi
-done
-
-# Show redirect URL for broker setup
-log_message "\nRedirect URL for broker developer portal:" "$YELLOW"
-log_message "https://$DOMAIN/$BROKER_NAME/callback" "$GREEN"
-log_message "\nPlease use this URL in your broker's developer portal to generate API credentials." "$BLUE"
-log_message "Once you have the credentials, you can proceed with the installation." "$BLUE"
-echo ""
-
-# Get broker API credentials
-read -p "Enter your broker API key: " BROKER_API_KEY
-read -p "Enter your broker API secret: " BROKER_API_SECRET
-
-if [ -z "$BROKER_API_KEY" ] || [ -z "$BROKER_API_SECRET" ]; then
-    log_message "Error: Broker API credentials are required" "$RED"
-    exit 1
-fi
-
-# Check if the broker is XTS-based and ask for additional credentials if needed
-BROKER_API_KEY_MARKET=""
-BROKER_API_SECRET_MARKET=""
-if is_xts_broker "$BROKER_NAME"; then
-    log_message "\nThis broker ($BROKER_NAME) is XTS API-based and requires additional market data credentials." "$YELLOW"
-    read -p "Enter your broker market data API key: " BROKER_API_KEY_MARKET
-    read -p "Enter your broker market data API secret: " BROKER_API_SECRET_MARKET
-    
-    if [ -z "$BROKER_API_KEY_MARKET" ] || [ -z "$BROKER_API_SECRET_MARKET" ]; then
-        log_message "Error: Market data API credentials are required for XTS-based brokers" "$RED"
-        exit 1
-    fi
-fi
-
-# Check if the broker is crypto-based and disable auto-logout
-DISABLE_SESSION_EXPIRY="false"
-if is_crypto_broker "$BROKER_NAME"; then
-    log_message "\nThis broker ($BROKER_NAME) operates on 24/7 crypto markets." "$YELLOW"
-    log_message "Auto-logout (session expiry at 3 AM IST) will be disabled." "$GREEN"
-    DISABLE_SESSION_EXPIRY="true"
-fi
-
 # Optional: Remote MCP for hosted AI clients (Claude.ai, ChatGPT).
 # Same-domain mode — /mcp and /oauth/* are served from the same nginx
 # vhost as the dashboard, so the existing reverse-proxy config covers it.
@@ -506,6 +539,9 @@ if [[ $enable_mcp_input =~ ^[Yy]$ ]]; then
     ENABLE_REMOTE_MCP="true"
     log_message "Remote MCP will be enabled at https://$DOMAIN/mcp" "$GREEN"
 fi
+
+# Optional fail2ban for this server (default No)
+ask_fail2ban
 
 # Generate random keys
 APP_KEY=$(generate_hex)
@@ -754,8 +790,47 @@ if ! command -v certbot >/dev/null 2>&1; then
 fi
 log_message "Certbot installed successfully" "$GREEN"
 
-# Check and handle existing OpenAlgo installation
-handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
+# Check and handle existing OpenAlgo installation. A backup carries its .env
+# (security keys) and db/ (your data) into the fresh copy below; deleting it
+# asks first, because the keys and the database go with it.
+CARRY_FROM=""
+
+# Stop the running service before its folder is moved or deleted: the database
+# is then complete (SQLite folds its write-ahead log in when it closes), and no
+# old process keeps serving from the moved folder.
+stop_running_service() {
+    if command -v systemctl >/dev/null 2>&1 && sudo systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        log_message "Stopping the running $SERVICE_NAME service first..." "$BLUE"
+        sudo systemctl stop "$SERVICE_NAME"
+        check_status "Failed to stop the $SERVICE_NAME service"
+    fi
+}
+
+if [ -e "$BASE_PATH" ]; then
+    log_message "Warning: OpenAlgo directory for $DEPLOY_NAME already exists at $BASE_PATH" "$YELLOW"
+    read -p "Would you like to backup the existing installation directory? (y/n): " backup_choice
+    if [[ $backup_choice =~ ^[Yy]$ ]]; then
+        CARRY_FROM="${BASE_PATH}_backup_$(date +%Y%m%d_%H%M%S)"
+        stop_running_service
+        log_message "Creating backup at $CARRY_FROM" "$BLUE"
+        sudo mv "$BASE_PATH" "$CARRY_FROM"
+        check_status "Failed to create backup of the OpenAlgo directory"
+        log_message "Its .env (security keys), db/ (your data), strategies/ and keys/ will be copied into the new installation." "$GREEN"
+    else
+        log_message "Deleting it also deletes its .env (security keys) and db/ (users, saved broker keys, history)." "$RED"
+        log_message "They cannot be recovered afterwards." "$RED"
+        read -p "Type DELETE to remove the existing installation, or press Enter to stop: " remove_choice
+        if [ "$remove_choice" = "DELETE" ]; then
+            stop_running_service
+            log_message "Removing existing installation directory..." "$BLUE"
+            sudo rm -rf "$BASE_PATH"
+            check_status "Failed to remove existing installation directory"
+        else
+            log_message "Installation stopped. Nothing was changed." "$YELLOW"
+            exit 1
+        fi
+    fi
+fi
 
 # Create base directory
 log_message "\nCreating base directory..." "$BLUE"
@@ -774,6 +849,33 @@ log_message "\nCloning OpenAlgo repository..." "$BLUE"
 # support just full-clones, so this is never worse than no flag at all.
 sudo git clone --filter=blob:none https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
+
+# Bring the backed-up .env and the trader's own files into the fresh copy,
+# unchanged. From db/ (databases, their -wal/-shm files, the strategy key,
+# backups), strategies/ (scripts, configs, indicators, OpenScript) and keys/,
+# every file the new checkout does not already have is copied; files that ship
+# with OpenAlgo come from the new checkout. The backup folder is left as it was.
+carry_user_files() {
+    local dir rel failed=0
+    for dir in db strategies keys; do
+        [ -d "$CARRY_FROM/$dir" ] || continue
+        while IFS= read -r rel; do
+            [ -e "$OPENALGO_PATH/$rel" ] && continue
+            sudo mkdir -p "$OPENALGO_PATH/$(dirname "$rel")" && sudo cp -a "$CARRY_FROM/$rel" "$OPENALGO_PATH/$rel" || failed=1
+        done < <(cd "$CARRY_FROM" && sudo find "$dir" ! -type d)
+    done
+    return $failed
+}
+if [ -n "$CARRY_FROM" ]; then
+    if [ -f "$CARRY_FROM/.env" ]; then
+        sudo cp -p "$CARRY_FROM/.env" "$OPENALGO_PATH/.env"
+        check_status "Failed to copy .env from $CARRY_FROM"
+    fi
+    carry_user_files
+    check_status "Failed to copy your files from $CARRY_FROM"
+    log_message "Copied .env, db/, strategies/ and keys/ from $CARRY_FROM into the new installation." "$GREEN"
+    log_message "Logs and anything else stay in $CARRY_FROM." "$BLUE"
+fi
 
 # Create virtual environment using uv
 log_message "\nSetting up Python virtual environment with uv..." "$BLUE"
@@ -825,48 +927,59 @@ fi
 
 # Configure .env file
 log_message "\nConfiguring environment file..." "$BLUE"
-handle_existing "$OPENALGO_PATH/.env" "environment file" ".env file"
 
-sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
-sudo sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" $OPENALGO_PATH/.env
-sudo sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" $OPENALGO_PATH/.env
+# A .env is written only for a new install. An existing one keeps its keys
+# and broker settings untouched.
+ENV_KEPT="false"
+if [ -e "$OPENALGO_PATH/.env" ]; then
+    log_message "Kept the existing .env and its keys. It was not changed." "$GREEN"
+    if ! sudo grep -qE "^HOST_SERVER *= *'https://$DOMAIN'" "$OPENALGO_PATH/.env"; then
+        log_message "Note: that .env is set for a different domain than $DOMAIN; its HOST_SERVER and CORS were left as they are." "$YELLOW"
+    fi
+    # Report Remote MCP as the kept .env has it, not as answered above
+    ENV_KEPT="true"
+    if sudo grep -qiE "^[[:space:]]*MCP_HTTP_ENABLED[[:space:]]*=[[:space:]]*['\"]?true" "$OPENALGO_PATH/.env"; then
+        ENABLE_REMOTE_MCP="true"
+    else
+        ENABLE_REMOTE_MCP="false"
+    fi
+else
+    sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
 
-# Update market data API credentials if the broker is XTS-based
-if is_xts_broker "$BROKER_NAME"; then
-    sudo sed -i "s|YOUR_BROKER_MARKET_API_KEY|$BROKER_API_KEY_MARKET|g" $OPENALGO_PATH/.env
-    sudo sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$BROKER_API_SECRET_MARKET|g" $OPENALGO_PATH/.env
-fi
+    # No broker in .env: the trader adds broker keys in OpenAlgo after signing in
+    # (Broker Configuration). VALID_BROKERS keeps the full list of brokers keys can be saved for.
+    sudo sed -i \
+        -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
+        -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
+        -e "s|^BROKER_API_KEY_MARKET *=.*|BROKER_API_KEY_MARKET = ''|" \
+        -e "s|^BROKER_API_SECRET_MARKET *=.*|BROKER_API_SECRET_MARKET = ''|" \
+        -e "s|^REDIRECT_URL *=.*|REDIRECT_URL = ''|" \
+        $OPENALGO_PATH/.env
 
-sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
-# Explicitly set HOST_SERVER in case the default value didn't match
-sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
-sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
-sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" $OPENALGO_PATH/.env
-sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
+    sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
+    # Explicitly set HOST_SERVER in case the default value didn't match
+    sudo sed -i "s|HOST_SERVER = '.*'|HOST_SERVER = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
+    sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" $OPENALGO_PATH/.env
+    sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
 
-# This deployment runs gunicorn behind the nginx reverse proxy configured below
-# (Unix socket bind, not directly reachable from the internet). The proxy sets
-# X-Forwarded-For / X-Real-IP for IP-based features; trust those headers.
-sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" $OPENALGO_PATH/.env
+    # This deployment runs gunicorn behind the nginx reverse proxy configured below
+    # (Unix socket bind, not directly reachable from the internet). The proxy sets
+    # X-Forwarded-For / X-Real-IP for IP-based features; trust those headers.
+    sudo sed -i "s|TRUST_PROXY_HEADERS = 'FALSE'|TRUST_PROXY_HEADERS = 'TRUE'|g" $OPENALGO_PATH/.env
 
-# Disable session expiry for crypto brokers (24/7 markets)
-if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
-    sudo sed -i "s|DISABLE_SESSION_EXPIRY = 'false'|DISABLE_SESSION_EXPIRY = 'true'|g" $OPENALGO_PATH/.env
-    log_message "Session auto-logout disabled for crypto broker" "$GREEN"
-fi
+    # Update WebSocket URL for production
+    sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
 
-# Update WebSocket URL for production
-sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
-
-# Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
-# /oauth/* are served from the same nginx vhost as the dashboard, no
-# extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
-# allowlist) inherit their defaults from .sample.env — flip them later
-# in .env if you want stricter behavior on a shared deployment.
-if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
-    sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" $OPENALGO_PATH/.env
-    sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
-    log_message "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+    # Enable Remote MCP if the operator opted in. Same-domain mode: /mcp and
+    # /oauth/* are served from the same nginx vhost as the dashboard, no
+    # extra config needed. Other MCP_* keys (auto-approve, write scope, CORS
+    # allowlist) inherit their defaults from .sample.env — flip them later
+    # in .env if you want stricter behavior on a shared deployment.
+    if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
+        sudo sed -i "s|MCP_HTTP_ENABLED = 'False'|MCP_HTTP_ENABLED = 'True'|g" $OPENALGO_PATH/.env
+        sudo sed -i "s|MCP_PUBLIC_URL = ''|MCP_PUBLIC_URL = 'https://$DOMAIN'|g" $OPENALGO_PATH/.env
+        log_message "Remote MCP enabled at https://$DOMAIN/mcp" "$GREEN"
+    fi
 fi
 
 # Host bindings intentionally left at 127.0.0.1 (the .sample.env default):
@@ -1278,7 +1391,8 @@ check_status "Failed to set permissions"
 log_message "\nStarting services..." "$BLUE"
 sudo systemctl daemon-reload
 sudo systemctl enable $SERVICE_NAME
-sudo systemctl start $SERVICE_NAME
+# restart, not start: a reinstall over a still-running unit must load the new code
+sudo systemctl restart $SERVICE_NAME
 sudo systemctl restart nginx
 check_status "Failed to start services"
 
@@ -1314,23 +1428,23 @@ if [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhe
     fi
 fi
 
+setup_fail2ban
+
 log_message "\nInstallation completed successfully!" "$GREEN"
 log_message "\nInstallation Summary:" "$YELLOW"
 log_message "Operating System: $OS_TYPE $OS_VERSION" "$BLUE"
 log_message "Deployment Name: $DEPLOY_NAME" "$BLUE"
 log_message "Domain: $DOMAIN" "$BLUE"
-log_message "Broker: $BROKER_NAME" "$BLUE"
 log_message "Installation Directory: $OPENALGO_PATH" "$BLUE"
-log_message "Environment File: $OPENALGO_PATH/.env" "$BLUE"
+if [ "$ENV_KEPT" = "true" ]; then
+    log_message "Environment File: $OPENALGO_PATH/.env (kept from before, not changed)" "$BLUE"
+else
+    log_message "Environment File: $OPENALGO_PATH/.env" "$BLUE"
+fi
 log_message "Socket File: $SOCKET_FILE" "$BLUE"
 log_message "Service Name: $SERVICE_NAME" "$BLUE"
 log_message "Nginx Config: $NGINX_CONFIG_FILE" "$BLUE"
 log_message "SSL: Enabled with Let's Encrypt" "$BLUE"
-if [ "$DISABLE_SESSION_EXPIRY" = "true" ]; then
-    log_message "Auto-Logout: Disabled (24/7 crypto market)" "$BLUE"
-else
-    log_message "Auto-Logout: Enabled (3 AM IST daily)" "$BLUE"
-fi
 if [ "$ENABLE_REMOTE_MCP" = "true" ]; then
     log_message "Remote MCP: Enabled at https://$DOMAIN/mcp" "$BLUE"
 else
@@ -1340,7 +1454,7 @@ log_message "Installation Log: $LOG_FILE" "$BLUE"
 
 log_message "\nNext Steps:" "$YELLOW"
 log_message "1. Visit https://$DOMAIN to access your OpenAlgo instance" "$GREEN"
-log_message "2. Configure your broker settings in the web interface" "$GREEN"
+log_message "2. Sign in, open Broker Configuration and add your broker's keys. The page shows the redirect URL to register in your broker's developer console." "$GREEN"
 log_message "3. Review the logs using: sudo journalctl -u $SERVICE_NAME" "$GREEN"
 log_message "4. Monitor the application status: sudo systemctl status $SERVICE_NAME" "$GREEN"
 

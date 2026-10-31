@@ -84,6 +84,16 @@ ADDED_COLUMNS = (
         "stop_requested_reason",
         "VARCHAR(30)",
     ),
+    # The broker account a Live run started on, so its orders are refused when
+    # OpenAlgo is logged in to another account at the same broker. NULL on the
+    # rows already there, and correctly so: the account a past run started on
+    # is not recorded anywhere to derive it from, and NULL is read as "not
+    # known", which binds that run by its broker alone, as before.
+    (
+        "sm_strategy_run",
+        "broker_account",
+        "VARCHAR(255)",
+    ),
 )
 
 

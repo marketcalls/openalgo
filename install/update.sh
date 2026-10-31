@@ -542,31 +542,27 @@ if [ -f "$OPENALGO_PATH/.env" ] && [ -f "$OPENALGO_PATH/.sample.env" ]; then
         log_message "Environment configuration is up to date" "$GREEN"
     fi
 elif [ ! -f "$OPENALGO_PATH/.env" ]; then
-    log_message "Warning: No .env file found. Creating from .sample.env..." "$YELLOW"
-    if [ "$SERVER_MODE" = true ]; then
-        sudo cp "$OPENALGO_PATH/.sample.env" "$OPENALGO_PATH/.env"
+    # Never create .env here. OpenAlgo creates it on its next start, with new
+    # security keys, only when there is no database yet; over an existing
+    # database new keys would make every stored password, API key and broker
+    # key unreadable, so that case is left to the trader to restore.
+    # Any database counts (install-multi.sh names them db/openalgoN.db)
+    HAS_DATABASE=false
+    for db_file in "$OPENALGO_PATH"/db/*.db; do
+        if [ -f "$db_file" ]; then
+            HAS_DATABASE=true
+            break
+        fi
+    done
+    if [ "$HAS_DATABASE" = true ]; then
+        log_message "Warning: No .env file found, but this install has a database." "$RED"
+        log_message "Restore your .env from a backup before starting OpenAlgo. A new .env would" "$RED"
+        log_message "carry new security keys and make your saved password, API key and broker" "$RED"
+        log_message "keys unreadable." "$RED"
     else
-        cp "$OPENALGO_PATH/.sample.env" "$OPENALGO_PATH/.env"
+        log_message "No .env file yet. OpenAlgo creates one with new security keys on its next" "$YELLOW"
+        log_message "start. Add your broker keys in OpenAlgo after you sign in." "$YELLOW"
     fi
-
-    # Generate fresh APP_KEY and API_KEY_PEPPER and substitute the placeholders.
-    # Without this, the new .env would carry the public sample placeholder values
-    # — the app's startup check would then auto-rotate them, which works, but
-    # generating here keeps update.sh symmetric with install.sh and avoids the
-    # noisy "first-run setup" message after what the user thinks is just an update.
-    NEW_APP_KEY=$($PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))")
-    NEW_PEPPER=$($PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))")
-    if [ "$SERVER_MODE" = true ]; then
-        sudo sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$NEW_APP_KEY|g" "$OPENALGO_PATH/.env"
-        sudo sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$NEW_PEPPER|g" "$OPENALGO_PATH/.env"
-        sudo chmod 600 "$OPENALGO_PATH/.env"
-    else
-        sed -i.bak "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$NEW_APP_KEY|g" "$OPENALGO_PATH/.env" && rm -f "$OPENALGO_PATH/.env.bak"
-        sed -i.bak "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$NEW_PEPPER|g" "$OPENALGO_PATH/.env" && rm -f "$OPENALGO_PATH/.env.bak"
-        chmod 600 "$OPENALGO_PATH/.env"
-    fi
-    log_message "Generated fresh APP_KEY and API_KEY_PEPPER in $OPENALGO_PATH/.env" "$GREEN"
-    log_message "Please edit $OPENALGO_PATH/.env with your broker credentials and settings." "$RED"
 fi
 
 # ============================================

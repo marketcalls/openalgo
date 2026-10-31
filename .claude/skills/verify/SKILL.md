@@ -61,6 +61,14 @@ When disabling a guard to prove a test, target the exact line. A blind
 `replace(..., 1)` hits the first match, which may be a different, pre-existing
 guard, and then the "proof" proves nothing.
 
+**A surviving mutation is a question, not a verdict.** When a test stays green
+with its guard removed, either the test misses the case or another check backs
+the guard up. Find out which: mutate back to the exact earlier behaviour (the
+separate reads, the permissive comparison, the plain lock), not merely remove
+one line. In the broker-keys work, four "survivors" were each backed up by a
+second check, and only mutations restoring the old code showed the tests
+were real; one more was a genuinely missing test (the resume case).
+
 ## Rule 3 - grep for the sink, not the variable name
 
 A grep that returns nothing is not evidence of absence. It is evidence about

@@ -43,6 +43,7 @@ Columns rotated:
     - apikeys.api_key_encrypted
     - users.totp_secret    (was plaintext for some installs)
     - flow_workflows.api_key   (was plaintext for some installs)
+    - broker_keys.api_key, api_secret, api_key_market, api_secret_market
   apikeys.api_key_hash:
     - re-derived from the decrypted api_key plaintext (Argon2 + new pepper)
   telegram_db Fernet (PBKDF2-SHA256, salt=TELEGRAM_KEY_SALT):
@@ -249,6 +250,7 @@ class Rotator:
             "bot_config.token_plaintext_promoted": 0,
             "flow_workflows.api_key": 0,
             "flow_workflows.api_key_plaintext_promoted": 0,
+            "broker_keys": 0,
         }
 
     def _table_exists(self, name: str) -> bool:
@@ -439,6 +441,27 @@ class Rotator:
                 self.stats["flow_workflows.api_key"] += 1
                 if not was_enc:
                     self.stats["flow_workflows.api_key_plaintext_promoted"] += 1
+
+        # ---- broker_keys (broker keys saved in OpenAlgo, always ciphertext) ----
+        # A value that does not decrypt is left alone rather than encrypted as
+        # if it were plain text: the trader re-enters that broker's keys.
+        if self._table_exists("broker_keys"):
+            columns = ("api_key", "api_secret", "api_key_market", "api_secret_market")
+            cur = self.conn.execute(f"SELECT id, {', '.join(columns)} FROM broker_keys")
+            for row in cur.fetchall():
+                row_id, values = row[0], row[1:]
+                for column, value in zip(columns, values, strict=True):
+                    if not value:
+                        continue
+                    pt, was_enc = _try_decrypt(self.old_auth, value)
+                    if not was_enc:
+                        print(f"  WARN: broker_keys.{column} row {row_id}: cannot decrypt, leaving alone")
+                        continue
+                    self.conn.execute(
+                        f"UPDATE broker_keys SET {column} = ? WHERE id = ?",
+                        (_encrypt(self.new_auth, pt), row_id),
+                    )
+                    self.stats["broker_keys"] += 1
 
 
 # ---------- Main ----------

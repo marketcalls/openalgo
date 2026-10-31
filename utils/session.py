@@ -13,18 +13,45 @@ logger = get_logger(__name__)
 def is_session_expiry_disabled():
     """Check if session expiry is disabled (e.g., for crypto brokers with 24/7 markets).
 
-    Note: Each OpenAlgo instance serves a single broker, so this env var is
-    instance-scoped — it only affects the broker configured for this instance,
-    not all brokers globally.  The install script sets it automatically when
-    a crypto broker (e.g. deltaexchange) is selected.
+    True when DISABLE_SESSION_EXPIRY is set (the install script sets it when a
+    crypto broker such as deltaexchange is chosen), or when the broker whose
+    keys are in use is a crypto broker by its plugin.json. One broker is logged
+    in at a time, so this follows whichever it is.
     """
-    return os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true"
+    if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
+        return True
+    # The installer sets the flag when a crypto broker is chosen at install
+    # time. A crypto broker whose keys are saved in OpenAlgo was never seen by
+    # the installer, so the broker logged in decides as well: its plugin.json
+    # says whether it trades around the clock. The stored session names it,
+    # not the environment, which changes as soon as a login is started.
+    try:
+        from utils.broker_keys import broker_type, logged_in_broker
+
+        return broker_type(logged_in_broker()) == "crypto"
+    except Exception:
+        return False
 
 
-def get_session_expiry_time():
-    """Get session expiry time set to 3 AM IST next day"""
+def get_session_expiry_time(broker=None):
+    """Get session expiry time set to 3 AM IST next day.
+
+    Args:
+        broker: The broker being logged in to, when known. A login computes its
+            cookie lifetime before its session is stored, so the stored session
+            still names the previous broker (or none) at that moment; passing
+            the broker lets a crypto login get its year-long cookie.
+    """
+    crypto_login = False
+    if broker:
+        try:
+            from utils.broker_keys import broker_type
+
+            crypto_login = broker_type(broker) == "crypto"
+        except Exception:
+            crypto_login = False
     # Skip expiry for crypto brokers (24/7 markets)
-    if is_session_expiry_disabled():
+    if crypto_login or is_session_expiry_disabled():
         logger.debug("Session expiry disabled (crypto broker / 24/7 market)")
         return timedelta(days=365)
 
@@ -54,6 +81,103 @@ def set_session_login_time():
     logger.info(f"Session login time set to: {now_ist}")
 
 
+def mark_signed_in():
+    """Record when this browser signed in to OpenAlgo (password, and TOTP if on).
+
+    The sign-in time is what a logout elsewhere and the daily rollover are
+    measured against, before a broker login exists and after it. It is always
+    later than the last revocation: a clock that ticks coarsely (about 15 ms on
+    Windows with Python 3.12) could otherwise stamp a sign-in with the very
+    instant a logout elsewhere, or this request's own broker switch, recorded,
+    and the new sign-in would read as ended.
+    """
+    now = datetime.now(pytz.UTC)
+    username = session.get("user")
+    if username:
+        from database.auth_db import get_pre_broker_revoked_at, get_sessions_revoked_at
+
+        for revoked_at in (get_sessions_revoked_at(username), get_pre_broker_revoked_at(username)):
+            if revoked_at is not None and now <= revoked_at:
+                now = revoked_at + timedelta(microseconds=1)
+    session["auth_at"] = now.isoformat()
+
+
+def _parse_instant(raw):
+    """An ISO timestamp from the session as an aware datetime, or None."""
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        value = pytz.timezone("Asia/Kolkata").localize(value)
+    return value
+
+
+def _signed_in_at():
+    """When this browser signed in: the password sign-in, else the broker login."""
+    return _parse_instant(session.get("auth_at")) or _parse_instant(session.get("login_time"))
+
+
+def sign_in_revoked():
+    """Whether a logout, password change or reset ended this sign-in elsewhere.
+
+    The session is a signed cookie and a copy can sit on another device, so a
+    logout records the instant (database.auth_db.revoke_all_sessions) and every
+    sign-in from before it is refused here. A logout from a sign-in with no
+    broker login (revoke_pre_broker_sessions) ends every sign-in from before it
+    that has not reached a broker login either.
+    """
+    username = session.get("user")
+    signed_in = _signed_in_at()
+    if not username or signed_in is None:
+        return False
+    from database.auth_db import get_pre_broker_revoked_at, get_sessions_revoked_at
+
+    revoked_at = get_sessions_revoked_at(username)
+    if revoked_at is not None and signed_in <= revoked_at:
+        return True
+    if session.get("logged_in"):
+        return False
+    pre_broker = get_pre_broker_revoked_at(username)
+    return pre_broker is not None and signed_in <= pre_broker
+
+
+def end_session_if_signed_out():
+    """Clear this browser's session when its sign-in has ended.
+
+    Two cases, both checked on every request:
+
+    - A logout, password change or password reset on any device ended it.
+    - It signed in with a password but never completed a broker login, and the
+      daily rollover has passed since. A sign-in from before this check carries
+      no sign-in time and has to sign in again once.
+
+    A session with a broker login is left to is_session_valid() and the
+    rollover hook in app.py, which also revoke the broker token.
+
+    Returns:
+        bool: True when the session was cleared.
+    """
+    if "user" not in session:
+        return False
+    reason = None
+    if sign_in_revoked():
+        reason = "ended by a logout or password change"
+    elif not session.get("logged_in"):
+        signed_in = _parse_instant(session.get("auth_at"))
+        if signed_in is None:
+            reason = "has no sign-in time"
+        elif not is_session_expiry_disabled() and signed_in < last_rollover_boundary():
+            reason = "is from before the daily rollover"
+    if reason is None:
+        return False
+    logger.info(f"Clearing a browser session that {reason}")
+    session.clear()
+    return True
+
+
 def is_session_valid():
     """Check if the current session is valid"""
     if not session.get("logged_in"):
@@ -63,6 +187,10 @@ def is_session_valid():
     # If no login time is set, consider session invalid
     if "login_time" not in session:
         logger.debug("Session invalid: 'login_time' not in session")
+        return False
+
+    if sign_in_revoked():
+        logger.info("Session invalid: ended by a logout or password change")
         return False
 
     # Skip expiry check for crypto brokers (24/7 markets)
@@ -106,6 +234,22 @@ def _todays_rollover_boundary(now_ist=None):
     expiry_time = os.getenv("SESSION_EXPIRY_TIME", "03:00")
     hour, minute = map(int, expiry_time.split(":"))
     return now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def last_rollover_boundary(now_ist=None):
+    """Return the most recent session-expiry boundary as an IST datetime.
+
+    Today's boundary once it has passed, yesterday's before it: between
+    midnight and 03:00 IST the trading session that is still running began at
+    yesterday's boundary. Anything authenticated before this instant belongs to
+    a session that has ended.
+    """
+    if now_ist is None:
+        now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
+    boundary = _todays_rollover_boundary(now_ist)
+    if now_ist < boundary:
+        boundary -= timedelta(days=1)
+    return boundary
 
 
 def get_trading_session_date():
@@ -305,9 +449,15 @@ def check_session_validity(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
-            # Revoke tokens before clearing session
-            revoke_user_tokens()
-            session.clear()
+            # Only an expired broker session is torn down. A sign-in that has
+            # not reached a broker login yet (the broker login page, Profile)
+            # is not expired, just not far enough for this route: it is
+            # refused and kept, and it never held the broker token, so it must
+            # not revoke it. Tearing it down signed the trader out whenever
+            # those pages touched a route like this, such as the error reporter.
+            if session.get("logged_in"):
+                revoke_user_tokens()
+                session.clear()
 
             # Check if this is an AJAX/fetch request
             from flask import jsonify, request
@@ -339,12 +489,34 @@ def check_session_validity(f):
     return decorated_function
 
 
+def check_signed_in(f):
+    """Admit a trader signed in to OpenAlgo, with or without a broker login.
+
+    For Profile, where a new install adds its first broker's keys before any
+    broker login, as OpenAlgo Desktop allows. A session with a broker login
+    gets the full check_session_validity; one without is admitted while its
+    sign-in stands (end_session_if_signed_out); anyone else is refused the
+    same way check_session_validity refuses.
+    """
+    validated = check_session_validity(f)
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if session.get("logged_in"):
+            return validated(*args, **kwargs)
+        if "user" in session and not end_session_if_signed_out():
+            return f(*args, **kwargs)
+        return validated(*args, **kwargs)
+
+    return decorated_function
+
+
 def invalidate_session_if_invalid(f):
     """Decorator to invalidate session if invalid without redirecting"""
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not is_session_valid():
+        if not is_session_valid() and session.get("logged_in"):
             logger.info("Invalid session detected - clearing session")
             # Revoke tokens before clearing session
             revoke_user_tokens()

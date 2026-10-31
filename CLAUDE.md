@@ -116,6 +116,35 @@ uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
   `ThreadPoolExecutor-` thread made `test_gthread_brokers_a_quote_paths.py`
   fail at random. Record the pools the code under test builds and check their
   own threads, or match a `thread_name_prefix` only that code uses.
+- **Compare failures by name, and list them.** The job's `-rs` reports skips
+  only, so no `FAILED` line is printed and a grep for them compares two empty
+  lists, which once let "no new failures" stand for three runs. Add `-rf`
+  (`-rfs`) when you need the names, or read the `____ test_name ____` headers.
+
+### Tests for a race land the competing writer at the write
+
+The audits of the broker-keys work (PR 2337) found four races a test suite of
+150 had missed, because every test changed the state *before* the code's last
+check, where the check rightly refused. A race lives between the last check and
+the write, so stage it there:
+
+- **Patch the function that writes** (`utils.auth_utils.upsert_auth`, a
+  plugin's HTTP client) to run the competing action first and then the
+  original. A test that interleaves anywhere earlier proves only the check.
+- **A competing request runs in a context of its own:**
+  `contextvars.Context().run(lambda: client.get(...))`. The Flask test client
+  runs a request made inside a request on the outer one's app context, so the
+  two share `g` and every `ContextVar`; production requests never do, and the
+  inner request's teardown then undoes the outer one's state.
+- **Assert what reached the transport:** the endpoint and the header, not
+  only that the token and keys agree. A coherent pair sent to the wrong
+  broker's endpoint passed one such test.
+- **Clear module-level caches between tests** (`auth_db.auth_cache` and the
+  like): a token cached by one test answers the next one's read, and the race
+  under test never happens.
+- **Read repository files with `encoding="utf-8"`.** The Windows CI runner
+  decodes in cp1252, and the installers hold UTF-8. Mode-bit checks skip on
+  Windows, which only simulates them.
 
 ## Invariants — do not break these
 
@@ -149,6 +178,176 @@ changed** (real login, ~3 AM rollover, logout/revoke).
 
 - **Gate the teardown on a real token change.** `upsert_auth` compares the new token / feed-token / broker / revoke flag against the stored row using **decrypted plaintext** — Fernet ciphertext is non-deterministic, so never compare encrypted blobs. If nothing material changed, clear the cheap in-process caches and return early, leaving the live feed up. Only a genuine change (or `revoke=True`) runs the ZMQ-publish + `cleanup_pools_for_user` path.
 - **Why:** without the gate, a same-day 2nd-device login kills the 1st device's stream until it refreshes (Shoonya), and on single-active-session Finvasia/Noren brokers the disconnect churn drops the broker token entirely (Flattrade "broker session expired"). See issue #1591. The teardown itself is the #1394/#765/#851 fix — keep it, just keep it gated. Broker-agnostic.
+
+### Broker keys: .env first, one broker at a time, read when called
+
+A trader saves keys for several brokers (`database/broker_keys_db.py`) and
+logs in to one at a time. **The screens are OpenAlgo Desktop's, and stay so**:
+Select Broker (`/broker`, a card per broker with search, Login with, Configure,
+Edit keys, Open Dashboard and the switch confirm), Broker Configuration
+(`/broker/config`, the keys of the broker chosen there, Forget this broker) and
+the summary on Profile's Broker tab. Port a desktop change to these pages
+rather than inventing a web variant; the deliberate differences are the
+server-started login, the fixed error sentences and Open Dashboard joining a
+session from another device (`/auth/broker/resume`). The pages keep no broker
+list: `GET /api/broker/list` serves every VALID_BROKERS broker with the fields,
+hints and sign-in sentence of `utils/broker_setup_guide.py` (desktop's setup
+guide, adjusted where the web signs in differently). They open before any
+broker login (`check_signed_in`), because a new install adds its first broker
+there. `utils/broker_keys.py` owns which keys a broker uses.
+
+- **Stored like the broker tokens.** The auth_db Fernet, so a new encrypted
+  column goes into both rotation lists (`env_check._migrate_fernet_db` and
+  `upgrade/rotate_pepper.py`) or a rotation strands it. Each value is bound to
+  its broker and field inside the authenticated plaintext, so a ciphertext
+  moved to another row or column reads as not saved. A read says whether a
+  secret is set and never a character or the length of it.
+
+- **`.env` comes first.** The broker `.env` names in `REDIRECT_URL` with a
+  `BROKER_API_KEY` always uses the `.env` keys, even if keys are saved for it;
+  saved keys serve every other broker, and all of them when `.env` sets none.
+  About 4,75,000 installs log in from `.env`, and their broker resolves to the
+  values already in the environment, so nothing is written for them. Keep it
+  that way; `.env` is being phased out by migration, not by breaking it.
+- **The keys reach the plugins through the environment, staged per request.**
+  About 140 broker files call `os.getenv("BROKER_API_KEY")`. The process holds
+  the logged-in broker's keys, and every order, funds call and feed reads
+  them. A login's callback and a resume do not write the process: they stage
+  their broker's keys for their own request (`stage_broker_keys`, a
+  `ContextVar` read through an overlay on `os.environ`'s class, so it follows
+  the greenlet under eventlet and the thread under gthread), and the keys
+  become the process's only when the login commits (`publish_broker_keys`, in
+  `handle_auth_success`, after the token is stored). Writing the process at
+  the callback sent the logged-in broker's next funds request out with the
+  other broker's key and its own token. `begin_broker_login` and
+  `end_broker_login` (`utils/auth_utils.py`) take and drop the slot and the
+  staging, and the app teardown drops them again, because a pooled thread or
+  a keep-alive greenlet serves the next request with the same context.
+  Startup and the websocket proxy process publish the logged-in broker's keys
+  (`use_broker_keys`). A broker plugin must read its keys when called, never
+  into a module constant, and must not read them on a thread it starts inside
+  a login: a new thread does not inherit the staged keys. Starting a login
+  writes nothing (`keys_for_login`).
+- **A login commits only if it still may, and the check is part of the write.**
+  `_commit_refusal` in `utils/auth_utils.py` runs before anything is stored,
+  and again as the `fence` of `upsert_auth`, under
+  `database.auth_db.auth_commit_guard()` immediately before the token write.
+  Every sign-out (`_record_revocation`) and every key change on Broker
+  Configuration takes the same guard, so a sign-out or a key change either
+  lands before the check, which refuses the write, or after the commit. A
+  check made before the write and not repeated inside it is not a fence: the
+  re-review proved four writers landing in that gap. The checks: the request
+  still holds the slot, the broker's keys are the ones it started with (a
+  digest, kept in memory), no sign-out since the login started and this
+  browser's own sign-in not ended, the switch rules allow it, and for a resume
+  the process's keys unchanged. Inside the fence the new keys are published
+  first, so a request that reads the new token reads the new keys; a write
+  that then fails puts them back (`restore_published`). In the same commit the
+  old broker's other devices are signed out (`end_broker_session_for_switch`,
+  which revokes no token) and this browser's sign-in is stamped, so a sign-out
+  after the commit ends it, a cookie-less XTS session included. The feed
+  teardown (`defer`) and the notices run after the guard is released: nothing
+  waits on a broker or the network under it. A resume holds the slot alone
+  from its first read to its commit, validates with staged keys, and re-reads
+  the stored session before storing it.
+- **A token read pins its broker's keys, and reads again if they moved.**
+  The token readers in `database/auth_db.py` (`get_auth_token`,
+  `get_auth_token_broker`, `get_session_identity`) go through
+  `_read_coherently`: note the keys' publication generation and the session
+  cache's generation, read the token, pin the keys of its broker
+  (`pin_keys_for`: the published keys when they are that broker's, else
+  `resolve(broker)`), and if either generation moved meanwhile (a switch, a
+  key change with its sign-out, a forget) drop the pin and read again. A
+  token whose keys cannot be pinned is not returned, so the request is
+  refused before it reaches the broker instead of sending one broker's token
+  with another's keys. A login's own staged keys are never replaced. A pin
+  lasts to the end of the request (the auth blueprint's teardown drops it,
+  app-wide); outside a request it lasts until that context's next token
+  read, never a timer. In a request from a browser whose session is logged in
+  to a broker, the token must also be that broker's, and that account's when
+  both are known (`_browser_session_expects`): about ten blueprints (orders,
+  the dashboard, the option tools) pick their broker module from
+  `session["broker"]`, so a token of the broker another device switched to
+  would go to the wrong broker's endpoint. Such a request is refused; the
+  switch signed that browser out anyway. Code that needs the broker of the
+  token it reads uses `get_auth_token_broker` and dispatches through the
+  broker it is handed. `use_broker_keys` drops its caller's pin. Tests reset
+  staging and the published record per test (`test/conftest.py`).
+- **One broker at a time.** While the stored broker token is unrevoked and was
+  signed in to during the current trading day (a device session from today, or
+  a broker login recorded since the rollover, which a password change does not
+  clear), it is the logged-in broker. A login to another broker may start,
+  from any browser including one on the logged-in broker (the switch the
+  trader confirmed on Select Broker), and the old session ends only when that
+  login commits, on every device, as in the desktop; a login that fails or is
+  abandoned leaves it connected with its keys untouched. The switch is refused
+  while the broker logged in now, or last if a logout ended its session
+  (`broker_switch.previous_broker`, from the login attempts), still runs Live
+  automation (`switch_refusal`: Live strategy module runs, Live OpenScript
+  runs, and outside analyzer mode Python strategies and scalping protection),
+  checked when the login starts and again when it commits
+  (`refusal_for_login`). A logout does not stop that automation, so it must
+  not open the switch either. New keys for the logged-in broker, or forgetting it, end its
+  session only with `sign_out=true`, which the page sends after the trader
+  confirms. Whether a session outlives the rollover follows the logged-in
+  broker (`logged_in_broker()`, from the stored session), never the
+  environment, which changes as soon as a login reaches its callback.
+- **Saving keys follows the same rule.** Broker Configuration writes the `.env`
+  broker's keys to `.env` (read from the file at each login) and every other
+  broker's to the database, where they apply at once. The page never shows a
+  character of a secret.
+- **The `.env` broker comes from the file, not from `os.environ`.** After a
+  switch the environment holds the saved broker's keys, so `env_file_values()`
+  reads `.env` itself. Tests point `env_file_path` at their own file (the suite
+  default is a file that does not exist).
+
+### A broker login is started by the server and its answer is checked
+
+The login page POSTs the broker to `/auth/broker/login` (CSRF-checked); the
+server builds the sign-in address (`utils/broker_login.login_url`) and records a
+pending login for that browser. The callback completes a login only for an
+answer that matches one: the browser brings its own marker back in its session,
+or, for a broker in `STATE_BROKERS`, the answer carries the state issued for
+it. Those brokers are matched by the state alone: the marker proves only that
+the browser started some login, so it never completes theirs. Every broker
+that can echo a state is in that set (Zerodha through `redirect_params`,
+Upstox and Paytm through `state`, as OpenAlgo Desktop sends them); a broker
+whose sign-in address can carry one belongs there. The two XTS brokers post
+back across sites without the cookie, so their state rides on the return
+address, as OpenAlgo Desktop does. Dhan's redirect carries only a consent
+token, accepted for the consent this browser asked for; a ready access token
+comes only from OpenAlgo's own form, and either is refused for another account
+than the configured client ID, or when Dhan does not report the account. An
+account is only ever taken from the broker's own answer, never from a label
+posted beside a token: RMoney's from its `/user/profile` reply to the session
+token, CompositEdge's from its answer to the token exchange, and either is
+refused when it is not the market data keys' account. That comparison is
+skipped when the market data login fails (the login then completes, as it did
+before): which XTS brokers and versions should refuse instead is an open
+decision, to be made against real accounts. A strategy run bound to
+a known account reads its token and the current account in one read
+(`get_session_identity`) and refuses when the account is unknown: a known
+binding is never reduced to the broker alone. Pending logins live in the
+`broker_login_states` table as SHA-256 digests (so a restart mid-login is
+harmless and a copy of the table completes nothing); each is used once, by a
+delete only one caller can win, lasts ten minutes, and at most 16 are open. A POST from OpenAlgo's own login form must carry its CSRF token and belong to a started login too, and it uses that login up like any answer (`_claim_login`). Every sign-out (`revoke_all_sessions`, `revoke_pre_broker_sessions`) cancels every started login, and the commit compares when the login started with the last sign-out, so a login started before a logout or password reset never signs anyone back in. Before this, any request token that
+arrived while a trader was signed in completed a login, and an XTS post-back
+logged the admin in with no password at all. A broker whose answer arrives
+without the browser's cookie (a POST from its own site) must be in
+`BROKER_SITE_POST_BROKERS` and `STATE_BROKERS` with the state on its return
+address, or its logins are refused; a broker that redirects back needs nothing,
+the cookie carries the match.
+
+Sessions are signed cookies, so ending one is recorded rather than deleted:
+a logout of a broker-logged-in session, a password change, a reset and a
+switch that ends another broker's session call `revoke_all_sessions`, and every
+sign-in from before that instant is cleared on its next request
+(`end_session_if_signed_out`, and `is_session_valid` for Socket.IO). A logout
+from a sign-in that never reached a broker login calls
+`revoke_pre_broker_sessions` (`session_revocations.pre_broker_revoked_at`):
+every sign-in from before it that has no broker login ends, so a copy of that
+cookie stops working, and the devices on the broker session stay. A sign-in
+that never reached a broker login also ends at the daily rollover.
 
 ### Risk rules live in services/risk/ and are never reimplemented
 
@@ -203,6 +402,17 @@ a defect that reversed a real position:
   switching to analyze mode while a live run held real positions sent every exit
   to the sandbox, which reports success. `force_live=True` opts out. Anything
   executing a position it opened must pass it.
+- **A position's orders go to the broker that holds it.** A trader can log out
+  of one broker and in to another, so resolving the broker when an exit is sent
+  sent a short's cover to the new broker, opening a position there and leaving
+  the first one unmanaged. A Live strategy run records its broker, and its
+  account when the login names one (`SmStrategyRun.broker`, `broker_account`);
+  every order, cancel and status read it makes carries that binding
+  (`services/strategy_module/broker_binding.py`), and `order_dispatch` refuses
+  a call whose session is on another broker or account before sending
+  anything. The run stays open and managed until the trader logs back in to
+  its broker, and a login to another broker is refused while it runs
+  (`broker_switch.refusal_for_login`).
 
 The same shape applies wherever a stop is finalised: a stop whose exit orders
 were refused must leave the run **open and managed**, because the position is
@@ -754,5 +964,15 @@ to `main` after every successful push.
 - **Feature branches** CI has not built may carry stale or missing `dist/`. Build locally or rebase onto recent `main`.
 - **A local build on a branch cut from `main` rewrites tracked files under `frontend/dist/`.** Never stage them (`git add -A -- . ':!frontend/dist'`); `git checkout -- frontend/dist` restores them. A user testing a branch with `uv run app.py` needs that local build, and the commit still carries source only.
 
-Config lives in `.env` (copy from `.sample.env`); `VALID_BROKERS` gates which
-broker plugins load, and plugins are discovered at startup only.
+Config lives in `.env`; `VALID_BROKERS` gates which broker plugins load, and
+plugins are discovered at startup only. A first start with no `.env` creates it
+from `.sample.env` (`utils/env_check.create_env_from_sample`) with fresh
+`APP_KEY`, `API_KEY_PEPPER` and `FERNET_SALT`, owner-only permissions and no
+broker, so a fresh download runs with `uv run app.py` alone. It never does so
+when `db/openalgo.db` exists: new keys would make every stored secret
+unreadable. A `.env` copied from `.sample.env` unchanged starts too: the
+placeholder keys are replaced on first start (`_generate_keys_on_first_run`,
+`_ensure_fernet_salt`) and the `<broker>` placeholder means no broker in
+`.env`. An existing `.env` keeps its real keys and broker values: startup only
+ever replaces the public placeholders. A new placeholder secret in `.sample.env` belongs in
+`_NEW_ENV_SECRETS`, or a fresh install starts with the public placeholder.

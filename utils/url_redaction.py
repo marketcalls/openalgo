@@ -18,10 +18,13 @@ _URL_CREDENTIAL = re.compile(
 # parameters. Keep this URL-specific so an ordinary application line such as
 # ``HTTP status code=200`` remains untouched while callback ``code=...`` is
 # masked. The names cover the aliases accepted by ``blueprints/brlogin.py``.
+# The OAuth state is one too: it completes the pending broker login it was
+# issued for (utils/broker_login.py), and Zerodha carries it in
+# ``redirect_params``.
 _QUERY_CREDENTIAL = re.compile(
     r"(?P<prefix>[?&](?:"
     r"api[_-]?session|token(?:[_-]?id)?|request[_-]?token|auth[_-]?code|"
-    r"access[_-]?token|session|code"
+    r"access[_-]?token|session|code|state|redirect[_-]?params"
     r")=)[^&#\s'\"<>]+",
     flags=re.IGNORECASE,
 )

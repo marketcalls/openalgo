@@ -10,14 +10,22 @@ services:
       - "${FLASK_PORT:-5000}:5000"
       - "${WEBSOCKET_PORT:-8765}:8765"
 
-    # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
+    # persistent DB, strategies, logs + mount the host .env read+write so dotenv can read it
     volumes:
       - openalgo_db:/app/db
       - openalgo_log:/app/log            # Application logs (named volume)
       - openalgo_strategies:/app/strategies  # Python strategies (named volume)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
-      - ./.env:/app/.env
+      # Long form with create_host_path off on purpose: when .env is missing
+      # on the host, Docker stops with "bind source path does not exist"
+      # instead of creating a folder named .env. ./docker-build.sh creates
+      # .env for you.
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
 
     # (optional) extra env-vars that are NOT in .env
     environment:

@@ -33,6 +33,39 @@ def get_host_lookup():
         return None, None, f"HostLookup exception: {str(e)}"
 
 
+def session_account(auth_token):
+    """The account an interactive session token belongs to, as RMoney reports it.
+
+    The third-party login posts the session back from RMoney's site, and a
+    ``userID`` beside the token in that post is only a label. The token is
+    asked for its own profile (XTS ``/user/profile``, authorised by the token
+    itself), which both checks the token with RMoney and names its account.
+
+    Returns:
+        str | None: The account id, or None when RMoney refused the token or
+        did not name the account.
+    """
+    try:
+        response = get_httpx_client().get(
+            f"{INTERACTIVE_URL}/user/profile",
+            headers={"authorization": auth_token, "Content-Type": "application/json"},
+        )
+        data = response.json() if response.status_code == 200 else {}
+    except Exception:
+        logger.exception("Could not read the account of an RMoney session token")
+        return None
+    if not isinstance(data, dict) or data.get("type") != "success":
+        return None
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return None
+    for key in ("ClientId", "ClientID", "clientId", "clientID"):
+        value = str(result.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def authenticate_broker(request_token):
     """Authenticate with RMoney XTS using token from OAuth callback.
 

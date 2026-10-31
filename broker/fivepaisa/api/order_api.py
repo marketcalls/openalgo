@@ -32,12 +32,22 @@ logger = get_logger(__name__)
 # Base URL for 5Paisa API
 BASE_URL = "https://Openapi.5paisa.com"
 
-# Retrieve the BROKER_API_KEY and BROKER_API_SECRET environment variables
-broker_api_key = os.getenv("BROKER_API_KEY")
-api_secret = os.getenv("BROKER_API_SECRET")
-api_key, user_id, client_id = broker_api_key.split(":::")
+def _fivepaisa_keys():
+    """The app key, user id and client code packed in BROKER_API_KEY.
 
-json_data = {"head": {"key": api_key}, "body": {"ClientCode": client_id}}
+    Read when a call is made, not at import: the broker's keys can be put in
+    place after startup (keys saved in OpenAlgo, utils/broker_keys.py), and a
+    key without the 'User_Key:::User_ID:::client_id' layout then fails the call
+    that needs it rather than the import of every 5paisa module.
+    """
+    api_key, user_id, client_id = (os.getenv("BROKER_API_KEY") or "").split(":::")
+    return api_key, user_id, client_id
+
+
+def _client_request():
+    """The request body that names this account, for the book and position calls."""
+    api_key, _user_id, client_id = _fivepaisa_keys()
+    return {"head": {"key": api_key}, "body": {"ClientCode": client_id}}
 
 
 def get_api_response(
@@ -95,7 +105,7 @@ def get_order_book(auth: str) -> dict[str, Any]:
         Dict[str, Any]: Order book data
     """
     try:
-        payload = json.dumps(json_data)
+        payload = json.dumps(_client_request())
         return get_api_response(
             "/VendorsAPI/Service1.svc/V3/OrderBook", auth, method="POST", payload=payload
         )
@@ -114,7 +124,7 @@ def get_trade_book(auth: str) -> dict[str, Any]:
         Dict[str, Any]: Trade book data
     """
     try:
-        payload = json.dumps(json_data)
+        payload = json.dumps(_client_request())
         return get_api_response(
             "/VendorsAPI/Service1.svc/V1/TradeBook", auth, method="POST", payload=payload
         )
@@ -144,7 +154,7 @@ def _request_positions(auth: str) -> dict[str, Any]:
         try:
             # Get the shared httpx client
             client = get_httpx_client()
-            payload = json.dumps(json_data)
+            payload = json.dumps(_client_request())
 
             # Use a longer timeout specifically for positions endpoint
             headers = {"Authorization": f"bearer {auth}", "Content-Type": "application/json"}
@@ -197,7 +207,7 @@ def get_holdings(auth: str) -> dict[str, Any]:
         Dict[str, Any]: Holdings data
     """
     try:
-        payload = json.dumps(json_data)
+        payload = json.dumps(_client_request())
         return get_api_response(
             "/VendorsAPI/Service1.svc/V3/Holding", auth, method="POST", payload=payload
         )
@@ -347,7 +357,7 @@ def place_order_api(data: dict[str, Any], auth: str) -> dict[str, Any]:
     newdata = transform_data(data, token, AUTH_TOKEN)
     headers = {"Content-Type": "application/json", "Authorization": f"bearer {AUTH_TOKEN}"}
 
-    json_data = {"head": {"key": api_key}, "body": newdata}
+    json_data = {"head": {"key": _fivepaisa_keys()[0]}, "body": newdata}
 
     payload = json.dumps(json_data)
 
@@ -627,7 +637,7 @@ def cancel_order(orderid: str, auth: str) -> dict[str, Any]:
             }, 400
 
         # Build the cancel request based on the official 5Paisa documentation
-        cancel_data = {"head": {"key": api_key}, "body": {"ExchOrderID": exchange_order_id}}
+        cancel_data = {"head": {"key": _fivepaisa_keys()[0]}, "body": {"ExchOrderID": exchange_order_id}}
 
         logger.debug(f"Cancelling order with status: {order_details['OrderStatus']}")
         logger.debug(f"Using ExchOrderID: {exchange_order_id} for cancellation")
@@ -710,7 +720,7 @@ def modify_order(data: dict[str, Any], auth: str) -> dict[str, Any]:
         transformed_data = transform_modify_order_data(data)
 
         # Prepare request data
-        json_data = {"head": {"key": api_key}, "body": transformed_data}
+        json_data = {"head": {"key": _fivepaisa_keys()[0]}, "body": transformed_data}
 
         logger.debug(f"Modify Order Request body: {json_data['body']}")
 

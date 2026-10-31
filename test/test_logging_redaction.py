@@ -176,6 +176,22 @@ def test_shared_url_redactor_masks_callback_query_credentials_but_not_status_cod
     assert redacted.count("[REDACTED]") == 3
 
 
+def test_the_oauth_state_is_masked_like_a_code():
+    """The state completes the pending broker login it was issued for
+    (utils/broker_login.py), so a logged callback or sign-in address must not
+    carry it. Zerodha carries it inside redirect_params."""
+    callback = f"GET /fyers/callback?auth_code={SECRET}&state={SECRET} HTTP/1.1"
+    sign_in = (
+        "https://kite.zerodha.com/connect/login?v=3&api_key=public"
+        f"&redirect_params=state%3D{SECRET}"
+    )
+
+    assert SECRET not in redact_url_credentials(callback)
+    assert SECRET not in redact_url_credentials(sign_in)
+    assert "api_key=public" in redact_url_credentials(sign_in)
+    assert redact_url_credentials("order state=complete") == "order state=complete"
+
+
 @pytest.mark.parametrize(
     "path",
     [

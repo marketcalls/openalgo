@@ -62,7 +62,7 @@ dependencies = [
   "itsdangerous==2.2.0",
   "jedi==0.20.0",
   "Jinja2==3.1.6",
-  "joserfc==1.7.4",
+  "joserfc==1.7.7",
   "jsonschema==4.26.0",
   "jsonschema-specifications==2023.12.1",
   "jupyter-client==8.9.1",

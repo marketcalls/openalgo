@@ -49,20 +49,124 @@ generate_hex() {
     python3 -c "import secrets; print(secrets.token_hex(32))"
 }
 
-validate_broker() {
-    local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,rupeezy,sahi,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
-    [[ ",$valid_brokers," == *",$broker,"* ]]
+# ---------------------------------------------------------------------------
+# Optional fail2ban for this server. Asked once on a fresh install, default No.
+# It guards SSH logins to the server and nothing else: OpenAlgo has its own IP
+# ban for the app, and nginx jails are left off on purpose, because the nginx
+# rate limit also covers the webhook paths and a burst of alerts would get the
+# sender banned. Nothing in this step may stop the installation.
+# This block is repeated in each server installer on purpose: they are
+# downloaded and run on their own, before the repository (and install/lib) exists.
+# ---------------------------------------------------------------------------
+FAIL2BAN_WANTED="false"
+FAIL2BAN_JAIL_FILE="/etc/fail2ban/jail.d/openalgo.conf"
+FAIL2BAN_AUTH_LOG="/var/log/auth.log"
+
+# Only an interactive run is asked; a piped or unattended run means No
+fail2ban_can_ask() {
+    [ -t 0 ]
 }
 
-is_xts_broker() {
-    local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,rmoney,wisdom"
-    if [[ ",$xts_brokers," == *",$broker,"* ]]; then
+ask_fail2ban() {
+    FAIL2BAN_WANTED="false"
+    if ! command -v apt-get >/dev/null 2>&1; then
+        log "fail2ban: skipped, this server has no apt-get." "$YELLOW"
         return 0
-    else
-        return 1
     fi
+    fail2ban_can_ask || return 0
+    local answer=""
+    read -r -p "Set up fail2ban to block repeated failed logins on this server? [y/N]: " answer || answer=""
+    case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) FAIL2BAN_WANTED="true" ;;
+    esac
+    return 0
+}
+
+# A real IP address, as Python's ipaddress module reads one
+fail2ban_valid_ip() {
+    [ -n "$1" ] && command -v python3 >/dev/null 2>&1 \
+        && python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "$1" >/dev/null 2>&1
+}
+
+# The address of the SSH session running this installer, or nothing. A
+# terminal multiplexer or a local console leaves other text where the address
+# would be (for example "tmux(12345).%0" or ":0"); that is not used.
+fail2ban_ssh_client_ip() {
+    local ip="${SSH_CLIENT%% *}"
+    if [ -z "$ip" ]; then
+        ip="${SSH_CONNECTION%% *}"
+    fi
+    if [ -z "$ip" ]; then
+        # sudo drops SSH_CLIENT; this terminal's login record may still have it
+        ip=$(who -m 2>/dev/null | sed -n 's/.*(\([^)]*\)).*/\1/p' | head -n 1)
+    fi
+    # [2001:db8::1] and fe80::1%eth0 forms
+    ip="${ip#\[}"
+    ip="${ip%\]}"
+    ip="${ip%%\%*}"
+    if fail2ban_valid_ip "$ip"; then
+        printf '%s' "$ip"
+    fi
+}
+
+setup_fail2ban() {
+    [ "$FAIL2BAN_WANTED" = "true" ] || return 0
+    log "\n=== Setting up fail2ban ===" "$BLUE"
+    if ! apt-get install -y fail2ban; then
+        log "Warning: fail2ban could not be installed. The installation continues without it." "$YELLOW"
+        return 0
+    fi
+
+    local ssh_ip ignore conf
+    ssh_ip=$(fail2ban_ssh_client_ip)
+    ignore="127.0.0.1/8 ::1"
+    if [ -n "$ssh_ip" ]; then
+        ignore="$ignore $ssh_ip"
+    fi
+
+    conf="# Written by the OpenAlgo installer. Running it again replaces this file.
+[sshd]
+enabled = true
+maxretry = 5
+findtime = 10m
+bantime = 1h
+ignoreip = $ignore"
+    # Without rsyslog (Debian 12) SSH logins are only in the journal
+    if [ ! -f "$FAIL2BAN_AUTH_LOG" ]; then
+        apt-get install -y python3-systemd >/dev/null 2>&1 || true
+        conf="$conf
+backend = systemd"
+    fi
+
+    if ! printf '%s\n' "$conf" | tee "$FAIL2BAN_JAIL_FILE" >/dev/null; then
+        log "Warning: could not write $FAIL2BAN_JAIL_FILE. The installation continues without fail2ban." "$YELLOW"
+        return 0
+    fi
+    if ! { systemctl enable fail2ban >/dev/null 2>&1 && systemctl restart fail2ban; }; then
+        log "Warning: fail2ban did not start (see: sudo journalctl -u fail2ban). The installation continues." "$YELLOW"
+        return 0
+    fi
+    # fail2ban needs a moment after a restart before it answers
+    local tries=0
+    until fail2ban-client status >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 10 ]; then
+            log "Warning: fail2ban is installed but not answering (see: sudo fail2ban-client status). The installation continues." "$YELLOW"
+            return 0
+        fi
+        sleep 1
+    done
+
+    log "fail2ban is on for SSH logins (jail: sshd)." "$GREEN"
+    log "An address is banned for 1 hour after 5 failed SSH logins within 10 minutes." "$BLUE"
+    if [ -n "$ssh_ip" ]; then
+        log "The address you are installing from ($ssh_ip) and this server itself are never banned." "$BLUE"
+    else
+        log "Your SSH address could not be detected, so it is not exempt; only this server itself is." "$YELLOW"
+        log "To exempt it, add it to the ignoreip line in $FAIL2BAN_JAIL_FILE and run: sudo systemctl restart fail2ban" "$YELLOW"
+    fi
+    log "To unban an address: sudo fail2ban-client set sshd unbanip <ip>" "$BLUE"
+    return 0
 }
 
 sanitize_domain() {
@@ -413,7 +517,12 @@ ${BUILD_EXTRA_HOSTS_YAML}    container_name: ${PROJECT_NAME}-web
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env
+      # Fails instead of creating a folder named .env when the file is missing.
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0
@@ -619,11 +728,6 @@ fi
 
 # Arrays to store config
 declare -a CONF_DOMAINS
-declare -a CONF_BROKERS
-declare -a CONF_API_KEYS
-declare -a CONF_API_SECRETS
-declare -a CONF_MARKET_KEYS
-declare -a CONF_MARKET_SECRETS
 declare -a CONF_SSL_CERTS
 declare -a CONF_SSL_KEYS
 declare -a UPDATE_MODE  # Track update vs fresh install per domain
@@ -657,19 +761,15 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
                 EXISTING_ENV="$INSTANCE_DIR/.env"
                 if [ -f "$EXISTING_ENV" ]; then
                     log "Loading existing configuration from .env..." "$GREEN"
+                    # Shown only; the existing .env is kept exactly as it is
                     EXISTING_BROKER=$(extract_env_value "$EXISTING_ENV" "REDIRECT_URL" | sed 's|.*/\([^/]*\)/callback|\1|')
-                    EXISTING_API_KEY=$(extract_env_value "$EXISTING_ENV" "BROKER_API_KEY")
-                    EXISTING_API_SECRET=$(extract_env_value "$EXISTING_ENV" "BROKER_API_SECRET")
-                    EXISTING_M_KEY=$(extract_env_value "$EXISTING_ENV" "BROKER_API_KEY_MARKET")
-                    EXISTING_M_SECRET=$(extract_env_value "$EXISTING_ENV" "BROKER_API_SECRET_MARKET")
-                    
+                    # The "<broker>" placeholder of an unchanged .sample.env names no broker
+                    case "$EXISTING_BROKER" in
+                        *"<broker>"*) EXISTING_BROKER="" ;;
+                    esac
+
                     # Use existing values
                     CONF_DOMAINS+=("$DOMAIN")
-                    CONF_BROKERS+=("$EXISTING_BROKER")
-                    CONF_API_KEYS+=("$EXISTING_API_KEY")
-                    CONF_API_SECRETS+=("$EXISTING_API_SECRET")
-                    CONF_MARKET_KEYS+=("${EXISTING_M_KEY:-}")
-                    CONF_MARKET_SECRETS+=("${EXISTING_M_SECRET:-}")
                     UPDATE_MODE+=("true")
                     
                     # SSL already configured, get existing paths
@@ -683,7 +783,11 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
                         CONF_SSL_KEYS+=("EXISTING")
                     fi
                     
-                    log "Loaded: Broker=$EXISTING_BROKER" "$GREEN"
+                    if [ -n "$EXISTING_BROKER" ]; then
+                        log "Loaded: Broker=$EXISTING_BROKER" "$GREEN"
+                    else
+                        log "Loaded: no broker in .env (brokers are set up in OpenAlgo in Broker Configuration)" "$GREEN"
+                    fi
 
                     # Per-instance options (Enter keeps what the instance has)
                     PREV_WORKER=$(read_worker_class "$EXISTING_ENV")
@@ -701,8 +805,8 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
                 continue
                 ;;
             [Rr]*)
-                log "Reinstall mode: Will ask for all configuration again." "$YELLOW"
-                log "Warning: This will regenerate security keys and invalidate existing passwords!" "$RED"
+                log "Reinstall mode: Will ask for this instance's options again." "$YELLOW"
+                log "Its existing .env and security keys are kept, so passwords and saved data stay valid." "$YELLOW"
                 read -p "Are you sure you want to reinstall? (yes to confirm): " CONFIRM_REINSTALL
                 if [ "$CONFIRM_REINSTALL" != "yes" ]; then
                     log "Skipping $DOMAIN" "$YELLOW"
@@ -720,52 +824,6 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
     UPDATE_MODE+=("$IS_UPDATE")
 
     CONF_DOMAINS+=("$DOMAIN")
-
-    # Broker
-    while true; do
-        read -p "Enter BROKER for $DOMAIN: " BROKER
-        if validate_broker "$BROKER"; then
-            CONF_BROKERS+=("$BROKER")
-            break
-        else
-            log "Invalid broker path. See documentation for list." "$RED"
-        fi
-    done
-
-    # Credentials
-    log "Redirect URL: https://$DOMAIN/$BROKER/callback" "$GREEN"
-    # Credentials
-    log "Redirect URL: https://$DOMAIN/$BROKER/callback" "$GREEN"
-    while true; do
-        read -p "Enter API Key: " API_KEY
-        if [ ! -z "$API_KEY" ]; then
-            CONF_API_KEYS+=("$API_KEY")
-            break
-        else
-            log "API Key cannot be empty." "$RED"
-        fi
-    done
-
-    while true; do
-        read -p "Enter API Secret: " API_SECRET
-        if [ ! -z "$API_SECRET" ]; then
-            CONF_API_SECRETS+=("$API_SECRET")
-            break
-        else
-            log "API Secret cannot be empty." "$RED"
-        fi
-    done
-
-    # XTS Check
-    if is_xts_broker "$BROKER"; then
-        read -p "Enter Market Data API Key: " M_KEY
-        read -p "Enter Market Data API Secret: " M_SECRET
-        CONF_MARKET_KEYS+=("$M_KEY")
-        CONF_MARKET_SECRETS+=("$M_SECRET")
-    else
-        CONF_MARKET_KEYS+=("")
-        CONF_MARKET_SECRETS+=("")
-    fi
 
     # SSL Config
     if [[ $USE_WILDCARD_SSL =~ ^[Yy]$ ]]; then
@@ -826,6 +884,18 @@ for DOMAIN in "${DOMAINS_INPUT[@]}"; do
     CONF_WORKERS+=("$(choose_worker_class "$DOMAIN" "eventlet" new)")
     CONF_PROFILES+=("$(choose_memory_profile "$DOMAIN" "auto")")
 done
+
+# Optional fail2ban for this server (default No). Offered only when this
+# run installs a new instance; a run that only updates never asks.
+FRESH_INSTANCE="false"
+for mode in "${UPDATE_MODE[@]}"; do
+    if [ "$mode" != "true" ]; then
+        FRESH_INSTANCE="true"
+    fi
+done
+if [ "$FRESH_INSTANCE" = "true" ]; then
+    ask_fail2ban
+fi
 
 # -----------------
 # Deployment Loop
@@ -1098,11 +1168,6 @@ fi
 
 for i in "${!CONF_DOMAINS[@]}"; do
     DOMAIN="${CONF_DOMAINS[$i]}"
-    BROKER="${CONF_BROKERS[$i]}"
-    API_KEY="${CONF_API_KEYS[$i]}"
-    API_SECRET="${CONF_API_SECRETS[$i]}"
-    M_KEY="${CONF_MARKET_KEYS[$i]}"
-    M_SECRET="${CONF_MARKET_SECRETS[$i]}"
     SSL_CERT="${CONF_SSL_CERTS[$i]}"
     SSL_KEY="${CONF_SSL_KEYS[$i]}"
 
@@ -1175,10 +1240,16 @@ for i in "${!CONF_DOMAINS[@]}"; do
     snapshot_instance_config "$INSTANCE_DIR" "$DOMAIN"
 
     # 4. Clone/Update Repo
+    MOVED_DIR=""
     if [ ! -d "$INSTANCE_DIR/.git" ]; then
         if [ -d "$INSTANCE_DIR" ]; then
             log "Directory exists but is not a valid git repo. Backing up and re-cloning..." "$YELLOW"
-            mv "$INSTANCE_DIR" "${INSTANCE_DIR}_backup_$(date +%s)"
+            # Stop a container still running from it first; its data volumes are kept
+            if [ -f "$INSTANCE_DIR/docker-compose.yaml" ]; then
+                (cd "$INSTANCE_DIR" && docker compose down) || log "Warning: could not stop the running container; continuing." "$YELLOW"
+            fi
+            MOVED_DIR="${INSTANCE_DIR}_backup_$(date +%s)"
+            mv "$INSTANCE_DIR" "$MOVED_DIR"
         fi
         # --filter=blob:none makes this a partial clone: the server sends every
         # commit and tree but no file contents, so it pulls ~20 MB instead of
@@ -1189,6 +1260,11 @@ for i in "${!CONF_DOMAINS[@]}"; do
         # frontend/dist bundles that a server never reads. A host without filter
         # support just full-clones, so this is never worse than no flag at all.
         git clone --filter=blob:none "$REPO_URL" "$INSTANCE_DIR"
+        # The moved folder's .env holds the keys for this instance's data in
+        # its Docker volumes; carry it into the new checkout unchanged.
+        if [ -n "$MOVED_DIR" ] && [ -f "$MOVED_DIR/.env" ] && [ -d "$INSTANCE_DIR" ] && [ ! -e "$INSTANCE_DIR/.env" ]; then
+            cp -p "$MOVED_DIR/.env" "$INSTANCE_DIR/.env"
+        fi
     else
         log "Updating existing repository..." "$GREEN"
         cd "$INSTANCE_DIR"
@@ -1236,17 +1312,38 @@ for i in "${!CONF_DOMAINS[@]}"; do
         fi
         
         log "Updated connectivity settings (preserved custom domains)" "$GREEN"
+    elif [ -e "$ENV_FILE" ]; then
+        # A .env is written only for a new instance. An existing one keeps its
+        # keys and broker settings untouched.
+        log "Kept the existing .env and its keys. It was not changed." "$GREEN"
+    elif DB_VOLUME="$(basename "$INSTANCE_DIR" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')_openalgo_db" \
+        && docker volume inspect "$DB_VOLUME" >/dev/null 2>&1; then
+        # No .env, but Docker still holds this instance's database from an
+        # earlier install. New keys would make it unreadable.
+        log "Error: $DOMAIN has no .env, but Docker still holds its OpenAlgo database from an earlier install (volume $DB_VOLUME)." "$RED"
+        log "       Put the old .env back at $ENV_FILE and run this script again. New keys would make" "$RED"
+        log "       the saved passwords and broker keys unreadable. This instance was NOT installed." "$RED"
+        log "       Or, to start over without that data: sudo docker volume rm $DB_VOLUME" "$YELLOW"
+        FAILED_DOMAINS+=("$DOMAIN")
+        continue
     else
         log "Creating new .env configuration..." "$YELLOW"
         cp "$INSTANCE_DIR/.sample.env" "$ENV_FILE"
         
         APP_KEY=$(generate_hex)
         PEPPER=$(generate_hex)
-        
-        sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
-        sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
+
+        # No broker in .env: the trader adds broker keys in OpenAlgo after
+        # signing in (Broker Configuration). VALID_BROKERS keeps the full list of
+        # brokers keys can be saved for.
+        sed -i \
+            -e "s|^BROKER_API_KEY *=.*|BROKER_API_KEY = ''|" \
+            -e "s|^BROKER_API_SECRET *=.*|BROKER_API_SECRET = ''|" \
+            -e "s|^BROKER_API_KEY_MARKET *=.*|BROKER_API_KEY_MARKET = ''|" \
+            -e "s|^BROKER_API_SECRET_MARKET *=.*|BROKER_API_SECRET_MARKET = ''|" \
+            -e "s|^REDIRECT_URL *=.*|REDIRECT_URL = ''|" \
+            "$ENV_FILE"
         sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" "$ENV_FILE"
-        sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_APP_KEY_REGENERATE_BEFORE_USE|$APP_KEY|g" "$ENV_FILE"
         sed -i "s|OPENALGO_PLACEHOLDER_API_KEY_PEPPER_REGENERATE_BEFORE_USE|$PEPPER|g" "$ENV_FILE"
 
@@ -1261,12 +1358,6 @@ for i in "${!CONF_DOMAINS[@]}"; do
         # gives appuser read+write while keeping the file private on the host.
         chown 1000:1000 "$ENV_FILE"
         chmod 600 "$ENV_FILE"
-        
-        # XTS
-        if [ ! -z "$M_KEY" ]; then
-            sed -i "s|YOUR_BROKER_MARKET_API_KEY|$M_KEY|g" "$ENV_FILE"
-            sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$M_SECRET|g" "$ENV_FILE"
-        fi
         
         # Connectivity
         sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
@@ -1618,6 +1709,8 @@ EOF
 
 chmod +x /usr/local/bin/openalgo-ctl
 
+
+setup_fail2ban
 
 if [ ${#FAILED_DOMAINS[@]} -gt 0 ]; then
     log "\n==============================================" "$RED"

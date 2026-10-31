@@ -55,6 +55,7 @@ from blueprints.apikey import api_key_bp
 from blueprints.arbitrage import arbitrage_bp  # Import the Arbitrage blueprint
 from blueprints.auth import auth_bp
 from blueprints.brlogin import brlogin_bp
+from blueprints.broker_config import broker_config_bp  # Broker Configuration and Select Broker
 from blueprints.broker_credentials import (
     broker_credentials_bp,  # Import the broker credentials blueprint
 )
@@ -124,6 +125,7 @@ from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
 from database.apscheduler_jobstore_db import ensure_jobstore_tables_exist
 from database.auth_db import init_db as ensure_auth_tables_exists
+from database.broker_keys_db import ensure_broker_keys_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
@@ -350,6 +352,7 @@ def create_app():
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(agent_bp)  # Register Agent blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
+    app.register_blueprint(broker_config_bp)  # Broker Configuration and Select Broker
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
@@ -514,6 +517,23 @@ def create_app():
         # Wait up to 30s for DB init (typically ~3.5s)
         if hasattr(app, "db_ready") and not app.db_ready.is_set():
             app.db_ready.wait(timeout=30)
+
+    @app.before_request
+    def drop_ended_sessions():
+        """Clear a session a logout elsewhere ended, or a broker-less one past the rollover.
+
+        Runs ahead of every check below, so no route sees a sign-in that has
+        ended. Clearing only: a logout that ended it already revoked the broker
+        token, and a broker-less sign-in holds no token.
+        """
+        from flask import request
+
+        if request.path.startswith("/static/") or request.path.startswith("/assets/"):
+            return
+
+        from utils.session import end_session_if_signed_out
+
+        end_session_if_signed_out()
 
     @app.before_request
     def check_session_expiry():
@@ -749,6 +769,9 @@ def setup_environment(app):
 
             db_init_functions = [
                 ("Auth DB", ensure_auth_tables_exists),
+                # After Auth DB: it puts the logged-in broker's keys back in
+                # place, reading the stored session from the auth table.
+                ("Broker Keys DB", ensure_broker_keys_tables_exists),
                 ("User DB", ensure_user_tables_exists),
                 ("Master Contract DB", ensure_master_contract_tables_exists),
                 ("API Log DB", ensure_api_log_tables_exists),
@@ -1073,6 +1096,7 @@ def shutdown_database_sessions(exception=None):
     from utils.db_sessions import remove_all_scoped_sessions
 
     remove_all_scoped_sessions()
+
 
 
 # Integrate the WebSocket proxy server with the Flask app. Where it runs is
