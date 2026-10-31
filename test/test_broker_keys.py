@@ -3100,3 +3100,31 @@ def test_the_migration_adds_the_pre_broker_column_to_an_existing_table(tmp_path)
     rows = con.execute("SELECT username, revoked_at, pre_broker_revoked_at FROM session_revocations").fetchall()
     con.close()
     assert rows == [("trader", "2026-10-30 10:00:00", None)]
+
+
+def test_the_broker_logged_in_at_a_moment_is_read_from_the_login_records(stores):
+    """Login attempts are stored in IST, order times in UTC: an order at 04:00
+    UTC (09:30 IST) went to the broker logged in at 09:15 IST, not to one logged
+    in at 10:00 IST, and before any broker login there is none."""
+    for hour, minute, broker in ((9, 15, "zerodha"), (10, 0, "fyers")):
+        auth_db.db_session.add(
+            auth_db.LoginAttempt(
+                username=USER,
+                status="success",
+                login_type="oauth",
+                broker=broker,
+                timestamp=datetime(2026, 10, 30, hour, minute),
+            )
+        )
+    auth_db.db_session.add(
+        auth_db.LoginAttempt(
+            username=USER, status="success", login_type="password", broker=None,
+            timestamp=datetime(2026, 10, 30, 9, 20),
+        )
+    )
+    auth_db.db_session.commit()
+
+    assert auth_db.broker_logged_in_at(USER, datetime(2026, 10, 30, 4, 0)) == "zerodha"
+    assert auth_db.broker_logged_in_at(USER, datetime(2026, 10, 30, 4, 45)) == "fyers"
+    assert auth_db.broker_logged_in_at(USER, datetime(2026, 10, 30, 3, 0)) is None
+    assert auth_db.broker_logged_in_at("someone-else", datetime(2026, 10, 30, 4, 0)) is None

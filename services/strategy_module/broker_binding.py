@@ -10,8 +10,13 @@ written, so a refusal that will last until the trader logs back in is reported
 once rather than once per tick or per retry.
 
 A run that started with no broker logged in (a signal run opened before the
-day's login) has no broker to be held to yet. Its first Live call binds it to
+day's login) has no broker to be held to yet. Its first Live order binds it to
 the session of that moment, with a conditional write only one caller can win.
+A run that already sent orders without recording its broker (one open across
+the upgrade that added the record) is bound to the broker that took them, read
+from the login records at its first order, never to the session of the moment;
+with no such record it stays unbound and its orders are refused. A check that
+only asks (``refusal_for_run``) never binds.
 
 Nothing here holds a lock: every read and write is a short database or cached
 auth lookup made by a caller that is already outside the run lock.
@@ -41,11 +46,15 @@ def refusal_for_run(run_id: int, *, api_key: str, user_id: str) -> str | None:
 
     None also when there is no session at all: that case already has its own
     handling and its own message on every path, and is not a broker mismatch.
+    None too for a run that has sent nothing to any broker yet: it holds
+    nothing a session could reach wrongly, and its first order binds it.
     """
-    read = _read_binding(run_id, api_key=api_key, user_id=user_id)
+    read = _read_binding(run_id, api_key=api_key, user_id=user_id, bind=False)
     if read is None or read[0] != "live":
         return None
     binding = read[1]
+    if not binding.known and store.first_dispatched_at(run_id) is None:
+        return None
     _token, broker, error = order_dispatch.resolve_live_auth(api_key)
     if error:
         return None
@@ -53,8 +62,14 @@ def refusal_for_run(run_id: int, *, api_key: str, user_id: str) -> str | None:
     return order_dispatch.binding_refusal(binding, broker, account)
 
 
-def _read_binding(run_id: int, *, api_key: str, user_id: str) -> tuple[str, BrokerBinding] | None:
-    """``(mode, binding)`` for a run, binding an unbound Live run first."""
+def _read_binding(
+    run_id: int, *, api_key: str, user_id: str, bind: bool = True
+) -> tuple[str, BrokerBinding] | None:
+    """``(mode, binding)`` for a run, binding an unbound Live run first.
+
+    ``bind`` False leaves a run that has sent nothing unbound: only an order
+    binds it to the session.
+    """
     run = store.get_run(run_id)
     if run is None:
         return None
@@ -69,14 +84,30 @@ def _read_binding(run_id: int, *, api_key: str, user_id: str) -> tuple[str, Brok
     if mode != "live" or binding.known:
         return mode, binding
 
-    # Started with no broker logged in. Bind it to the session placing its
-    # first Live order; with no session the order is refused for that reason.
-    _token, broker, error = order_dispatch.resolve_live_auth(api_key)
-    if error or not broker:
-        return mode, binding
-    account = order_dispatch.session_account(user_id)
-    if store.bind_run_broker(run_id, broker, account):
-        logger.info("Run %s bound to broker %s on its first Live order", run_id, broker)
+    first_order = store.first_dispatched_at(run_id)
+    if first_order is not None:
+        # Orders went out before the run recorded its broker. They are at the
+        # broker logged in when the first one went out, whatever the session
+        # is now; with no record of it, nothing is bound and nothing is sent.
+        from database.auth_db import broker_logged_in_at
+
+        broker = broker_logged_in_at(user_id, first_order)
+        if not broker:
+            logger.warning("Run %s sent orders before recording its broker; none is known", run_id)
+            return mode, binding
+        if store.bind_run_broker(run_id, broker, None):
+            logger.info("Run %s bound to broker %s, which took its earlier orders", run_id, broker)
+    else:
+        if not bind:
+            return mode, binding
+        # Started with no broker logged in. Bind it to the session placing its
+        # first Live order; with no session the order is refused for that reason.
+        _token, broker, error = order_dispatch.resolve_live_auth(api_key)
+        if error or not broker:
+            return mode, binding
+        account = order_dispatch.session_account(user_id)
+        if store.bind_run_broker(run_id, broker, account):
+            logger.info("Run %s bound to broker %s on its first Live order", run_id, broker)
     # Read back whichever bind won: a racing order may have bound it first.
     bound = store.get_run(run_id)
     if bound is None:

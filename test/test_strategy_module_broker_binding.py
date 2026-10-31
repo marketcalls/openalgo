@@ -561,6 +561,97 @@ def test_a_run_opened_before_any_login_is_bound_by_its_first_live_order(session)
     assert store.get_run(run_id).broker == "zerodha"
 
 
+def _sent_before_recording(run_id):
+    """An order that reached a broker while the run had no broker recorded."""
+    row = store.record_order(
+        run_id,
+        1,
+        "entry",
+        {"symbol": SYMBOL, "exchange": "NFO", "action": "SELL", "qty": 75,
+         "broker_order_id": "EARLIER-1", "status": "open"},
+    )
+    assert row is not None
+    return store.first_dispatched_at(run_id)
+
+
+def test_a_run_that_sent_orders_before_recording_its_broker_is_bound_to_the_broker_that_took_them(
+    session, broker
+):
+    """Security review. A run open across the upgrade that added the record has
+    orders at a broker and no broker recorded. Binding it to the session of the
+    moment would send its exits wherever the trader was logged in by then."""
+    sid = _make()
+    run_id = int(store.create_run(sid, "live", "live").id)
+    first = _sent_before_recording(run_id)
+    session.login("fyers", "fyers-token")
+    asked = []
+
+    def logged_in_at(user, when):
+        asked.append((user, when))
+        return "zerodha"
+
+    with patch("database.auth_db.broker_logged_in_at", side_effect=logged_in_at):
+        refusal = broker_binding.refusal_for_run(run_id, api_key=API_KEY, user_id=USER)
+        bound = broker_binding.for_run(run_id, api_key=API_KEY, user_id=USER)
+
+    assert asked[0] == (USER, first)
+    assert store.get_run(run_id).broker == "zerodha"
+    assert bound.broker == "zerodha"
+    assert "Log in to Zerodha to manage it." in refusal
+    assert broker == []
+
+
+def test_a_run_whose_earlier_broker_is_not_on_record_stays_unbound_and_sends_nothing(
+    session, broker
+):
+    sid = _make()
+    run_id = int(store.create_run(sid, "live", "live").id)
+    _sent_before_recording(run_id)
+    session.login("fyers", "fyers-token")
+
+    with patch("database.auth_db.broker_logged_in_at", return_value=None):
+        refusal = broker_binding.refusal_for_run(run_id, api_key=API_KEY, user_id=USER)
+        bound = broker_binding.for_run(run_id, api_key=API_KEY, user_id=USER)
+        sent = order_dispatch.dispatch_order(
+            mode="live", api_key=API_KEY, order=_order(), binding=bound
+        )
+
+    assert store.get_run(run_id).broker == "live"
+    assert refusal is not None and "could not confirm which broker" in refusal
+    assert sent.ok is False and broker == []
+
+
+def test_a_check_never_binds_a_run_that_has_sent_nothing(session):
+    """Security review. Only an order binds a run to the session: a stop or a
+    tick check on a run with nothing at any broker neither binds nor refuses."""
+    sid = _make()
+    run_id = int(store.create_run(sid, "live", "live").id)
+
+    refusal = broker_binding.refusal_for_run(run_id, api_key=API_KEY, user_id=USER)
+
+    assert refusal is None
+    assert store.get_run(run_id).broker == "live"
+
+
+def test_a_run_not_yet_bound_holds_no_login_back(session):
+    """Security review. An unbound run records "live" in place of a broker, and
+    the switch check read that as a broker, so every login was refused while
+    one was open, the login that would bind it included."""
+    from utils import broker_switch
+
+    sid = _make()
+    run_id = int(store.create_run(sid, "live", "live").id)
+    assert store.set_strategy_status(sid, "running", run_id)
+    session.logout()
+    with (
+        patch("utils.broker_keys.live_broker", return_value=None),
+        patch.object(broker_switch, "previous_broker", return_value=None),
+        patch.object(broker_switch, "_blockers", return_value=(1, 0, 0, 0)),
+    ):
+        assert broker_switch.refusal_for_login("fyers", USER) is None
+        assert broker_switch.refusal_for_login("zerodha", USER) is None
+
+
 def test_the_unbound_markers_agree():
     assert set(store.UNBOUND_RUN_BROKERS) == order_dispatch.UNBOUND_BROKERS
 

@@ -562,6 +562,45 @@ def _revocations(username):
     )
 
 
+def broker_logged_in_at(username, when_utc):
+    """The broker ``username`` was logged in to at ``when_utc`` (naive UTC), or None.
+
+    The broker of the latest successful broker login at or before then: one
+    broker is logged in at a time, so an order placed then went to it. Read
+    from the login attempts, kept permanently. Their timestamps are stored in
+    IST (naive in SQLite).
+    """
+    from datetime import UTC
+
+    import pytz
+
+    ist = pytz.timezone("Asia/Kolkata")
+    when = when_utc.replace(tzinfo=UTC)
+    try:
+        rows = (
+            LoginAttempt.query.filter(
+                LoginAttempt.username == username,
+                LoginAttempt.status == "success",
+                LoginAttempt.broker.isnot(None),
+                LoginAttempt.broker != "",
+            )
+            .order_by(LoginAttempt.timestamp.desc())
+            .limit(200)
+            .all()
+        )
+    except Exception:
+        logger.exception("Could not read which broker was logged in at a time")
+        return None
+    for row in rows:
+        stamp = row.timestamp
+        if stamp is None:
+            continue
+        stamp = ist.localize(stamp) if stamp.tzinfo is None else stamp
+        if stamp <= when:
+            return row.broker
+    return None
+
+
 def get_sessions_revoked_at(username):
     """When ``username`` last ended every session, as an aware UTC datetime.
 

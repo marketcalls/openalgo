@@ -544,7 +544,13 @@ Six departures from how the rest of the product places orders:
   leg stays open and priced, a stop stays pending and completes once the trader
   logs back in to the run's broker, and the tick path reports the mismatch once
   per episode. A run opened with no broker logged in is bound by its first live
-  call (a conditional write only one caller wins). Accounts are compared only
+  order (a conditional write only one caller wins); a check that only asks never
+  binds, and never refuses a run that has sent nothing. A run that sent orders
+  before recording its broker (one open across the upgrade that added the
+  record) is bound to the broker logged in when its first order went out, read
+  from the login attempts, never to the session of the moment; with no such
+  record it stays unbound and its orders are refused. An unbound run holds no
+  login back. Accounts are compared only
   when both are known, without regard to case, so a broker whose login names no
   account is bound by broker alone and a same-account token refresh keeps
   working. Sandbox runs are never bound. A login to another broker is refused

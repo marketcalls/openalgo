@@ -50,6 +50,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     exists,
+    func,
 )
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
@@ -865,7 +866,8 @@ def live_run_brokers(user_id: str) -> list[str]:
 
     Asked before a login to another broker: a run on one broker must not be
     left behind by a switch, whatever the session and the login records say.
-    A run that has not recorded its broker yet is not listed.
+    A run that has not recorded its broker yet (UNBOUND_RUN_BROKERS) is not
+    listed: it is bound by its first order, so it holds no broker to switch from.
     """
     try:
         rows = (
@@ -876,7 +878,7 @@ def live_run_brokers(user_id: str) -> list[str]:
                 SmStrategy.status == "running",
                 SmStrategyRun.mode == "live",
                 SmStrategyRun.broker.isnot(None),
-                SmStrategyRun.broker != "",
+                SmStrategyRun.broker.notin_(UNBOUND_RUN_BROKERS),
             )
             .distinct()
             .all()
@@ -2314,6 +2316,26 @@ def bind_order_acknowledgement(
             return "conflict"
 
     return "conflict"
+
+
+def first_dispatched_at(run_id: int) -> datetime | None:
+    """When the run's first order reached a broker (naive UTC), or None if none has.
+
+    An order counts once the broker gave it an id. Used to bind a run that sent
+    orders before it recorded its broker to the broker that took them.
+    """
+    try:
+        return (
+            db_session.query(func.min(SmStrategyOrder.placed_at))
+            .filter(
+                SmStrategyOrder.run_id == run_id,
+                SmStrategyOrder.broker_order_id.isnot(None),
+                SmStrategyOrder.broker_order_id != "",
+            )
+            .scalar()
+        )
+    finally:
+        db_session.remove()
 
 
 def list_orders(run_id: int) -> list[dict]:
