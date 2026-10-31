@@ -8,6 +8,21 @@ from flask import Flask, session
 
 from blueprints import brlogin
 
+
+@pytest.fixture(autouse=True)
+def _keys_in_place(monkeypatch):
+    """The callback checks the login was started here and puts the broker's keys
+    in place first (utils/broker_keys.py, utils/broker_login.py).
+
+    These tests are about what a callback logs and returns, so the keys are
+    taken as available; otherwise every callback would stop at "no API key is
+    saved" before reaching the code under test.
+    """
+    monkeypatch.setattr(brlogin, "use_broker_keys", lambda *args, **kwargs: None)
+    # Likewise a login started from the broker page: an answer without one is
+    # refused before it is parsed (test_broker_keys.py covers that refusal).
+    monkeypatch.setattr(brlogin, "has_pending_login", lambda *args, **kwargs: True)
+
 SENTINEL = "SENTINEL_CALLBACK_CREDENTIAL_7e949f"
 
 

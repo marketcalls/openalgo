@@ -21,6 +21,19 @@ import database.auth_db as auth_db  # noqa: E402
 import utils.auth_utils as auth_utils  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _keys_in_place(monkeypatch):
+    """Resume puts the stored broker's keys in place before validating its token.
+
+    These tests are about the validation, so the keys are taken as available.
+    Without this a missing key would refuse the resume first, and every test
+    expecting a refusal would pass without reaching the check it is about.
+    """
+    import utils.broker_keys as broker_keys
+
+    monkeypatch.setattr(broker_keys, "use_broker_keys", lambda *args, **kwargs: None)
+
+
 @pytest.fixture()
 def app_context():
     app = Flask(__name__)

@@ -35,7 +35,12 @@ from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
-from utils.session import check_session_validity, is_session_valid, revoke_user_tokens
+from utils.session import (
+    check_session_validity,
+    is_session_valid,
+    mark_signed_in,
+    revoke_user_tokens,
+)
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -116,39 +121,128 @@ def get_csrf_token():
 
 @auth_bp.route("/broker-config", methods=["GET"])
 def get_broker_config():
-    """Return broker configuration for React SPA.
+    """The brokers this trader can log in to, for the broker login page.
 
-    broker_name is always returned (needed to display the broker login button).
-    broker_api_key and redirect_url are only returned when authenticated.
+    Each broker appears once: the one the .env file sets keys for (always
+    first, and always used for that broker), then every other broker with keys
+    saved in OpenAlgo. ``broker_name`` is the one to preselect: the broker last
+    logged in to when it is still configured, else the .env broker, else the
+    first saved one.
+
+    No key is returned here: the login itself is started by
+    POST /auth/broker/login, which builds the broker's sign-in address (that
+    address carries the public API key a broker's sign-in page needs, never the
+    secret).
     """
-    REDIRECT_URL = os.getenv("REDIRECT_URL")
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
 
-    # Extract broker name from redirect URL
-    match = re.search(r"/([^/]+)/callback$", REDIRECT_URL)
-    broker_name = match.group(1) if match else None
+    from database.auth_db import get_auth_token_dbquery
+    from utils.broker_keys import configured_brokers, live_broker, resolve
 
-    if not broker_name:
-        return jsonify({"status": "error", "message": "Broker not configured"}), 500
+    brokers = configured_brokers()
+    names = [b["broker"] for b in brokers]
+    preferred = None
+    try:
+        row = get_auth_token_dbquery(session["user"])
+        if row is not None and row.broker in names:
+            preferred = row.broker
+    except Exception:
+        logger.exception("Could not read the last broker for the login page")
+    if preferred is None and names:
+        preferred = names[0]
 
-    # Return full config only for authenticated users
-    if "user" in session:
-        BROKER_API_KEY = os.getenv("BROKER_API_KEY")
-        return jsonify(
-            {
-                "status": "success",
-                "broker_name": broker_name,
-                "broker_api_key": BROKER_API_KEY,
-                "redirect_url": REDIRECT_URL,
-            }
-        )
-
-    # Unauthenticated: return broker name only so the login button is visible
+    keys = resolve(preferred) if preferred else None
     return jsonify(
         {
             "status": "success",
-            "broker_name": broker_name,
+            "broker_name": preferred,
             "broker_api_key": None,
-            "redirect_url": REDIRECT_URL,
+            "redirect_url": keys.redirect_url if keys else None,
+            "brokers": brokers,
+            "live_broker": live_broker(),
+        }
+    )
+
+
+@auth_bp.route("/broker/login", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def start_broker_login():
+    """Start a login to one broker and return the address that begins it.
+
+    A CSRF-checked POST, so another site cannot start a login in the trader's
+    browser. The server checks the broker may be used now (only one broker is
+    logged in at a time), puts its keys in place, records a pending login for
+    this browser and builds the broker's sign-in address. The callback accepts
+    the broker's answer only for a login started here.
+    """
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
+
+    from utils.broker_keys import BrokerKeysRefused, enabled_brokers, use_broker_keys
+    from utils.broker_login import start_broker_login as begin_login
+
+    data = request.get_json(silent=True) or {}
+    broker = str(data.get("broker") or request.form.get("broker") or "").strip().lower()
+    if broker not in enabled_brokers():
+        return jsonify({"status": "error", "message": "Choose a broker from the list."}), 400
+
+    if session.get("logged_in"):
+        from database.auth_db import get_auth_token
+
+        if get_auth_token(session.get("user")):
+            return jsonify({"status": "success", "url": "/dashboard"})
+
+    try:
+        keys = use_broker_keys(broker)
+    except BrokerKeysRefused as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
+
+    from utils.broker_login import BrokerLoginRefused
+
+    try:
+        url = begin_login(keys)
+    except BrokerLoginRefused:
+        return jsonify(
+            {"status": "error", "message": "The broker login could not be started. Try again."}
+        ), 500
+    return jsonify({"status": "success", "url": url})
+
+
+@auth_bp.route("/broker/end-session", methods=["POST"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def end_live_broker_session():
+    """End the broker session another device holds, to log in to another broker.
+
+    One broker is logged in at a time, so a login to a different one is refused
+    while a device holds a session from today. When that device is out of reach
+    or its broker token has died, the trader ends it here: the same teardown as
+    a logout on that device. This browser asked for it, so it stays signed in
+    to OpenAlgo; every other device signs in again.
+    """
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Sign in to OpenAlgo first."}), 401
+
+    from utils.broker_keys import broker_title, live_broker
+
+    live = live_broker()
+    if not live:
+        return jsonify({"status": "success", "message": "No broker is logged in."})
+
+    username = session["user"]
+    _end_broker_session(
+        username, f"OpenAlgo was logged out of {broker_title(live)} from another device."
+    )
+    session.pop("logged_in", None)
+    session.pop("broker", None)
+    mark_signed_in()
+    logger.info(f"Ended the {live} broker session for {username} from the broker login page")
+    return jsonify(
+        {
+            "status": "success",
+            "message": f"Logged out of {broker_title(live)}. Choose a broker to log in.",
         }
     )
 
@@ -210,6 +304,17 @@ def _try_resume_broker_session(username):
         broker = auth_obj.broker
         feed_token = decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
         user_id = auth_obj.user_id
+
+        # The stored session's broker may not be the one whose keys are in the
+        # environment (a restart, or keys saved in OpenAlgo). Put its keys in
+        # place before validating the token with them.
+        from utils.broker_keys import BrokerKeysRefused, use_broker_keys
+
+        try:
+            use_broker_keys(broker, check_live=False)
+        except BrokerKeysRefused as exc:
+            logger.info(f"Not resuming the {broker} session for {username}: {exc}")
+            return None
 
         # Validate token with a lightweight broker API call (funds)
         import importlib
@@ -357,6 +462,7 @@ def login():
                 ), 200
 
             session["user"] = username  # Set the username in the session
+            mark_signed_in()
 
             # Try to resume existing broker session (skip OAuth if token still valid)
             resumed = _try_resume_broker_session(username)
@@ -454,6 +560,7 @@ def login_totp():
     # Promote the pending login to a real session.
     session["user"] = pending_username
     session["totp_verified_at"] = _utcnow_iso()
+    mark_signed_in()
     _clear_pending_totp()
 
     ip = get_real_ip()
@@ -723,8 +830,9 @@ def reset_password():
             # operator (or attacker) chose the reset path because they
             # could prove control of the email/TOTP, not because every
             # logged-in browser is theirs. Force re-login everywhere.
-            from database.auth_db import clear_user_sessions
+            from database.auth_db import clear_user_sessions, revoke_all_sessions
             clear_user_sessions(user.username)
+            revoke_all_sessions(user.username)
             socketio.emit("force_logout", {
                 "message": "Your password was reset. Please log in again with the new password.",
             })
@@ -827,8 +935,9 @@ def change_password():
             # devices — including the current one — and let the user log
             # in again with the new password. This prevents an attacker
             # who already has a valid cookie from continuing to hold it.
-            from database.auth_db import clear_user_sessions
+            from database.auth_db import clear_user_sessions, revoke_all_sessions
             clear_user_sessions(username)
+            revoke_all_sessions(username)
             socketio.emit("force_logout", {
                 "message": "Your password was changed. Please log in again with the new password.",
             })
@@ -1284,6 +1393,44 @@ def _is_foreign_initiated() -> bool:
     return site is not None and site not in ("same-origin", "none")
 
 
+def _end_broker_session(username, message):
+    """Log every device out: revoke the broker token and end every sign-in.
+
+    What a logout does once a broker is connected, and what ending another
+    device's broker session from the broker login page does.
+    """
+    # Clear cache entries before database update to prevent stale data
+    # access. Never a membership test then a delete: another thread can
+    # drop the entry between the two, and the KeyError used to escape
+    # here, after the browser session was cleared but before the broker
+    # token below was revoked. invalidate_user_auth_cache never raises.
+    invalidate_user_auth_cache(username)
+    logger.info(f"Cleared cached broker session for user: {username}")
+
+    try:
+        from database.master_contract_cache_hook import clear_cache_on_logout
+
+        clear_cache_on_logout()
+        logger.info("Cleared symbol cache on logout")
+    except Exception as cache_error:
+        logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
+
+    inserted_id = upsert_auth(username, "", "", revoke=True)
+    if inserted_id is not None:
+        logger.info(f"Auth Revoked in the Database for user: {username}")
+    else:
+        logger.error(f"Failed to upsert auth token for user: {username}")
+
+    # Every device: the sign-ins end with the broker session.
+    from database.auth_db import clear_user_sessions, revoke_all_sessions
+
+    clear_user_sessions(username)
+    revoke_all_sessions(username)
+
+    socketio.emit("force_logout", {"message": message})
+    socketio.emit("active_sessions_update", {"count": 0, "sessions": []})
+
+
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
     # Checked before anything is torn down, so a rejected request leaves the
@@ -1303,47 +1450,7 @@ def logout():
     session.clear()
 
     if was_logged_in and username:
-        # Clear cache entries before database update to prevent stale data
-        # access. Never a membership test then a delete: another thread can
-        # drop the entry between the two, and the KeyError used to escape
-        # here, after the browser session was cleared but before the broker
-        # token below was revoked. invalidate_user_auth_cache never raises.
-        invalidate_user_auth_cache(username)
-        logger.info(f"Cleared cached broker session for user: {username}")
-
-        # Clear symbol cache on logout
-        try:
-            from database.master_contract_cache_hook import clear_cache_on_logout
-
-            clear_cache_on_logout()
-            logger.info("Cleared symbol cache on logout")
-        except Exception as cache_error:
-            logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
-
-        # writing to database
-        inserted_id = upsert_auth(username, "", "", revoke=True)
-        if inserted_id is not None:
-            logger.info(f"Database Upserted record with ID: {inserted_id}")
-            logger.info(f"Auth Revoked in the Database for user: {username}")
-        else:
-            logger.error(f"Failed to upsert auth token for user: {username}")
-
-        # Clear ALL sessions for this user (logout means all devices)
-        from database.auth_db import clear_user_sessions
-        clear_user_sessions(username)
-
-        # Notify all connected devices to logout immediately
-        socketio.emit("force_logout", {
-            "message": "You have been logged out from another device.",
-        })
-
-        # Update session count to 0
-        socketio.emit("active_sessions_update", {
-            "count": 0,
-            "sessions": [],
-        })
-
-        # Clear entire session to ensure complete logout
+        _end_broker_session(username, "You have been logged out from another device.")
         logger.info(f"Session cleared for user: {username}")
 
     # For POST requests (AJAX from React), return JSON
@@ -1458,8 +1565,9 @@ def change_password_api():
         # for this account, including the current browser. The user logs in
         # again with the new password — typical 5-second flow — and any
         # attacker holding a stolen cookie is kicked out at the same moment.
-        from database.auth_db import clear_user_sessions
+        from database.auth_db import clear_user_sessions, revoke_all_sessions
         clear_user_sessions(username)
+        revoke_all_sessions(username)
         socketio.emit("force_logout", {
             "message": "Your password was changed. Please log in again with the new password.",
         })

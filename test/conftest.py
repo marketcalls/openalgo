@@ -52,6 +52,18 @@ os.environ["LATENCY_DATABASE_URL"] = "sqlite:///db/latency-test.db"
 # file to its last 1000 lines on startup, so a test run could evict real errors.
 os.environ["LOG_DIR"] = "log/test"
 
+# utils.broker_keys reads the .env file itself to learn which broker .env sets
+# (os.environ holds whichever broker was logged in last). Point it at a file
+# that does not exist, so no test reads the operator's broker keys and every
+# test starts with no .env broker. A test that needs one writes its own file
+# and points env_file_path at it.
+from pathlib import Path  # noqa: E402
+
+import utils.broker_keys as _broker_keys  # noqa: E402
+
+_broker_keys.env_file_path = lambda: Path(__file__).resolve().parent / "__no_env_file_for_tests__"
+_broker_keys._STARTUP_VALUES = dict.fromkeys(_broker_keys.ENV_VARS.values())
+
 
 # These are manual diagnostics, not pytest modules. test_bot_web.py starts the
 # Telegram bot from its module body. The WebSocket scripts require a live proxy,

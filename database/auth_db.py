@@ -351,6 +351,24 @@ class LoginAttempt(Base):
     )
 
 
+class SessionRevocation(Base):
+    """When a user last ended every session: a logout, a password change or a reset.
+
+    The browser session is a signed cookie, so the server cannot delete a copy
+    held by another device. A session whose sign-in is older than this instant
+    is refused instead (utils.session), which is what makes a logout end the
+    sign-in on every device rather than only on the one that clicked it.
+    """
+
+    __tablename__ = "session_revocations"
+    username = Column(String(255), primary_key=True)
+    revoked_at = Column(DateTime, nullable=False)  # naive UTC
+
+
+# Read on every authenticated request, written on logout and password changes.
+_session_revocation_cache = LockedTTLCache(maxsize=64, ttl=60)
+
+
 def _now_ist():
     """Get current time in IST."""
     from datetime import datetime
@@ -508,6 +526,54 @@ def clear_user_sessions(username):
     except Exception as e:
         db_session.rollback()
         logger.error(f"Error clearing user sessions: {e}")
+
+
+def get_sessions_revoked_at(username):
+    """When ``username`` last ended every session, as an aware UTC datetime.
+
+    Returns:
+        datetime | None: None when never, or when it cannot be read; a read
+        failure must not sign every device out.
+    """
+    from datetime import UTC
+
+    def _load():
+        try:
+            row = SessionRevocation.query.filter_by(username=username).first()
+            return row.revoked_at.replace(tzinfo=UTC) if row and row.revoked_at else None
+        except Exception:
+            logger.exception("Could not read when sessions were last ended")
+            return MISSING
+
+    value = _session_revocation_cache.get_or_load(
+        username, _load, should_cache=lambda v: v is not MISSING
+    )
+    return None if value is MISSING else value
+
+
+def revoke_all_sessions(username):
+    """End every browser session of ``username`` signed in before now.
+
+    Returns:
+        bool: True when recorded.
+    """
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC).replace(tzinfo=None)
+    try:
+        row = SessionRevocation.query.filter_by(username=username).first()
+        if row is None:
+            db_session.add(SessionRevocation(username=username, revoked_at=now))
+        else:
+            row.revoked_at = now
+        db_session.commit()
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record the end of every session")
+        return False
+    finally:
+        _session_revocation_cache.invalidate(username)
 
 
 def init_db():
@@ -668,6 +734,14 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     auth_cache.clear()
     feed_token_cache.clear()
     broker_cache.clear()  # Also clear broker cache to ensure fresh data
+    try:
+        # The logged-in broker decides whether sessions outlive the rollover
+        # (a crypto broker); read it afresh after a login or a logout.
+        from utils.broker_keys import forget_logged_in_broker
+
+        forget_logged_in_broker()
+    except Exception:
+        logger.debug("Could not refresh the logged-in broker", exc_info=True)
     logger.info(f"Cleared all auth caches after token update for user: {name}")
 
     # The two operations below TEAR DOWN the shared broker WebSocket feed (the

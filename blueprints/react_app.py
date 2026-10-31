@@ -159,6 +159,12 @@ def react_broker():
     return serve_react_app()
 
 
+# Broker keys saved in OpenAlgo, reachable before any broker login.
+@react_bp.route("/broker/keys", strict_slashes=False)
+def react_broker_keys():
+    return serve_react_app()
+
+
 # Broker TOTP routes - serve React for broker authentication forms
 @react_bp.route("/broker/<broker>/totp")
 def react_broker_totp(broker):

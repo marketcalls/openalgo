@@ -508,7 +508,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     session["broker"] = broker
 
     # Set session expiry and login time
-    app.config["PERMANENT_SESSION_LIFETIME"] = get_session_expiry_time()
+    app.config["PERMANENT_SESSION_LIFETIME"] = get_session_expiry_time(broker)
     session.permanent = True
     set_session_login_time()  # Set the login timestamp
 
@@ -609,8 +609,10 @@ def handle_auth_failure(error_message, forward_url="broker.html"):
     if is_ajax_request():
         return jsonify({"status": "error", "message": error_message}), 401
     else:
-        # For OAuth callbacks, redirect to broker selection with error
-        return redirect(url_for("auth.broker_login"))
+        # For OAuth callbacks, back to broker selection, which shows a fixed
+        # sentence for the code. The broker's own message stays in the log:
+        # it can carry text a trader cannot act on.
+        return redirect("/broker?error=login_failed")
 
 
 def get_feed_token():

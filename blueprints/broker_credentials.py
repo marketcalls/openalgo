@@ -72,12 +72,17 @@ def get_broker_from_redirect_url(redirect_url: str) -> str:
 def get_credentials():
     """Get current broker credentials (masked)."""
     try:
-        # Get current values from environment
-        broker_api_key = get_env_value("BROKER_API_KEY")
-        broker_api_secret = get_env_value("BROKER_API_SECRET")
-        broker_api_key_market = get_env_value("BROKER_API_KEY_MARKET")
-        broker_api_secret_market = get_env_value("BROKER_API_SECRET_MARKET")
-        redirect_url = get_env_value("REDIRECT_URL")
+        # The broker values as the .env file sets them. Not os.environ: that
+        # holds whichever broker was logged in last, which may be one whose
+        # keys are saved in OpenAlgo rather than in .env (utils/broker_keys.py).
+        from utils.broker_keys import env_file_values
+
+        env_broker_values = env_file_values()
+        broker_api_key = env_broker_values["api_key"]
+        broker_api_secret = env_broker_values["api_secret"]
+        broker_api_key_market = env_broker_values["api_key_market"]
+        broker_api_secret_market = env_broker_values["api_secret_market"]
+        redirect_url = env_broker_values["redirect_url"]
         valid_brokers = get_env_value("VALID_BROKERS")
         ngrok_allow = get_env_value("NGROK_ALLOW")
         host_server = get_env_value("HOST_SERVER")

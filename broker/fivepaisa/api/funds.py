@@ -12,8 +12,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Retrieve the BROKER_API_KEY environment variable
-broker_api_key = os.getenv("BROKER_API_KEY")
 
 
 def get_margin_data(auth_token: str) -> dict[str, Any]:
@@ -30,6 +28,8 @@ def get_margin_data(auth_token: str) -> dict[str, Any]:
             - m2mrealized: Total booked P&L
             - utiliseddebits: Utilized margin
     """
+    # Read when called: the broker's keys can be put in place after startup.
+    broker_api_key = os.getenv("BROKER_API_KEY")
     if not broker_api_key:
         raise ValueError("BROKER_API_KEY not found in environment variables")
 
