@@ -10,6 +10,7 @@ import {
   FileWarning,
   FolderCheck,
   Key,
+  KeyRound,
   Lock,
   Mail,
   Moon,
@@ -932,6 +933,29 @@ export default function ProfilePage() {
 
         {/* Broker Tab */}
         <TabsContent value="broker" className="space-y-6">
+          {/* Keys for several brokers live on their own page, which also works
+              before any broker login. The .env form below is unchanged. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <KeyRound className="h-5 w-5" />
+                Broker keys saved in OpenAlgo
+              </CardTitle>
+              <CardDescription>
+                Save keys for several brokers and choose which one to use each time you log in. The
+                .env broker settings below still come first for the broker they set.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" asChild>
+                <Link to="/broker/keys">
+                  <KeyRound className="h-4 w-4 mr-2" />
+                  Manage broker keys
+                </Link>
+              </Button>
+            </CardContent>
+          </Card>
+
           <Alert>
             <Key className="h-4 w-4" />
             <AlertTitle>Broker API Credentials</AlertTitle>

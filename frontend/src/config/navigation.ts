@@ -14,6 +14,7 @@ import {
   FlaskConical,
   Gauge,
   Key,
+  KeyRound,
   Layers,
   LayoutDashboard,
   type LucideIcon,
@@ -76,6 +77,9 @@ export const profileMenuItems: NavItem[] = [
   // main navbar on that understanding and a test pins the adjacency, so a new
   // entry goes after it rather than between the two.
   { href: '/action-center', label: 'Action Center', icon: Bell },
+  // Broker Keys renders outside Layout (it works before any broker login), so
+  // this entry is the way back to it once a broker is logged in.
+  { href: '/broker/keys', label: 'Broker Keys', icon: KeyRound },
   // Agent Config is NOT here. It lives under /admin with the other
   // configuration surfaces. The chat header carries its own settings control,
   // so a configured /agent still has a route back to its settings without this

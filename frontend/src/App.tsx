@@ -28,6 +28,7 @@ const NotFound = lazy(() => import('@/pages/NotFound'))
 
 // Broker auth
 const BrokerSelect = lazy(() => import('@/pages/BrokerSelect'))
+const BrokerKeys = lazy(() => import('@/pages/BrokerKeys'))
 const BrokerTOTP = lazy(() => import('@/pages/BrokerTOTP'))
 const SamcoAuth = lazy(() => import('@/pages/SamcoAuth'))
 
@@ -180,6 +181,9 @@ function App() {
 
               {/* Broker auth routes */}
               <Route path="/broker" element={<BrokerSelect />} />
+              {/* Outside Layout: keys are added before any broker login, and
+                  Layout sends a session with no broker back to /broker. */}
+              <Route path="/broker/keys" element={<BrokerKeys />} />
               <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
               <Route path="/broker/samco/auth" element={<SamcoAuth />} />
               {/* Dynamic broker TOTP routes for all supported brokers */}

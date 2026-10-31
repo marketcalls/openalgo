@@ -1,7 +1,30 @@
-import { BookOpen, ExternalLink, Info, Loader2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BookOpen, ExternalLink, Info, KeyRound, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Link, useNavigate, useSearchParams } from 'react-router'
+import {
+  brokerQueryKeys,
+  type ConfiguredBroker,
+  endBrokerSession,
+  getBrokerConfig,
+  isSignedOut,
+  retryUnlessRefused,
+  serverMessage,
+  startBrokerLogin,
+} from '@/api/brokerKeys'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -12,235 +35,130 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { brokerName } from '@/lib/brokers'
 import { useAuthStore } from '@/stores/authStore'
 
-// All supported brokers with their display names and auth types
-const allBrokers = [
-  { id: 'fivepaisa', name: '5 Paisa', authType: 'totp' },
-  { id: 'fivepaisaxts', name: '5 Paisa (XTS)', authType: 'totp' },
-  { id: 'aliceblue', name: 'Alice Blue', authType: 'totp' },
-  { id: 'angel', name: 'Angel One', authType: 'totp' },
-  { id: 'arrow', name: 'Arrow', authType: 'oauth' },
-  { id: 'compositedge', name: 'CompositEdge', authType: 'oauth' },
-  { id: 'dhan', name: 'Dhan', authType: 'oauth' },
-  { id: 'deltaexchange', name: 'Delta Exchange', authType: 'totp' },
-  { id: 'indmoney', name: 'IndMoney', authType: 'totp' },
-  { id: 'dhan_sandbox', name: 'Dhan (Sandbox)', authType: 'totp' },
-  { id: 'definedge', name: 'Definedge', authType: 'totp' },
-  { id: 'firstock', name: 'Firstock', authType: 'totp' },
-  { id: 'flattrade', name: 'Flattrade', authType: 'oauth' },
-  { id: 'motilal', name: 'Motilal Oswal', authType: 'totp' },
-  { id: 'fyers', name: 'Fyers', authType: 'oauth' },
-  { id: 'groww', name: 'Groww', authType: 'totp' },
-  { id: 'hdfcsecurities', name: 'HDFC Securities', authType: 'oauth' },
-  { id: 'hdfcsky', name: 'HDFC Sky', authType: 'oauth' },
-  { id: 'ibulls', name: 'Ibulls', authType: 'totp' },
-  { id: 'iifl', name: 'IIFL', authType: 'totp' },
-  { id: 'iiflcapital', name: 'IIFL Capital', authType: 'oauth' },
-  { id: 'jainamxts', name: 'JainamXts', authType: 'totp' },
-  { id: 'kotak', name: 'Kotak Securities', authType: 'totp' },
-  { id: 'mstock', name: 'mStock by Mirae Asset', authType: 'totp' },
-  { id: 'nubra', name: 'Nubra', authType: 'totp' },
-  { id: 'paytm', name: 'Paytm Money', authType: 'oauth' },
-  { id: 'pocketful', name: 'Pocketful', authType: 'oauth' },
-  { id: 'rmoney', name: 'RMoney', authType: 'oauth' },
-  { id: 'rupeezy', name: 'Rupeezy', authType: 'oauth' },
-  { id: 'sahi', name: 'Sahi', authType: 'totp' },
-  { id: 'samco', name: 'Samco', authType: 'totp' },
-  { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
-  { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
-  { id: 'tradesmart', name: 'TradeSmart', authType: 'oauth' },
-  { id: 'upstox', name: 'Upstox', authType: 'oauth' },
-  { id: 'wisdom', name: 'Wisdom Capital', authType: 'totp' },
-  { id: 'zebu', name: 'Zebu', authType: 'totp' },
-  { id: 'zerodha', name: 'Zerodha', authType: 'oauth' },
-] as const
+const LOGIN_FAILED = 'The broker login could not be started. Try again.'
+const END_FAILED = 'The broker session could not be ended. Try again.'
+const CONFIG_FAILED = 'The broker list could not be loaded. Reload the page to try again.'
 
-interface BrokerConfig {
-  broker_name: string
-  broker_api_key: string
-  redirect_url: string
+/**
+ * The message for a refused broker callback, which lands here as
+ * /broker?error=<code>. Only these fixed sentences are ever shown: the query
+ * string is set by whoever built the link, so its text never reaches the page.
+ */
+const CALLBACK_ERRORS: Record<string, string> = {
+  login_not_started:
+    'This broker login was not started from OpenAlgo, or it took longer than 10 minutes. Start the broker login again.',
+  broker_unavailable:
+    'This broker cannot be used right now. Check its keys under Broker Keys. If another broker is logged in, end that session on this page first.',
+  form_expired: 'This login form has expired. Reload the page and try again.',
 }
 
-// Helper function to get Flattrade API key
-function getFlattradeApiKey(fullKey: string): string {
-  if (!fullKey) return ''
-  const parts = fullKey.split(':::')
-  return parts.length > 1 ? parts[1] : fullKey
+function callbackErrorMessage(code: string | null): string | null {
+  if (code === null) return null
+  return Object.hasOwn(CALLBACK_ERRORS, code)
+    ? CALLBACK_ERRORS[code]
+    : 'The broker login did not complete. Try again.'
 }
 
-// Generate random state for OAuth
-function generateRandomState(): string {
-  const length = 16
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  let result = ''
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return result
+function brokerLabel(broker: ConfiguredBroker): string {
+  const name = broker.name || brokerName(broker.broker)
+  return broker.source === 'env' ? `${name} (from .env)` : name
 }
 
 export default function BrokerSelect() {
   const { user } = useAuthStore()
-  const [selectedBroker, setSelectedBroker] = useState<string>('')
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [brokerConfig, setBrokerConfig] = useState<BrokerConfig | null>(null)
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
+  // The trader's own pick; until they make one the server's preselection holds.
+  const [chosenBroker, setChosenBroker] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(() =>
+    callbackErrorMessage(searchParams.get('error'))
+  )
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const configQuery = useQuery({
+    queryKey: brokerQueryKeys.config(),
+    queryFn: getBrokerConfig,
+    retry: retryUnlessRefused,
+  })
+  const signedOut = configQuery.isError && isSignedOut(configQuery.error)
 
   useEffect(() => {
-    // Fetch broker configuration
-    const fetchBrokerConfig = async () => {
-      try {
-        const response = await fetch('/auth/broker-config', {
-          credentials: 'include',
-        })
-        const data = await response.json()
+    if (signedOut) navigate('/login', { replace: true })
+  }, [signedOut, navigate])
 
-        if (data.status === 'success') {
-          setBrokerConfig(data)
-          // Auto-select the configured broker
-          setSelectedBroker(data.broker_name)
-        } else {
-          setError(data.message || 'Failed to load broker configuration')
-        }
-      } catch {
-        setError('Failed to load broker configuration')
-      } finally {
-        setIsLoading(false)
+  const loginMutation = useMutation({
+    mutationFn: startBrokerLogin,
+    onSuccess: (url) => {
+      window.location.href = url
+    },
+    onError: (err) => {
+      if (isSignedOut(err)) {
+        navigate('/login', { replace: true })
+        return
       }
-    }
+      setError(serverMessage(err, LOGIN_FAILED))
+    },
+  })
 
-    fetchBrokerConfig()
-  }, [])
+  // Ends the broker session another device holds, the same as logging out
+  // there, so this browser can log in to a different broker.
+  const endMutation = useMutation({
+    mutationFn: endBrokerSession,
+    onSuccess: (message) => {
+      setNotice(message)
+      // live_broker changed: re-read the login list and the keys page's badges.
+      return queryClient.invalidateQueries({ queryKey: brokerQueryKeys.all })
+    },
+    onError: (err) => {
+      if (isSignedOut(err)) {
+        navigate('/login', { replace: true })
+        return
+      }
+      setError(serverMessage(err, END_FAILED))
+    },
+  })
+
+  const brokerConfig = configQuery.data ?? null
+  const brokers: ConfiguredBroker[] = brokerConfig?.brokers ?? []
+  const liveBroker = brokerConfig?.live_broker ?? null
+  const selectedBroker =
+    chosenBroker && brokers.some((b) => b.broker === chosenBroker)
+      ? chosenBroker
+      : brokerConfig?.broker_name || brokers[0]?.broker || ''
+  // Stays set after a successful start, while the browser leaves for the broker.
+  const isSubmitting = loginMutation.isPending || loginMutation.isSuccess
+  const isEnding = endMutation.isPending
+  const shownError =
+    error ??
+    (configQuery.isError && !signedOut ? serverMessage(configQuery.error, CONFIG_FAILED) : null)
+
+  const nameOf = (id: string) => {
+    const found = brokers.find((b) => b.broker === id)
+    return found?.name || brokerName(id)
+  }
+
+  const endLiveSession = () => {
+    setError(null)
+    endMutation.mutate()
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!selectedBroker) {
-      setError('Please select a broker')
+      setError('Choose a broker to log in to.')
       return
     }
 
-    if (!brokerConfig) {
-      setError('Broker configuration not loaded')
-      return
-    }
-
-    setIsSubmitting(true)
-    let loginUrl = ''
-
-    const { broker_api_key, redirect_url } = brokerConfig
-
-    // Build login URL based on broker type (matching original broker.html logic)
-    switch (selectedBroker) {
-      case 'fivepaisa':
-      case 'fivepaisaxts':
-      case 'aliceblue':
-      case 'angel':
-      case 'mstock':
-      case 'indmoney':
-      case 'deltaexchange':
-      case 'jainamxts':
-      case 'dhan_sandbox':
-      case 'definedge':
-      case 'firstock':
-      case 'samco':
-      case 'motilal':
-      case 'nubra':
-      case 'groww':
-      case 'sahi':
-      case 'ibulls':
-      case 'iifl':
-      case 'kotak':
-      case 'rmoney':
-      case 'shoonya':
-      case 'tradejini':
-      case 'tradesmart':
-      case 'wisdom':
-      case 'zebu':
-        // Brokers using callback route (form-based or redirect-based)
-        loginUrl = `/${selectedBroker}/callback`
-        break
-
-      case 'iiflcapital':
-        // Route via backend callback endpoint to centralize URL generation and
-        // avoid provider-specific redirect parameter parsing differences.
-        loginUrl = '/iiflcapital/callback'
-        break
-
-      case 'dhan':
-        loginUrl = '/dhan/initiate-oauth'
-        break
-
-      case 'compositedge':
-        loginUrl = `https://xts.compositedge.com/interactive/thirdparty?appKey=${broker_api_key}&returnURL=${redirect_url}`
-        break
-
-      case 'flattrade': {
-        const flattradeApiKey = getFlattradeApiKey(broker_api_key)
-        loginUrl = `https://auth.flattrade.in/?app_key=${flattradeApiKey}`
-        break
-      }
-
-      case 'fyers':
-        loginUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c`
-        break
-
-      case 'upstox':
-        loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${broker_api_key}&redirect_uri=${redirect_url}`
-        break
-
-      case 'zerodha':
-        loginUrl = `https://kite.trade/connect/login?api_key=${broker_api_key}`
-        break
-
-      case 'arrow':
-        // Arrow hosted login; redirects back to /arrow/callback with request-token.
-        loginUrl = `https://app.arrow.trade/app/login?appID=${broker_api_key}`
-        break
-
-      case 'rupeezy':
-        // Rupeezy Vortex SSO; redirects back to /rupeezy/callback with an `auth` param.
-        loginUrl = `https://flow.rupeezy.in?applicationId=${broker_api_key}`
-        break
-
-      case 'hdfcsecurities':
-        // HDFC Securities InvestRight hosted login (credentials + 2FA +
-        // consent); redirects back to the app's registered callback with a
-        // request token.
-        loginUrl = `https://developer.hdfcsec.com/oapi/v1/login?api_key=${broker_api_key}`
-        break
-
-      case 'hdfcsky':
-        // HDFC Sky hosted login (credentials + 2FA + consent); redirects back
-        // to the app's registered callback with a request token.
-        loginUrl = `https://developer.hdfcsky.com/oapi/v1/login?api_key=${broker_api_key}`
-        break
-
-      case 'paytm':
-        loginUrl = `https://login.paytmmoney.com/merchant-login?apiKey=${broker_api_key}&state={default}`
-        break
-
-      case 'pocketful': {
-        const state = generateRandomState()
-        localStorage.setItem('pocketful_oauth_state', state)
-        const scope = 'orders holdings'
-        loginUrl = `https://trade.pocketful.in/oauth2/auth?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`
-        break
-      }
-
-      default:
-        setError('Please select a broker')
-        setIsSubmitting(false)
-        return
-    }
-
-    // Use setTimeout to ensure state updates complete before navigation
-    setTimeout(() => {
-      window.location.href = loginUrl
-    }, 100)
+    setError(null)
+    loginMutation.mutate(selectedBroker)
   }
+
+  const isLoading = configQuery.isPending || signedOut
 
   if (isLoading) {
     return (
@@ -249,6 +167,8 @@ export default function BrokerSelect() {
       </div>
     )
   }
+
+  const noBrokers = brokerConfig !== null && brokers.length === 0
 
   return (
     <div className="min-h-screen flex items-center justify-center py-8 px-4">
@@ -266,62 +186,153 @@ export default function BrokerSelect() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {error && (
+              {shownError && (
                 <Alert variant="destructive" className="mb-4">
-                  <AlertDescription>{error}</AlertDescription>
+                  <AlertDescription>{shownError}</AlertDescription>
+                </Alert>
+              )}
+              {notice && !shownError && (
+                <Alert className="mb-4">
+                  <AlertDescription>{notice}</AlertDescription>
                 </Alert>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="broker-select" className="block text-center">
-                    Login with your Broker
-                  </Label>
-                  <Select
-                    value={selectedBroker}
-                    onValueChange={setSelectedBroker}
-                    disabled={isSubmitting}
-                  >
-                    <SelectTrigger id="broker-select" className="w-full">
-                      <SelectValue placeholder="Select a Broker" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allBrokers
-                        .filter((broker) => broker.id === brokerConfig?.broker_name)
-                        .map((broker) => (
-                          <SelectItem key={broker.id} value={broker.id}>
-                            {broker.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
+              {noBrokers ? (
+                <div className="space-y-4 text-center">
+                  <div className="space-y-1">
+                    <p className="font-medium">No broker is set up yet</p>
+                    <p className="text-sm text-muted-foreground">
+                      Save the API keys your broker gave you, then come back here to log in.
+                    </p>
+                  </div>
+                  <Button asChild className="w-full">
+                    <Link to="/broker/keys">
+                      <KeyRound className="mr-2 h-4 w-4" />
+                      Add broker keys
+                    </Link>
+                  </Button>
                 </div>
+              ) : (
+                <>
+                  <form onSubmit={handleSubmit} className="space-y-6">
+                    <div className="space-y-2">
+                      <Label htmlFor="broker-select" className="block text-center">
+                        Login with your Broker
+                      </Label>
+                      <Select
+                        value={selectedBroker}
+                        onValueChange={(value) => {
+                          setChosenBroker(value)
+                          setError(null)
+                        }}
+                        disabled={isSubmitting}
+                      >
+                        <SelectTrigger id="broker-select" className="w-full">
+                          <SelectValue placeholder="Select a Broker" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {brokers.map((broker) => (
+                            <SelectItem key={broker.broker} value={broker.broker}>
+                              {brokerLabel(broker)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
 
-                {(selectedBroker === 'zerodha' || selectedBroker === 'dhan') && (
-                  <Alert className="border-amber-500/50 bg-amber-500/10">
-                    <Info className="h-4 w-4 text-amber-500" />
-                    <AlertDescription className="text-amber-700 dark:text-amber-400">
-                      {selectedBroker === 'zerodha'
-                        ? 'Zerodha requires an active Kite Connect data subscription for market data access.'
-                        : 'Dhan requires an active Data API subscription for market data access.'}
-                    </AlertDescription>
-                  </Alert>
-                )}
+                    {liveBroker && selectedBroker && liveBroker !== selectedBroker && (
+                      <Alert>
+                        <Info className="h-4 w-4" />
+                        <AlertDescription className="space-y-3">
+                          <p>
+                            OpenAlgo is logged in to {nameOf(liveBroker)} on another device. To use
+                            a different broker, log out of OpenAlgo on that device first, or end
+                            that session here.
+                          </p>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={isEnding || isSubmitting}
+                              >
+                                {isEnding ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Ending the session...
+                                  </>
+                                ) : (
+                                  `End the ${nameOf(liveBroker)} session`
+                                )}
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                  End the {nameOf(liveBroker)} session?
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Every device is logged out of OpenAlgo, the same as logging out
+                                  there, and no order reaches {nameOf(liveBroker)} until you log in
+                                  to a broker again. Positions and orders already at the broker are
+                                  not affected. You stay signed in here.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Keep it</AlertDialogCancel>
+                                <AlertDialogAction onClick={endLiveSession}>
+                                  End the session
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </AlertDescription>
+                      </Alert>
+                    )}
 
-                <Button type="submit" className="w-full" disabled={!selectedBroker || isSubmitting}>
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                      Connect Account
-                    </>
+                    {(selectedBroker === 'zerodha' || selectedBroker === 'dhan') && (
+                      <Alert className="border-amber-500/50 bg-amber-500/10">
+                        <Info className="h-4 w-4 text-amber-500" />
+                        <AlertDescription className="text-amber-700 dark:text-amber-400">
+                          {selectedBroker === 'zerodha'
+                            ? 'Zerodha requires an active Kite Connect data subscription for market data access.'
+                            : 'Dhan requires an active Data API subscription for market data access.'}
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    <Button
+                      type="submit"
+                      className="w-full"
+                      disabled={!selectedBroker || isSubmitting}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <ExternalLink className="mr-2 h-4 w-4" />
+                          Connect Account
+                        </>
+                      )}
+                    </Button>
+                  </form>
+
+                  {brokerConfig && (
+                    <div className="mt-4 text-center text-sm">
+                      <Link
+                        to="/broker/keys"
+                        className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                      >
+                        Manage broker keys
+                      </Link>
+                    </div>
                   )}
-                </Button>
-              </form>
+                </>
+              )}
 
               <div className="mt-6 text-center text-sm">
                 <BrokerAuthSignOut />
