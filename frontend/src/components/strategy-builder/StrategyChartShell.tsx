@@ -13,10 +13,20 @@
  */
 
 import { BarChart3, Maximize2, Minimize2, RefreshCw, Settings2 } from 'lucide-react'
-import type { CrosshairMoveEvent, DataFeed } from 'openalgo-charts'
+import type { CrosshairMoveEvent, DataFeed, IndicatorBarSource } from 'openalgo-charts'
 import { registeredIndicators } from 'openalgo-charts'
 import type { Widget } from 'openalgo-charts/widget'
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { ChartContextMenu, type ChartMenuAnchor } from '@/components/chart/ChartContextMenu'
 import {
   type ChartDataEvent,
@@ -27,6 +37,19 @@ import {
   type CatalogEntry,
   IndicatorPickerDialog,
 } from '@/components/trading/IndicatorPickerDialog'
+import {
+  applyIndicatorSettings,
+  buildIndicatorSettingsRequest,
+  indicatorDefaultsFor,
+} from '@/lib/trading/indicatorSettings'
+import type { IndicatorSettingsRequest } from '@/lib/trading/terminal'
+
+const IndicatorSettingsDialog = lazy(() =>
+  import('@/components/trading/IndicatorSettingsDialog').then((m) => ({
+    default: m.IndicatorSettingsDialog,
+  }))
+)
+
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -218,6 +241,8 @@ export function StrategyChartShell({
   const [fullscreen, setFullscreen] = useState(false)
   const [indicatorsOpen, setIndicatorsOpen] = useState(false)
   const [activeIndicators, setActiveIndicators] = useState<{ id: string; name: string }[]>([])
+  const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([])
   const [hover, setHover] = useState<HoverPoint | null>(null)
   const [menuAt, setMenuAt] = useState<ChartMenuAnchor | null>(null)
   const [railVisible, setRailVisible] = useState(true)
@@ -312,22 +337,82 @@ export function StrategyChartShell({
    * build, so a snapshot taken earlier would list the built-ins and none of
    * yours.
    */
-  const catalog = useMemo<CatalogEntry[]>(() => {
-    if (!indicatorsOpen) return []
-    return registeredIndicators().map((d) => ({
-      id: d.id,
-      name: d.name,
-      category: d.category ?? 'Other',
-    }))
+  useEffect(() => {
+    if (!indicatorsOpen) return
+    setCatalog(
+      registeredIndicators().map((d) => ({
+        id: d.id,
+        name: d.name,
+        category: d.category ?? 'Other',
+      }))
+    )
+    let cancelled = false
+    const load = async () => {
+      try {
+        await import('openalgo-charts/indicators')
+        const { loadCustomIndicators } = await import('@/lib/trading/customIndicators')
+        await loadCustomIndicators()
+        const { loadOpenScriptStudies } = await import('@/lib/trading/openscriptStudies')
+        await loadOpenScriptStudies()
+      } catch {
+        // Non-fatal
+      }
+      if (!cancelled) {
+        setCatalog(
+          registeredIndicators().map((d) => ({
+            id: d.id,
+            name: d.name,
+            category: d.category ?? 'Other',
+          }))
+        )
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
   }, [indicatorsOpen])
 
-  const openIndicatorSettings = (instanceId: string) => {
+  const openIndicatorSettings = useCallback(
+    async (instanceId: string) => {
+      if (!widget) return
+      const req = await buildIndicatorSettingsRequest(widget.chart, instanceId, intervals)
+      if (req) {
+        setIndSettings(req)
+      }
+    },
+    [widget, intervals]
+  )
+
+  useEffect(() => {
     if (!widget) return
-    const object = widget.objects
-      .list()
-      .find((o) => o.kind === 'indicator' && o.sourceId === instanceId)
-    widget.objects.openSettings(object?.id ?? instanceId)
-  }
+    const off = widget.chart.on('indicatorSettings', (payload) => {
+      const p = payload as { instanceId?: string }
+      if (p?.instanceId) {
+        void openIndicatorSettings(p.instanceId)
+      }
+    })
+    return () => {
+      off?.()
+    }
+  }, [widget, openIndicatorSettings])
+
+  const handleApplySettings = useCallback(
+    (instanceId: string, patch: Record<string, unknown>, barSource?: IndicatorBarSource) => {
+      if (!widget) return
+      applyIndicatorSettings(widget.chart, instanceId, patch, barSource)
+      setActiveIndicators(widget.chart.indicators().map((i) => ({ id: i.id, name: i.name })))
+    },
+    [widget]
+  )
+
+  const handleDefaults = useCallback(
+    async (instanceId: string): Promise<Record<string, unknown> | null> => {
+      if (!widget) return null
+      return indicatorDefaultsFor(widget.chart, instanceId)
+    },
+    [widget]
+  )
 
   /**
    * Send the feed back to the network when the request behind it changed.
@@ -574,9 +659,24 @@ export function StrategyChartShell({
         active={activeIndicators}
         onAdd={(indicatorId) => widget?.chart.addIndicator(indicatorId)}
         onRemove={(instanceId) => widget?.chart.removeIndicator(instanceId)}
-        onSettings={openIndicatorSettings}
+        onSettings={(instanceId) => {
+          setIndicatorsOpen(false)
+          void openIndicatorSettings(instanceId)
+        }}
         onClose={() => setIndicatorsOpen(false)}
       />
+
+      {indSettings && (
+        <Suspense fallback={null}>
+          <IndicatorSettingsDialog
+            req={indSettings}
+            chartInterval={interval}
+            onApply={handleApplySettings}
+            onDefaults={handleDefaults}
+            onClose={() => setIndSettings(null)}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
