@@ -550,9 +550,12 @@ Six departures from how the rest of the product places orders:
   record) is bound to the broker logged in when its first order went out, read
   from the login attempts, never to the session of the moment; with no such
   record it stays unbound and its orders are refused. An unbound run holds no
-  login back. Accounts are compared only
-  when both are known, without regard to case, so a broker whose login names no
-  account is bound by broker alone and a same-account token refresh keeps
+  login back. A run that recorded no
+  account (its broker's login names none, or it predates the record) is bound
+  by broker alone. A run that recorded one reads its token and the current
+  account in one read (`resolve_session`), compares them without regard to
+  case, and refuses when the current account is unknown: a known account is
+  never reduced to the broker alone. A same-account token refresh keeps
   working. Sandbox runs are never bound. A login to another broker is refused
   while a Live run is bound elsewhere (`utils/broker_switch.refusal_for_login`).
   The broker-backed books in `views.py` still read the current session: they

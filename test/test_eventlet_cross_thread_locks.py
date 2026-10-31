@@ -645,3 +645,43 @@ def test_staged_broker_keys_stay_with_their_own_greenlet():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_the_auth_commit_guard_lets_the_hub_run_while_a_holder_waits():
+    """database.auth_db.auth_commit_guard is taken by request greenlets around a
+    login's token write and every sign-out, and the holder yields on the
+    database. Under eventlet it must be green: a real lock would block the
+    whole worker while a second greenlet waited for it."""
+    result = run(
+        """
+        import database.auth_db as auth_db
+
+        guard = auth_db.auth_commit_guard()
+        order = []
+
+        def holder():
+            with guard:
+                order.append("held")
+                eventlet.sleep(0.2)  # the token write yields on the database
+                order.append("released")
+
+        def waiter():
+            eventlet.sleep(0.05)
+            with guard:
+                order.append("waiter")
+
+        ticks = []
+
+        def ticker():
+            for _ in range(5):
+                ticks.append(time.monotonic())
+                eventlet.sleep(0.03)
+
+        a, b, c = eventlet.spawn(holder), eventlet.spawn(waiter), eventlet.spawn(ticker)
+        a.wait(); b.wait(); c.wait()
+        assert order == ["held", "released", "waiter"], order
+        assert len(ticks) == 5, ticks  # the hub kept running while the waiter waited
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr

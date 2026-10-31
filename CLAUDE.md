@@ -199,19 +199,37 @@ there. `utils/broker_keys.py` owns which keys a broker uses.
   into a module constant, and must not read them on a thread it starts inside
   a login: a new thread does not inherit the staged keys. Starting a login
   writes nothing (`keys_for_login`).
-- **A login commits only if it still may.** `_commit_refusal` in
-  `utils/auth_utils.py` runs before anything is stored, and a refused login
-  changes nothing: the request must still hold the slot (a lease that ran out
-  and was taken over only discards its result), the broker's keys must be the
-  ones it started with (a digest, kept in memory), no sign-out may have landed
-  since the login started (the pending login's start time against
-  `session_revocations`), the switch rules below must allow it, and a resume
-  must find the process's keys unchanged. Then the token is stored first, the
-  keys published, and only then the old broker's devices signed out
-  (`end_broker_session_for_switch`, which revokes no token: `upsert_auth` has
-  already replaced the old one and torn its feed down). A resume holds the
-  slot alone (`exclusive`) from its first read to its commit, validates with
-  staged keys and re-reads the stored session before storing it.
+- **A login commits only if it still may, and the check is part of the write.**
+  `_commit_refusal` in `utils/auth_utils.py` runs before anything is stored,
+  and again as the `fence` of `upsert_auth`, under
+  `database.auth_db.auth_commit_guard()` immediately before the token write.
+  Every sign-out (`_record_revocation`) and every key change on Broker
+  Configuration takes the same guard, so a sign-out or a key change either
+  lands before the check, which refuses the write, or after the commit. A
+  check made before the write and not repeated inside it is not a fence: the
+  re-review proved four writers landing in that gap. The checks: the request
+  still holds the slot, the broker's keys are the ones it started with (a
+  digest, kept in memory), no sign-out since the login started and this
+  browser's own sign-in not ended, the switch rules allow it, and for a resume
+  the process's keys unchanged. Inside the fence the new keys are published
+  first, so a request that reads the new token reads the new keys; a write
+  that then fails puts them back (`restore_published`). In the same commit the
+  old broker's other devices are signed out (`end_broker_session_for_switch`,
+  which revokes no token) and this browser's sign-in is stamped, so a sign-out
+  after the commit ends it, a cookie-less XTS session included. The feed
+  teardown (`defer`) and the notices run after the guard is released: nothing
+  waits on a broker or the network under it. A resume holds the slot alone
+  from its first read to its commit, validates with staged keys, and re-reads
+  the stored session before storing it.
+- **A token read pins its broker's keys.** The token readers in
+  `database/auth_db.py` call `pin_keys_for(broker)`, so the rest of that
+  request reads the keys of the broker the token belongs to: the published
+  keys when they are that broker's, else `resolve(broker)`. A request is never
+  left with one broker's token and the other's keys while a switch is stored.
+  A login's own staged keys are never replaced. A pin lasts to the end of the
+  request (the auth blueprint's teardown drops it, app-wide) or, outside a
+  request, `PIN_SECONDS`. Tests reset staging and the published record per
+  test (`test/conftest.py`).
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or
   a broker login recorded since the rollover, which a password change does not
@@ -256,9 +274,14 @@ back across sites without the cookie, so their state rides on the return
 address, as OpenAlgo Desktop does. Dhan's redirect carries only a consent
 token, accepted for the consent this browser asked for; a ready access token
 comes only from OpenAlgo's own form, and either is refused for another account
-than the configured client ID. RMoney's posted session token is checked with
-RMoney, and an XTS session for another account than the market data keys is
-refused. Pending logins live in the
+than the configured client ID, or when Dhan does not report the account. An
+account is only ever taken from the broker's own answer, never from a label
+posted beside a token: RMoney's from its `/user/profile` reply to the session
+token, CompositEdge's from its answer to the token exchange, and either is
+refused when it is not the market data keys' account. A strategy run bound to
+a known account reads its token and the current account in one read
+(`get_session_identity`) and refuses when the account is unknown: a known
+binding is never reduced to the broker alone. Pending logins live in the
 `broker_login_states` table as SHA-256 digests (so a restart mid-login is
 harmless and a copy of the table completes nothing); each is used once, by a
 delete only one caller can win, lasts ten minutes, and at most 16 are open. A POST from OpenAlgo's own login form must carry its CSRF token and belong to a started login too, and it uses that login up like any answer (`_claim_login`). Every sign-out (`revoke_all_sessions`, `revoke_pre_broker_sessions`) cancels every started login, and the commit compares when the login started with the last sign-out, so a login started before a logout or password reset never signs anyone back in. Before this, any request token that

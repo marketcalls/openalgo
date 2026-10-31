@@ -175,7 +175,16 @@ def binding_refusal(
             f"OpenAlgo is logged in to {current}, but this strategy's run trades on "
             f"{bound}, so nothing was sent to {current}. Log in to {bound} to manage it."
         )
-    if binding.account and account and _account_key(binding.account) != _account_key(account):
+    if binding.account and not account:
+        # A known account is never reduced to the broker alone: a login that
+        # records no account, or a read that failed, does not show the session
+        # is still that account's.
+        return (
+            f"OpenAlgo could not confirm which {bound} account is logged in, so nothing was "
+            f"sent. This strategy's run trades on {bound} account {binding.account}. Log in "
+            f"to {bound} with that account to manage it."
+        )
+    if binding.account and _account_key(binding.account) != _account_key(account):
         return (
             f"OpenAlgo is logged in to {bound} account {account}, but this strategy's run "
             f"trades on {bound} account {binding.account}, so nothing was sent. Log in to "
@@ -287,6 +296,24 @@ def resolve_live_auth(api_key: str) -> tuple[str | None, str | None, str | None]
         return None, None, "Could not resolve broker authorisation"
 
 
+def resolve_session(api_key: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """``(auth_token, broker, account, error)`` from one read of the stored session.
+
+    The token and the account come from the same row, so a login landing in
+    between cannot pair one account's token with another account's id.
+    """
+    try:
+        from database.auth_db import get_session_identity
+
+        auth_token, broker, account = get_session_identity(api_key)
+    except Exception:
+        logger.exception("Could not resolve broker authorisation for a live order")
+        return None, None, None, "Could not resolve broker authorisation"
+    if not auth_token or not broker:
+        return None, None, None, "Broker session is not available or has expired"
+    return auth_token, broker, account, None
+
+
 def resolve_bound_auth(
     api_key: str,
     binding: BrokerBinding | None,
@@ -294,18 +321,17 @@ def resolve_bound_auth(
     """``(auth_token, broker, error)`` for a live call on behalf of a bound run.
 
     The session is resolved first, so a missing or expired one is reported as
-    that rather than as a mismatch. The token is read before the account: both
-    come from one stored row, so an account read after the token is never older
-    than it, and a re-login landing between the two can only produce a refusal.
+    that rather than as a mismatch. A run bound to an account reads the token,
+    the broker and the account in one read (resolve_session), and the token
+    sent is the one read with the account that was checked.
     """
-    auth_token, broker, error = resolve_live_auth(api_key)
+    if binding is not None and binding.account:
+        auth_token, broker, account, error = resolve_session(api_key)
+    else:
+        auth_token, broker, error = resolve_live_auth(api_key)
+        account = None
     if error:
         return None, None, error
-    account = None
-    if binding is not None and binding.account:
-        # Read only when the run recorded one: there is nothing to compare
-        # otherwise, and it costs a query on every order.
-        account = session_account(binding.user_id)
     refusal = binding_refusal(binding, broker, account)
     if refusal:
         logger.warning(

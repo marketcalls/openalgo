@@ -11,6 +11,11 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+#: The error authenticate_broker returns when the interactive session and the
+#: market data keys belong to different accounts.
+ACCOUNT_MISMATCH = "account_mismatch"
+
+
 def authenticate_broker(request_token):
     try:
         # Get the shared httpx client
@@ -35,14 +40,20 @@ def authenticate_broker(request_token):
             result = response.json()
             if result.get("type") == "success":
                 token = result["result"]["token"]
+                # The account CompositEdge names in its own answer to the
+                # exchange, made with this app's key and secret.
+                session_user = str(result["result"].get("userID") or "").strip()
                 logger.debug("Auth token received")
 
                 # Call get_feed_token() after successful authentication
                 feed_token, user_id, feed_error = get_feed_token()
                 if feed_error:
-                    return token, None, None, f"Feed token error: {feed_error}"
+                    return token, None, session_user or None, f"Feed token error: {feed_error}"
+                feed_user = str(user_id or "").strip()
+                if session_user and feed_user and session_user.upper() != feed_user.upper():
+                    return None, None, None, ACCOUNT_MISMATCH
 
-                return token, feed_token, user_id, None
+                return token, feed_token, session_user or user_id, None
 
             else:
                 # Access token not present in the response

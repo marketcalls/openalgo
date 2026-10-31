@@ -104,9 +104,16 @@ def session():
     def account_of(name):
         return current.account
 
+    def identity(api_key):
+        # One read of the stored row: token, broker and account together.
+        if not current.token:
+            return None, None, None
+        return current.token, current.broker, current.account
+
     with (
         patch("database.auth_db.get_auth_token_broker", side_effect=token_broker) as reads,
         patch("database.auth_db.get_user_id", side_effect=account_of),
+        patch("database.auth_db.get_session_identity", side_effect=identity),
         patch.object(engine, "_api_key_for", return_value=API_KEY),
         patch.object(signals, "_api_key_for", return_value=API_KEY),
         patch.object(engine, "_subscribe_run"),
@@ -282,6 +289,9 @@ def test_a_login_to_another_broker_is_refused_while_a_live_run_trades_elsewhere(
     with (
         patch("utils.broker_keys.live_broker", return_value=None),
         patch.object(broker_switch, "previous_broker", return_value=None),
+        # The platform-wide analyzer toggle lives in the settings table, which
+        # this file does not create: Live, as a fresh install starts.
+        patch("database.settings_db.get_analyze_mode", return_value=False),
     ):
         other = broker_switch.refusal_for_login("fyers", USER)
         same = broker_switch.refusal_for_login("zerodha", USER)
@@ -443,17 +453,51 @@ def test_a_token_refresh_on_the_same_account_keeps_working(session, broker):
     )
 
 
-@pytest.mark.parametrize(("at_start", "now"), [(None, "XY9876"), ("AB1234", None)])
-def test_an_account_unknown_on_either_side_binds_by_broker_alone(session, broker, at_start, now):
+def test_a_run_that_recorded_no_account_is_bound_by_broker_alone(session, broker):
     # Most brokers' logins name no account. Refusing then would refuse every
     # exit of every run on those brokers.
-    session.account = at_start
+    session.account = None
     _sid, run_id = _start()
 
-    session.login("zerodha", "zerodha-token-2", account=now)
+    session.login("zerodha", "zerodha-token-2", account="XY9876")
 
     assert engine.close_leg(run_id, 1, USER)["ok"] is True
     assert broker[-1].broker == "zerodha"
+
+
+def test_a_known_account_is_never_reduced_to_the_broker_alone(session, broker):
+    """AUDIT N03. A run recorded account AB1234, and the session now names no
+    account (or its read failed): that is not evidence the session is still
+    AB1234's, so nothing is sent and the run stays managed."""
+    session.account = "AB1234"
+    sid, run_id = _start()
+    sent_before = len(broker)
+
+    session.login("zerodha", "token-of-unknown-account", account=None)
+    result = engine.close_leg(run_id, 1, USER)
+
+    assert result["ok"] is False
+    assert "could not confirm which Zerodha account is logged in" in result["error"]
+    assert len(broker) == sent_before
+    _assert_still_managed(sid, run_id)
+
+
+def test_the_token_sent_is_the_one_read_with_the_account_checked(session, broker):
+    """AUDIT N03. The token was read first and the account afterwards, so a
+    login to the run's account landing between the two passed the account
+    check while the token of the other account was sent."""
+    session.account = "AB1234"
+    sid, run_id = _start()
+    sent_before = len(broker)
+    session.login("zerodha", "token-of-XY9876", account="XY9876")
+
+    result = engine.close_leg(run_id, 1, USER)
+
+    assert result["ok"] is False
+    assert len(broker) == sent_before
+    session.login("zerodha", "token-of-AB1234", account="AB1234")
+    assert engine.close_leg(run_id, 1, USER)["ok"] is True
+    assert [b.token for b in broker[sent_before:]] == ["token-of-AB1234"]
 
 
 # ---------------------------------------------------------------------------

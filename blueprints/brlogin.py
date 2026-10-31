@@ -83,14 +83,26 @@ def _form_csrf_ok():
 
 
 def _dhan_account_mismatch(keys, reported):
-    """Refuse a Dhan token for another account than the configured client id.
+    """Refuse a Dhan token unless Dhan confirmed it is for the configured client id.
 
     The Dhan key is saved as ``client_id:::api_key``. A token that works but
     belongs to a different account must not be stored: orders would reach an
-    account the trader did not configure.
+    account the trader did not configure. With a client id configured, an
+    account Dhan did not report (a failed or incomplete read) is not a match
+    either: the login is refused and can be tried again.
     """
     configured = (keys.api_key or "").split(":::")[0].strip() if ":::" in (keys.api_key or "") else ""
-    if not configured or not reported or str(reported).strip() == configured:
+    if not configured:
+        return None
+    if not reported:
+        logger.warning("Refused a Dhan login: Dhan did not confirm which account it is for")
+        return _refuse_login(
+            "account_unverified",
+            "Dhan did not confirm which account this login is for, so it was not stored. "
+            "Log in again.",
+            status=409,
+        )
+    if str(reported).strip() == configured:
         return None
     logger.warning("Refused a Dhan login for another account than the configured client id")
     return _refuse_login(
@@ -104,14 +116,20 @@ def _dhan_account_mismatch(keys, reported):
 def _xts_account_mismatch(broker, session_user, feed_user):
     """Refuse an XTS login whose session is for another account than the market data keys.
 
-    The session is posted back from the broker's site, and the market data
-    keys log in as the account they were issued to. Both are the trader's
-    own, so two different accounts mean the session is not the trader's.
+    ``session_user`` must be the account the broker itself named for the
+    session token (never a label posted beside it); the market data keys log
+    in as the account they were issued to. Both are the trader's own, so two
+    different accounts mean the session is not the trader's.
     """
     a = str(session_user or "").strip().upper()
     b = str(feed_user or "").strip().upper()
     if not a or not b or a == b:
         return None
+    return _refuse_xts_account(broker)
+
+
+def _refuse_xts_account(broker):
+    """The refusal for an XTS session of another account than the market data keys."""
     logger.warning(f"Refused a {broker} login: the session and the market data keys name different accounts")
     return _refuse_login(
         "account_mismatch",
@@ -139,15 +157,17 @@ def broker_callback(broker, para=None):
         return _refuse_login("broker_unavailable", str(exc), status=409)
     except BrokerLoginRefused:
         logger.warning(f"Refused a {broker} login answer that no login started from this browser")
-        if not had_user:
-            session.pop("user", None)
         return _refuse_login(
             LOGIN_NOT_STARTED,
             "This broker login was not started from OpenAlgo, or it took longer than "
             "10 minutes. Start the broker login again.",
         )
     finally:
-        _end_login_request()
+        # A browser that arrived without a sign-in (the XTS post-back, which
+        # carries no cookie) is given one only by a login that completed: a
+        # refused, failed or unfinished one leaves it signed out.
+        if not _end_login_request() and not had_user:
+            session.pop("user", None)
 
 
 def _begin_login_request(broker):
@@ -156,8 +176,12 @@ def _begin_login_request(broker):
 
 
 def _end_login_request():
-    """Drop the staged keys and give the slot back, however the request ended."""
-    end_broker_login()
+    """Drop the staged keys and give the slot back, however the request ended.
+
+    Returns:
+        bool: Whether the login completed.
+    """
+    return end_broker_login()
 
 
 def _claim_login(broker):
@@ -400,11 +424,14 @@ def _broker_callback(broker, para=None):
             if not access_token:
                 return jsonify({"error": "No access token found"}), 400
 
-            # Fetch auth token, feed token and user ID
+            # Fetch auth token, feed token and user ID. The interactive session
+            # names its account in CompositEdge's own answer to the token
+            # exchange, compared with the market data keys' there.
             auth_token, feed_token, user_id, error_message = auth_function(access_token)
-            mismatch = _xts_account_mismatch(broker, session_json.get("userID"), user_id)
-            if mismatch:
-                return mismatch
+            from broker.compositedge.api.auth_api import ACCOUNT_MISMATCH
+
+            if error_message == ACCOUNT_MISMATCH:
+                return _refuse_xts_account(broker)
 
             # print(f'Auth token is {auth_token}')
             # print(f'Feed token is {feed_token}')
@@ -1123,17 +1150,22 @@ def _broker_callback(broker, para=None):
                     logger.error(f"RMoney callback - No token in session. Keys: {list(session_json.keys())}")
                     return jsonify({"error": "No token found in session data"}), 400
 
-                # The session arrives from RMoney's site: check the token with
-                # RMoney before anything is stored.
-                from broker.rmoney.api.auth_api import get_feed_token, validate_session_token
+                # The session arrives from RMoney's site, and the userID beside
+                # the token is only a label. RMoney itself names the token's
+                # account, and that account is the one compared and stored.
+                from broker.rmoney.api.auth_api import get_feed_token, session_account
 
-                if not validate_session_token(auth_token):
-                    return handle_auth_failure("RMoney did not accept the session token")
+                user_id = session_account(auth_token)
+                if not user_id:
+                    logger.warning("Refused an RMoney login: RMoney did not confirm the account")
+                    return _refuse_login(
+                        "account_unverified",
+                        "RMoney did not confirm which account this login is for, so it was "
+                        "not stored. Log in again.",
+                        status=409,
+                    )
 
-                logger.info(
-                    "RMoney OAuth authentication successful (user ID present: %s)",
-                    bool(user_id),
-                )
+                logger.info("RMoney OAuth authentication successful")
 
                 # Get feed token for market data
                 feed_token, feed_user_id, feed_error = get_feed_token()
@@ -1143,8 +1175,6 @@ def _broker_callback(broker, para=None):
                 mismatch = _xts_account_mismatch(broker, user_id, feed_user_id)
                 if mismatch:
                     return mismatch
-                if not user_id:
-                    user_id = feed_user_id
 
                 error_message = None
                 forward_url = "broker.html"

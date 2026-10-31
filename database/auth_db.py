@@ -2,6 +2,7 @@
 
 import base64
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -376,6 +377,37 @@ _NEVER = datetime(1970, 1, 1)
 # Read on every authenticated request, written on logout and password changes.
 _session_revocation_cache = LockedTTLCache(maxsize=64, ttl=60)
 
+# Every write that decides who is signed in to which broker takes this lock: a
+# login's final checks and the token write it guards (upsert_auth with a
+# fence), every sign-out (_record_revocation), and a change to saved broker
+# keys (blueprints/broker_config.py). A check made under it is still true when
+# the write it guards lands. Reentrant, because a login that switches brokers
+# signs the other devices out inside its own commit. Only requests and
+# scheduler jobs take it, never one of the real threads (CLAUDE.md), so the
+# stdlib lock is right: green under eventlet, real under gthread. Nothing
+# waits on a broker or the network while holding it: upsert_auth hands its
+# feed teardown back to the caller (``defer``).
+_commit_lock = threading.RLock()
+
+
+def auth_commit_guard():
+    """The lock a login's final checks and its token write are made under."""
+    return _commit_lock
+
+
+class AuthCommitRefused(Exception):
+    """A login's final checks refused its token write. Nothing was stored.
+
+    Attributes:
+        code: The refusal code Select Broker turns into a sentence.
+        message: A sentence for the trader.
+    """
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
 
 def _now_ist():
     """Get current time in IST."""
@@ -630,24 +662,28 @@ def _record_revocation(username, field):
 
     from database.broker_keys_db import clear_login_states
 
-    now = datetime.now(UTC).replace(tzinfo=None)
-    try:
-        row = SessionRevocation.query.filter_by(username=username).first()
-        if row is None:
-            row = SessionRevocation(username=username, revoked_at=_NEVER)
-            db_session.add(row)
-        setattr(row, field, now)
-        db_session.commit()
-        recorded = True
-    except Exception:
-        db_session.rollback()
-        logger.exception("Could not record the end of the sessions")
-        recorded = False
-    finally:
-        _session_revocation_cache.invalidate(username)
-    # A broker login started from an ended sign-in must not complete: it would
-    # sign the browser back in (the XTS brokers answer without the cookie).
-    clear_login_states()
+    # Under the commit guard: a login whose final checks pass stores its token
+    # before this sign-out is recorded, or sees it and stores nothing.
+    with _commit_lock:
+        now = datetime.now(UTC).replace(tzinfo=None)
+        try:
+            row = SessionRevocation.query.filter_by(username=username).first()
+            if row is None:
+                row = SessionRevocation(username=username, revoked_at=_NEVER)
+                db_session.add(row)
+            setattr(row, field, now)
+            db_session.commit()
+            recorded = True
+        except Exception:
+            db_session.rollback()
+            logger.exception("Could not record the end of the sessions")
+            recorded = False
+        finally:
+            _session_revocation_cache.invalidate(username)
+        # A broker login started from an ended sign-in must not complete: it
+        # would sign the browser back in (the XTS brokers answer without the
+        # cookie).
+        clear_login_states()
     return recorded
 
 
@@ -795,12 +831,49 @@ def decrypt_token(encrypted_token):
         return None
 
 
-def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False):
+def upsert_auth(
+    name, auth_token, broker, feed_token=None, user_id=None, revoke=False, fence=None, defer=None
+):
     """Store encrypted auth token and feed token if provided.
 
     Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
     This ensures WebSocket proxy and other processes clear their stale cached tokens.
     See GitHub issue #765 for details on the cross-process cache synchronization problem.
+
+    Args:
+        fence: For a login, its final checks: called under the commit guard
+            immediately before the write, returning (code, message) to refuse
+            it or None. A sign-out, a key change or another login landing
+            after the caller's own checks is seen here, not after the write.
+        defer: A list. When given, the feed and order-feed teardown is appended
+            to it instead of run, so the caller runs it once it has released
+            the commit guard.
+
+    Raises:
+        AuthCommitRefused: When ``fence`` refused; nothing was written.
+    """
+    with _commit_lock:
+        if fence is not None:
+            refused = fence()
+            if refused is not None:
+                raise AuthCommitRefused(*refused)
+        result = _store_auth(name, auth_token, broker, feed_token, user_id, revoke)
+    if result is None:
+        return None
+    auth_id, after = result
+    if after is not None:
+        if defer is not None:
+            defer.append(after)
+        else:
+            after()
+    return auth_id
+
+
+def _store_auth(name, auth_token, broker, feed_token, user_id, revoke):
+    """The token write of upsert_auth. Hold the commit guard.
+
+    Returns:
+        tuple | None: (row id, the feed teardown to run, or None).
     """
     encrypted_token = encrypt_token(auth_token)
     encrypted_feed_token = encrypt_token(feed_token) if feed_token else None
@@ -882,13 +955,21 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     # token (multi-device session resume) we must SKIP them so a second device
     # logging in does not interrupt the first device's live stream. See issue #1591
     # (and #1394/#765/#851 for why the teardown exists in the first place).
+    auth_id = auth_obj.id
     if not (token_changed or revoke):
         logger.info(
             f"Broker token unchanged for {name} (multi-session resume) — "
             f"preserving live WebSocket feed, skipping pool teardown"
         )
-        return auth_obj.id
+        return auth_id, None
+    return auth_id, lambda: _tear_down_feed(name, broker, revoke)
 
+
+def _tear_down_feed(name, broker, revoke):
+    """What a real token change does to the broker feeds, after the token is stored.
+
+    Network and process work, so never run under the commit guard.
+    """
     # Publish cache invalidation event via ZeroMQ for other processes
     # This notifies WebSocket proxy and other processes to clear their stale caches
     try:
@@ -934,7 +1015,27 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     except Exception as e:
         logger.warning(f"Order-update adapter lifecycle failed for {name}/{broker}: {e}")
 
-    return auth_obj.id
+
+def _pin_keys(broker):
+    """Pin, for the reading request, the keys of the broker a token belongs to.
+
+    utils.broker_keys.pin_keys_for: a request that reads a token sends that
+    broker's keys with it, even while a switch is being stored.
+    """
+    if not broker:
+        return
+    try:
+        from utils.broker_keys import pin_keys_for
+
+        pin_keys_for(broker)
+    except Exception:
+        logger.exception("Could not pin the keys of the token's broker")
+
+
+def _token_of(record):
+    """A cached record's decrypted token, its broker's keys pinned."""
+    _pin_keys(record.broker)
+    return decrypt_token(record.auth)
 
 
 def get_auth_token(name, bypass_cache: bool = False):
@@ -970,7 +1071,7 @@ def get_auth_token(name, bypass_cache: bool = False):
             # Update cache with fresh data
             record = AuthRecord.from_row(auth_obj)
             _fill(auth_cache, cache_key, record, generation)
-            return decrypt_token(record.auth)
+            return _token_of(record)
         return None
 
     # Normal cache-first lookup. One get, not a membership test followed by a
@@ -980,7 +1081,7 @@ def get_auth_token(name, bypass_cache: bool = False):
     if cached is not MISSING and cached is not None:
         record = _as_record(cached)
         if record is not None and not record.is_revoked:
-            return decrypt_token(record.auth)
+            return _token_of(record)
         auth_cache.pop(cache_key, None)
         return None
 
@@ -992,7 +1093,7 @@ def get_auth_token(name, bypass_cache: bool = False):
     if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
         record = AuthRecord.from_row(auth_obj)
         _fill(auth_cache, cache_key, record, generation)
-        return decrypt_token(record.auth)
+        return _token_of(record)
     return None
 
 
@@ -1391,6 +1492,7 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                     return (None, None, None) if include_feed_token else (None, None)
                 # Not revoked, return cached result
                 logger.debug(f"Auth token retrieved from cache for user_id: {user_id}")
+                _pin_keys(cached_result[-1] if cached_result[0] else None)
                 return cached_result
             except Exception as e:
                 logger.exception(f"Error checking revocation status: {e}")
@@ -1421,6 +1523,7 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 # Cache the result
                 _fill(auth_cache, cache_key, result, generation)
                 logger.debug(f"Auth token cached for user_id: {user_id}")
+                _pin_keys(auth_obj.broker if decrypted_token else None)
                 return result
             else:
                 # Cache the negative result to prevent repeated DB queries and log spam
@@ -1434,6 +1537,37 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
             return (None, None, None) if include_feed_token else (None, None)
     else:
         return (None, None, None) if include_feed_token else (None, None)
+
+
+def get_session_identity(provided_api_key):
+    """(token, broker, account) of the API key's stored session, from one read of its row.
+
+    For a call held to a known broker account (the strategy module): the
+    token, its broker and the account the login recorded come from the same
+    row, read afresh, so a login landing between separate reads cannot pair
+    one account's token with another account's id. ``account`` is None when
+    the broker's login records none.
+
+    Returns:
+        tuple: (None, None, None) when there is no usable session.
+    """
+    username = verify_api_key(provided_api_key)
+    if not username:
+        return None, None, None
+    try:
+        row = Auth.query.populate_existing().filter_by(name=username).first()
+        if row is None or row.is_revoked or not row.auth or not row.broker:
+            return None, None, None
+        token = decrypt_token(row.auth)
+        if not token:
+            return None, None, None
+        account = str(row.user_id).strip() if row.user_id else None
+        broker = row.broker
+    except Exception:
+        logger.exception("Could not read the stored broker session")
+        return None, None, None
+    _pin_keys(broker)
+    return token, broker, account or None
 
 
 def get_order_mode(user_id):

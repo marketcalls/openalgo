@@ -1097,16 +1097,6 @@ def shutdown_database_sessions(exception=None):
 
     remove_all_scoped_sessions()
 
-    # A broker login's staged keys and slot never outlive its request, even
-    # when a view did not reach its own cleanup: a pooled thread (gthread) or
-    # a keep-alive greenlet (eventlet) serves the next request with the same
-    # context.
-    try:
-        from utils.auth_utils import end_broker_login
-
-        end_broker_login()
-    except Exception:
-        logger.exception("Could not end a broker login at the end of a request")
 
 
 # Integrate the WebSocket proxy server with the Flask app. Where it runs is

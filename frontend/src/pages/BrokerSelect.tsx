@@ -60,6 +60,9 @@ const LOGIN_ERRORS: Record<string, string> = {
     'The broker you are logged in to still runs Live strategies or protection, so it stayed logged in. Stop them first, then switch.',
   account_mismatch:
     'This login is for a different account than the client ID saved for this broker. Log in with that account, or change the client ID under Broker Configuration.',
+  // The broker did not say which account the login is for, so it was not stored.
+  account_unverified:
+    'The broker did not confirm which account this login is for, so it was not stored. Log in again.',
   // A sign-out on any device, or a password change, while this broker login
   // was at the broker's site.
   signed_out:

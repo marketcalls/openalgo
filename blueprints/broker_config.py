@@ -21,6 +21,7 @@ OpenAlgo and works before any broker login; writes are CSRF-checked by the
 app.
 """
 
+import functools
 import re
 
 from flask import Blueprint, jsonify, request, session
@@ -145,9 +146,30 @@ def _known_broker(broker):
     return broker if broker in enabled_brokers() else None
 
 
+def _under_commit_guard(view):
+    """Run a key change under the commit guard a login stores its token under.
+
+    Its checks (a login under way, the logged-in broker) and its write then
+    happen as one step against a login's final checks: a login either sees the
+    new keys and stores nothing, or stores its token before the change, which
+    then has to end that session like any change to the logged-in broker's
+    keys (database.auth_db.auth_commit_guard).
+    """
+
+    @functools.wraps(view)
+    def guarded(*args, **kwargs):
+        from database.auth_db import auth_commit_guard
+
+        with auth_commit_guard():
+            return view(*args, **kwargs)
+
+    return guarded
+
+
 @broker_config_bp.route("/credentials/<broker>", methods=["PUT"])
 @check_signed_in
 @limiter.limit(WRITE_RATE_LIMIT)
+@_under_commit_guard
 def save_broker(broker):
     """Save a broker's keys and redirect URL. A key left blank keeps its value.
 
@@ -280,6 +302,7 @@ def save_broker(broker):
 @broker_config_bp.route("/credentials/<broker>", methods=["DELETE"])
 @check_signed_in
 @limiter.limit(WRITE_RATE_LIMIT)
+@_under_commit_guard
 def forget_broker(broker):
     """Remove a broker's saved keys; the logged-in one only with ``sign_out=true``."""
     from database.broker_keys_db import delete_broker_keys, get_broker_keys

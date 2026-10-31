@@ -55,10 +55,13 @@ def refusal_for_run(run_id: int, *, api_key: str, user_id: str) -> str | None:
     binding = read[1]
     if not binding.known and store.first_dispatched_at(run_id) is None:
         return None
-    _token, broker, error = order_dispatch.resolve_live_auth(api_key)
+    if binding.account:
+        _token, broker, account, error = order_dispatch.resolve_session(api_key)
+    else:
+        _token, broker, error = order_dispatch.resolve_live_auth(api_key)
+        account = None
     if error:
         return None
-    account = order_dispatch.session_account(user_id) if binding.account else None
     return order_dispatch.binding_refusal(binding, broker, account)
 
 

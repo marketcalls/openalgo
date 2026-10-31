@@ -109,6 +109,24 @@ def _clear_pending_totp() -> None:
     session.pop("pending_totp_started_at", None)
 
 
+@auth_bp.teardown_app_request
+def _drop_staged_broker_keys(exception=None):
+    """Every request, app-wide: drop a broker login's staged keys and slot, and any pin.
+
+    Even when a view did not reach its own cleanup: a pooled thread (gthread)
+    or a keep-alive greenlet (eventlet) serves the next request with the same
+    context, and must read the process's keys (utils.broker_keys).
+    """
+    try:
+        from utils.auth_utils import end_broker_login
+        from utils.broker_keys import clear_pin
+
+        end_broker_login()
+        clear_pin()
+    except Exception:
+        logger.exception("Could not drop a request's broker keys")
+
+
 @auth_bp.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify(status="error", message="Too many login attempts. Please wait a minute and try again."), 429
@@ -280,6 +298,8 @@ def _try_resume_broker_session(username):
             logger.info(f"Not resuming the {broker} session for {username}: {exc}")
             return None
         g.broker_publish_if = publication_generation()
+        # A sign-out while the stored session is checked stops its commit.
+        g.broker_login_started_at = datetime.now(UTC)
 
         # Validate token with a lightweight broker API call (funds)
         import importlib
@@ -1437,37 +1457,43 @@ def end_broker_session_keeping_this_browser(username, message):
     mark_signed_in()
 
 
-def end_broker_session_for_switch(username, live, chosen):
+def end_broker_session_for_switch(username, live, chosen, after=None):
     """Sign every other device out because a login to another broker completed.
 
-    As OpenAlgo Desktop does when the logged-in broker changes. Called once
-    the new broker's token is stored (utils.auth_utils.handle_auth_success),
-    which replaced the old token and tore its feed down (upsert_auth), so
-    nothing here revokes a token: revoking now would revoke the new one. This
-    browser stays signed in and goes on to the new broker's dashboard.
+    As OpenAlgo Desktop does when the logged-in broker changes. Called inside
+    the login's commit (utils.auth_utils.handle_auth_success), once the new
+    broker's token is stored: that replaced the old token and handed back its
+    feed teardown, so nothing here revokes a token, which would revoke the new
+    one. The browser that logged in stays signed in: the commit stamps its
+    sign-in after this. The notices go into ``after``, run once the commit's
+    guard is released.
     """
     from database.auth_db import clear_user_sessions, revoke_all_sessions
     from utils.broker_keys import broker_title
 
     invalidate_user_auth_cache(username)
-    try:
-        from database.master_contract_cache_hook import clear_cache_on_logout
-
-        clear_cache_on_logout()
-    except Exception:
-        logger.exception("Error clearing the symbol cache on a broker switch")
-
     clear_user_sessions(username)
     revoke_all_sessions(username)
-    mark_signed_in()
 
-    socketio.emit(
-        "force_logout",
-        {
-            "message": f"OpenAlgo was logged out of {broker_title(live)} because a login to "
-            f"{broker_title(chosen)} completed."
-        },
-    )
+    def notify():
+        try:
+            from database.master_contract_cache_hook import clear_cache_on_logout
+
+            clear_cache_on_logout()
+        except Exception:
+            logger.exception("Error clearing the symbol cache on a broker switch")
+        socketio.emit(
+            "force_logout",
+            {
+                "message": f"OpenAlgo was logged out of {broker_title(live)} because a login to "
+                f"{broker_title(chosen)} completed."
+            },
+        )
+
+    if after is not None:
+        after.append(notify)
+    else:
+        notify()
     logger.info(f"Ended the {live} broker session for {username}: {chosen} is logged in now")
 
 

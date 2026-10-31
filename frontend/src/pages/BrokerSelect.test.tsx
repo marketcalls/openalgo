@@ -182,6 +182,7 @@ describe('A login that came back refused', () => {
     ['switch_refused', /so it stayed logged in\. Stop them first, then switch\./],
     ['account_mismatch', /a different account than the client ID saved for this broker/],
     ['signed_out', /Your OpenAlgo sign-in ended while this broker login was in progress/],
+    ['account_unverified', /did not confirm which account this login is for/],
     ['login_failed', /The broker login did not complete/],
   ])("shows the %s sentence on that broker's card", async (code, sentence) => {
     list = brokerList([saved(brokerEntry('zerodha', 'Zerodha', 'redirect'), {})])

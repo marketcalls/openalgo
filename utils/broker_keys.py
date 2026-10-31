@@ -133,7 +133,38 @@ _publication = {"generation": 0}
 # orders, funds, streaming) keeps reading the process's keys until the login
 # commits. A context variable is per greenlet under eventlet and per thread
 # under gthread and the dev server.
+#
+# A token read pins keys too (pin_keys_for): the keys of the broker the token
+# belongs to, for the rest of that request, so a request never pairs one
+# broker's token with another broker's keys while a switch is being stored.
 _staged = contextvars.ContextVar("staged_broker_keys", default=None)
+
+#: How long a pin lasts outside a request (a scheduler job, a strategy tick):
+#: long enough for the broker call that follows the token read, short enough
+#: that a thread reused for later work reads the process's keys again.
+PIN_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class _Stage:
+    """Keys staged or pinned for one context. ``values`` maps variable -> value or None."""
+
+    values: dict
+    kind: str  # "login" or "pin"
+    expires: float | None = None
+
+
+@dataclass(frozen=True)
+class _Published:
+    """The keys the process holds, and the broker they are for."""
+
+    broker: str | None
+    values: dict
+
+
+# Replaced whole on every publish, so a reader sees one broker's keys or the
+# other's, never a mixture.
+_published = {"state": None}
 _ENVIRON_TYPE = type(os.environ)
 # The originals, kept on the class so a second import of this module (tests
 # reload it) never wraps the overlay in itself.
@@ -143,9 +174,15 @@ _base_len = _ENVIRON_TYPE.__dict__.get("_openalgo_base_len") or _ENVIRON_TYPE.__
 
 
 def _staged_here(environ):
-    """The keys staged for this request, when `environ` is os.environ, else None."""
-    staged = _staged.get()
-    return staged if staged is not None and environ is os.environ else None
+    """The keys staged or pinned for this context, when `environ` is os.environ, else None."""
+    if environ is not os.environ:
+        return None
+    stage = _staged.get()
+    if stage is None:
+        return None
+    if stage.expires is not None and stage.expires < time.monotonic():
+        return None
+    return stage.values
 
 
 def _overlay_getitem(self, key):
@@ -542,8 +579,55 @@ def stage_broker_keys(broker):
         BrokerKeysRefused: When no key is configured for the broker.
     """
     keys = _resolve_or_refuse(broker)
-    staged = {var: (getattr(keys, field) or None) for field, var in ENV_VARS.items()}
-    return keys, _staged.set(staged)
+    return keys, _staged.set(_Stage(values=_values_of(keys), kind="login"))
+
+
+def _values_of(keys):
+    """A broker's keys as the five variables, None where a key is empty."""
+    return {var: (getattr(keys, field) or None) for field, var in ENV_VARS.items()}
+
+
+def pin_keys_for(broker):
+    """Pin, for this request, the keys of the broker whose token was just read.
+
+    Called by the token reads in database.auth_db. The token and the keys a
+    request sends together must belong to one broker, and a switch stores the
+    new token and publishes the new keys as two steps: a request reading
+    between them, or still running after them, would pair one broker's token
+    with the other's keys. Pinned, every later read of the five variables in
+    this request returns the keys of the token's broker. A login's own staged
+    keys are never replaced. Outside a request the pin lasts PIN_SECONDS.
+    """
+    if not broker:
+        return
+    current = _staged.get()
+    if current is not None and current.kind == "login":
+        return
+    published = _published["state"]
+    if published is None:
+        # Nothing published since startup: the process holds the .env keys,
+        # which is what every read gets anyway.
+        return
+    if published.broker == broker:
+        values = published.values
+    else:
+        # The token belongs to a broker whose keys are not the process's: a
+        # switch is being stored, or one was refused and undone.
+        keys = resolve(broker)
+        if keys is None:
+            return
+        values = _values_of(keys)
+    from flask import has_request_context
+
+    expires = None if has_request_context() else time.monotonic() + PIN_SECONDS
+    _staged.set(_Stage(values=values, kind="pin", expires=expires))
+
+
+def clear_pin():
+    """Drop this context's pin. A login's staged keys are left alone. At request teardown."""
+    current = _staged.get()
+    if current is not None and current.kind == "pin":
+        _staged.set(None)
 
 
 def unstage_broker_keys(token):
@@ -563,6 +647,31 @@ def publication_generation():
         return _publication["generation"]
 
 
+def published_snapshot():
+    """What the process publishes now, to put back with restore_published()."""
+    with _apply_lock:
+        return _published["state"], {var: _process_value(var) for var in ENV_VARS.values()}
+
+
+def restore_published(snapshot):
+    """Put back the keys a snapshot recorded: a login refused after publishing."""
+    state, values = snapshot
+    with _apply_lock:
+        changed = False
+        for var, value in values.items():
+            if _process_value(var) != value:
+                if value is None:
+                    # Not pop(): it reads through the overlay, which in a
+                    # login's own context says a staged-empty variable is unset.
+                    del os.environ[var]
+                else:
+                    os.environ[var] = value
+                changed = True
+        if changed:
+            _publication["generation"] += 1
+        _published["state"] = state
+
+
 def publish_broker_keys(keys, if_generation=None):
     """Make a broker's keys the process's, read by every request from now on.
 
@@ -579,6 +688,9 @@ def publish_broker_keys(keys, if_generation=None):
         changed = _apply_unlocked(keys)
         if changed:
             _publication["generation"] += 1
+        _published["state"] = _Published(
+            broker=keys.broker, values={var: _process_value(var) for var in ENV_VARS.values()}
+        )
     if changed:
         where = "the .env file" if keys.source == "env" else "the keys saved in OpenAlgo"
         logger.info(f"Using {where} for {broker_title(keys.broker)}")

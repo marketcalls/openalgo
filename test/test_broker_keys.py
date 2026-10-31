@@ -13,6 +13,8 @@ that never reached a broker login ends at the daily rollover.
 Each test runs on its own SQLite file and its own .env file.
 """
 
+import contextvars
+import json
 import os
 import subprocess
 import sys
@@ -2389,9 +2391,15 @@ def test_a_login_under_way_keeps_another_brokers_login_out(stores, environment, 
     during = {}
 
     def zerodha_exchange(code):
-        # The other device starts and answers while this exchange is under way.
-        during["start"] = other.post("/auth/broker/login", json={"broker": "fyers"}).status_code
-        during["answer"] = other.get(f"/fyers/callback?auth_code=c&state={state}")
+        # The other device starts and answers while this exchange is under way,
+        # each in a context of its own, as a request on another thread or
+        # greenlet is: the test client otherwise runs a request made inside a
+        # request on the outer one's Flask g.
+        separate = contextvars.Context().run
+        during["start"] = separate(
+            lambda: other.post("/auth/broker/login", json={"broker": "fyers"})
+        ).status_code
+        during["answer"] = separate(lambda: other.get(f"/fyers/callback?auth_code=c&state={state}"))
         during["key"] = os.getenv("BROKER_API_KEY")
         return "access", None
 
@@ -3132,3 +3140,354 @@ def test_the_broker_logged_in_at_a_moment_is_read_from_the_login_records(stores)
     assert auth_db.broker_logged_in_at(USER, datetime(2026, 10, 30, 4, 45)) == "fyers"
     assert auth_db.broker_logged_in_at(USER, datetime(2026, 10, 30, 3, 0)) is None
     assert auth_db.broker_logged_in_at("someone-else", datetime(2026, 10, 30, 4, 0)) is None
+
+
+# --------------------------------------------------------------------------
+# Re-review of PR 2337 (82/100): the cut between a login's final checks and
+# its write. Each case lands a competing writer exactly there, as the
+# re-review's probes did, and states what must hold.
+# --------------------------------------------------------------------------
+
+
+def _fyers_login(app):
+    client = _signed_in(app)
+    url = client.post("/auth/broker/login", json={"broker": "fyers"}).get_json()["url"]
+    return client, f"/fyers/callback?auth_code=good&state={_url_state(url)}"
+
+
+def _at_the_write(monkeypatch, action):
+    """Run `action` as the token write begins: after every check made before it."""
+    from utils import auth_utils
+
+    original = auth_utils.upsert_auth
+
+    def landing(*args, **kwargs):
+        action(*args, **kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(auth_utils, "upsert_auth", landing)
+
+
+def test_a_sign_out_landing_at_the_write_stores_nothing(stores, environment, commit, monkeypatch):
+    """AUDIT N01. A logout or password reset after the final check lost to the
+    login's write: the broker token was stored unrevoked."""
+    _save_fyers()
+    app = _app()
+    app.broker_auth_functions = {"fyers_auth": lambda code: ("new-fyers-token", None)}
+    _at_the_write(monkeypatch, lambda *a, **k: auth_db.revoke_all_sessions(USER))
+    client, address = _fyers_login(app)
+
+    answer = client.get(address)
+
+    assert answer.headers["Location"] == "/broker?error=signed_out&broker=fyers"
+    assert auth_db.Auth.query.filter_by(name=USER).first() is None
+    assert broker_keys._process_value("BROKER_API_KEY") is None
+
+
+def test_a_sign_out_landing_at_the_write_gives_a_cookieless_browser_nothing(xts, commit, monkeypatch):
+    """AUDIT N01. The XTS post-back arrives without a cookie: a sign-out after
+    its final check used to be overridden by a fresh, working sign-in."""
+    state = _started_xts_state(xts)
+    _at_the_write(monkeypatch, lambda *a, **k: auth_db.revoke_all_sessions(USER))
+    stranger = xts.test_client()
+
+    answer = _xts_post(stranger, state=state)
+
+    assert "/broker?error=signed_out" in answer.headers["Location"]
+    with stranger.session_transaction() as sess:
+        assert "user" not in sess and "logged_in" not in sess
+    assert _probe(stranger) == 401
+    assert auth_db.Auth.query.filter_by(name=USER).first() is None
+
+
+def test_a_sign_out_after_the_commit_ends_the_cookieless_session_it_opened(xts, commit):
+    """The session the XTS post-back opens dates from the commit, so a logout
+    anywhere afterwards ends it like any other sign-in."""
+    state = _started_xts_state(xts)
+    stranger = xts.test_client()
+    _xts_post(stranger, state=state)
+    assert _probe(stranger) == 200
+
+    auth_db.revoke_all_sessions(USER)
+
+    assert _probe(stranger) == 401
+
+
+def test_a_key_change_landing_at_the_write_stores_nothing(stores, environment, commit, monkeypatch):
+    """AUDIT N01. A key save that passed its own checks landed after the login's
+    digest check, and the token went in with keys it does not belong to."""
+    _save_fyers()
+    app = _app()
+    app.broker_auth_functions = {"fyers_auth": lambda code: ("token-for-old-keys", None)}
+    _at_the_write(
+        monkeypatch,
+        lambda *a, **k: keys_db.save_broker_keys("fyers", {"api_key": "FYAPP-200"}, None),
+    )
+    client, address = _fyers_login(app)
+
+    answer = client.get(address)
+
+    assert answer.headers["Location"] == "/broker?error=login_failed&broker=fyers"
+    assert auth_db.Auth.query.filter_by(name=USER).first() is None
+    assert broker_keys._process_value("BROKER_API_KEY") is None
+
+
+def test_a_login_whose_slot_was_taken_at_the_write_never_overwrites_the_new_one(
+    stores, environment, commit, monkeypatch
+):
+    """AUDIT N01. Fyers passed its checks, its lease ran out, a Zerodha login
+    took the slot and committed, and Fyers then overwrote it."""
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    clock = [1000.0]
+    monkeypatch.setattr(broker_keys, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    app = _app()
+    app.broker_auth_functions = {
+        "fyers_auth": lambda code: ("late-fyers-token", None),
+        "zerodha_auth": lambda code: ("new-zerodha-token", None),
+    }
+    other = _signed_in(app)
+    zerodha_url = other.post("/auth/broker/login", json={"broker": "zerodha"}).get_json()["url"]
+    other_address = f"/zerodha/callback?request_token=good&state={_url_state(zerodha_url)}"
+    seen = {}
+
+    def takeover(name, token, broker, **kwargs):
+        if broker == "fyers":
+            clock[0] += broker_keys.LOGIN_SLOT_SECONDS + 1
+            seen["other"] = contextvars.Context().run(lambda: other.get(other_address))
+
+    _at_the_write(monkeypatch, takeover)
+    client, address = _fyers_login(app)
+
+    answer = client.get(address)
+
+    assert seen["other"].headers["Location"].endswith("/dashboard")
+    assert answer.headers["Location"] == "/broker?error=login_failed&broker=fyers"
+    assert auth_db.Auth.query.filter_by(name=USER).one().broker == "zerodha"
+    assert auth_db.get_auth_token(USER) == "zkey123:new-zerodha-token"
+    assert broker_keys._process_value("BROKER_API_KEY") == "zkey123"
+
+
+def _fyers_transport(monkeypatch):
+    import broker.fyers.api.funds as funds
+
+    sent = []
+    monkeypatch.setattr(funds, "_cache", {})
+    monkeypatch.setattr(funds, "_rate_limit", {})
+
+    def get(url, **kwargs):
+        sent.append(kwargs["headers"]["Authorization"])
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"code": 401})
+
+    monkeypatch.setattr(funds, "get_httpx_client", lambda: SimpleNamespace(get=get))
+    return funds, sent
+
+
+def test_a_request_never_pairs_the_new_token_with_the_old_keys(
+    stores, environment, commit, monkeypatch
+):
+    """AUDIT N02. The new token was stored before the new keys were published,
+    so a request in between sent Zerodha's key with Fyers' token."""
+    funds, sent = _fyers_transport(monkeypatch)
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("zerodha")
+    broker_keys.use_broker_keys("zerodha")
+    from utils import auth_utils
+
+    original = auth_utils.upsert_auth
+
+    def store_then_other_request(*args, **kwargs):
+        result = original(*args, **kwargs)
+        token = auth_db.get_auth_token(USER)
+        contextvars.Context().run(funds.get_margin_data, token)
+        return result
+
+    monkeypatch.setattr(auth_utils, "upsert_auth", store_then_other_request)
+    app = _app()
+    app.broker_auth_functions = {"fyers_auth": lambda code: ("new-fyers-token", None)}
+    client, address = _fyers_login(app)
+
+    client.get(address)
+
+    assert sent == ["FYAPP-100:new-fyers-token"]
+
+
+def test_a_request_holding_the_old_token_keeps_the_old_keys(stores, environment, monkeypatch):
+    """AUDIT N02, the other side of the cut: a request that read the old
+    broker's token keeps that broker's keys though new keys are published
+    before its broker call."""
+    funds, sent = _fyers_transport(monkeypatch)
+    environment.write(ENV_ZERODHA)
+    _save_fyers()
+    _logged_in("fyers")
+    broker_keys.use_broker_keys("fyers")
+
+    def old_request():
+        token = auth_db.get_auth_token(USER)
+        broker_keys.use_broker_keys("zerodha")  # a switch publishes meanwhile
+        funds.get_margin_data(token)
+
+    contextvars.Context().run(old_request)
+
+    assert sent == ["FYAPP-100:tok"]
+    assert broker_keys._process_value("BROKER_API_KEY") == "zkey123"
+
+
+@pytest.mark.parametrize("origin", ["redirect", "manual"])
+def test_a_dhan_login_whose_account_dhan_did_not_confirm_is_refused(dhan, completed, origin):
+    """AUDIT N04. With a client id configured, an account Dhan did not report
+    was taken as a match."""
+    dhan.consume.client = None
+    if origin == "redirect":
+        _consented(dhan.client)
+        answer = dhan.client.get("/dhan/callback?tokenId=consent-token")
+        assert answer.headers["Location"] == "/broker?error=account_unverified&broker=dhan"
+    else:
+        answer = dhan.client.post("/dhan/callback", data={"access_token": "x" * 200}, headers=JSON)
+        assert answer.get_json()["code"] == "account_unverified"
+    assert completed == []
+
+
+def _rmoney_login(monkeypatch, profile, feed_user, label):
+    import broker.rmoney.api.auth_api as rmoney
+
+    monkeypatch.setenv("VALID_BROKERS", "rmoney")
+    keys_db.save_broker_keys(
+        "rmoney",
+        {"api_key": "app", "api_secret": "s", "api_key_market": "m", "api_secret_market": "ms"},
+        None,
+    )
+    asked = []
+
+    def get(url, headers=None, **kwargs):
+        asked.append((url, headers.get("authorization")))
+        return SimpleNamespace(status_code=200, json=lambda: profile)
+
+    monkeypatch.setattr(rmoney, "get_httpx_client", lambda: SimpleNamespace(get=get))
+    monkeypatch.setattr(rmoney, "get_feed_token", lambda: ("feed-token", feed_user, None))
+    app = _app()
+    app.broker_auth_functions = {"rmoney_auth": rmoney.authenticate_broker}
+    client = _signed_in(app)
+    client.post("/auth/broker/login", json={"broker": "rmoney"})
+    answer = client.post(
+        f"/rmoney/callback?state={_state_of(client)}",
+        data="session=" + json.dumps({"token": "token-for-A", "userID": label}),
+        content_type="application/x-www-form-urlencoded",
+    )
+    return answer, asked
+
+
+def test_an_rmoney_token_is_held_to_the_account_rmoney_names_for_it(
+    stores, environment, completed, monkeypatch
+):
+    """AUDIT N05. The account compared with the market data keys was the label
+    posted beside the token: a token of account A labelled B passed."""
+    profile = {"type": "success", "result": {"ClientId": "A"}}
+
+    forged, asked = _rmoney_login(monkeypatch, profile, feed_user="B", label="B")
+
+    assert asked and asked[0][0].endswith("/user/profile") and asked[0][1] == "token-for-A"
+    assert forged.headers["Location"] == "/broker?error=account_mismatch&broker=rmoney"
+    assert completed == []
+
+
+def test_an_rmoney_token_whose_account_is_not_named_is_refused(
+    stores, environment, completed, monkeypatch
+):
+    answer, _ = _rmoney_login(
+        monkeypatch, {"type": "error", "description": "Invalid token"}, feed_user="A", label="A"
+    )
+
+    assert answer.headers["Location"] == "/broker?error=account_unverified&broker=rmoney"
+    assert completed == []
+
+
+def test_an_rmoney_login_for_the_market_data_account_completes(
+    stores, environment, completed, monkeypatch
+):
+    answer, _ = _rmoney_login(
+        monkeypatch, {"type": "success", "result": {"ClientId": "A"}}, feed_user="A", label=""
+    )
+
+    assert answer.get_data(as_text=True) == "logged in"
+    assert completed == [("token-for-A", USER, "rmoney")]
+
+
+def test_the_session_identity_comes_from_one_read_of_the_stored_row(stores, commit):
+    """AUDIT N03. The token, its broker and its account are read together."""
+    auth_db.upsert_api_key(USER, "platform-key")
+    auth_db.upsert_auth(USER, "token-for-B", "dhan", user_id=" B ")
+
+    assert auth_db.get_session_identity("platform-key") == ("token-for-B", "dhan", "B")
+    auth_db.upsert_auth(USER, "", "", revoke=True)
+    assert auth_db.get_session_identity("platform-key") == (None, None, None)
+    assert auth_db.get_session_identity("not-a-key") == (None, None, None)
+
+
+@pytest.mark.parametrize("account_mode", ["missing", "changed_between_reads"])
+def test_a_run_bound_to_an_account_never_sends_another_accounts_token(
+    stores, environment, commit, monkeypatch, account_mode
+):
+    """AUDIT N03, with real stored sessions: a run bound to Dhan account A, and
+    a session holding account B's token, either naming no account or with a
+    login to A landing between a token read and an account read."""
+    import restx_api  # noqa: F401  (before the service modules, as the strategy tests do)
+    import services.place_order_service as place
+    from services.strategy_module import order_dispatch as dispatch
+
+    auth_db.upsert_api_key(USER, "platform-key")
+    auth_db.upsert_auth(
+        USER, "token-for-B", "dhan", user_id=None if account_mode == "missing" else "B"
+    )
+    if account_mode == "changed_between_reads":
+        original = dispatch.session_account
+
+        def login_a_between_reads(username):
+            auth_db.upsert_auth(USER, "token-for-A", "dhan", user_id="A")
+            return original(username)
+
+        monkeypatch.setattr(dispatch, "session_account", login_a_between_reads)
+    sent = []
+    monkeypatch.setattr(
+        place,
+        "place_order_with_auth",
+        lambda order, token, broker, original, force_live=False: sent.append(token)
+        or (True, {"orderid": "X"}, 200),
+    )
+
+    result = dispatch.dispatch_order(
+        mode="live",
+        api_key="platform-key",
+        binding=dispatch.BrokerBinding("dhan", account="A", user_id=USER),
+        order={"symbol": "S", "exchange": "NSE", "action": "BUY", "quantity": "1",
+               "product": "MIS", "pricetype": "MARKET"},
+    )
+
+    assert result.ok is False
+    assert sent == []
+
+
+def test_a_resume_after_this_browsers_sign_in_was_ended_stores_nothing(
+    stores, environment, commit, monkeypatch
+):
+    """A sign-out between this browser's password sign-in and its resume: the
+    resume starts after it, so only the browser's own sign-in time shows that
+    it was ended, and the commit must not stamp it signed in again."""
+    import broker.zerodha.api.funds as funds
+
+    environment.write(ENV_ZERODHA)
+    _logged_in("zerodha")
+    monkeypatch.setattr(funds, "get_margin_data", lambda token: {"availablecash": "1"})
+    signed_in_at = datetime.now(UTC) - timedelta(seconds=30)
+    auth_db.revoke_all_sessions(USER)
+
+    with _app().test_request_context("/auth/login", method="POST"):
+        from flask import session
+
+        session["user"] = USER
+        session["auth_at"] = signed_in_at.isoformat()
+        resumed = auth_bp_module._try_resume_broker_session(USER)
+        logged_in = session.get("logged_in")
+
+    assert resumed is None and logged_in is None

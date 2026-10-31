@@ -56,9 +56,13 @@ The installers, and a first `uv run app.py` with no `.env`, leave `REDIRECT_URL`
 3. Complete the broker's login: its own login page, a short form in OpenAlgo, or one click with the saved keys. Broker Configuration says which, for each broker.
 4. Confirm the dashboard loads account data before starting a strategy.
 
-OpenAlgo starts every broker login on the server. The page sends only the broker you chose; the server checks it can be used and opens the broker's own sign-in page or OpenAlgo's login form. Your API secret never reaches the browser; the broker's sign-in address carries only the public API key it needs, and a one-time state for the brokers that return it (Fyers, Zerodha, Upstox, Paytm Money, Pocketful, CompositEdge, RMoney and IIFL Capital). The broker's answer, and OpenAlgo's own login form, are accepted only for a login started this way, within 10 minutes, and only once: from the same browser, or, for a broker that returns the state, with that state. A link from someone else cannot connect your OpenAlgo to their account. If it is refused, the broker's card says "This broker login was not started from OpenAlgo, or it took longer than 10 minutes": start the login again.
+OpenAlgo starts every broker login on the server. The page sends only the broker you chose; the server checks it can be used and opens the broker's own sign-in page or OpenAlgo's login form. Your API secret never reaches the browser; the broker's sign-in address carries only the public API key it needs, and a one-time state for the brokers that return it (Fyers, Zerodha, Upstox, Paytm Money, Pocketful, CompositEdge, RMoney and IIFL Capital). The broker's answer, and OpenAlgo's own login form, are accepted only for a login started this way, within 10 minutes, and only once: from the same browser, or, for a broker that returns the state, with that state. A broker answer that no login of yours started is refused, so a link someone else sends you does not complete a login. If it is refused, the broker's card says "This broker login was not started from OpenAlgo, or it took longer than 10 minutes": start the login again.
 
-While a login runs, the broker you are logged in to keeps trading with its own keys: the new broker's keys are used only by that login, and become OpenAlgo's only once it completes. A Dhan login is refused for an account other than the client ID saved for Dhan, and an RMoney or CompositEdge login for an account other than the one the market data keys belong to.
+While a login runs, the broker you are logged in to keeps trading with its own keys: the new broker's keys are used only by that login, and become OpenAlgo's only once it completes. A request that read a broker's session uses that broker's keys to the end, even while a switch is being stored.
+
+Where the broker reports which account a login is for, OpenAlgo checks it. Dhan reports it, and a Dhan login is refused when it is for an account other than the client ID saved for Dhan, or when Dhan does not say which account it is. RMoney reports the account of its session, and an RMoney or CompositEdge login is refused when that account is not the one the market data keys belong to. Other brokers do not report an account at login, so OpenAlgo cannot check it for them.
+
+A logout, a password change or a password reset that happens while a broker login is completing wins: the login is not stored. So does a change to that broker's keys.
 
 OpenAlgo imports the selected adapter's authentication module only when it is needed. The broker's current authentication policy determines when another login is required.
 
@@ -101,6 +105,7 @@ To use multiple brokers concurrently, run separate OpenAlgo instances with separ
 | "... still has 1 running Live strategy ..." | Stop the strategies and the scalping protection on the logged-in broker, then switch |
 | "A login to ... is under way" | A login to that broker is completing, perhaps on another device; wait a moment and try again |
 | "... a different account than the client ID saved ..." | Log in with the account whose client ID (Dhan) or market data keys (RMoney, CompositEdge) are saved, or correct them on Broker Configuration |
+| "The broker did not confirm which account this login is for" | The broker answered without naming the account; log in again. If it repeats, check the broker's service status |
 | "Your OpenAlgo sign-in ended while this broker login was in progress" | A logout or password change happened during the login; sign in and start the broker login again |
 | Saved keys seem to be ignored | `.env` sets keys for the same broker and comes first; empty the broker lines in `.env` and restart |
 | Invalid credentials | Required key format, whitespace, expiry, and broker-side app status |

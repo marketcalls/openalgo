@@ -67,8 +67,18 @@ _broker_keys._STARTUP_VALUES = dict.fromkeys(_broker_keys.ENV_VARS.values())
 
 @pytest.fixture(autouse=True)
 def _free_the_broker_login_slot():
-    """A test that stops while a login holds the broker slot must not refuse the next one's."""
+    """A test that stops while a login holds the broker slot must not refuse the next one's.
+
+    Nor may a test's staged or pinned keys (a token read outside a request
+    pins for a minute), or the record of what it published, reach the next:
+    every test runs in the same thread and context.
+    """
     _broker_keys._slot.update(broker=None, holders=set(), until=0.0)
+    _broker_keys._staged.set(None)
+    _broker_keys._published["state"] = None
+    yield
+    _broker_keys._staged.set(None)
+    _broker_keys._published["state"] = None
 
 
 # These are manual diagnostics, not pytest modules. test_bot_web.py starts the
