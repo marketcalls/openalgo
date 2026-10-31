@@ -25,7 +25,7 @@ docker run -d \
     -v "$OPENALGO_DIR/db:/app/db" \
     -v "$OPENALGO_DIR/strategies:/app/strategies" \
     -v "$OPENALGO_DIR/log:/app/log" \
-    -v "$OPENALGO_DIR/.env:/app/.env:ro" \
+    -v "$OPENALGO_DIR/.env:/app/.env" \
     --restart unless-stopped \
     "$IMAGE"
 ```
@@ -47,7 +47,7 @@ docker run -d \
     -v "$OPENALGO_DIR/log:/app/log" \
     -v "$OPENALGO_DIR/keys:/app/keys" \
     -v "$OPENALGO_DIR/tmp:/app/tmp" \
-    -v "$OPENALGO_DIR/.env:/app/.env:ro" \
+    -v "$OPENALGO_DIR/.env:/app/.env" \
     --restart unless-stopped \
     "$IMAGE"
 ```
@@ -71,7 +71,7 @@ docker run -d ^
     -v "%OPENALGO_DIR%\db:/app/db" ^
     -v "%OPENALGO_DIR%\strategies:/app/strategies" ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
-    -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
+    -v "%OPENALGO_DIR%\.env:/app/.env" ^
     --restart unless-stopped ^
     %IMAGE%
 ```
@@ -93,7 +93,7 @@ docker run -d ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
     -v "%OPENALGO_DIR%\keys:/app/keys" ^
     -v "%OPENALGO_DIR%\tmp:/app/tmp" ^
-    -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
+    -v "%OPENALGO_DIR%\.env:/app/.env" ^
     --restart unless-stopped ^
     %IMAGE%
 ```
@@ -129,7 +129,7 @@ services:
       - openalgo_log:/app/log
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production
@@ -183,7 +183,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production
