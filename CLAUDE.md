@@ -180,33 +180,53 @@ there. `utils/broker_keys.py` owns which keys a broker uses.
   About 4,75,000 installs log in from `.env`, and their broker resolves to the
   values already in the environment, so nothing is written for them. Keep it
   that way; `.env` is being phased out by migration, not by breaking it.
-- **The keys reach the plugins through the environment.** About 140 broker
-  files call `os.getenv("BROKER_API_KEY")`, so `use_broker_keys(broker)` writes
-  the five variables before that broker's code runs: at the callback, on a
-  session resume, at startup for the logged-in broker, and in the websocket
-  proxy process before an adapter starts (it is a separate process under
-  gunicorn and Docker, so the app's writes never reach it). A broker plugin
-  must read its keys when called, never into a module constant: the
-  environment can name another broker than it did at import. A login holds
-  the broker slot (`hold_login_slot`) from writing its keys until its token
-  is stored, and starting a login writes nothing (`keys_for_login`): two
-  devices logging in to different brokers at once otherwise stored one
-  broker's token alongside the other's keys.
+- **The keys reach the plugins through the environment, staged per request.**
+  About 140 broker files call `os.getenv("BROKER_API_KEY")`. The process holds
+  the logged-in broker's keys, and every order, funds call and feed reads
+  them. A login's callback and a resume do not write the process: they stage
+  their broker's keys for their own request (`stage_broker_keys`, a
+  `ContextVar` read through an overlay on `os.environ`'s class, so it follows
+  the greenlet under eventlet and the thread under gthread), and the keys
+  become the process's only when the login commits (`publish_broker_keys`, in
+  `handle_auth_success`, after the token is stored). Writing the process at
+  the callback sent the logged-in broker's next funds request out with the
+  other broker's key and its own token. `begin_broker_login` and
+  `end_broker_login` (`utils/auth_utils.py`) take and drop the slot and the
+  staging, and the app teardown drops them again, because a pooled thread or
+  a keep-alive greenlet serves the next request with the same context.
+  Startup and the websocket proxy process publish the logged-in broker's keys
+  (`use_broker_keys`). A broker plugin must read its keys when called, never
+  into a module constant, and must not read them on a thread it starts inside
+  a login: a new thread does not inherit the staged keys. Starting a login
+  writes nothing (`keys_for_login`).
+- **A login commits only if it still may.** `_commit_refusal` in
+  `utils/auth_utils.py` runs before anything is stored, and a refused login
+  changes nothing: the request must still hold the slot (a lease that ran out
+  and was taken over only discards its result), the broker's keys must be the
+  ones it started with (a digest, kept in memory), no sign-out may have landed
+  since the login started (the pending login's start time against
+  `session_revocations`), the switch rules below must allow it, and a resume
+  must find the process's keys unchanged. Then the token is stored first, the
+  keys published, and only then the old broker's devices signed out
+  (`end_broker_session_for_switch`, which revokes no token: `upsert_auth` has
+  already replaced the old one and torn its feed down). A resume holds the
+  slot alone (`exclusive`) from its first read to its commit, validates with
+  staged keys and re-reads the stored session before storing it.
 - **One broker at a time.** While the stored broker token is unrevoked and was
   signed in to during the current trading day (a device session from today, or
   a broker login recorded since the rollover, which a password change does not
-  clear), it is the logged-in broker. A login to another broker may start, and
-  the old session ends only when that login completes, on every device
-  (`auth_utils._hand_over_from_live_broker`), as in the desktop; a login that
-  fails or is abandoned leaves it connected, and its keys are put back
-  (`restore_logged_in_broker_keys`), because the callback wrote the new
-  broker's keys. Only the request holding the login slot restores, and a
-  resume waits while another broker's login holds it: anything else writing
-  keys then would replace them under that login's exchange. The switch is refused while the old broker still runs Live
-  automation (`utils/broker_switch.switch_refusal`: Live strategy module runs,
-  Live OpenScript runs, and outside analyzer mode Python strategies and
-  scalping protection), checked when the login starts and again when it
-  completes. New keys for the logged-in broker, or forgetting it, end its
+  clear), it is the logged-in broker. A login to another broker may start,
+  from any browser including one on the logged-in broker (the switch the
+  trader confirmed on Select Broker), and the old session ends only when that
+  login commits, on every device, as in the desktop; a login that fails or is
+  abandoned leaves it connected with its keys untouched. The switch is refused
+  while the broker logged in now, or last if a logout ended its session
+  (`broker_switch.previous_broker`, from the login attempts), still runs Live
+  automation (`switch_refusal`: Live strategy module runs, Live OpenScript
+  runs, and outside analyzer mode Python strategies and scalping protection),
+  checked when the login starts and again when it commits
+  (`refusal_for_login`). A logout does not stop that automation, so it must
+  not open the switch either. New keys for the logged-in broker, or forgetting it, end its
   session only with `sign_out=true`, which the page sends after the trader
   confirms. Whether a session outlives the rollover follows the logged-in
   broker (`logged_in_broker()`, from the stored session), never the
@@ -228,12 +248,20 @@ pending login for that browser. The callback completes a login only for an
 answer that matches one: the browser brings its own marker back in its session,
 or, for a broker in `STATE_BROKERS`, the answer carries the state issued for
 it. Those brokers are matched by the state alone: the marker proves only that
-the browser started some login, so it never completes theirs. The two XTS brokers post
+the browser started some login, so it never completes theirs. Every broker
+that can echo a state is in that set (Zerodha through `redirect_params`,
+Upstox and Paytm through `state`, as OpenAlgo Desktop sends them); a broker
+whose sign-in address can carry one belongs there. The two XTS brokers post
 back across sites without the cookie, so their state rides on the return
-address, as OpenAlgo Desktop does. Pending logins live in the
+address, as OpenAlgo Desktop does. Dhan's redirect carries only a consent
+token, accepted for the consent this browser asked for; a ready access token
+comes only from OpenAlgo's own form, and either is refused for another account
+than the configured client ID. RMoney's posted session token is checked with
+RMoney, and an XTS session for another account than the market data keys is
+refused. Pending logins live in the
 `broker_login_states` table as SHA-256 digests (so a restart mid-login is
 harmless and a copy of the table completes nothing); each is used once, by a
-delete only one caller can win, lasts ten minutes, and at most 16 are open. A POST from OpenAlgo's own login form must carry its CSRF token. Before this, any request token that
+delete only one caller can win, lasts ten minutes, and at most 16 are open. A POST from OpenAlgo's own login form must carry its CSRF token and belong to a started login too, and it uses that login up like any answer (`_claim_login`). Every sign-out (`revoke_all_sessions`, `revoke_pre_broker_sessions`) cancels every started login, and the commit compares when the login started with the last sign-out, so a login started before a logout or password reset never signs anyone back in. Before this, any request token that
 arrived while a trader was signed in completed a login, and an XTS post-back
 logged the admin in with no password at all. A broker whose answer arrives
 without the browser's cookie (a POST from its own site) must be in
@@ -245,8 +273,12 @@ Sessions are signed cookies, so ending one is recorded rather than deleted:
 a logout of a broker-logged-in session, a password change, a reset and a
 switch that ends another broker's session call `revoke_all_sessions`, and every
 sign-in from before that instant is cleared on its next request
-(`end_session_if_signed_out`, and `is_session_valid` for Socket.IO). A sign-in
-that never reached a broker login ends at the daily rollover.
+(`end_session_if_signed_out`, and `is_session_valid` for Socket.IO). A logout
+from a sign-in that never reached a broker login calls
+`revoke_pre_broker_sessions` (`session_revocations.pre_broker_revoked_at`):
+every sign-in from before it that has no broker login ends, so a copy of that
+cookie stops working, and the devices on the broker session stay. A sign-in
+that never reached a broker login also ends at the daily rollover.
 
 ### Risk rules live in services/risk/ and are never reimplemented
 

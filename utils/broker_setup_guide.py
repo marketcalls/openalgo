@@ -7,10 +7,11 @@ redirect URL. Carried over from OpenAlgo Desktop's setup guide
 (``src-tauri/src/brokers/setup_guide.rs``) so a trader sees the same page in
 both, with these changes for how the web signs in:
 
-- ``sign_in`` follows this server's login flow (``utils/broker_login``): a
-  redirect to the broker's site, OpenAlgo's own form, or one click with the
-  saved keys. Shoonya and Zebu use a form here and Groww the saved keys, so
-  their sentences say so.
+- ``sign_in`` follows this server's login flow (``utils/broker_login`` and
+  the callback routes in ``blueprints/brlogin.py``): a redirect to the
+  broker's site, OpenAlgo's own form, or one click with the saved keys. Groww
+  signs in with the saved keys here, so its sentence says so. A test starts
+  each broker's login and checks where it goes against this table.
 - No client ID is saved here, so the Client ID fields and the sentences about
   checking a login against one are left out. HDFC Sky's BROKER_CLIENT_ID
   stays in .env.
@@ -882,7 +883,7 @@ GUIDES = {
     },
     "shoonya": {
         "name": "Shoonya",
-        "sign_in": "form",
+        "sign_in": "redirect",
         "fields": (
             {
                 "hint": "Your Shoonya user ID and your app's client ID joined by ::: "
@@ -900,10 +901,9 @@ GUIDES = {
                 "secret": True,
             },
         ),
-        "banner": "Login with Shoonya opens a short form in OpenAlgo. Each time, enter "
-        "your Shoonya user ID, password and the TOTP from your authenticator "
-        "app.",
-        "redirect_hint": "",
+        "banner": "Login with Shoonya takes you to Shoonya's login page. Log in there "
+        "and Shoonya sends you back to OpenAlgo.",
+        "redirect_hint": "Register this exact address as the redirect URL in your broker app.",
     },
     "tradejini": {
         "name": "Tradejini",
@@ -1012,7 +1012,7 @@ GUIDES = {
     },
     "zebu": {
         "name": "Zebu",
-        "sign_in": "form",
+        "sign_in": "redirect",
         "fields": (
             {
                 "hint": "Your Zebu user ID and your app's client ID joined by ::: "
@@ -1030,9 +1030,9 @@ GUIDES = {
                 "secret": True,
             },
         ),
-        "banner": "Login with Zebu opens a short form in OpenAlgo. Each time, enter your "
-        "Zebu user ID, password and your TOTP, date of birth or PAN.",
-        "redirect_hint": "",
+        "banner": "Login with Zebu takes you to Zebu's login page. Log in there and Zebu "
+        "sends you back to OpenAlgo.",
+        "redirect_hint": "Register this exact address as the redirect URL in your broker app.",
     },
     "zerodha": {
         "name": "Zerodha",

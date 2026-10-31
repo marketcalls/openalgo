@@ -56,15 +56,17 @@ The installers, and a first `uv run app.py` with no `.env`, leave `REDIRECT_URL`
 3. Complete the broker's login: its own login page, a short form in OpenAlgo, or one click with the saved keys. Broker Configuration says which, for each broker.
 4. Confirm the dashboard loads account data before starting a strategy.
 
-OpenAlgo starts every broker login on the server. The page sends only the broker you chose; the server checks it can be used and opens the broker's own sign-in page or OpenAlgo's login form, and puts the broker's keys in place when the broker answers. Your API secret never reaches the browser; the broker's sign-in address carries only the public API key it needs, as before. The broker's answer is accepted only for a login started this way, within 10 minutes, and only once: from the same browser, or, for a broker that returns the state OpenAlgo gave it, with that state. A link from someone else cannot connect your OpenAlgo to their account. If it is refused, the broker's card says "This broker login was not started from OpenAlgo, or it took longer than 10 minutes": start the login again.
+OpenAlgo starts every broker login on the server. The page sends only the broker you chose; the server checks it can be used and opens the broker's own sign-in page or OpenAlgo's login form. Your API secret never reaches the browser; the broker's sign-in address carries only the public API key it needs, and a one-time state for the brokers that return it (Fyers, Zerodha, Upstox, Paytm Money, Pocketful, CompositEdge, RMoney and IIFL Capital). The broker's answer, and OpenAlgo's own login form, are accepted only for a login started this way, within 10 minutes, and only once: from the same browser, or, for a broker that returns the state, with that state. A link from someone else cannot connect your OpenAlgo to their account. If it is refused, the broker's card says "This broker login was not started from OpenAlgo, or it took longer than 10 minutes": start the login again.
+
+While a login runs, the broker you are logged in to keeps trading with its own keys: the new broker's keys are used only by that login, and become OpenAlgo's only once it completes. A Dhan login is refused for an account other than the client ID saved for Dhan, and an RMoney or CompositEdge login for an account other than the one the market data keys belong to.
 
 OpenAlgo imports the selected adapter's authentication module only when it is needed. The broker's current authentication policy determines when another login is required.
 
 ## Sign-in and Session Rules
 
 - The OpenAlgo application session and broker session are separate. If the broker token expires while the application session is still valid, the dashboard sends you back to the broker login page to reconnect rather than discarding the OpenAlgo login.
-- **Logging out ends your sign-in on every device.** So does changing or resetting your password. A browser that was signed in before that moment has to sign in again, even if it still holds its cookie.
-- Signing out from the broker login page, before any broker is connected, ends only that browser's sign-in.
+- **Logging out ends your sign-in on every device.** So does changing or resetting your password. A browser that was signed in before that moment has to sign in again, even if it still holds its cookie. A broker login started before then does not complete: start it again after signing in.
+- Signing out from the broker login page, before any broker is connected, ends every sign-in that has not connected a broker yet, including a copy of that browser's cookie. Devices already on the broker session stay signed in.
 - A sign-in that never connected a broker ends at the daily session expiry (`SESSION_EXPIRY_TIME`, 03:00 IST by default), like a connected one.
 - Profile opens before any broker login, so a new install can add its first broker there.
 
@@ -83,9 +85,9 @@ Use Analyzer Mode for the first order workflow. It isolates order execution from
 
 OpenAlgo is logged in to one broker at a time, as OpenAlgo Desktop is. Its card shows **Active** and **Open Dashboard** (which also joins a session opened on another device). To switch, press **Login with** on another broker's card. OpenAlgo asks first, and the old broker's session ends only when the new login completes, on every device; a login that fails or is abandoned leaves the old broker connected. You stay signed in, and the other devices sign in again. Open positions and orders stay with the old broker. No restart is needed.
 
-A switch is refused while the logged-in broker still has running Live strategies, Live OpenScript runs, running Python strategies or positions under scalping protection, because they would otherwise trade through the new broker or lose their stop. Stop them first, then switch.
+A switch is refused while the logged-in broker still has running Live strategies, Live OpenScript runs, running Python strategies or positions under scalping protection, because they would otherwise trade through the new broker or lose their stop. Logging out does not stop them, so after a logout the broker you were logged in to last counts: logging back in to it is always allowed, and another broker waits until they are stopped. Stop them first, then switch.
 
-New keys for the logged-in broker, or forgetting it, end its session; Broker Configuration asks you to confirm first.
+New keys for the logged-in broker, or forgetting it, end its session; Broker Configuration asks you to confirm first. To remove a single saved key (for example a pasted access token), use **Forget this broker** and save the keys you still need again, as in OpenAlgo Desktop.
 
 To use multiple brokers concurrently, run separate OpenAlgo instances with separate `.env` files, ports, databases, and process supervision.
 
@@ -98,6 +100,8 @@ To use multiple brokers concurrently, run separate OpenAlgo instances with separ
 | "No API key is saved for ..." | Add the broker's keys on Broker Configuration, or set them in `.env` |
 | "... still has 1 running Live strategy ..." | Stop the strategies and the scalping protection on the logged-in broker, then switch |
 | "A login to ... is under way" | A login to that broker is completing, perhaps on another device; wait a moment and try again |
+| "... a different account than the client ID saved ..." | Log in with the account whose client ID (Dhan) or market data keys (RMoney, CompositEdge) are saved, or correct them on Broker Configuration |
+| "Your OpenAlgo sign-in ended while this broker login was in progress" | A logout or password change happened during the login; sign in and start the broker login again |
 | Saved keys seem to be ignored | `.env` sets keys for the same broker and comes first; empty the broker lines in `.env` and restart |
 | Invalid credentials | Required key format, whitespace, expiry, and broker-side app status |
 | Repeated login prompt | Broker token expiry or daily reauthentication policy |

@@ -35,6 +35,7 @@ from database.broker_keys_db import (
     clear_login_states,
     consume_login_state,
     find_login_state,
+    find_open_login,
     record_login_state,
 )
 
@@ -78,8 +79,13 @@ CALLBACK_START_BROKERS = frozenset(
 
 #: Brokers that bring back a state the server generates, so the answer can be
 #: checked against it even without the cookie. The XTS pair and IIFL Capital
-#: carry it on the return address; the others echo the OAuth state parameter.
-STATE_BROKERS = frozenset({"fyers", "pocketful", "compositedge", "rmoney", "iiflcapital"})
+#: carry it on the return address, Zerodha in its redirect_params, and the
+#: others echo the OAuth state parameter. Their answer must carry the state of
+#: the login it belongs to: the browser's marker alone proves only that some
+#: login was started, not that this code belongs to it.
+STATE_BROKERS = frozenset(
+    {"fyers", "pocketful", "compositedge", "rmoney", "iiflcapital", "zerodha", "upstox", "paytm"}
+)
 
 #: The state brokers whose login starts with a GET to the callback, before
 #: any state exists: the callback builds their sign-in address itself.
@@ -156,10 +162,14 @@ def login_url(keys, state):
     if broker == "upstox":
         return (
             "https://api.upstox.com/v2/login/authorization/dialog?response_type=code"
-            f"&client_id={key}&redirect_uri={redirect}"
+            f"&client_id={key}&redirect_uri={redirect}&state={state}"
         )
     if broker == "zerodha":
-        return f"https://kite.trade/connect/login?api_key={key}"
+        # Kite returns redirect_params on the return address as they were sent.
+        params = quote(f"state={state}", safe="")
+        return (
+            f"https://kite.zerodha.com/connect/login?v=3&api_key={key}&redirect_params={params}"
+        )
     if broker == "arrow":
         return f"https://app.arrow.trade/app/login?appID={key}"
     if broker == "rupeezy":
@@ -169,7 +179,7 @@ def login_url(keys, state):
     if broker == "hdfcsky":
         return f"https://developer.hdfcsky.com/oapi/v1/login?api_key={key}"
     if broker == "paytm":
-        return f"https://login.paytmmoney.com/merchant-login?apiKey={key}&state={{default}}"
+        return f"https://login.paytmmoney.com/merchant-login?apiKey={key}&state={state}"
     if broker == "pocketful":
         scope = quote("orders holdings", safe="")
         return (
@@ -267,19 +277,23 @@ def verify_broker_return(broker, state=None):
         broker: The broker the answer is for.
         state: The state the broker brought back, if any.
 
+    Returns:
+        datetime: When the login started (aware UTC). A sign-out after it
+        keeps the login from being stored (utils.auth_utils).
+
     Raises:
         BrokerLoginRefused: When no pending login matches.
     """
     marker = _marker(broker)
     session.pop(_SESSION_KEY, None)
     if broker in STATE_BROKERS:
-        state_id = find_login_state(broker, state=state) if state else None
+        found = find_open_login(broker, state=state) if state else None
     elif marker:
-        state_id = find_login_state(broker, nonce=marker["nonce"])
+        found = find_open_login(broker, nonce=marker["nonce"])
     else:
-        state_id = None
-    if state_id is not None and consume_login_state(state_id):
-        return
+        found = None
+    if found is not None and consume_login_state(found[0]):
+        return found[1]
     raise BrokerLoginRefused(broker)
 
 

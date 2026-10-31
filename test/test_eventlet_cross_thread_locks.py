@@ -584,3 +584,64 @@ def test_real_threading_sleep_is_the_unpatched_one():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_staged_broker_keys_stay_with_their_own_greenlet():
+    """A login's callback stages its broker's keys for its own request
+    (utils.broker_keys.stage_broker_keys); under eventlet every request is a
+    greenlet on one OS thread, so the staging must follow the greenlet, not
+    the thread. Another greenlet that runs while the callback waits on the
+    broker, a greenlet started afterwards, and a real OS thread all keep
+    reading the process's keys."""
+    result = run(
+        """
+        import os
+        import utils.broker_keys as bk
+        from types import SimpleNamespace
+
+        os.environ["BROKER_API_KEY"] = "process-key"
+        os.environ.pop("BROKER_API_KEY_MARKET", None)
+        keys = SimpleNamespace(
+            broker="fyers", api_key="staged-key", api_secret="s", api_key_market="",
+            api_secret_market="", redirect_url="", source="saved",
+        )
+        bk._resolve_or_refuse = lambda broker: keys
+        seen = {}
+
+        def login():
+            _keys, token = bk.stage_broker_keys("fyers")
+            try:
+                seen["login_before"] = os.getenv("BROKER_API_KEY")
+                eventlet.sleep(0.1)  # the exchange with the broker
+                seen["login_after"] = os.environ["BROKER_API_KEY"]
+                seen["market"] = "BROKER_API_KEY_MARKET" in os.environ
+                seen["later"] = eventlet.spawn(lambda: os.getenv("BROKER_API_KEY")).wait()
+            finally:
+                bk.unstage_broker_keys(token)
+            seen["login_done"] = os.getenv("BROKER_API_KEY")
+
+        def other_request():
+            eventlet.sleep(0.05)
+            seen["other"] = os.getenv("BROKER_API_KEY")
+            got = []
+            t = _orig.Thread(target=lambda: got.append(os.getenv("BROKER_API_KEY")))
+            t.start()
+            while t.is_alive():
+                eventlet.sleep(0.01)
+            seen["thread"] = got[0]
+
+        a, b = eventlet.spawn(login), eventlet.spawn(other_request)
+        a.wait(); b.wait()
+        assert seen == {
+            "login_before": "staged-key",
+            "login_after": "staged-key",
+            "market": False,
+            "later": "process-key",
+            "login_done": "process-key",
+            "other": "process-key",
+            "thread": "process-key",
+        }, seen
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr

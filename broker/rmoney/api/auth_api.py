@@ -33,6 +33,26 @@ def get_host_lookup():
         return None, None, f"HostLookup exception: {str(e)}"
 
 
+def validate_session_token(auth_token):
+    """Whether RMoney accepts an interactive session token.
+
+    The third-party login posts the session back from RMoney's site, so the
+    token is checked with RMoney before it is stored.
+
+    Returns:
+        bool: True when RMoney answered with a success for this token.
+    """
+    try:
+        response = get_httpx_client().get(
+            f"{INTERACTIVE_URL}/user/balance",
+            headers={"authorization": auth_token, "Content-Type": "application/json"},
+        )
+        return response.status_code == 200 and response.json().get("type") == "success"
+    except Exception:
+        logger.exception("Could not check an RMoney session token")
+        return False
+
+
 def authenticate_broker(request_token):
     """Authenticate with RMoney XTS using token from OAuth callback.
 

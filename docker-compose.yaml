@@ -17,12 +17,15 @@ services:
       - openalgo_strategies:/app/strategies  # Python strategies (named volume)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
-      # Long form on purpose: when .env is missing on the host, Docker stops
-      # with "bind source path does not exist" instead of creating a folder
-      # named .env. ./docker-build.sh creates .env for you.
+      # Long form with create_host_path off on purpose: when .env is missing
+      # on the host, Docker stops with "bind source path does not exist"
+      # instead of creating a folder named .env. ./docker-build.sh creates
+      # .env for you.
       - type: bind
         source: ./.env
         target: /app/.env
+        bind:
+          create_host_path: false
 
     # (optional) extra env-vars that are NOT in .env
     environment:

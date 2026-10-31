@@ -9,6 +9,7 @@ from flask import (
     abort,
     current_app,
     flash,
+    g,
     jsonify,
     make_response,
     redirect,
@@ -148,7 +149,7 @@ def start_broker_login():
     if broker not in enabled_brokers():
         return jsonify({"status": "error", "message": "Choose a broker from the list."}), 400
 
-    if session.get("logged_in"):
+    if session.get("logged_in") and session.get("broker") == broker:
         from database.auth_db import get_auth_token
 
         if get_auth_token(session.get("user")):
@@ -159,14 +160,13 @@ def start_broker_login():
     except BrokerKeysRefused as exc:
         return jsonify({"status": "error", "message": str(exc)}), 409
 
-    from utils.broker_keys import live_broker
-    from utils.broker_switch import switch_refusal
+    # The broker logged in now, or last if a logout ended it while its
+    # automation kept running, must not be replaced under that automation.
+    from utils.broker_switch import refusal_for_login
 
-    live = live_broker()
-    if live and live != broker:
-        refusal = switch_refusal(live, session["user"])
-        if refusal:
-            return jsonify({"status": "error", "message": refusal}), 409
+    refusal = refusal_for_login(broker, session["user"])
+    if refusal:
+        return jsonify({"status": "error", "message": refusal}), 409
 
     from utils.broker_login import BrokerLoginRefused
 
@@ -244,10 +244,18 @@ def _try_resume_broker_session(username):
     If so, validate it with a lightweight funds API call and resume
     the session without requiring broker OAuth re-authentication.
 
+    The resume holds the broker slot alone from the first read to the commit,
+    so no login starts or commits while the stored session is checked, and it
+    calls the broker with that broker's keys staged for this request only.
+    Before storing anything it re-reads the stored session: one that changed
+    while it was checked is not resumed.
+
     Returns a JSON response if session was resumed, or None to proceed
     with normal broker OAuth flow.
     """
-    from database.auth_db import Auth, decrypt_token, get_auth_token_dbquery
+    from database.auth_db import decrypt_token, get_auth_token_dbquery
+    from utils.auth_utils import begin_broker_login, end_broker_login
+    from utils.broker_keys import BrokerKeysRefused, publication_generation
 
     try:
         auth_obj = get_auth_token_dbquery(username)
@@ -263,25 +271,15 @@ def _try_resume_broker_session(username):
         feed_token = decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
         user_id = auth_obj.user_id
 
-        # The stored session's broker may not be the one whose keys are in the
-        # environment (a restart, or keys saved in OpenAlgo). Put its keys in
-        # place before validating the token with them.
-        from utils.broker_keys import BrokerKeysRefused, login_slot_broker, use_broker_keys
-
-        # A login to another broker is writing its keys for its exchange;
-        # putting this broker's keys in place now would replace them under it.
-        pending = login_slot_broker()
-        if pending and pending != broker:
-            logger.info(
-                f"Not resuming the {broker} session for {username}: a {pending} login is under way"
-            )
-            return None
-
+        # The stored session's broker may not be the one whose keys the
+        # process holds (a restart, or keys saved in OpenAlgo), so its keys
+        # are staged for the check. Refused while any login holds the slot.
         try:
-            use_broker_keys(broker, check_live=False)
+            begin_broker_login(broker, exclusive=True)
         except BrokerKeysRefused as exc:
             logger.info(f"Not resuming the {broker} session for {username}: {exc}")
             return None
+        g.broker_publish_if = publication_generation()
 
         # Validate token with a lightweight broker API call (funds)
         import importlib
@@ -309,6 +307,12 @@ def _try_resume_broker_session(username):
             logger.info(f"Broker token validation failed for {username}: {e}")
             return None
 
+        # The session checked must still be the one stored: a logout, a
+        # revoke or a new login meanwhile is not undone by resuming.
+        if not _stored_session_unchanged(username, broker, auth_token):
+            logger.info(f"Not resuming the {broker} session for {username}: it changed meanwhile")
+            return None
+
         # Token is valid — resume the session via handle_auth_success
         logger.info(f"Resuming existing broker session for {username} (broker: {broker})")
 
@@ -316,6 +320,7 @@ def _try_resume_broker_session(username):
         # Call handle_auth_success for its side effects (session setup, DB upsert,
         # master contract loading) but ignore its response format — the login
         # endpoint must always return JSON for the React frontend's fetch() call.
+        # Whether it stored the session is what it records in g.
         try:
             handle_auth_success(
                 auth_token=auth_token,
@@ -326,7 +331,8 @@ def _try_resume_broker_session(username):
             )
         except Exception as e:
             logger.error(f"handle_auth_success failed during resume: {e}", exc_info=True)
-            # Clear partial session state and fall through to OAuth
+        if not g.get("broker_login_completed"):
+            # Refused or failed: clear partial session state and fall through to OAuth
             session.pop("logged_in", None)
             session.pop("broker", None)
             session.pop("session_id", None)
@@ -343,6 +349,26 @@ def _try_resume_broker_session(username):
     except Exception as e:
         logger.error(f"Error trying to resume broker session: {e}", exc_info=True)
         return None
+    finally:
+        end_broker_login()
+
+
+def _stored_session_unchanged(username, broker, auth_token):
+    """Whether the stored broker session is still `broker` with `auth_token`, read afresh."""
+    from database.auth_db import Auth, decrypt_token
+
+    try:
+        row = Auth.query.populate_existing().filter_by(name=username).first()
+    except Exception:
+        logger.exception("Could not re-read the stored broker session")
+        return False
+    return bool(
+        row
+        and not row.is_revoked
+        and row.broker == broker
+        and row.auth
+        and decrypt_token(row.auth) == auth_token
+    )
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
@@ -1412,18 +1438,35 @@ def end_broker_session_keeping_this_browser(username, message):
 
 
 def end_broker_session_for_switch(username, live, chosen):
-    """End the live broker session because a login to another broker completed.
+    """Sign every other device out because a login to another broker completed.
 
-    As OpenAlgo Desktop does when the logged-in broker changes: the old
-    broker's session is logged out on every device, at the moment the new
-    login has completed.
+    As OpenAlgo Desktop does when the logged-in broker changes. Called once
+    the new broker's token is stored (utils.auth_utils.handle_auth_success),
+    which replaced the old token and tore its feed down (upsert_auth), so
+    nothing here revokes a token: revoking now would revoke the new one. This
+    browser stays signed in and goes on to the new broker's dashboard.
     """
+    from database.auth_db import clear_user_sessions, revoke_all_sessions
     from utils.broker_keys import broker_title
 
-    end_broker_session_keeping_this_browser(
-        username,
-        f"OpenAlgo was logged out of {broker_title(live)} because a login to "
-        f"{broker_title(chosen)} completed.",
+    invalidate_user_auth_cache(username)
+    try:
+        from database.master_contract_cache_hook import clear_cache_on_logout
+
+        clear_cache_on_logout()
+    except Exception:
+        logger.exception("Error clearing the symbol cache on a broker switch")
+
+    clear_user_sessions(username)
+    revoke_all_sessions(username)
+    mark_signed_in()
+
+    socketio.emit(
+        "force_logout",
+        {
+            "message": f"OpenAlgo was logged out of {broker_title(live)} because a login to "
+            f"{broker_title(chosen)} completed."
+        },
     )
     logger.info(f"Ended the {live} broker session for {username}: {chosen} is logged in now")
 
@@ -1449,6 +1492,13 @@ def logout():
     if was_logged_in and username:
         _end_broker_session(username, "You have been logged out from another device.")
         logger.info(f"Session cleared for user: {username}")
+    elif username:
+        # A sign-in that never reached a broker login: a copy of its cookie
+        # must stop working too. The devices on the broker session stay.
+        from database.auth_db import revoke_pre_broker_sessions
+
+        revoke_pre_broker_sessions(username)
+        logger.info(f"Sign-in ended for user: {username}")
 
     # For POST requests (AJAX from React), return JSON
     if request.method == "POST":

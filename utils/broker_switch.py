@@ -55,6 +55,50 @@ def _blockers(username):
     return strategy_runs, openscript_runs, python_runs, protected
 
 
+def previous_broker(username):
+    """The broker logged in now, or else the one logged in to last.
+
+    A logout clears the stored session but leaves its automation running, so
+    the broker that automation trades through is still the one logged in to
+    last (the latest successful broker login).
+    """
+    from utils.broker_keys import live_broker
+
+    live = live_broker()
+    if live:
+        return live
+    try:
+        from database.auth_db import LoginAttempt
+
+        row = (
+            LoginAttempt.query.filter(
+                LoginAttempt.username == username,
+                LoginAttempt.status == "success",
+                LoginAttempt.broker.isnot(None),
+                LoginAttempt.broker != "",
+            )
+            .order_by(LoginAttempt.timestamp.desc())
+            .first()
+        )
+        return row.broker if row else None
+    except Exception:
+        logger.exception("Could not read the broker logged in to last")
+        return None
+
+
+def refusal_for_login(broker, username):
+    """Why a login to `broker` may not go ahead, or None.
+
+    A login to another broker than the one logged in now (or last, after a
+    logout) is refused while that broker still runs Live automation. Logging
+    back in to the same broker is always allowed.
+    """
+    previous = previous_broker(username)
+    if not previous or previous == broker:
+        return None
+    return switch_refusal(previous, username)
+
+
 def switch_refusal(live_broker, username):
     """Why the live broker's session cannot end for a switch now, or None.
 

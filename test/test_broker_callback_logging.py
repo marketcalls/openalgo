@@ -18,7 +18,8 @@ def _keys_in_place(monkeypatch):
     taken as available; otherwise every callback would stop at "no API key is
     saved" before reaching the code under test.
     """
-    monkeypatch.setattr(brlogin, "use_broker_keys", lambda *args, **kwargs: None)
+    keys = SimpleNamespace(api_key="test-key", api_secret="", redirect_url="")
+    monkeypatch.setattr(brlogin, "begin_broker_login", lambda *args, **kwargs: keys)
     # Likewise a login started from the broker page: an answer without one is
     # refused before it is parsed (test_broker_keys.py covers that refusal).
     monkeypatch.setattr(brlogin, "has_pending_login", lambda *args, **kwargs: True)
@@ -98,6 +99,13 @@ def test_every_oauth_callback_keeps_raw_query_session_and_referrer_credentials_o
         # Flask's signed session. The callback preamble must log keys, not the
         # session values.
         session["definedge_otp_token"] = SENTINEL
+        if broker == "dhan":
+            # Dhan's redirect is exchanged only for the consent this browser
+            # asked for, and directly with consume_consent.
+            from broker.dhan.api import auth_api
+
+            session["consent_app_id"] = "consent"
+            monkeypatch.setattr(auth_api, "consume_consent", lambda _token: auth_result)
         response = callback(broker)
 
     assert response is not None

@@ -10,18 +10,14 @@ from flask import current_app as app
 
 from limiter import limiter  # Import the limiter instance
 from utils.auth_utils import (
+    begin_broker_login,
+    end_broker_login,
     handle_auth_failure,
     handle_auth_success,
     is_ajax_request,
     login_error_address,
 )
-from utils.broker_keys import (
-    BrokerKeysRefused,
-    hold_login_slot,
-    release_login_slot,
-    restore_logged_in_broker_keys,
-    use_broker_keys,
-)
+from utils.broker_keys import BrokerKeysRefused
 from utils.broker_login import (
     BrokerLoginRefused,
     has_pending_login,
@@ -86,6 +82,45 @@ def _form_csrf_ok():
         return False
 
 
+def _dhan_account_mismatch(keys, reported):
+    """Refuse a Dhan token for another account than the configured client id.
+
+    The Dhan key is saved as ``client_id:::api_key``. A token that works but
+    belongs to a different account must not be stored: orders would reach an
+    account the trader did not configure.
+    """
+    configured = (keys.api_key or "").split(":::")[0].strip() if ":::" in (keys.api_key or "") else ""
+    if not configured or not reported or str(reported).strip() == configured:
+        return None
+    logger.warning("Refused a Dhan login for another account than the configured client id")
+    return _refuse_login(
+        "account_mismatch",
+        "This Dhan login is for a different account than the client ID saved for Dhan. "
+        "Log in with that account, or change the client ID under Broker Configuration.",
+        status=409,
+    )
+
+
+def _xts_account_mismatch(broker, session_user, feed_user):
+    """Refuse an XTS login whose session is for another account than the market data keys.
+
+    The session is posted back from the broker's site, and the market data
+    keys log in as the account they were issued to. Both are the trader's
+    own, so two different accounts mean the session is not the trader's.
+    """
+    a = str(session_user or "").strip().upper()
+    b = str(feed_user or "").strip().upper()
+    if not a or not b or a == b:
+        return None
+    logger.warning(f"Refused a {broker} login: the session and the market data keys name different accounts")
+    return _refuse_login(
+        "account_mismatch",
+        "This login is for a different account than the market data keys saved for this "
+        "broker. Log in with that account, or check the keys under Broker Configuration.",
+        status=409,
+    )
+
+
 @brlogin_bp.route("/<broker>/callback", methods=["POST", "GET"])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
@@ -112,18 +147,35 @@ def broker_callback(broker, para=None):
             "10 minutes. Start the broker login again.",
         )
     finally:
-        # Another broker may still be logged in: this request wrote its own
-        # broker's keys, so unless it completed the login (and ended that
-        # session), the logged-in broker gets its keys back. Then the slot is
-        # released: it was held for this request only, however it ended.
-        # Only a request that took the slot wrote keys; restoring from any
-        # other (a refused or forged callback) would overwrite the keys of the
-        # login that holds the slot, mid-exchange.
-        completed = g.pop("broker_login_completed", False)
-        slot = g.pop("broker_login_slot", None)
-        if slot is not None and not completed:
-            restore_logged_in_broker_keys(broker)
-        release_login_slot(slot)
+        _end_login_request()
+
+
+def _begin_login_request(broker):
+    """This broker's keys, staged for this request under the broker slot."""
+    return begin_broker_login(broker)
+
+
+def _end_login_request():
+    """Drop the staged keys and give the slot back, however the request ended."""
+    end_broker_login()
+
+
+def _claim_login(broker):
+    """Use up the pending login this answer completes, once per request.
+
+    Every completion goes through here, the broker's answer and OpenAlgo's own
+    login form alike: the login must have been started from Select Broker,
+    within ten minutes, and is used once. When it started is kept, so a
+    sign-out since then stops it from being stored.
+    """
+    if g.get("broker_login_started_at") is None:
+        g.broker_login_started_at = verify_broker_return(broker, state=request.args.get("state"))
+
+
+def _complete_login(auth_token, username, broker, feed_token=None, user_id=None):
+    """Store a broker login, once it is matched to the login it completes."""
+    _claim_login(broker)
+    return handle_auth_success(auth_token, username, broker, feed_token=feed_token, user_id=user_id)
 
 
 def _broker_callback(broker, para=None):
@@ -145,37 +197,32 @@ def _broker_callback(broker, para=None):
             logger.warning(f"User not in session for {broker} callback, redirecting to login")
             return redirect(url_for("auth.login"))
 
-    if session.get("logged_in"):
-        # Already logged in: nothing to do here. The session's broker is not
-        # changed: with several brokers configured, a link to another broker's
-        # callback would otherwise point this session at a broker it is not
-        # logged in to.
+    if session.get("logged_in") and session.get("broker") == broker:
+        # Already logged in to this broker: nothing to do here. A login to
+        # another broker goes on: it is the switch the trader confirmed on
+        # Select Broker, and it needs a login started there like any other.
         return redirect(url_for("dashboard_bp.dashboard"))
 
     # A POST from OpenAlgo's own login form (PIN, password, TOTP) must carry
-    # the page's CSRF token. The broker-site posts are checked below instead,
-    # against the login this browser started.
+    # the page's CSRF token. The broker-site posts are checked below, by the
+    # state they bring back.
     if request.method == "POST" and not is_broker_site_post(broker, request.method):
         if not _form_csrf_ok():
             return _refuse_login(
                 FORM_EXPIRED, "This login form has expired. Reload the page and try again.", 400
             )
 
-    # Anything else arriving here (a broker's answer, or a sign-in that starts
-    # at the callback) must belong to a login started from the broker login
-    # page, checked before any code is exchanged or OTP requested. It is used
-    # up only when the login completes, below.
-    elif not has_pending_login(broker, state=request.args.get("state")):
+    # Everything arriving here (a broker's answer, our own login form, or a
+    # sign-in that starts at the callback) must belong to a login started from
+    # Select Broker, checked before any code is exchanged or OTP requested. It
+    # is used up only when the login completes (_claim_login).
+    if not has_pending_login(broker, state=request.args.get("state")):
         raise BrokerLoginRefused(broker)
 
-    # Put this broker's keys in place (.env first, then the keys saved in
-    # OpenAlgo) before any of its code reads them. Refused while another broker
-    # is logged in. The keys are kept: anything this login stores with them
-    # uses these, not whatever the environment holds by the time it returns.
-    # The slot keeps another broker's login from replacing them before this
-    # login's token is stored.
-    g.broker_login_slot = hold_login_slot(broker)
-    keys = use_broker_keys(broker)
+    # This broker's keys (.env first, then the keys saved in OpenAlgo), for
+    # this request only, under the slot that keeps another broker's login
+    # from committing in the middle of this one.
+    keys = _begin_login_request(broker)
 
     broker_auth_functions = app.broker_auth_functions
     auth_function = broker_auth_functions.get(f"{broker}_auth")
@@ -250,7 +297,7 @@ def _broker_callback(broker, para=None):
 
             # Authentication successful
             logger.info("mStock TOTP authentication successful")
-            return handle_auth_success(
+            return _complete_login(
                 auth_token, session["user"], broker, feed_token=feed_token, user_id=None
             )
 
@@ -355,6 +402,9 @@ def _broker_callback(broker, para=None):
 
             # Fetch auth token, feed token and user ID
             auth_token, feed_token, user_id, error_message = auth_function(access_token)
+            mismatch = _xts_account_mismatch(broker, session_json.get("userID"), user_id)
+            if mismatch:
+                return mismatch
 
             # print(f'Auth token is {auth_token}')
             # print(f'Feed token is {feed_token}')
@@ -389,7 +439,7 @@ def _broker_callback(broker, para=None):
             )
 
             if auth_token:
-                return handle_auth_success(auth_token, session["user"], broker)
+                return _complete_login(auth_token, session["user"], broker)
             else:
                 return jsonify({"status": "error", "message": error_message}), 401
 
@@ -530,41 +580,39 @@ def _broker_callback(broker, para=None):
             )
 
             if token_id:
-                # Step 3: Consume consent with tokenId
+                # Step 3: Consume consent with tokenId. The redirect carries only
+                # Dhan's consent token: a ready access token is accepted from
+                # OpenAlgo's own form (the POST below), never from an address.
+                # The consent must be one this browser asked Dhan for.
                 logger.debug("Dhan broker - tokenId present: %s", bool(token_id))
-                # auth_function now returns (auth_token, user_id, error_message)
-                auth_result = auth_function(token_id)
+                consent_app_id = session.pop("consent_app_id", None)
+                if not consent_app_id or len(token_id) > 100:
+                    raise BrokerLoginRefused(broker)
+                from broker.dhan.api.auth_api import consume_consent
 
-                # Handle both old format (2 values) and new format (3 values)
-                if len(auth_result) == 3:
-                    auth_token, user_id, error_message = auth_result
-                else:
-                    auth_token, error_message = auth_result
-                    user_id = None
+                auth_token, details = consume_consent(token_id)
+                if not auth_token or not isinstance(details, dict):
+                    return handle_auth_failure(
+                        details if isinstance(details, str) else "Authentication failed",
+                        forward_url="broker.html",
+                    )
+                user_id = details.get("dhan_client_id")
+                mismatch = _dhan_account_mismatch(keys, user_id)
+                if mismatch:
+                    return mismatch
 
                 # Validate authentication by testing funds API before proceeding
-                if auth_token:
-                    # Import the funds function to test authentication
-                    from broker.dhan.api.funds import test_auth_token
+                from broker.dhan.api.funds import test_auth_token
 
-                    is_valid, validation_error = test_auth_token(auth_token)
-
-                    if not is_valid:
-                        logger.error(f"Dhan authentication validation failed: {validation_error}")
-                        return handle_auth_failure(
-                            f"Authentication validation failed: {validation_error}",
-                            forward_url="broker.html",
-                        )
-
-                    logger.info("Dhan authentication validation successful")
-                    # Set forward_url for successful authentication
-                    forward_url = "broker.html"
-                    # The auth_token will be handled by the common success flow below
-                else:
-                    # Authentication failed
+                is_valid, validation_error = test_auth_token(auth_token)
+                if not is_valid:
+                    logger.error(f"Dhan authentication validation failed: {validation_error}")
                     return handle_auth_failure(
-                        error_message or "Authentication failed", forward_url="broker.html"
+                        f"Authentication validation failed: {validation_error}",
+                        forward_url="broker.html",
                     )
+                logger.info("Dhan authentication validation successful")
+                # The auth_token will be handled by the common success flow below
             else:
                 # First time coming from broker.html - redirect to initiate OAuth
                 # This avoids showing the form and directly starts OAuth if we have a stored client ID
@@ -587,6 +635,12 @@ def _broker_callback(broker, para=None):
                     is_valid, validation_error = test_auth_token(auth_token)
 
                     if is_valid:
+                        from broker.dhan.api.funds import get_client_id
+
+                        user_id = get_client_id(auth_token)
+                        mismatch = _dhan_account_mismatch(keys, user_id)
+                        if mismatch:
+                            return mismatch
                         logger.info("Dhan direct token authentication successful")
                         forward_url = "broker.html"
                         # The auth_token will be handled by the common success flow below
@@ -1069,18 +1123,26 @@ def _broker_callback(broker, para=None):
                     logger.error(f"RMoney callback - No token in session. Keys: {list(session_json.keys())}")
                     return jsonify({"error": "No token found in session data"}), 400
 
+                # The session arrives from RMoney's site: check the token with
+                # RMoney before anything is stored.
+                from broker.rmoney.api.auth_api import get_feed_token, validate_session_token
+
+                if not validate_session_token(auth_token):
+                    return handle_auth_failure("RMoney did not accept the session token")
+
                 logger.info(
                     "RMoney OAuth authentication successful (user ID present: %s)",
                     bool(user_id),
                 )
 
                 # Get feed token for market data
-                from broker.rmoney.api.auth_api import get_feed_token
-
                 feed_token, feed_user_id, feed_error = get_feed_token()
                 if feed_error:
                     logger.warning(f"RMoney feed token error: {feed_error}")
                     feed_token = None
+                mismatch = _xts_account_mismatch(broker, user_id, feed_user_id)
+                if mismatch:
+                    return mismatch
                 if not user_id:
                     user_id = feed_user_id
 
@@ -1172,8 +1234,7 @@ def _broker_callback(broker, para=None):
         # A broker's answer (a GET, or a post from the broker's own site)
         # completes a login only when this browser started it from OpenAlgo.
         # Before session["user"] is set for the brokers that answer without it.
-        if request.method == "GET" or is_broker_site_post(broker, request.method):
-            verify_broker_return(broker, state=request.args.get("state"))
+        _claim_login(broker)
         # Store broker in session
         session["broker"] = broker
         logger.info(f"Successfully connected broker: {broker}")
@@ -1202,15 +1263,15 @@ def _broker_callback(broker, para=None):
                     )
 
             # Pass the feed token and user_id to handle_auth_success
-            return handle_auth_success(
+            return _complete_login(
                 auth_token, session["user"], broker, feed_token=feed_token, user_id=user_id
             )
         elif broker == "paytm":
             # Paytm has feed_token (public_access_token) but no user_id
-            return handle_auth_success(auth_token, session["user"], broker, feed_token=feed_token)
+            return _complete_login(auth_token, session["user"], broker, feed_token=feed_token)
         else:
             # Pass just the feed token to handle_auth_success (other brokers don't have feed_token or user_id)
-            return handle_auth_success(auth_token, session["user"], broker, feed_token=feed_token)
+            return _complete_login(auth_token, session["user"], broker, feed_token=feed_token)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
 
@@ -1223,10 +1284,7 @@ def dhan_initiate_oauth():
     try:
         return _dhan_initiate_oauth()
     finally:
-        slot = g.pop("broker_login_slot", None)
-        if slot is not None:
-            restore_logged_in_broker_keys("dhan")
-        release_login_slot(slot)
+        _end_login_request()
 
 
 def _dhan_initiate_oauth():
@@ -1243,8 +1301,7 @@ def _dhan_initiate_oauth():
             "10 minutes. Start the broker login again.",
         )
     try:
-        g.broker_login_slot = hold_login_slot("dhan")
-        use_broker_keys("dhan")
+        _begin_login_request("dhan")
     except BrokerKeysRefused as exc:
         return _refuse_login("broker_unavailable", str(exc), status=409)
 

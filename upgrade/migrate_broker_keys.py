@@ -10,13 +10,16 @@ Adds three tables to the main database:
   for always uses them.
 - session_revocations: when a user last ended every session (a logout, a
   password change or a reset), so a copy of the session cookie on another
-  device stops working at that moment.
+  device stops working at that moment, and when a sign-in that never reached
+  a broker login was logged out (pre_broker_revoked_at), which ends every such
+  sign-in. An install that created the table before that column existed gets
+  it added, empty: no logout of that kind has been recorded yet.
 - broker_login_states: broker logins started from the broker login page and
   not yet completed, kept as SHA-256 digests with a ten-minute expiry, so the
   broker's answer is accepted only for a login started here.
 
 All are new tables, so there is nothing to backfill and no existing value to
-preserve. The app creates them at startup too; this script is what reaches the
+preserve; the added column starts empty for the same reason. The app creates them at startup too; this script is what reaches the
 installs that upgrade with `git pull` and migrate_all.py before restarting.
 
 This migration is idempotent - safe to run multiple times.
@@ -117,6 +120,25 @@ def missing_tables(engine):
     return [name for name in TABLES if name not in present]
 
 
+def missing_columns(engine):
+    """Columns added to these tables after they were first created, not there yet.
+
+    Returns:
+        list[str]: "table.column" names.
+    """
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    if "session_revocations" not in inspector.get_table_names():
+        return []
+    present = {column["name"] for column in inspector.get_columns("session_revocations")}
+    return [
+        f"session_revocations.{name}"
+        for name in ("pre_broker_revoked_at",)
+        if name not in present
+    ]
+
+
 def main():
     """Entry point.
 
@@ -146,12 +168,18 @@ def main():
     engine = create_db_engine(db_url)
     try:
         missing = missing_tables(engine)
+        columns = missing_columns(engine)
         if args.status:
             print("Broker keys, session sign-out and broker login tables")
             print("-" * 62)
             for name in TABLES:
                 print(f"  {name:<22} {'missing' if name in missing else 'present'}")
-            print(f"Would create {len(missing)} table(s)." if missing else "Nothing to change.")
+            for name in columns:
+                print(f"  {name:<40} missing")
+            if missing or columns:
+                print(f"Would create {len(missing)} table(s) and add {len(columns)} column(s).")
+            else:
+                print("Nothing to change.")
             return 0
 
         print("=" * 62)
@@ -166,6 +194,16 @@ def main():
         still_missing = missing_tables(engine)
         if still_missing:
             print(f"  [FAIL] Could not create: {', '.join(still_missing)}")
+            return 1
+        from database.auth_db import ensure_session_revocation_columns
+
+        if not columns:
+            print("  [SKIP] All columns already exist")
+        for name in ensure_session_revocation_columns(engine):
+            print(f"  [OK] Added session_revocations.{name}")
+        still_missing = missing_columns(engine)
+        if still_missing:
+            print(f"  [FAIL] Could not add: {', '.join(still_missing)}")
             return 1
         print("-" * 62)
         print("Migration complete.")

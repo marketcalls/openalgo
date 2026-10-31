@@ -94,11 +94,11 @@ def mark_signed_in():
     now = datetime.now(pytz.UTC)
     username = session.get("user")
     if username:
-        from database.auth_db import get_sessions_revoked_at
+        from database.auth_db import get_pre_broker_revoked_at, get_sessions_revoked_at
 
-        revoked_at = get_sessions_revoked_at(username)
-        if revoked_at is not None and now <= revoked_at:
-            now = revoked_at + timedelta(microseconds=1)
+        for revoked_at in (get_sessions_revoked_at(username), get_pre_broker_revoked_at(username)):
+            if revoked_at is not None and now <= revoked_at:
+                now = revoked_at + timedelta(microseconds=1)
     session["auth_at"] = now.isoformat()
 
 
@@ -125,16 +125,23 @@ def sign_in_revoked():
 
     The session is a signed cookie and a copy can sit on another device, so a
     logout records the instant (database.auth_db.revoke_all_sessions) and every
-    sign-in from before it is refused here.
+    sign-in from before it is refused here. A logout from a sign-in with no
+    broker login (revoke_pre_broker_sessions) ends every sign-in from before it
+    that has not reached a broker login either.
     """
     username = session.get("user")
     signed_in = _signed_in_at()
     if not username or signed_in is None:
         return False
-    from database.auth_db import get_sessions_revoked_at
+    from database.auth_db import get_pre_broker_revoked_at, get_sessions_revoked_at
 
     revoked_at = get_sessions_revoked_at(username)
-    return revoked_at is not None and signed_in <= revoked_at
+    if revoked_at is not None and signed_in <= revoked_at:
+        return True
+    if session.get("logged_in"):
+        return False
+    pre_broker = get_pre_broker_revoked_at(username)
+    return pre_broker is not None and signed_in <= pre_broker
 
 
 def end_session_if_signed_out():

@@ -28,7 +28,9 @@ Two rules keep that safe:
 This module performs no Flask work, so the websocket proxy process can use it.
 """
 
+import contextvars
 import functools
+import hashlib
 import json
 import os
 import re
@@ -117,7 +119,79 @@ LOGIN_SLOT_SECONDS = 120
 # The broker whose login is writing its keys and storing its token. In memory:
 # production runs one worker process, and only it serves broker logins.
 _slot_lock = Lock()
-_slot = {"broker": None, "holders": set(), "until": 0.0}
+_slot = {"broker": None, "holders": set(), "until": 0.0, "exclusive": False}
+
+# The keys published to the process (what every request reads unless it has
+# staged its own), counted so a resume can tell that a login committed while
+# it validated and must not undo it.
+_publication = {"generation": 0}
+
+# Keys staged for one request: the login whose callback is exchanging its
+# code, or a resume validating the stored token. About 140 broker files read
+# their keys with os.getenv, so reads of the five variables return the staged
+# value inside that request, and every other request (the logged-in broker's
+# orders, funds, streaming) keeps reading the process's keys until the login
+# commits. A context variable is per greenlet under eventlet and per thread
+# under gthread and the dev server.
+_staged = contextvars.ContextVar("staged_broker_keys", default=None)
+_ENVIRON_TYPE = type(os.environ)
+# The originals, kept on the class so a second import of this module (tests
+# reload it) never wraps the overlay in itself.
+_base_getitem = _ENVIRON_TYPE.__dict__.get("_openalgo_base_getitem") or _ENVIRON_TYPE.__getitem__
+_base_iter = _ENVIRON_TYPE.__dict__.get("_openalgo_base_iter") or _ENVIRON_TYPE.__iter__
+_base_len = _ENVIRON_TYPE.__dict__.get("_openalgo_base_len") or _ENVIRON_TYPE.__len__
+
+
+def _staged_here(environ):
+    """The keys staged for this request, when `environ` is os.environ, else None."""
+    staged = _staged.get()
+    return staged if staged is not None and environ is os.environ else None
+
+
+def _overlay_getitem(self, key):
+    staged = _staged_here(self)
+    if staged is not None and key in staged:
+        value = staged[key]
+        if value is None:
+            raise KeyError(key)
+        return value
+    return _base_getitem(self, key)
+
+
+def _overlay_iter(self):
+    staged = _staged_here(self)
+    if staged is None:
+        yield from _base_iter(self)
+        return
+    for key in _base_iter(self):
+        if key not in staged:
+            yield key
+    for key, value in staged.items():
+        if value is not None:
+            yield key
+
+
+def _overlay_len(self):
+    if _staged_here(self) is None:
+        return _base_len(self)
+    return sum(1 for _ in _overlay_iter(self))
+
+
+if "_openalgo_base_getitem" not in _ENVIRON_TYPE.__dict__:
+    _ENVIRON_TYPE._openalgo_base_getitem = _base_getitem
+    _ENVIRON_TYPE._openalgo_base_iter = _base_iter
+    _ENVIRON_TYPE._openalgo_base_len = _base_len
+    _ENVIRON_TYPE.__getitem__ = _overlay_getitem
+    _ENVIRON_TYPE.__iter__ = _overlay_iter
+    _ENVIRON_TYPE.__len__ = _overlay_len
+
+
+def _process_value(var):
+    """A variable as the process holds it, never a staged value."""
+    try:
+        return _base_getitem(os.environ, var)
+    except KeyError:
+        return None
 
 # The logged-in broker, read on every request through the session-expiry
 # check, so it is cached briefly; a login or logout changes it rarely.
@@ -421,8 +495,8 @@ def live_broker():
     return None
 
 
-def _apply(keys):
-    """Write a broker's keys into the process environment.
+def _apply_unlocked(keys):
+    """Write a broker's keys into the process environment. Hold _apply_lock.
 
     A variable that already holds the value is not written, so applying the
     broker that is already in place changes nothing. An empty value clears a
@@ -433,48 +507,116 @@ def _apply(keys):
         bool: True when anything changed.
     """
     changed = False
-    with _apply_lock:
-        for field, var in ENV_VARS.items():
-            value = getattr(keys, field) or ""
-            current = os.environ.get(var)
-            if not value and current is None:
-                continue
-            if current != value:
-                os.environ[var] = value
-                changed = True
+    for field, var in ENV_VARS.items():
+        value = getattr(keys, field) or ""
+        current = _process_value(var)
+        if not value and current is None:
+            continue
+        if current != value:
+            os.environ[var] = value
+            changed = True
     return changed
 
 
-def hold_login_slot(broker):
-    """Hold the broker slot while a login writes its keys and stores its token.
+def keys_digest(keys):
+    """A digest of a broker's four keys, kept in memory only, to tell if they changed."""
+    digest = hashlib.sha256()
+    for field in ("api_key", "api_secret", "api_key_market", "api_secret_market"):
+        value = (getattr(keys, field, "") or "").encode()
+        digest.update(len(value).to_bytes(8, "little"))
+        digest.update(value)
+    return digest.hexdigest()
 
-    The environment holds one broker's keys, so a login exchanging its code
-    keeps every other broker's login from writing theirs until its token is
-    stored: otherwise that token would be stored and used with the other
-    broker's keys. Logins to the same broker share the slot. Release it with
+
+def stage_broker_keys(broker):
+    """Put a broker's keys in place for this request only.
+
+    The callback of a login, or a resume, calls the broker with them while
+    every other request keeps the process's keys, so the logged-in broker's
+    orders never read another broker's keys. Undo with unstage_broker_keys().
+
+    Returns:
+        tuple[BrokerKeys, object]: The keys and the token to unstage with.
+
+    Raises:
+        BrokerKeysRefused: When no key is configured for the broker.
+    """
+    keys = _resolve_or_refuse(broker)
+    staged = {var: (getattr(keys, field) or None) for field, var in ENV_VARS.items()}
+    return keys, _staged.set(staged)
+
+
+def unstage_broker_keys(token):
+    """Undo stage_broker_keys(). None is ignored."""
+    if token is None:
+        return
+    try:
+        _staged.reset(token)
+    except ValueError:
+        # Not this context's token: leave nothing staged here.
+        _staged.set(None)
+
+
+def publication_generation():
+    """How many times the process's keys changed so far."""
+    with _apply_lock:
+        return _publication["generation"]
+
+
+def publish_broker_keys(keys, if_generation=None):
+    """Make a broker's keys the process's, read by every request from now on.
+
+    Called when a login commits, after its token is stored. With
+    `if_generation`, only if the keys did not change since then: a resume that
+    validated an older session must not undo a login that committed meanwhile.
+
+    Returns:
+        bool: True when published.
+    """
+    with _apply_lock:
+        if if_generation is not None and _publication["generation"] != if_generation:
+            return False
+        changed = _apply_unlocked(keys)
+        if changed:
+            _publication["generation"] += 1
+    if changed:
+        where = "the .env file" if keys.source == "env" else "the keys saved in OpenAlgo"
+        logger.info(f"Using {where} for {broker_title(keys.broker)}")
+    return True
+
+
+def hold_login_slot(broker, exclusive=False):
+    """Hold the broker slot while a login (or a resume) runs and commits.
+
+    Only one broker's login runs at a time, so a login to another broker
+    cannot commit in the middle of this one. Logins to the same broker share
+    the slot. A resume holds it alone (`exclusive`): no login may start or
+    commit while it validates the stored session. Release it with
     release_login_slot() when the request ends, however it ends.
 
     Returns:
         object: The holder to release.
 
     Raises:
-        BrokerKeysRefused: While a login to another broker holds the slot.
+        BrokerKeysRefused: While another login holds the slot in a way this
+            one cannot share.
     """
     holder = object()
     now = time.monotonic()
     with _slot_lock:
         held = _slot["broker"]
         busy = bool(_slot["holders"]) and _slot["until"] > now
-        other = held if busy and held != broker else None
-        if other is None:
+        refused = busy and (exclusive or _slot["exclusive"] or held != broker)
+        if not refused:
             if held != broker or not busy:
                 _slot["holders"] = set()
             _slot["broker"] = broker
+            _slot["exclusive"] = exclusive
             _slot["holders"].add(holder)
             _slot["until"] = now + LOGIN_SLOT_SECONDS
-    if other:
+    if refused:
         raise BrokerKeysRefused(
-            f"A login to {broker_title(other)} is under way. Wait for it to finish, then try again."
+            f"A login to {broker_title(held)} is under way. Wait for it to finish, then try again."
         )
     return holder
 
@@ -486,7 +628,17 @@ def release_login_slot(holder):
     with _slot_lock:
         _slot["holders"].discard(holder)
         if not _slot["holders"]:
-            _slot.update(broker=None, until=0.0)
+            _slot.update(broker=None, until=0.0, exclusive=False)
+
+
+def login_slot_held(holder):
+    """Whether a holder still holds the slot: not expired and not taken over.
+
+    A login whose slot expired and was taken by another may still be running;
+    it must not commit what it got (utils.auth_utils checks this).
+    """
+    with _slot_lock:
+        return holder in _slot["holders"] and _slot["until"] > time.monotonic()
 
 
 def login_slot_broker():
@@ -502,7 +654,7 @@ def _refuse_another_broker(broker):
 
     A broker that is merely logged in does not refuse: logging in to another
     one ends its session when that login completes (auth_utils.
-    _hand_over_from_live_broker), as in OpenAlgo Desktop.
+    handle_auth_success), as in OpenAlgo Desktop.
     """
     pending = login_slot_broker()
     if pending and pending != broker:
@@ -525,7 +677,7 @@ def keys_for_login(broker):
     """The keys a login to this broker starts with, leaving the environment alone.
 
     Starting a login only builds the broker's sign-in address, so nothing is
-    written: the keys go in place at the callback, under the login slot.
+    written: the keys are staged at the callback, under the login slot.
 
     Raises:
         BrokerKeysRefused: While a login to another broker is under way, or
@@ -535,17 +687,16 @@ def keys_for_login(broker):
     return _resolve_or_refuse(broker)
 
 
-def use_broker_keys(broker, check_live=True):
-    """Put a broker's keys in place for the code about to call it.
+def use_broker_keys(broker, check_live=False):
+    """Publish a broker's keys to the process: startup and the websocket proxy.
 
-    A login holds the slot (hold_login_slot) before calling this, so no other
-    broker's login can replace the keys before its token is stored.
+    Only for the broker whose session is stored, where nothing else is
+    logging in. A login stages its keys instead (stage_broker_keys) and
+    publishes them when it commits.
 
     Args:
         broker: The broker id.
-        check_live: Refuse while a login to another broker is under way. False
-            only where the broker passed is the one already logged in
-            (startup, resume, the websocket proxy).
+        check_live: Refuse while a login to another broker is under way.
 
     Returns:
         BrokerKeys: The keys now in place.
@@ -556,35 +707,8 @@ def use_broker_keys(broker, check_live=True):
     if check_live:
         _refuse_another_broker(broker)
     keys = _resolve_or_refuse(broker)
-    if _apply(keys):
-        where = "the .env file" if keys.source == "env" else "the keys saved in OpenAlgo"
-        logger.info(f"Using {where} for {broker_title(broker)}")
+    publish_broker_keys(keys)
     return keys
-
-
-def restore_logged_in_broker_keys(except_broker):
-    """Put the logged-in broker's keys back after a login to another one ended.
-
-    A login writes its broker's keys before the broker answers, while the
-    logged-in broker may still be trading. When that login ends without
-    completing (refused, failed, a form shown, abandoned), the logged-in
-    broker gets its own keys back. Nothing is done when `except_broker` is
-    the logged-in one or none is, and nothing while a login to another broker
-    than `except_broker` holds the slot: its keys are in place for its
-    exchange.
-    """
-    pending = login_slot_broker()
-    if pending and pending != except_broker:
-        return
-    stored = logged_in_broker()
-    if not stored or stored == except_broker:
-        return
-    try:
-        use_broker_keys(stored, check_live=False)
-    except BrokerKeysRefused:
-        logger.warning(
-            f"Could not put back the keys of {broker_title(stored)}: none are configured any more."
-        )
 
 
 def apply_logged_in_broker_keys():

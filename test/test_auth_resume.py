@@ -29,9 +29,9 @@ def _keys_in_place(monkeypatch):
     Without this a missing key would refuse the resume first, and every test
     expecting a refusal would pass without reaching the check it is about.
     """
-    import utils.broker_keys as broker_keys
-
-    monkeypatch.setattr(broker_keys, "use_broker_keys", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auth_utils, "begin_broker_login", lambda *args, **kwargs: None)
+    # The session these tests read is a stand-in, so it is taken as still stored.
+    monkeypatch.setattr(auth_bp_module, "_stored_session_unchanged", lambda *args: True)
 
 
 @pytest.fixture()
@@ -105,8 +105,12 @@ def test_resume_accepts_valid_broker_validation(monkeypatch, app_context):
     )
 
     def fake_auth_success(**kwargs):
+        from flask import g
+
         session["logged_in"] = True
         session["broker"] = kwargs["broker"]
+        # What the real one records once the session is stored.
+        g.broker_login_completed = True
 
     monkeypatch.setattr(auth_db, "get_auth_token_dbquery", lambda username: _auth_record())
     monkeypatch.setattr(auth_db, "decrypt_token", lambda token: "plain-token")

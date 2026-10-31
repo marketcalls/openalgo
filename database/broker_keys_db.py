@@ -25,7 +25,7 @@ The started broker logins (broker_login_states) sit here too.
 import hashlib
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy import delete as sql_delete
@@ -314,11 +314,12 @@ def record_login_state(broker, nonce, state):
         db_session.remove()
 
 
-def find_login_state(broker, nonce=None, state=None):
-    """The id of an open login for a broker, matched by nonce or by state.
+def find_open_login(broker, nonce=None, state=None):
+    """An open login for a broker, matched by nonce or by state.
 
     Returns:
-        int | None: None when there is no such open login.
+        tuple[int, datetime] | None: Its id and when it started (aware UTC),
+        or None when there is no such open login.
     """
     if not nonce and not state:
         return None
@@ -332,13 +333,23 @@ def find_login_state(broker, nonce=None, state=None):
         else:
             query = query.filter(BrokerLoginState.state_hash == _digest(state))
         row = query.first()
-        return row.id if row else None
+        return (row.id, row.created_at.replace(tzinfo=UTC)) if row else None
     except Exception as exc:
         if not _table_missing(exc):
             logger.exception("Could not read the started broker logins")
         return None
     finally:
         db_session.remove()
+
+
+def find_login_state(broker, nonce=None, state=None):
+    """The id of an open login for a broker, matched by nonce or by state.
+
+    Returns:
+        int | None: None when there is no such open login.
+    """
+    found = find_open_login(broker, nonce=nonce, state=state)
+    return found[0] if found else None
 
 
 def consume_login_state(state_id):
@@ -365,13 +376,24 @@ def consume_login_state(state_id):
 
 
 def clear_login_states():
-    """Remove every started login (tests)."""
+    """Remove every started login.
+
+    A logout, a password change or reset and a broker switch end every
+    sign-in (database.auth_db.revoke_all_sessions), and with them every login
+    started from one: a started login is not a way back in.
+
+    Returns:
+        bool: True when removed, or when there was nothing to remove.
+    """
     try:
         db_session.execute(sql_delete(BrokerLoginState))
         db_session.commit()
+        return True
     except Exception as exc:
         db_session.rollback()
-        if not _table_missing(exc):
-            logger.exception("Could not clear the started broker logins")
+        if _table_missing(exc):
+            return True
+        logger.exception("Could not clear the started broker logins")
+        return False
     finally:
         db_session.remove()

@@ -361,6 +361,9 @@ done
 if [ -w "." ]; then
     # Set more permissive permissions for directories
     chmod -R 755 db log strategies 2>/dev/null || echo "Skipping chmod (may be mounted volume or permission restricted)"
+    # That opened every file under db, the copy of the security keys kept
+    # beside the database included: only the owner may read it.
+    [ -f "$KEYS_FILE" ] && { chmod 600 "$KEYS_FILE" 2>/dev/null || true; }
     # Set restrictive permissions for keys directory (only owner can access)
     chmod 700 keys 2>/dev/null || true
 else

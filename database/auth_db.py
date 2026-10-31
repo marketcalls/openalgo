@@ -3,6 +3,7 @@
 import base64
 import os
 from dataclasses import dataclass
+from datetime import datetime
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -363,6 +364,13 @@ class SessionRevocation(Base):
     __tablename__ = "session_revocations"
     username = Column(String(255), primary_key=True)
     revoked_at = Column(DateTime, nullable=False)  # naive UTC
+    # A logout from a sign-in that never reached a broker login ends every
+    # such sign-in, and leaves the devices on the broker session alone.
+    pre_broker_revoked_at = Column(DateTime, nullable=True)  # naive UTC
+
+
+#: revoked_at of a row written only for a pre-broker logout: no session ended.
+_NEVER = datetime(1970, 1, 1)
 
 
 # Read on every authenticated request, written on logout and password changes.
@@ -528,6 +536,32 @@ def clear_user_sessions(username):
         logger.error(f"Error clearing user sessions: {e}")
 
 
+def _revocations(username):
+    """(revoked_at, pre_broker_revoked_at) of ``username``, each aware UTC or None.
+
+    Returns:
+        tuple | MISSING: MISSING when it cannot be read.
+    """
+    from datetime import UTC
+
+    def _aware(value):
+        return value.replace(tzinfo=UTC) if value and value > _NEVER else None
+
+    def _load():
+        try:
+            row = SessionRevocation.query.filter_by(username=username).first()
+            if row is None:
+                return (None, None)
+            return (_aware(row.revoked_at), _aware(row.pre_broker_revoked_at))
+        except Exception:
+            logger.exception("Could not read when sessions were last ended")
+            return MISSING
+
+    return _session_revocation_cache.get_or_load(
+        username, _load, should_cache=lambda v: v is not MISSING
+    )
+
+
 def get_sessions_revoked_at(username):
     """When ``username`` last ended every session, as an aware UTC datetime.
 
@@ -535,45 +569,98 @@ def get_sessions_revoked_at(username):
         datetime | None: None when never, or when it cannot be read; a read
         failure must not sign every device out.
     """
-    from datetime import UTC
-
-    def _load():
-        try:
-            row = SessionRevocation.query.filter_by(username=username).first()
-            return row.revoked_at.replace(tzinfo=UTC) if row and row.revoked_at else None
-        except Exception:
-            logger.exception("Could not read when sessions were last ended")
-            return MISSING
-
-    value = _session_revocation_cache.get_or_load(
-        username, _load, should_cache=lambda v: v is not MISSING
-    )
-    return None if value is MISSING else value
+    value = _revocations(username)
+    return None if value is MISSING else value[0]
 
 
-def revoke_all_sessions(username):
-    """End every browser session of ``username`` signed in before now.
+def get_pre_broker_revoked_at(username):
+    """When ``username`` last logged out of a sign-in with no broker login, aware UTC.
+
+    Every sign-in from before then that has not reached a broker login is
+    ended (utils.session.sign_in_revoked).
 
     Returns:
-        bool: True when recorded.
+        datetime | None: None when never, or when it cannot be read.
     """
-    from datetime import UTC, datetime
+    value = _revocations(username)
+    return None if value is MISSING else value[1]
+
+
+def _record_revocation(username, field):
+    from datetime import UTC
+
+    from database.broker_keys_db import clear_login_states
 
     now = datetime.now(UTC).replace(tzinfo=None)
     try:
         row = SessionRevocation.query.filter_by(username=username).first()
         if row is None:
-            db_session.add(SessionRevocation(username=username, revoked_at=now))
-        else:
-            row.revoked_at = now
+            row = SessionRevocation(username=username, revoked_at=_NEVER)
+            db_session.add(row)
+        setattr(row, field, now)
         db_session.commit()
-        return True
+        recorded = True
     except Exception:
         db_session.rollback()
-        logger.exception("Could not record the end of every session")
-        return False
+        logger.exception("Could not record the end of the sessions")
+        recorded = False
     finally:
         _session_revocation_cache.invalidate(username)
+    # A broker login started from an ended sign-in must not complete: it would
+    # sign the browser back in (the XTS brokers answer without the cookie).
+    clear_login_states()
+    return recorded
+
+
+def revoke_all_sessions(username):
+    """End every browser session of ``username`` signed in before now.
+
+    Every broker login started before now is cancelled with them.
+
+    Returns:
+        bool: True when recorded.
+    """
+    return _record_revocation(username, "revoked_at")
+
+
+def revoke_pre_broker_sessions(username):
+    """End every sign-in of ``username`` from before now that has no broker login.
+
+    A logout from such a sign-in: a copy of its cookie stops working, and so
+    does any other sign-in that has not reached a broker login. The devices on
+    the broker session are left alone; their logout ends everything
+    (revoke_all_sessions). Every broker login started before now is cancelled.
+
+    Returns:
+        bool: True when recorded.
+    """
+    return _record_revocation(username, "pre_broker_revoked_at")
+
+
+def ensure_session_revocation_columns(target_engine=None):
+    """Add the columns session_revocations gained after it was first created.
+
+    Run at startup and by upgrade/migrate_broker_keys.py, for an install that
+    created the table before pre_broker_revoked_at existed. Idempotent.
+
+    Returns:
+        list[str]: The columns added.
+    """
+    from sqlalchemy import inspect, text
+
+    target_engine = target_engine or engine
+    inspector = inspect(target_engine)
+    if "session_revocations" not in inspector.get_table_names():
+        return []
+    present = {column["name"] for column in inspector.get_columns("session_revocations")}
+    added = []
+    if "pre_broker_revoked_at" not in present:
+        with target_engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE session_revocations ADD COLUMN pre_broker_revoked_at DATETIME")
+            )
+        added.append("pre_broker_revoked_at")
+    return added
 
 
 def init_db():
@@ -586,6 +673,10 @@ def init_db():
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Auth DB", logger)
+    try:
+        ensure_session_revocation_columns()
+    except Exception:
+        logger.exception("Could not add the new session sign-out column")
 
 
 def safe_decrypt_token(value):

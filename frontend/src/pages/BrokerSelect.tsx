@@ -58,6 +58,12 @@ const LOGIN_ERRORS: Record<string, string> = {
   // automation: that broker stays logged in.
   switch_refused:
     'The broker you are logged in to still runs Live strategies or protection, so it stayed logged in. Stop them first, then switch.',
+  account_mismatch:
+    'This login is for a different account than the client ID saved for this broker. Log in with that account, or change the client ID under Broker Configuration.',
+  // A sign-out on any device, or a password change, while this broker login
+  // was at the broker's site.
+  signed_out:
+    'Your OpenAlgo sign-in ended while this broker login was in progress. Sign in and log in to the broker again.',
 }
 const LOGIN_FAILED = 'The broker login did not complete. Try again.'
 

@@ -528,7 +528,12 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env
+      # Fails instead of creating a folder named .env when the file is missing.
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
 
     environment:
       - FLASK_ENV=production
