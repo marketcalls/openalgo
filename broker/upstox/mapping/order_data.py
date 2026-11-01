@@ -159,9 +159,6 @@ def transform_order_data(orders):
             "exchange": order.get("exchange", ""),
             "action": order.get("transaction_type", ""),
             "quantity": order.get("quantity", 0),
-            # Keep unavailable totals distinct from an explicit zero fill.
-            "filled_quantity": order.get("filled_quantity"),
-            "pending_quantity": order.get("pending_quantity"),
             "price": order.get("price", 0.0),
             "trigger_price": order.get("trigger_price", 0.0),
             "pricetype": order.get("order_type", ""),
@@ -170,6 +167,11 @@ def transform_order_data(orders):
             "order_status": normalize_order_status(order.get("status")),
             "timestamp": order.get("order_timestamp", ""),
         }
+
+        # Omit unknown totals: some consumers interpret a present null as zero.
+        for field in ("filled_quantity", "pending_quantity"):
+            if order.get(field) is not None:
+                transformed_order[field] = order[field]
 
         transformed_orders.append(transformed_order)
 

@@ -17,6 +17,16 @@ FILL_CASES = [
     pytest.param("open", {"filled_quantity": None, "pending_quantity": None}, id="null"),
     pytest.param("open", {"filled_quantity": 25}, id="pending-unavailable"),
     pytest.param("open", {"pending_quantity": 40}, id="filled-unavailable"),
+    pytest.param("complete", {}, id="complete-missing"),
+    pytest.param(
+        "complete", {"filled_quantity": None, "pending_quantity": None}, id="complete-null"
+    ),
+    pytest.param(
+        "open", {"filled_quantity": 0, "pending_quantity": None}, id="zero-fill-null-pending"
+    ),
+    pytest.param(
+        "open", {"filled_quantity": None, "pending_quantity": 0}, id="null-fill-zero-pending"
+    ),
 ]
 
 
@@ -46,8 +56,11 @@ def test_mapper_preserves_reported_quantities(status, quantities, single_order):
 
     [mapped] = order_data.transform_order_data(raw if single_order else [raw])
 
-    assert mapped.get("filled_quantity") == quantities.get("filled_quantity")
-    assert mapped.get("pending_quantity") == quantities.get("pending_quantity")
+    for field in ("filled_quantity", "pending_quantity"):
+        if quantities.get(field) is None:
+            assert field not in mapped
+        else:
+            assert mapped[field] == quantities[field]
     assert mapped["quantity"] == 65
     assert mapped["orderid"] == raw["order_id"]
     assert mapped["symbol"] == raw["tradingsymbol"]
@@ -85,8 +98,12 @@ def test_live_orderbook_and_status_keep_same_fill_totals(monkeypatch, status, qu
     )
     assert success and code == 200
     for field in ("filled_quantity", "pending_quantity"):
-        assert book_order.get(field) == quantities.get(field)
-        assert response["data"].get(field) == quantities.get(field)
+        if quantities.get(field) is None:
+            assert field not in book_order
+            assert field not in response["data"]
+        else:
+            assert book_order[field] == quantities[field]
+            assert response["data"][field] == quantities[field]
     assert fetch.call_count == 2
 
 
