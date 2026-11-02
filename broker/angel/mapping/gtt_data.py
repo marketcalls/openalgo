@@ -24,9 +24,9 @@ DEFAULT_TIME_PERIOD_DAYS = 365
 # The only GTT statuses Angel's docs name are the five in the ruleList request
 # sample: NEW, CANCELLED, ACTIVE, SENTTOEXCHANGE, FORALL (FORALL reads as a
 # request-side wildcard, not a state a rule is ever in). Of the real states,
-# only these three describe a rule that can still fire, so only these three are
-# ever asked for -- which is what makes the OpenAlgo GTT book active-only for
-# Angel (see docs/api/order-management/gttorderbook.md).
+# only these three describe a rule that can still fire. A fired rule is not one
+# of them: Angel lists it under FORALL with a null status (see is_fired), and
+# the book adds it, as "triggered", only once the order it placed is known.
 ACTIVE_GTT_STATUSES = ("NEW", "ACTIVE", "SENTTOEXCHANGE")
 
 # Display mapping. EXPIRED / TRIGGERED / REJECTED are NOT documented by Angel;
@@ -166,8 +166,24 @@ def transform_modify_gtt(data, token, rule_id):
     }
 
 
-def map_gtt_book(rules):
+def rule_key(rule):
+    """A ruleList row's id as a string. Angel's published sample omits the id; the live API returns it
+    as "id". Fall back to the other spellings seen in the SmartAPI SDK."""
+    return str(rule.get("id") or rule.get("gttid") or rule.get("ruleid") or "")
+
+
+def is_fired(rule):
+    """A rule that has fired. Angel lists it under FORALL with ``status: null`` (observed 2 Nov 2026 on
+    NFO OCO rules, both legs); TRIGGERED is accepted too in case the API ever names the state."""
+    return (rule.get("status") or "").upper() in ("", "TRIGGERED")
+
+
+def map_gtt_book(rules, children=None):
     """Normalise Angel's ``gtt/v1/ruleList`` rows into the OpenAlgo GTT shape.
+
+    ``children`` maps a fired rule's id to the order it placed (``{"orderid", "price"}``). A fired rule
+    with a known child is listed as ``triggered``, its child's id as ``triggered_order_id`` on the leg
+    whose limit price it carries (an OCO's one fired leg); a fired rule without one is left out.
 
     A SINGLE rule becomes one ``single`` entry; an OCO rule becomes one
     ``two-leg`` entry whose ``trigger_prices`` and ``legs`` are sorted by
@@ -184,9 +200,10 @@ def map_gtt_book(rules):
             continue
 
         status_raw = (rule.get("status") or "").upper()
-        # Active-only filter: drop CANCELLED/EXPIRED/TRIGGERED/REJECTED at the
-        # broker mapper so the orderbook UI shows only triggers that can fire.
-        if status_raw not in ACTIVE_GTT_STATUSES:
+        child = (children or {}).get(rule_key(rule)) if is_fired(rule) else None
+        # Rules that can still fire, and fired rules whose order is known; CANCELLED / EXPIRED /
+        # REJECTED are dropped at the broker mapper.
+        if status_raw not in ACTIVE_GTT_STATUSES and child is None:
             continue
 
         exchange = rule.get("exchange", "") or ""
@@ -203,6 +220,7 @@ def map_gtt_book(rules):
                 # Angel GTT rules always fire a LIMIT child order.
                 "pricetype": GTT_CHILD_PRICETYPE,
                 "product": reverse_map_gtt_product_type(rule.get("producttype", "")),
+                "triggered_order_id": None,
             }
 
         pairs = [(float(rule.get("triggerprice", 0) or 0), leg(rule.get("price")))]
@@ -213,15 +231,16 @@ def map_gtt_book(rules):
                 (float(rule.get("stoplosstriggerprice", 0) or 0), leg(rule.get("stoplossprice")))
             )
             pairs.sort(key=lambda pair: pair[0])
+        if child is not None:
+            # The fired leg is the one whose limit price the child order carries.
+            fired_leg = min((leg_ for _, leg_ in pairs), key=lambda leg_: abs(leg_["price"] - child["price"]))
+            fired_leg["triggered_order_id"] = child["orderid"]
 
         normalised.append(
             {
-                # Angel's published ruleList sample omits the id; the live API
-                # returns it as "id". Fall back to the other spellings seen in
-                # the SmartAPI SDK rather than emitting a book row with no id.
-                "trigger_id": str(rule.get("id") or rule.get("gttid") or rule.get("ruleid") or ""),
+                "trigger_id": rule_key(rule),
                 "trigger_type": trigger_type,
-                "status": _STATUS_MAP.get(status_raw, status_raw.lower()),
+                "status": "triggered" if child is not None else _STATUS_MAP.get(status_raw, status_raw.lower()),
                 "symbol": oa_symbol or br_symbol,
                 "exchange": exchange,
                 "trigger_prices": [trigger for trigger, _ in pairs],

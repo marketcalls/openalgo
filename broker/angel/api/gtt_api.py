@@ -39,11 +39,15 @@ Other Angel-specific quirks handled here:
 """
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from broker.angel.api.order_api import get_api_response
 from broker.angel.mapping.gtt_data import (
     ACTIVE_GTT_STATUSES,
+    is_fired,
     is_oco,
+    rule_key as _rule_key,
     map_gtt_book,
     transform_modify_gtt,
     transform_place_gtt,
@@ -66,6 +70,11 @@ _COMPOSITE_DELIMITER = "-"
 # that and stop at a sane ceiling instead of looping forever.
 _RULE_LIST_PAGE_SIZE = 10
 _RULE_LIST_MAX_PAGES = 25
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+# Fired rule id -> {"orderid", "price"} of the order it placed (see _fired_children).
+_CHILD_ORDERS = {}
 
 # Angel GTT error codes -> HTTP-ish status codes. SmartAPI answers business
 # failures with HTTP 200 and an ``errorcode``, and the shared
@@ -428,24 +437,17 @@ def cancel_gtt_order(trigger_id, auth):
     return {"status": "success", "trigger_id": _encode_trigger_id(cancelled_ids)}, 200
 
 
-def get_gtt_book(auth, include_history=False):
-    # include_history is accepted for interface parity; this mapper still
-    # returns active triggers only until its status vocabulary is mapped.
-    """List the user's live GTTs. Returns ``(response_dict, status_code)``.
-
-    Angel's ``ruleList`` takes the status filter in the request body, so only
-    the statuses that can still fire (NEW / ACTIVE / SENTTOEXCHANGE) are asked
-    for — CANCELLED, EXPIRED and TRIGGERED never reach the mapper. The endpoint
-    is paged; pages are walked until a short page comes back (or the ceiling is
-    hit).
-    """
+def _list_rules(auth, statuses):
+    """Walk ``ruleList`` for these statuses. Returns ``(rules, None)``, or ``(rules, error_response)``
+    when the first page fails. The endpoint is paged; pages are walked until a short page comes back (or
+    the ceiling is hit)."""
     rules = []
     page = 1
     last_response = {}
 
     while page <= _RULE_LIST_MAX_PAGES:
         body = {
-            "status": list(ACTIVE_GTT_STATUSES),
+            "status": list(statuses),
             "page": page,
             "count": _RULE_LIST_PAGE_SIZE,
         }
@@ -460,13 +462,7 @@ def get_gtt_book(auth, include_history=False):
                     f"collected so far: {response_data}"
                 )
                 break
-            return (
-                {
-                    "status": "error",
-                    "message": _error_message(response_data, "Failed to fetch GTT book"),
-                },
-                _error_status(response_data),
-            )
+            return rules, response_data
 
         # Angel's published sample shows ``data`` as a single object; the live
         # API returns a list. Accept both, and treat null as an empty page.
@@ -488,4 +484,56 @@ def get_gtt_book(auth, include_history=False):
             f"the book may be truncated. Last response: {last_response}"
         )
 
-    return {"status": "success", "data": map_gtt_book(rules)}, 200
+    return rules, None
+
+
+def _today_ist():
+    return datetime.now(_IST).date().isoformat()
+
+
+def _fired_children(auth, rule_ids):
+    """The order each fired rule placed, found in today's order book: Angel tags it
+    ``uniqueorderid = "GTTV3_<env>_<rule id>"``. A child never changes, so it is cached per process and
+    the order book is read only for a rule fired today whose child is not known yet."""
+    missing = [rid for rid in rule_ids if rid not in _CHILD_ORDERS]
+    if missing:
+        response_data = get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook", auth)
+        rows = response_data.get("data") if isinstance(response_data, dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            unique = str(row.get("uniqueorderid") or "")
+            rid = unique.rsplit("_", 1)[-1]
+            if unique.startswith("GTT") and rid in missing and row.get("orderid"):
+                _CHILD_ORDERS[rid] = {"orderid": str(row["orderid"]), "price": float(row.get("price") or 0)}
+    return {rid: _CHILD_ORDERS[rid] for rid in rule_ids if rid in _CHILD_ORDERS}
+
+
+def get_gtt_book(auth, include_history=False):
+    # include_history is accepted for interface parity: rules that can still fire and rules fired today
+    # are listed either way; cancelled, expired and older fired rules are not.
+    """List the user's GTTs. Returns ``(response_dict, status_code)``.
+
+    Rules that can still fire come from ``ruleList`` with NEW / ACTIVE / SENTTOEXCHANGE, as before. A
+    fired rule is not in that list: Angel reports it under ``FORALL`` with ``status: null``. A rule fired
+    today is listed as ``triggered`` with ``triggered_order_id`` on the leg that fired (the order it
+    placed, from the order book), so a caller can follow that order's fill (Angel has no TRIGGERED
+    status, and a rule that just vanished from the book is indistinguishable from a lost read). Fired
+    rules are best effort: if their listing fails, the active rules are still returned.
+    """
+    active, error = _list_rules(auth, ACTIVE_GTT_STATUSES)
+    if error is not None:
+        return (
+            {"status": "error", "message": _error_message(error, "Failed to fetch GTT book")},
+            _error_status(error),
+        )
+    fired, children = [], {}
+    history, error = _list_rules(auth, ("FORALL",))
+    if error is not None:
+        logger.warning(f"Angel gtt_book: fired rules not listed this time: {error}")
+    else:
+        known = {_rule_key(r) for r in active}
+        today = _today_ist()
+        fired = [r for r in history if is_fired(r) and _rule_key(r) not in known
+                 and str(r.get("updateddate") or "")[:10] == today]
+        if fired:
+            children = _fired_children(auth, [_rule_key(r) for r in fired])
+    return {"status": "success", "data": map_gtt_book(active + fired, children)}, 200
