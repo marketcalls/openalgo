@@ -267,7 +267,9 @@ def process_scrip_data(scrip_data, group_info):
                         "expiry": "",
                         "strike": 0,
                         "lotsize": 1,
-                        "instrumenttype": "INDEX",
+                        # No INDEX type in OpenAlgo: an index is EQ on
+                        # NSE_INDEX / BSE_INDEX, as Zerodha's master has it.
+                        "instrumenttype": "EQ",
                         "tick_size": 0.05,
                     }
                     records.append(record)
