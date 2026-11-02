@@ -86,7 +86,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild className="md:hidden">
-            <Button variant="ghost" size="icon" className="mr-2 min-h-[44px] min-w-[44px]">
+            <Button variant="ghost" size="icon" className="mr-2 min-h-[44px] min-w-[44px]" aria-label="Toggle navigation menu">
               <Menu className="h-5 w-5" />
               <span className="sr-only">Toggle menu</span>
             </Button>
@@ -102,6 +102,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                 to="/dashboard"
                 className="flex items-center gap-2 px-2"
                 onClick={() => setMobileOpen(false)}
+                aria-label="Dashboard Home"
               >
                 <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
                 <span className="font-semibold">OpenAlgo</span>
@@ -189,7 +190,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
         </Sheet>
 
         {/* Logo */}
-        <Link to="/dashboard" className="flex items-center gap-2 mr-6">
+        <Link to="/dashboard" className="flex items-center gap-2 mr-6" aria-label="Dashboard Home">
           <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
           <span className="hidden font-semibold sm:inline-block">OpenAlgo</span>
         </Link>
