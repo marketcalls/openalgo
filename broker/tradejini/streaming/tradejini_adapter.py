@@ -9,13 +9,13 @@ from typing import Any, Dict, List, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
 from broker.tradejini.api.auth_api import get_api_key
+from broker.tradejini.api.nxtradstream import NxtradStream
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
-from .nxtradstream import NxtradStream
 from .tradejini_mapping import TradejiniCapabilityRegistry, TradejiniExchangeMapper
 
 
@@ -50,6 +50,12 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._feed_dirty = threading.Event()
         self._flush_thread = None
         self._flush_stop = threading.Event()
+        # Latest L1 quote and L5 book per '<token>_<exchange>', for Depth
+        # subscribers. Tradejini's L5 packet carries only the book and total
+        # buy/sell quantity; LTP, OHLC, volume and OI arrive on L1. A Depth
+        # update merges the two. Entries are dropped on unsubscribe.
+        self._last_l1 = {}
+        self._last_l5 = {}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -208,6 +214,11 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "reusing existing token for reconnection"
                 )
 
+            # The token read above can outlast a disconnect(). The stream also
+            # refuses a connect once disconnected; this just skips the attempt.
+            if not self.running:
+                return
+
             self.ws_client.connect(self.ws_token)
 
         except Exception as e:
@@ -257,7 +268,8 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _feed_tokens(self, feed: str) -> list[str]:
         """Build the full '<token>_<exchange>' list for a feed from state."""
-        modes = (1, 2) if feed == "L1" else (3,)
+        # Depth (3) rides L1 as well as L5: L5 has no LTP, OHLC or volume.
+        modes = (1, 2, 3) if feed == "L1" else (3,)
         tokens = []
         for sub in self.subscriptions.values():
             if sub["mode"] in modes:
@@ -468,8 +480,11 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"(token_str: {token}_{brexchange})"
             )
 
-            # LTP (1) and Quote (2) both ride the L1 feed; Depth (3) uses L5
-            self._request_feed_sync("L1" if mode in (1, 2) else "L5")
+            # LTP (1) and Quote (2) ride the L1 feed; Depth (3) rides L5 for the
+            # book and L1 for the price fields.
+            self._request_feed_sync("L1")
+            if mode == 3:
+                self._request_feed_sync("L5")
 
         # Return success with capability info
         return self._create_success_response(
@@ -515,16 +530,26 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if k == correlation_id or k.startswith(f"{correlation_id}_")
             ]:
                 del self.subscriptions[key]
+            self._prune_tick_cache()
 
         # Re-send what is left on the feed. Sending nothing would leave the old
         # list in place, and unsubscribeL1()/unsubscribeL2() cancel the whole
         # feed - so _sync_feed() only falls back to those when nothing remains.
         if self.connected and self.ws_client:
-            self._request_feed_sync("L1" if mode in (1, 2) else "L5")
+            self._request_feed_sync("L1")
+            if mode == 3:
+                self._request_feed_sync("L5")
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
+
+    def _prune_tick_cache(self) -> None:
+        """Drop cached L1/L5 data for tokens no longer subscribed. Caller holds self.lock."""
+        live = {f"{sub['token']}_{sub['brexchange']}" for sub in self.subscriptions.values()}
+        for cache in (self._last_l1, self._last_l5):
+            for key in [k for k in cache if k not in live]:
+                del cache[key]
 
     def _on_connection_event(self, ws, message) -> None:
         """Callback for connection events"""
@@ -612,11 +637,26 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if str(sub["token"]) == token and sub["brexchange"] == brexchange:
                         matching_subscriptions.append(sub)
 
+                if matching_subscriptions:
+                    if msg_type == "L1":
+                        self._last_l1[symbol_str] = message
+                    elif msg_type in ("L5", "L2"):
+                        self._last_l5[symbol_str] = message
+                    last_l1 = self._last_l1.get(symbol_str)
+                    last_l5 = self._last_l5.get(symbol_str)
+
             if not matching_subscriptions:
                 self.logger.info(
                     f"Received data for unsubscribed token: {token} on {brexchange}. Active subscriptions: {list(self.subscriptions.keys())}"
                 )
                 return
+
+            # A Depth update needs both halves: the price fields from L1 and the
+            # book from L5. Until the book has arrived there is nothing to show.
+            depth_message = None
+            if last_l5 is not None:
+                depth_message = dict(last_l1 or {})
+                depth_message.update(last_l5)
 
             # Process data for each matching subscription (different modes for same symbol)
             for subscription in matching_subscriptions:
@@ -633,6 +673,9 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if msg_type == "L1":
                     # L1 data can be used for both LTP and Quote modes
                     if subscription_mode in [1, 2]:  # LTP or Quote
+                        should_publish = True
+                    elif subscription_mode == 3 and depth_message is not None:
+                        # A price tick refreshes the Depth view too
                         should_publish = True
                 elif msg_type == "L5" or msg_type == "L2":
                     # L5/L2 data is for depth mode
@@ -660,7 +703,8 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 # Normalize the data based on subscription mode
-                market_data = self._normalize_market_data(message, actual_mode)
+                source = depth_message if actual_mode == 3 else message
+                market_data = self._normalize_market_data(source, actual_mode)
 
                 # Add metadata
                 market_data.update(

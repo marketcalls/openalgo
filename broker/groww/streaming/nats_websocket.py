@@ -649,11 +649,11 @@ class GrowwNATSWebSocket:
 
                         # Add subscription info to market data
                         market_data["symbol"] = sub_info["symbol"]
-                        # For index mode, exchange might be NSE_INDEX/BSE_INDEX, normalize to NSE/BSE for matching
-                        if sub_info["mode"] == "index" and "_INDEX" in sub_info["exchange"]:
-                            market_data["exchange"] = sub_info["exchange"].replace("_INDEX", "")
-                        else:
-                            market_data["exchange"] = sub_info["exchange"]
+                        # Keep the OpenAlgo exchange (NSE_INDEX/BSE_INDEX) as-is:
+                        # mode is sent numerically (1), so the adapter matches
+                        # on sub["exchange"] == exchange. Stripping _INDEX here
+                        # made index ticks match no subscription.
+                        market_data["exchange"] = sub_info["exchange"]
 
                         # CRITICAL FIX: Use numeric mode for proper adapter processing
                         if "numeric_mode" in sub_info:
@@ -698,12 +698,7 @@ class GrowwNATSWebSocket:
 
                                 # Add subscription info to market data
                                 market_data["symbol"] = sub_info["symbol"]
-                                if sub_info["mode"] == "index" and "_INDEX" in sub_info["exchange"]:
-                                    market_data["exchange"] = sub_info["exchange"].replace(
-                                        "_INDEX", ""
-                                    )
-                                else:
-                                    market_data["exchange"] = sub_info["exchange"]
+                                market_data["exchange"] = sub_info["exchange"]
 
                                 if "numeric_mode" in sub_info:
                                     market_data["mode"] = sub_info["numeric_mode"]
@@ -801,11 +796,17 @@ class GrowwNATSWebSocket:
             token = spec.get("token", "")
             symbol = spec.get("symbol")
             instrumenttype = spec.get("instrumenttype")
+            # OpenAlgo-facing exchange (NFO/BFO/NSE_INDEX/...) for dispatch
+            # back to the adapter; falls back to the broker-side `exchange`
+            # arg (NSE/BSE) when not provided. The topic generator still
+            # needs the broker-side exchange.
+            openalgo_exchange = spec.get("openalgo_exchange") or exchange
+            # `exchange` is the broker-side NSE/BSE here, so index detection
+            # must look at the OpenAlgo exchange (NSE_INDEX/BSE_INDEX).
+            is_index = instrumenttype == "INDEX" or "INDEX" in str(openalgo_exchange).upper()
 
             # Indices don't have depth — redirect to LTP, mirroring subscribe_depth
-            if sub_type == "depth" and (
-                instrumenttype == "INDEX" or "INDEX" in str(exchange).upper()
-            ):
+            if sub_type == "depth" and is_index:
                 logger.warning(
                     f"INDEX detected: {symbol} - Indices don't have depth data. Redirecting to LTP subscription."
                 )
@@ -817,11 +818,6 @@ class GrowwNATSWebSocket:
             # an existing/future real LTP sub, otherwise the SID stored in
             # nats_sids[sub_key] gets overwritten and the older SID leaks.
             sub_key = spec.get("sub_key")
-            # OpenAlgo-facing exchange (NFO/BFO/NSE_INDEX/...) for dispatch
-            # back to the adapter; falls back to the broker-side `exchange`
-            # arg (NSE/BSE) when not provided. The topic generator still
-            # needs the broker-side exchange — see groww_exchange below.
-            openalgo_exchange = spec.get("openalgo_exchange") or exchange
             if sub_type == "depth":
                 if not sub_key:
                     sub_key = f"depth_{exchange}_{segment}_{token}"
@@ -844,7 +840,10 @@ class GrowwNATSWebSocket:
                     "groww_exchange": exchange,
                     "segment": segment,
                     "exchange_token": token,
-                    "mode": "ltp",
+                    # "index" routes to /ld/indices/{exch}/price.{token},
+                    # matching growwapi FeedConstants.get_live_index_topic.
+                    # Indices are not published on /ld/eq/... at all.
+                    "mode": "index" if is_index else "ltp",
                     "numeric_mode": 1,
                     "instrumenttype": instrumenttype,
                 }
@@ -937,8 +936,6 @@ class GrowwNATSWebSocket:
         else:
             mode = "ltp"
 
-        # Store subscription info - CRITICAL FIX: Set correct mode for LTP
-        mode = "ltp"  # This function is for LTP subscriptions
         self.subscriptions[sub_key] = {
             "symbol": symbol if symbol else f"{token}",  # Use actual symbol if provided
             "exchange": exchange,

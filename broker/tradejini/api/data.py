@@ -1045,6 +1045,8 @@ class BrokerData:
                 if col not in df.columns:
                     df[col] = 0.0
 
+            df = self._repair_candles(df, exchange, symbol, interval)
+
             # Reset index to include datetime as a column
             df = df.reset_index()
 
@@ -1067,6 +1069,65 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_history: {str(e)}", exc_info=True)
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    @staticmethod
+    def _repair_candles(
+        df: pd.DataFrame, exchange: str, symbol: str, interval: str
+    ) -> pd.DataFrame:
+        """Make every candle satisfy low <= open, close <= high with volume >= 0.
+
+        Chart clients validate that invariant and reject the whole series over
+        one bad bar ("History contains an invalid candle"). Tradejini's chart
+        API returns such bars: MCX GOLDPETAL30NOV26FUT 1m at 2026-10-27 09:00,
+        the session's first minute, came back open=14328 with low=14334, so
+        /trading could not load the contract on 1m.
+
+        Same repair as broker/shoonya and broker/kotak: the open and the close
+        are prices that actually traded, so the wick is widened to cover them,
+        and a volume that cannot be true is zeroed rather than costing the bar
+        its prices. Rows missing an OHLC value are dropped: a NaN reaches the
+        client as an invalid candle too, and there is no honest repair.
+        """
+        if df.empty:
+            return df
+
+        ohlc = ["open", "high", "low", "close"]
+        df = df.copy()
+        for col in ohlc + ["volume"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        usable = df[ohlc].notna().all(axis=1)
+        if not usable.all():
+            logger.warning(
+                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing "
+                f"OHLC for {exchange}:{symbol} {interval}"
+            )
+            df = df[usable]
+            if df.empty:
+                return df
+
+        high = df[ohlc].max(axis=1)
+        low = df[ohlc].min(axis=1)
+        broken = (high != df["high"]) | (low != df["low"])
+        if broken.any():
+            logger.info(
+                f"HISTORY API - Widened {int(broken.sum())} candle(s) whose high/low "
+                f"excluded their own open/close for {exchange}:{symbol} {interval}"
+            )
+            df["high"] = high
+            df["low"] = low
+
+        volume = df["volume"].fillna(0)
+        negative = volume < 0
+        if negative.any():
+            logger.warning(
+                f"HISTORY API - Zeroing {int(negative.sum())} negative volume(s) for "
+                f"{exchange}:{symbol} {interval}"
+            )
+            volume = volume.mask(negative, 0)
+        df["volume"] = volume
+
+        return df
 
     def _get_historical_data(
         self, symbol: str, exchange: str, interval: str, from_ts: int, to_ts: int
