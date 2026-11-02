@@ -64,6 +64,7 @@ export function SymbolSearchInput({
     enabled: open && query.trim().length >= 2,
     staleTime: 60_000,
   })
+  const isListboxOpen = open && query.trim().length >= 2 && results.length > 0
   const suggestions = results.slice(0, 25)
 
   const choose = (symbol: string) => {
@@ -78,8 +79,8 @@ export function SymbolSearchInput({
         role="combobox"
         aria-autocomplete="list"
         aria-haspopup="listbox"
-        aria-expanded={open && query.trim().length >= 2}
-        aria-controls={open && query.trim().length >= 2 ? listboxId : undefined}
+        aria-expanded={isListboxOpen}
+        aria-controls={isListboxOpen ? listboxId : undefined}
         aria-activedescendant={
           open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined
         }
