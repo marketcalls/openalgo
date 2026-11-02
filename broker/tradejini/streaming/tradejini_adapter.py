@@ -583,9 +583,15 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
 
     def _prune_tick_cache(self) -> None:
-        """Drop cached L1/L5 data for tokens no longer subscribed. Caller holds self.lock."""
-        live = {f"{sub['token']}_{sub['brexchange']}" for sub in self.subscriptions.values()}
-        for cache in (self._last_l1, self._last_l5):
+        """Drop cached L1/L5 data a feed no longer carries. Caller holds self.lock.
+
+        Pruned per feed: a token whose Depth was dropped while its LTP stays
+        keeps its L1 quote but loses its book, so a later Depth subscription
+        cannot publish the old book before a fresh one arrives.
+        """
+        live_l1 = set(self._feed_tokens("L1"))
+        live_l5 = set(self._feed_tokens("L5"))
+        for cache, live in ((self._last_l1, live_l1), (self._last_l5, live_l5)):
             for key in [k for k in cache if k not in live]:
                 del cache[key]
 
@@ -612,6 +618,13 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         elif status == "closed":
             self.logger.info(f"Tradejini WebSocket connection closed: {message.get('reason')}")
             self.connected = False
+
+            # The cached halves belong to the session that ended. Kept, the
+            # first tick after a reconnect would pair a fresh quote with a book
+            # from before the outage.
+            with self.lock:
+                self._last_l1.clear()
+                self._last_l5.clear()
 
             # Attempt to reconnect if we're still running. Backoff and the
             # attempt cap live in _schedule_reconnect - this callback fires on
@@ -678,7 +691,11 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if matching_subscriptions:
                     if msg_type == "L1":
                         self._last_l1[symbol_str] = message
-                    elif msg_type in ("L5", "L2"):
+                    elif msg_type in ("L5", "L2") and any(
+                        sub["mode"] == 3 for sub in matching_subscriptions
+                    ):
+                        # Only while Depth is subscribed: a book still in
+                        # flight after Depth was dropped must not be re-cached.
                         self._last_l5[symbol_str] = message
                     last_l1 = self._last_l1.get(symbol_str)
                     last_l5 = self._last_l5.get(symbol_str)
@@ -690,9 +707,10 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return
 
             # A Depth update needs both halves: the price fields from L1 and the
-            # book from L5. Until the book has arrived there is nothing to show.
+            # book from L5. Until both have arrived there is nothing to show;
+            # publishing the book alone would report LTP and OHLC as 0.
             depth_message = None
-            if last_l5 is not None:
+            if last_l1 is not None and last_l5 is not None:
                 depth_message = dict(last_l1 or {})
                 depth_message.update(last_l5)
 

@@ -9,6 +9,7 @@ import math
 
 import pandas as pd
 
+import broker.tradejini.api.data as tjdata
 from broker.tradejini.api.data import BrokerData
 
 
@@ -18,7 +19,7 @@ def _repair(rows):
 
 def _valid(row):
     return (
-        all(math.isfinite(row[k]) for k in ("open", "high", "low", "close"))
+        all(math.isfinite(row[k]) for k in ("open", "high", "low", "close", "volume"))
         and row["high"] >= max(row["open"], row["close"], row["low"])
         and row["low"] <= min(row["open"], row["close"])
         and row["volume"] >= 0
@@ -58,3 +59,60 @@ def test_negative_volume_is_zeroed_and_missing_prices_dropped():
     assert len(out) == 1
     assert out.iloc[0]["volume"] == 0
     assert all(_valid(r) for _, r in out.iterrows())
+
+
+def test_infinite_prices_are_dropped_and_infinite_volume_zeroed():
+    inf = float("inf")
+    out = _repair(
+        [
+            {"open": inf, "high": 105.0, "low": 95.0, "close": 101.0, "volume": 3},
+            {"open": 100.0, "high": 105.0, "low": -inf, "close": 101.0, "volume": 3},
+            {"open": 100.0, "high": 105.0, "low": 95.0, "close": 101.0, "volume": inf},
+        ]
+    )
+    assert len(out) == 1
+    assert out.iloc[0]["volume"] == 0
+    assert all(_valid(r) for _, r in out.iterrows())
+
+
+class _Response:
+    def __init__(self, payload):
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_bar_missing_a_price_is_not_drawn_at_zero(monkeypatch):
+    """A missing price must stay missing so the repair drops the bar."""
+    bars = [
+        {"time": 1793332800, "open": 100.0, "high": 105.0, "low": 95.0, "close": 101.0},
+        {"time": 1793332860, "high": 106.0, "low": 96.0, "close": 102.0, "volume": 9},
+        {"open": 100.0, "high": 105.0, "low": 95.0, "close": 101.0, "volume": 1},
+    ]
+
+    class _Client:
+        def get(self, *args, **kwargs):
+            return _Response({"s": "ok", "d": {"bars": bars}})
+
+    monkeypatch.setattr(tjdata, "get_httpx_client", lambda: _Client())
+    monkeypatch.setattr(tjdata, "get_api_key", lambda: "key")
+    monkeypatch.setattr(tjdata, "get_br_symbol", lambda s, e: "FUTCOM_X_MCX_2026-11-30")
+
+    broker = BrokerData.__new__(BrokerData)
+    broker.auth_token = "token"
+    ok, rows = broker._get_historical_data("X", "MCX", "1", 0, 1)
+
+    assert ok
+    assert len(rows) == 2  # the bar without a time is skipped
+    assert math.isnan(rows[1]["open"])
+    assert math.isnan(rows[0]["volume"])
+
+    out = _repair(rows)
+    assert len(out) == 1
+    assert out.iloc[0]["open"] == 100.0
+    assert out.iloc[0]["volume"] == 0

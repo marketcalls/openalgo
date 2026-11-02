@@ -392,3 +392,80 @@ def test_disconnect_stops_a_pending_retry(monkeypatch):
 
     time.sleep(0.8)
     assert len(client.calls) == 1
+
+
+# --- Depth cache review fixes -----------------------------------------------
+
+
+def test_depth_waits_for_l1_when_the_book_arrives_first():
+    adapter, published = _depth_adapter()
+
+    adapter._on_data(None, dict(L5_TICK))
+    assert published == []  # a book alone would show LTP and OHLC as 0
+
+    adapter._on_data(None, dict(L1_TICK))
+    _, data = published[-1]
+    assert data["ltp"] == 1155.0
+    assert data["depth"]["buy"][0]["price"] == 1154.8
+
+
+def test_closed_session_drops_cached_halves():
+    adapter, published = _depth_adapter()
+    adapter._on_data(None, dict(L1_TICK))
+    adapter._on_data(None, dict(L5_TICK))
+    adapter.running = False  # no reconnect from this test
+
+    adapter._on_connection_event(None, {"s": "closed", "code": 1006, "reason": "drop"})
+
+    assert adapter._last_l1 == {}
+    assert adapter._last_l5 == {}
+    count = len(published)
+    adapter._on_data(None, dict(L1_TICK, ltp=1160.0))  # first tick of a new session
+    assert len(published) == count  # no stale book paired with it
+
+
+def test_dropping_depth_keeps_the_quote_but_not_the_book(monkeypatch):
+    adapter, _ = _depth_adapter()
+    adapter.subscriptions["INFY_NSE_1"] = {
+        "symbol": "INFY",
+        "exchange": "NSE",
+        "brexchange": "NSE",
+        "token": "1594",
+        "mode": 1,
+    }
+    adapter._on_data(None, dict(L1_TICK))
+    adapter._on_data(None, dict(L5_TICK))
+    monkeypatch.setattr(
+        ta.SymbolMapper,
+        "get_token_from_symbol",
+        staticmethod(lambda s, e: {"token": "1594", "brexchange": "NSE"}),
+    )
+
+    adapter.unsubscribe("INFY", "NSE", mode=3)
+    assert "1594_NSE" in adapter._last_l1
+    assert adapter._last_l5 == {}
+
+    # A book still in flight after the unsubscribe is not cached again
+    adapter._on_data(None, dict(L5_TICK))
+    assert adapter._last_l5 == {}
+
+
+class _SentWS:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, data):
+        self.sent.append(data)
+
+
+def test_subscribe_l1_accepts_a_generator():
+    import json
+
+    stream = nx.NxtradStream("example.invalid")
+    stream.isConnected = True
+    stream.ws = _SentWS()
+
+    stream.subscribeL1(t for t in ["2885_NSE", "500325_BSE"])
+
+    request = json.loads(stream.ws.sent[0])
+    assert request["tokens"] == [{"t": "2885_NSE"}, {"t": "500325_BSE"}]
