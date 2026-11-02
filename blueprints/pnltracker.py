@@ -13,8 +13,10 @@ from flask_cors import cross_origin
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
 from services.history_service import get_history
 from services.tradebook_service import get_tradebook
+from utils.keyed_locks import KeyedLocks
 from utils.logging import get_logger
 from utils.session import check_session_validity
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -124,6 +126,34 @@ class RateLimiter:
 
 # Global rate limiter instance - 2 calls per second (conservative limit)
 history_rate_limiter = RateLimiter(calls_per_second=2)
+
+# Several tabs refreshing together would each fetch the same 1m history; share it for a minute
+_history_cache = LockedTTLCache(maxsize=1024, ttl=60)
+_history_locks = KeyedLocks(name="pnltracker-history")
+
+
+def fetch_intraday_history(symbol, exchange, today_str, api_key):
+    """Today's 1m history for a symbol, fetched from the broker at most once a minute."""
+    key = (symbol, exchange, today_str)
+    with _history_locks.hold(key):
+        cached = _history_cache.get(key)
+        if cached is not None:
+            return True, cached, 200
+
+        history_rate_limiter.wait()
+        logger.debug(f"Fetching historical data for {symbol} on {exchange}")
+        success, hist_response, status = get_history(
+            symbol=symbol,
+            exchange=exchange,
+            interval="1m",
+            start_date=today_str,
+            end_date=today_str,
+            api_key=api_key,
+        )
+        if success and "data" in hist_response:
+            _history_cache[key] = hist_response
+        return success, hist_response, status
+
 
 # Define the blueprint
 pnltracker_bp = Blueprint("pnltracker_bp", __name__, url_prefix="/")
@@ -492,17 +522,8 @@ def get_pnl_data():
 
             # Now get historical data and calculate PnL for each position window
             try:
-                # Apply rate limiting before API call (2 calls/sec to stay under broker's 3/sec limit)
-                history_rate_limiter.wait()
-                logger.debug(f"Fetching historical data for {symbol} on {exchange}")
-
-                success, hist_response, _ = get_history(
-                    symbol=symbol,
-                    exchange=exchange,
-                    interval="1m",
-                    start_date=today_str,
-                    end_date=today_str,
-                    api_key=api_key,
+                success, hist_response, _ = fetch_intraday_history(
+                    symbol, exchange, today_str, api_key
                 )
 
                 if success and "data" in hist_response:
@@ -663,14 +684,8 @@ def get_pnl_data():
                 # Case 1: Open carry-forward position (no trades today for this symbol)
                 if qty != 0 and pos_key not in symbol_trades:
                     try:
-                        history_rate_limiter.wait()
-                        success, hist_response, _ = get_history(
-                            symbol=symbol,
-                            exchange=exchange,
-                            interval="1m",
-                            start_date=today_str,
-                            end_date=today_str,
-                            api_key=api_key,
+                        success, hist_response, _ = fetch_intraday_history(
+                            symbol, exchange, today_str, api_key
                         )
 
                         if success and "data" in hist_response:
@@ -762,14 +777,8 @@ def get_pnl_data():
                     close_time = trades_for_symbol[-1].get("parsed_time")
 
                     try:
-                        history_rate_limiter.wait()
-                        success, hist_response, _ = get_history(
-                            symbol=symbol,
-                            exchange=exchange,
-                            interval="1m",
-                            start_date=today_str,
-                            end_date=today_str,
-                            api_key=api_key,
+                        success, hist_response, _ = fetch_intraday_history(
+                            symbol, exchange, today_str, api_key
                         )
 
                         if success and "data" in hist_response:
@@ -885,18 +894,8 @@ def get_pnl_data():
                     continue
 
                 try:
-                    # Apply rate limiting before API call (2 calls/sec to stay under broker's 3/sec limit)
-                    history_rate_limiter.wait()
-                    logger.debug(f"Fetching historical data for position {symbol} on {exchange}")
-
-                    # Get historical data for this position
-                    success, hist_response, _ = get_history(
-                        symbol=symbol,
-                        exchange=exchange,
-                        interval="1m",
-                        start_date=today_str,
-                        end_date=today_str,
-                        api_key=api_key,
+                    success, hist_response, _ = fetch_intraday_history(
+                        symbol, exchange, today_str, api_key
                     )
 
                     if success and "data" in hist_response:
