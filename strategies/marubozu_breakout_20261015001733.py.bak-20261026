@@ -1,0 +1,896 @@
+"""Opening Marubozu breakout strategy for the OpenAlgo /python strategy host.
+
+Flow (one trading day):
+    09:05  start, load universe, build 10-day first-5-minute volume baseline
+    09:20  read the 09:15-09:20 opening candle for every symbol
+           -> data valid? -> bullish Marubozu + volume? -> rank by relative volume
+    until  ENTRY_CUTOFF: wait for price to clear the opening-candle high by
+           BREAKOUT_BUFFER_PCT -> breakout not too extended? -> size the trade
+           -> risk and capital checks -> MARKET BUY (MIS) through OpenAlgo
+           -> confirm fill -> place SL-M SELL at the opening-candle low or
+              MAX_STOP_PCT below the fill, whichever is closer (at the broker)
+           Big opening candles (range > BIG_CANDLE_PCT) use the pullback entry
+           instead: wait for price to touch the candle midpoint, then buy once it
+           bounces PULLBACK_BOUNCE_PCT off its low since the touch. Stop: candle low.
+           Opening candles smaller than MIN_RANGE_PCT are skipped.
+    manage: the script watches price.
+            TP1: cancel the SL-M, sell TP1_FRACTION of the shares at MARKET, then
+            protect the rest with a new SL-M at the runner stop.
+            TP2: cancel the SL-M and sell the rest at MARKET.
+                          breakout                pullback
+            TP1           +TP1_PCT                candle high
+            runner stop   +RUNNER_STOP_PCT        entry price (breakeven)
+            TP2           +RUNNER_TARGET_PCT      candle high + PULLBACK_TP2_R x risk
+            If an SL-M fills first, the broker has closed those shares.
+            A quantity of 1 cannot be split, so it exits in full at TP1.
+    15:10  square off anything still open (cancel SL-M, sell at MARKET)
+
+The stop-loss lives at the broker, so a crashed script still leaves every position
+protected. State is saved to a JSON file so a restart resumes managing open trades.
+
+Every setting below can be overridden by a parameter of the same name in the
+/python upload form (they arrive as environment variables).
+
+Test in Analyzer (sandbox) mode before running live.
+"""
+
+import csv
+import json
+import math
+import os
+import signal
+import sys
+import time
+from datetime import date, datetime, timedelta
+from datetime import time as dtime
+from zoneinfo import ZoneInfo
+
+from openalgo import api
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+# ---------------------------------------------------------------------------
+# Settings (override any of these with a /python parameter of the same name)
+# ---------------------------------------------------------------------------
+
+
+def _env(name, default, cast=str):
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return cast(value)
+    except ValueError:
+        print(f"[CONFIG] Invalid value for {name}={value!r}, using default {default!r}", flush=True)
+        return default
+
+
+def _hhmm(value):
+    hour, minute = value.split(":")
+    return dtime(int(hour), int(minute))
+
+
+STRATEGY_NAME = _env("STRATEGY_TAG", "MarubozuBreakout")
+EXCHANGE = "NSE"
+PRODUCT = "MIS"
+
+# Universe: comma-separated symbols. Default is a liquid large-cap list; replace it
+# with your NIFTY 200 (or any) list through the SYMBOLS parameter.
+DEFAULT_SYMBOLS = (
+    "RELIANCE,HDFCBANK,ICICIBANK,INFY,TCS,SBIN,BHARTIARTL,ITC,LT,KOTAKBANK,"
+    "AXISBANK,HINDUNILVR,BAJFINANCE,MARUTI,SUNPHARMA,M&M,TITAN,ULTRACEMCO,"
+    "NTPC,POWERGRID,TATASTEEL,ONGC,HCLTECH,WIPRO,TECHM,ADANIENT,ADANIPORTS,"
+    "JSWSTEEL,HINDALCO,COALINDIA,BAJAJFINSV,NESTLEIND,ASIANPAINT,GRASIM,CIPLA,"
+    "DRREDDY,EICHERMOT,HEROMOTOCO,BPCL,BRITANNIA,TATACONSUM,APOLLOHOSP,"
+    "SBILIFE,HDFCLIFE,INDUSINDBK,SHRIRAMFIN,TRENT,BEL,BAJAJ-AUTO,DLF"
+)
+SYMBOLS = [s.strip().upper() for s in _env("SYMBOLS", DEFAULT_SYMBOLS).split(",") if s.strip()]
+
+# Candle and filter rules
+MIN_BODY_PCT = _env("MIN_BODY_PCT", 80.0, float)  # body >= 80% of candle range
+MAX_WICK_PCT = _env("MAX_WICK_PCT", 10.0, float)  # each wick <= 10% of range
+MIN_REL_VOLUME = _env("MIN_REL_VOLUME", 2.0, float)  # opening vol >= 2x baseline
+BASELINE_DAYS = _env("BASELINE_DAYS", 10, int)  # days for the volume baseline
+TOP_N = _env("TOP_N", 5, int)  # candidates kept after ranking
+MAX_EXTENSION_PCT = _env("MAX_EXTENSION_PCT", 0.5, float)  # skip if > 0.5% above high
+BREAKOUT_BUFFER_PCT = _env("BREAKOUT_BUFFER_PCT", 0.1, float)  # enter at high + 0.1%
+MIN_RANGE_PCT = _env("MIN_RANGE_PCT", 0.3, float)  # skip opening candles smaller than this
+BIG_CANDLE_PCT = _env("BIG_CANDLE_PCT", 1.5, float)  # above this: pullback entry
+PULLBACK_BOUNCE_PCT = _env("PULLBACK_BOUNCE_PCT", 0.1, float)  # bounce off the dip to buy
+PULLBACK_TP2_R = _env("PULLBACK_TP2_R", 0.5, float)  # TP2 = candle high + 0.5 x risk
+
+# Trade rules (all percentages are from the fill price)
+MAX_STOP_PCT = _env("MAX_STOP_PCT", 0.8, float)  # stop: candle low, or -0.8% if closer
+TP1_PCT = _env("TP1_PCT", 0.6, float)  # first target
+TP1_FRACTION = _env("TP1_FRACTION", 0.5, float)  # share of the quantity sold at TP1
+RUNNER_STOP_PCT = _env("RUNNER_STOP_PCT", 0.4, float)  # stop for the rest after TP1
+RUNNER_TARGET_PCT = _env("RUNNER_TARGET_PCT", 0.8, float)  # target for the rest
+RISK_PER_TRADE = _env("RISK_PER_TRADE", 1000.0, float)  # rupees risked per trade
+MAX_CAPITAL_PER_TRADE = _env("MAX_CAPITAL_PER_TRADE", 100000.0, float)
+MARGIN_FACTOR = _env("MARGIN_FACTOR", 1.0, float)  # cash needed = value * factor
+MAX_TRADES_PER_DAY = _env("MAX_TRADES_PER_DAY", 3, int)
+MAX_DAILY_LOSS = _env("MAX_DAILY_LOSS", 3000.0, float)
+
+# Times (IST)
+CANDLE_READY = _hhmm(_env("CANDLE_READY", "09:20"))
+ENTRY_CUTOFF = _hhmm(_env("ENTRY_CUTOFF", "11:00"))
+SQUARE_OFF = _hhmm(_env("SQUARE_OFF", "15:10"))
+
+POLL_SECONDS = _env("POLL_SECONDS", 2.0, float)
+FILL_TIMEOUT_SECONDS = _env("FILL_TIMEOUT_SECONDS", 30, int)
+QUOTE_BATCH = _env("QUOTE_BATCH", 50, int)
+TICK = 0.05
+
+API_KEY = os.getenv("OPENALGO_API_KEY") or os.getenv("API_KEY", "")
+API_HOST = os.getenv("HOST_SERVER") or os.getenv("OPENALGO_HOST", "http://127.0.0.1:5000")
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.join(HERE, f"marubozu_state_{date.today():%Y%m%d}.json")
+TRADES_CSV = os.path.join(HERE, "marubozu_trades.csv")
+
+_stop_requested = False
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def now_ist():
+    return datetime.now(IST)
+
+
+def log(tag, message):
+    print(f"{now_ist():%H:%M:%S} [{tag}] {message}", flush=True)
+
+
+def round_down_tick(price):
+    return math.floor(price / TICK + 1e-9) * TICK
+
+
+def to_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def ok(response):
+    return isinstance(response, dict) and response.get("status") == "success"
+
+
+def sleep_until(target_time):
+    while not _stop_requested:
+        current = now_ist()
+        if current.time() >= target_time:
+            return True
+        time.sleep(
+            min(
+                30.0,
+                max(
+                    1.0,
+                    (datetime.combine(current.date(), target_time, IST) - current).total_seconds(),
+                ),
+            )
+        )
+    return False
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as fh:
+            state = json.load(fh)
+        log("STATE", f"Resumed state from {os.path.basename(STATE_FILE)}")
+        return state
+    return {"candidates": {}, "trades": {}, "rejected": {}, "trades_taken": 0, "realized_pnl": 0.0}
+
+
+def save_state(state):
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(state, fh, indent=2, default=str)
+    os.replace(tmp, STATE_FILE)
+
+
+def record_trade(trade):
+    new_file = not os.path.exists(TRADES_CSV)
+    fields = [
+        "date",
+        "symbol",
+        "mode",
+        "qty",
+        "entry",
+        "initial_stop",
+        "tp1_qty",
+        "tp1_exit",
+        "stop",
+        "target",
+        "exit",
+        "exit_reason",
+        "pnl",
+        "entry_order",
+        "exit_order",
+    ]
+    with open(TRADES_CSV, "a", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        if new_file:
+            writer.writeheader()
+        writer.writerow(
+            {k: trade.get(k, "") for k in fields}
+            | {"date": f"{date.today()}", "qty": trade.get("initial_qty", trade.get("qty"))}
+        )
+
+
+def reject(state, symbol, reason):
+    state["rejected"][symbol] = reason
+    log("REJECT", f"{symbol}: {reason}")
+
+
+# ---------------------------------------------------------------------------
+# Market data
+# ---------------------------------------------------------------------------
+
+
+def get_quotes(client, symbols):
+    """Return {symbol: data} for the given symbols using batched multiquotes."""
+    out = {}
+    for i in range(0, len(symbols), QUOTE_BATCH):
+        batch = [{"symbol": s, "exchange": EXCHANGE} for s in symbols[i : i + QUOTE_BATCH]]
+        resp = client.multiquotes(symbols=batch)
+        if not ok(resp):
+            log("DATA", f"multiquotes failed: {resp}")
+            continue
+        for row in resp.get("results", []):
+            if isinstance(row.get("data"), dict):
+                out[row.get("symbol")] = row["data"]
+    return out
+
+
+def first_candle_from_history(client, symbol, day):
+    """Return the 09:15 5-minute candle for `day` from broker history, or None."""
+    df = client.history(
+        symbol=symbol, exchange=EXCHANGE, interval="5m", start_date=f"{day}", end_date=f"{day}"
+    )
+    if not hasattr(df, "empty") or df.empty:
+        return None
+    df = df[df.index.time == dtime(9, 15)]
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    return {
+        "open": float(row["open"]),
+        "high": float(row["high"]),
+        "low": float(row["low"]),
+        "close": float(row["close"]),
+        "volume": float(row["volume"]),
+    }
+
+
+def build_volume_baseline(client, symbols):
+    """Average 09:15 5-minute candle volume over the last BASELINE_DAYS sessions."""
+    baseline = {}
+    today = now_ist().date()
+    start = today - timedelta(days=BASELINE_DAYS * 2 + 5)
+    end = today - timedelta(days=1)
+    for symbol in symbols:
+        if _stop_requested:
+            break
+        df = client.history(
+            symbol=symbol,
+            exchange=EXCHANGE,
+            interval="5m",
+            start_date=f"{start}",
+            end_date=f"{end}",
+        )
+        if not hasattr(df, "empty") or df.empty:
+            log("BASELINE", f"{symbol}: no history ({df if isinstance(df, dict) else 'empty'})")
+            continue
+        firsts = df[df.index.time == dtime(9, 15)]["volume"].tail(BASELINE_DAYS)
+        if len(firsts) >= max(3, BASELINE_DAYS // 2) and firsts.mean() > 0:
+            baseline[symbol] = float(firsts.mean())
+        else:
+            log("BASELINE", f"{symbol}: only {len(firsts)} opening candles, skipped")
+    log("BASELINE", f"Volume baseline ready for {len(baseline)}/{len(symbols)} symbols")
+    return baseline
+
+
+# ---------------------------------------------------------------------------
+# Selection: data valid -> Marubozu + volume -> rank
+# ---------------------------------------------------------------------------
+
+
+def is_bullish_marubozu(c):
+    rng = c["high"] - c["low"]
+    if rng <= 0 or c["close"] <= c["open"]:
+        return False, "not a bullish candle"
+    body_pct = (c["close"] - c["open"]) / rng * 100
+    upper_pct = (c["high"] - c["close"]) / rng * 100
+    lower_pct = (c["open"] - c["low"]) / rng * 100
+    if body_pct < MIN_BODY_PCT:
+        return False, f"body {body_pct:.0f}% < {MIN_BODY_PCT:.0f}%"
+    if upper_pct > MAX_WICK_PCT or lower_pct > MAX_WICK_PCT:
+        return False, f"wicks {upper_pct:.0f}%/{lower_pct:.0f}% > {MAX_WICK_PCT:.0f}%"
+    return True, f"body {body_pct:.0f}%"
+
+
+def select_candidates(client, state, baseline):
+    today = now_ist().date()
+    quotes = get_quotes(client, list(baseline))
+    scored = []
+    for symbol, avg_vol in baseline.items():
+        q = quotes.get(symbol)
+        if not q:
+            reject(state, symbol, "no opening quote")
+            continue
+        # Pre-filter on the quote (day OHLC at 09:20 == opening candle), then
+        # confirm with the exact 09:15 candle from history.
+        pre = {
+            "open": to_float(q.get("open")),
+            "high": to_float(q.get("high")),
+            "low": to_float(q.get("low")),
+            "close": to_float(q.get("ltp")),
+        }
+        if min(pre.values()) <= 0 or to_float(q.get("volume")) <= 0:
+            reject(state, symbol, "incomplete opening data")
+            continue
+        passed, _ = is_bullish_marubozu(pre)
+        if not passed:
+            reject(state, symbol, "not a Marubozu (quote pre-filter)")
+            continue
+        candle = first_candle_from_history(client, symbol, today)
+        if not candle or min(candle.values()) <= 0:
+            reject(state, symbol, "opening candle unavailable or invalid")
+            continue
+        passed, why = is_bullish_marubozu(candle)
+        if not passed:
+            reject(state, symbol, f"not a Marubozu ({why})")
+            continue
+        rel_vol = candle["volume"] / avg_vol
+        if rel_vol < MIN_REL_VOLUME:
+            reject(state, symbol, f"relative volume {rel_vol:.2f} < {MIN_REL_VOLUME}")
+            continue
+        range_pct = (candle["high"] - candle["low"]) / candle["low"] * 100
+        if range_pct < MIN_RANGE_PCT:
+            reject(state, symbol, f"first candle too small ({range_pct:.2f}% < {MIN_RANGE_PCT}%)")
+            continue
+        scored.append((rel_vol, range_pct, symbol, candle))
+
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    for rel_vol, range_pct, symbol, candle in scored[:TOP_N]:
+        mode = "pullback" if range_pct > BIG_CANDLE_PCT else "breakout"
+        state["candidates"][symbol] = candle | {
+            "rel_vol": round(rel_vol, 2),
+            "range_pct": round(range_pct, 2),
+            "mode": mode,
+        }
+        log(
+            "CANDIDATE",
+            f"{symbol}: high {candle['high']} low {candle['low']} "
+            f"relvol {rel_vol:.2f} range {range_pct:.2f}% -> {mode} entry",
+        )
+    for _, _, symbol, _ in scored[TOP_N:]:
+        reject(state, symbol, "ranked below TOP_N")
+    if not state["candidates"]:
+        log("SELECT", "No candidates today")
+    save_state(state)
+
+
+# ---------------------------------------------------------------------------
+# Orders
+# ---------------------------------------------------------------------------
+
+
+def order_status(client, order_id):
+    resp = client.orderstatus(order_id=order_id, strategy=STRATEGY_NAME)
+    if not ok(resp):
+        return None, resp
+    return resp.get("data", {}), resp
+
+
+def wait_for_terminal(client, order_id, timeout):
+    """Poll an order until complete/rejected/cancelled or timeout. Returns its data."""
+    deadline = time.time() + timeout
+    data = None
+    while time.time() < deadline:
+        data, _ = order_status(client, order_id)
+        status = (data or {}).get("order_status", "").lower()
+        if status in ("complete", "rejected", "cancelled"):
+            return data
+        time.sleep(1)
+    return data
+
+
+def net_position(client, symbol):
+    resp = client.openposition(
+        strategy=STRATEGY_NAME, symbol=symbol, exchange=EXCHANGE, product=PRODUCT
+    )
+    if not ok(resp):
+        return None
+    return int(to_float(resp.get("quantity"), 0))
+
+
+def place_stop(client, symbol, qty, stop_price):
+    resp = client.placeorder(
+        strategy=STRATEGY_NAME,
+        symbol=symbol,
+        action="SELL",
+        exchange=EXCHANGE,
+        price_type="SL-M",
+        product=PRODUCT,
+        quantity=qty,
+        price=0,
+        trigger_price=round_down_tick(stop_price),
+    )
+    return resp.get("orderid") if ok(resp) else None, resp
+
+
+def market_sell(client, symbol, qty):
+    resp = client.placeorder(
+        strategy=STRATEGY_NAME,
+        symbol=symbol,
+        action="SELL",
+        exchange=EXCHANGE,
+        price_type="MARKET",
+        product=PRODUCT,
+        quantity=qty,
+    )
+    return resp.get("orderid") if ok(resp) else None, resp
+
+
+def initial_stop(candle, price):
+    """Breakout: candle low, or MAX_STOP_PCT below `price` if closer. Pullback: candle low."""
+    if candle.get("mode") == "pullback":
+        return candle["low"]
+    return max(candle["low"], price * (1 - MAX_STOP_PCT / 100))
+
+
+def exit_levels(candle, entry, stop):
+    """Return (tp1, runner_stop, runner_target) for a trade filled at `entry`."""
+    if candle.get("mode") == "pullback":
+        tp1 = candle["high"]
+        if tp1 <= entry:  # cannot happen from a midpoint entry; keep TP1 above the fill
+            tp1 = entry * (1 + TP1_PCT / 100)
+        return tp1, entry, candle["high"] + PULLBACK_TP2_R * (entry - stop)
+    return (
+        entry * (1 + TP1_PCT / 100),
+        entry * (1 + RUNNER_STOP_PCT / 100),
+        entry * (1 + RUNNER_TARGET_PCT / 100),
+    )
+
+
+def enter_trade(client, state, symbol, candle, ltp):
+    """Risk checks, MARKET BUY, fill reconciliation, then broker-side SL-M."""
+    risk_per_share = ltp - initial_stop(candle, ltp)
+    if risk_per_share <= 0:
+        reject(state, symbol, "price at or below stop")
+        return
+    qty = int(RISK_PER_TRADE // risk_per_share)
+    qty = min(qty, int(MAX_CAPITAL_PER_TRADE // ltp))
+    if qty < 1:
+        reject(state, symbol, "quantity below 1 after risk/capital sizing")
+        return
+
+    funds = client.funds()
+    cash = to_float(funds.get("data", {}).get("availablecash")) if ok(funds) else 0.0
+    needed = qty * ltp * MARGIN_FACTOR
+    if cash < needed:
+        reject(state, symbol, f"insufficient funds ({cash:.0f} < {needed:.0f})")
+        return
+    existing = net_position(client, symbol)
+    if existing is None:
+        reject(state, symbol, "could not read existing position")
+        return
+    if existing != 0:
+        reject(state, symbol, f"already holding {existing}")
+        return
+
+    resp = client.placeorder(
+        strategy=STRATEGY_NAME,
+        symbol=symbol,
+        action="BUY",
+        exchange=EXCHANGE,
+        price_type="MARKET",
+        product=PRODUCT,
+        quantity=qty,
+    )
+    if not ok(resp):
+        reject(state, symbol, f"entry refused: {resp.get('message', resp)}")
+        return
+    entry_id = resp.get("orderid")
+    state["trades_taken"] += 1
+    log("ENTRY", f"{symbol}: BUY {qty} MARKET sent, order {entry_id}")
+
+    data = wait_for_terminal(client, entry_id, FILL_TIMEOUT_SECONDS) or {}
+    status = data.get("order_status", "").lower()
+    if status != "complete":
+        if status not in ("rejected", "cancelled"):
+            client.cancelorder(order_id=entry_id, strategy=STRATEGY_NAME)
+        filled = net_position(client, symbol) or 0
+        if filled <= 0:
+            reject(
+                state,
+                symbol,
+                f"entry {status or 'unknown'}: "
+                f"{data.get('rejection_reason', data.get('message', ''))}",
+            )
+            save_state(state)
+            return
+        log("ENTRY", f"{symbol}: partial fill {filled}, protecting what was filled")
+        qty = filled
+
+    fill_price = to_float(data.get("average_price")) or ltp
+    held = net_position(client, symbol)
+    if held is not None and held > 0:
+        qty = held  # reconcile against the broker's position
+    stop = round_down_tick(initial_stop(candle, fill_price))
+    tp1, runner_stop, runner_target = exit_levels(candle, fill_price, stop)
+
+    sl_id, sl_resp = place_stop(client, symbol, qty, stop)
+    trade = {
+        "symbol": symbol,
+        "mode": candle.get("mode", "breakout"),
+        "qty": qty,
+        "initial_qty": qty,
+        "entry": round(fill_price, 2),
+        "stop": stop,
+        "initial_stop": stop,
+        "target": round(tp1, 2),
+        "runner_stop": round_down_tick(runner_stop),
+        "runner_target": round(runner_target, 2),
+        "phase": "full",
+        "partial_pnl": 0.0,
+        "entry_order": entry_id,
+        "sl_order": sl_id,
+        "status": "open",
+    }
+    state["trades"][symbol] = trade
+    save_state(state)
+    if not sl_id:
+        log("RISK", f"{symbol}: SL-M refused ({sl_resp}); exiting immediately")
+        close_trade(client, state, trade, "sl_order_failed")
+        return
+    log(
+        "PROTECT",
+        f"{symbol}: filled {qty} @ {fill_price:.2f}, SL-M {stop} (order {sl_id}), TP1 {tp1:.2f}",
+    )
+
+
+def take_tp1(client, state, trade):
+    """Sell part of the position at TP1, then re-protect the rest at the runner levels.
+
+    The SL-M covers the full quantity, so it is cancelled before anything is sold
+    (otherwise a later stop fill could sell more than is held). Every failure path
+    leaves the shares still held under a live SL-M.
+    """
+    symbol = trade["symbol"]
+    if trade["qty"] < 2:
+        return close_trade(client, state, trade, "target")
+
+    trade["tp1_pending"] = True
+    save_state(state)
+    client.cancelorder(order_id=trade["sl_order"], strategy=STRATEGY_NAME)
+    after = wait_for_terminal(client, trade["sl_order"], 10) or {}
+    sl_status = after.get("order_status", "").lower()
+    if sl_status == "complete":
+        # The stop filled before the cancel landed: the whole position is gone.
+        return close_trade(
+            client,
+            state,
+            trade,
+            "stop_loss",
+            exit_price=to_float(after.get("average_price")) or trade["stop"],
+            exit_order=trade["sl_order"],
+        )
+    if sl_status != "cancelled":
+        log("TP1", f"{symbol}: SL-M cancel not confirmed ({sl_status or 'unknown'}); will retry")
+        return False
+
+    held = net_position(client, symbol)
+    if held is None or held <= 0:
+        log("TP1", f"{symbol}: position unreadable or flat ({held}); closing the trade")
+        return close_trade(client, state, trade, "tp1_position_check")
+    sell_qty = max(1, min(held - 1, math.ceil(held * TP1_FRACTION)))
+
+    exit_id, resp = market_sell(client, symbol, sell_qty)
+    data = (wait_for_terminal(client, exit_id, FILL_TIMEOUT_SECONDS) or {}) if exit_id else {}
+    remaining = None
+    for _ in range(3):
+        remaining = net_position(client, symbol)
+        if remaining is not None:
+            break
+        time.sleep(1)
+    if remaining is None:
+        remaining = held - sell_qty if data.get("order_status", "").lower() == "complete" else held
+    sold = held - remaining
+
+    if sold <= 0:
+        # Nothing sold: put the original stop back on everything still held.
+        log("TP1", f"{symbol}: partial sell did not fill ({resp}); restoring SL-M")
+        sl_id, sl_resp = place_stop(client, symbol, held, trade["stop"])
+        trade["sl_order"] = sl_id
+        trade["tp1_pending"] = False
+        save_state(state)
+        if not sl_id:
+            log("RISK", f"{symbol}: SL-M refused ({sl_resp}); exiting at market")
+            close_trade(client, state, trade, "sl_order_failed")
+        return False
+
+    tp1_price = to_float(data.get("average_price")) or trade["target"]
+    leg_pnl = (tp1_price - trade["entry"]) * sold
+    state["realized_pnl"] = round(state["realized_pnl"] + leg_pnl, 2)
+    runner_stop = trade.get("runner_stop") or round_down_tick(
+        trade["entry"] * (1 + RUNNER_STOP_PCT / 100)
+    )
+    runner_target = trade.get("runner_target") or trade["entry"] * (1 + RUNNER_TARGET_PCT / 100)
+    trade.update(
+        {
+            "phase": "runner",
+            "tp1_pending": False,
+            "qty": remaining,
+            "tp1_qty": sold,
+            "tp1_exit": round(tp1_price, 2),
+            "tp1_order": exit_id,
+            "partial_pnl": round(leg_pnl, 2),
+            "stop": runner_stop,
+            "target": round(runner_target, 2),
+            "sl_order": None,
+        }
+    )
+    save_state(state)
+    log("TP1", f"{symbol}: sold {sold} @ {tp1_price:.2f}, P&L {leg_pnl:.2f}")
+
+    if remaining <= 0:
+        return close_trade(client, state, trade, "target", exit_price=tp1_price, exit_order=exit_id)
+    sl_id, sl_resp = place_stop(client, symbol, remaining, runner_stop)
+    trade["sl_order"] = sl_id
+    save_state(state)
+    if not sl_id:
+        log("RISK", f"{symbol}: runner SL-M refused ({sl_resp}); exiting at market")
+        return close_trade(client, state, trade, "sl_order_failed")
+    log(
+        "PROTECT",
+        f"{symbol}: {remaining} left, SL-M {runner_stop} (order {sl_id}), TP2 {runner_target:.2f}",
+    )
+    return True
+
+
+def close_trade(client, state, trade, reason, exit_price=None, exit_order=None):
+    """Cancel the SL-M (if any) and sell whatever is still held at MARKET."""
+    symbol = trade["symbol"]
+    if trade.get("sl_order") and exit_order is None:
+        sl_data, _ = order_status(client, trade["sl_order"])
+        if (sl_data or {}).get("order_status", "").lower() == "complete":
+            # The stop already filled at the broker: nothing left to sell.
+            exit_price = to_float(sl_data.get("average_price")) or trade["stop"]
+            exit_order = trade["sl_order"]
+            reason = "stop_loss"
+        else:
+            client.cancelorder(order_id=trade["sl_order"], strategy=STRATEGY_NAME)
+            after = wait_for_terminal(client, trade["sl_order"], 10) or {}
+            if after.get("order_status", "").lower() == "complete":
+                # The stop filled before the cancel landed: record it as the exit.
+                exit_price = to_float(after.get("average_price")) or trade["stop"]
+                exit_order = trade["sl_order"]
+                reason = "stop_loss"
+
+    if exit_order is None:
+        held = net_position(client, symbol)
+        if held is None:
+            log("EXIT", f"{symbol}: cannot read position; will retry")
+            return False
+        if held > 0:
+            exit_order, resp = market_sell(client, symbol, held)
+            if not exit_order:
+                log("EXIT", f"{symbol}: exit refused ({resp}); will retry")
+                return False
+            data = wait_for_terminal(client, exit_order, FILL_TIMEOUT_SECONDS) or {}
+            exit_price = to_float(data.get("average_price")) or exit_price
+
+    exit_price = exit_price or trade["entry"]
+    leg_pnl = (exit_price - trade["entry"]) * trade["qty"]
+    pnl = leg_pnl + trade.get("partial_pnl", 0.0)  # TP1 leg was booked at TP1
+    trade.update(
+        {
+            "status": "closed",
+            "exit": round(exit_price, 2),
+            "exit_reason": reason,
+            "exit_order": exit_order,
+            "pnl": round(pnl, 2),
+        }
+    )
+    state["realized_pnl"] = round(state["realized_pnl"] + leg_pnl, 2)
+    save_state(state)
+    record_trade(trade)
+    log(
+        "EXIT",
+        f"{symbol}: {reason} @ {exit_price:.2f}, trade P&L {pnl:.2f}, "
+        f"day P&L {state['realized_pnl']:.2f}",
+    )
+    return True
+
+
+def pullback_ready(state, symbol, candle, ltp):
+    """Big-candle entry: touch the midpoint, then bounce PULLBACK_BOUNCE_PCT off the dip.
+
+    The touch and the lowest price since it are kept on the candidate, so a restart
+    resumes the same setup. A fall to the candle low means the setup failed.
+    """
+    mid = (candle["high"] + candle["low"]) / 2
+    if ltp <= candle["low"]:
+        reject(state, symbol, f"pullback reached the candle low {candle['low']} before entry")
+        save_state(state)
+        return False
+    if not candle.get("touched_mid"):
+        if ltp <= mid:
+            candle["touched_mid"] = True
+            candle["dip_low"] = ltp
+            log("PULLBACK", f"{symbol}: LTP {ltp} touched midpoint {mid:.2f}")
+            save_state(state)
+        return False
+    if ltp < candle["dip_low"]:
+        candle["dip_low"] = ltp
+        save_state(state)
+        return False
+    if ltp < candle["dip_low"] * (1 + PULLBACK_BOUNCE_PCT / 100):
+        return False
+    if ltp > mid * (1 + MAX_EXTENSION_PCT / 100):
+        # Bounced too far between polls: wait for another touch of the midpoint.
+        log("PULLBACK", f"{symbol}: LTP {ltp} ran too far above midpoint {mid:.2f}; re-waiting")
+        candle["touched_mid"] = False
+        save_state(state)
+        return False
+    log("PULLBACK", f"{symbol}: LTP {ltp} bounced off {candle['dip_low']} (midpoint {mid:.2f})")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+
+def manage(client, state):
+    while not _stop_requested:
+        now_t = now_ist().time()
+        open_trades = [t for t in state["trades"].values() if t["status"] == "open"]
+
+        if now_t >= SQUARE_OFF:
+            for trade in open_trades:
+                close_trade(client, state, trade, "square_off")
+            if all(t["status"] == "closed" for t in state["trades"].values()):
+                log("DONE", f"Square-off complete. Day P&L {state['realized_pnl']:.2f}")
+                return
+            time.sleep(5)
+            continue
+
+        can_enter = (
+            now_t < ENTRY_CUTOFF
+            and state["trades_taken"] < MAX_TRADES_PER_DAY
+            and state["realized_pnl"] > -MAX_DAILY_LOSS
+        )
+        waiting = (
+            [
+                s
+                for s in state["candidates"]
+                if s not in state["trades"] and s not in state["rejected"]
+            ]
+            if can_enter
+            else []
+        )
+
+        watch = waiting + [t["symbol"] for t in open_trades]
+        if not watch:
+            if not open_trades and not can_enter:
+                log("IDLE", "No open trades and no new entries allowed; waiting for square-off")
+                sleep_until(SQUARE_OFF)
+            else:
+                time.sleep(POLL_SECONDS)
+            continue
+
+        quotes = get_quotes(client, watch)
+
+        # Manage open trades: stop filled at broker? target reached?
+        for trade in open_trades:
+            if not trade.get("sl_order"):
+                log("RISK", f"{trade['symbol']}: no SL-M in place; exiting at market")
+                close_trade(client, state, trade, "no_stop")
+                continue
+            sl_data, _ = order_status(client, trade["sl_order"])
+            sl_status = (sl_data or {}).get("order_status", "").lower()
+            if sl_status == "cancelled" and trade.get("tp1_pending"):
+                # Our own TP1 cancel landed late: carry on with the TP1 sell.
+                take_tp1(client, state, trade)
+                continue
+            if sl_status == "complete":
+                close_trade(
+                    client,
+                    state,
+                    trade,
+                    "stop_loss",
+                    exit_price=to_float(sl_data.get("average_price")) or trade["stop"],
+                    exit_order=trade["sl_order"],
+                )
+                continue
+            if sl_status in ("rejected", "cancelled"):
+                log("RISK", f"{trade['symbol']}: SL-M is {sl_status}; exiting at market")
+                close_trade(client, state, trade, f"sl_{sl_status}")
+                continue
+            ltp = to_float(quotes.get(trade["symbol"], {}).get("ltp"))
+            if ltp < trade["target"]:
+                continue
+            if trade.get("phase", "full") == "full":
+                log("TP1", f"{trade['symbol']}: LTP {ltp} >= TP1 {trade['target']}")
+                take_tp1(client, state, trade)
+            else:
+                log("TARGET", f"{trade['symbol']}: LTP {ltp} >= TP2 {trade['target']}")
+                close_trade(client, state, trade, "target")
+
+        # Look for entries
+        for symbol in waiting:
+            if state["trades_taken"] >= MAX_TRADES_PER_DAY:
+                break
+            candle = state["candidates"][symbol]
+            ltp = to_float(quotes.get(symbol, {}).get("ltp"))
+            if ltp <= 0:
+                continue
+            if candle.get("mode") == "pullback":
+                if pullback_ready(state, symbol, candle, ltp):
+                    enter_trade(client, state, symbol, candle, ltp)
+                continue
+            if ltp < candle["high"] * (1 + BREAKOUT_BUFFER_PCT / 100):
+                continue
+            extension = (ltp - candle["high"]) / candle["high"] * 100
+            if extension > MAX_EXTENSION_PCT:
+                reject(
+                    state,
+                    symbol,
+                    f"breakout too extended ({extension:.2f}% > {MAX_EXTENSION_PCT}%)",
+                )
+                save_state(state)
+                continue
+            log(
+                "BREAKOUT",
+                f"{symbol}: LTP {ltp} >= opening high {candle['high']} + {BREAKOUT_BUFFER_PCT}%",
+            )
+            enter_trade(client, state, symbol, candle, ltp)
+
+        time.sleep(POLL_SECONDS)
+
+
+def _handle_stop(signum, _frame):
+    global _stop_requested
+    _stop_requested = True
+    log(
+        "STOP",
+        f"Signal {signum} received. Open positions stay protected by their broker SL-M orders.",
+    )
+
+
+def main():
+    signal.signal(signal.SIGTERM, _handle_stop)
+    signal.signal(signal.SIGINT, _handle_stop)
+
+    if not API_KEY:
+        log("CONFIG", "OPENALGO_API_KEY is not set; run this from the /python host")
+        sys.exit(1)
+    client = api(api_key=API_KEY, host=API_HOST)
+    log("START", f"{STRATEGY_NAME}: {len(SYMBOLS)} symbols, host {API_HOST}")
+
+    state = load_state()
+
+    if now_ist().time() >= SQUARE_OFF:
+        log("START", "Past square-off time; nothing to do today")
+        return
+
+    if not state["candidates"] and now_ist().time() < ENTRY_CUTOFF:
+        baseline = build_volume_baseline(client, SYMBOLS)
+        if not sleep_until(CANDLE_READY):
+            return
+        time.sleep(5)  # let the 09:15 candle close at the broker
+        select_candidates(client, state, baseline)
+
+    manage(client, state)
+
+
+if __name__ == "__main__":
+    main()
