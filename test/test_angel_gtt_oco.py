@@ -191,6 +191,27 @@ def test_a_rule_is_never_modified_into_the_other_kind(monkeypatch, stored, asked
     assert angel.paths() == ["ruleDetails"]
 
 
+def test_a_modify_without_a_symboltoken_is_refused_before_angel_is_called(monkeypatch):
+    angel = Angel(monkeypatch, ruleDetails=ok({**OCO_RULE, "symboltoken": ""}))
+    monkeypatch.setattr(gtt_api, "get_token", lambda symbol, exchange: None)
+
+    body, status = gtt_api.modify_gtt_order(oco(trigger_id="10045655"), "auth")
+
+    assert status == 400 and "symboltoken" in body["message"]
+    assert angel.paths() == ["ruleDetails"]
+
+
+@pytest.mark.parametrize("leg", ["triggerprice_sl", "stoploss", "triggerprice_tg", "target"])
+def test_an_oco_with_a_missing_leg_price_is_never_sent(monkeypatch, leg):
+    monkeypatch.setattr(gtt_data, "get_br_symbol", lambda symbol, exchange: symbol)
+    with pytest.raises((KeyError, TypeError)):
+        gtt_data.transform_place_gtt({**oco(), leg: None}, TOKEN)
+    data = oco()
+    del data[leg]
+    with pytest.raises(KeyError):
+        gtt_data.transform_place_gtt(data, TOKEN)
+
+
 def test_a_legacy_two_rule_oco_is_not_modified(monkeypatch):
     angel = Angel(monkeypatch)
 
@@ -356,7 +377,7 @@ def test_the_book_lists_active_rules_and_rules_fired_today_with_their_order(monk
         orders=[child(10050999, 107.0), child(10040000, 50.0, "OLD")],
     )
 
-    book, code = gtt_api.get_gtt_book("auth")
+    book, code = gtt_api.get_gtt_book("auth", include_history=True)
 
     # a rule cancelled today is listed too, so a caller can confirm its cancel; older ones are not
     assert code == 200 and [(r["trigger_id"], r["status"]) for r in book["data"]] == [
@@ -368,22 +389,36 @@ def test_the_book_lists_active_rules_and_rules_fired_today_with_their_order(monk
         None,
         "261102000085580",
     ]
-    gtt_api.get_gtt_book("auth")
+    gtt_api.get_gtt_book("auth", include_history=True)
     assert angel.order_reads == 1  # a fired rule's order never changes: read once
+
+
+def test_the_default_book_lists_only_rules_that_can_still_fire(monkeypatch):
+    angel = Book(
+        monkeypatch,
+        active=[OCO_RULE],
+        history=[FIRED_RULE, CANCELLED_RULE],
+        orders=[child(10050999, 107.0)],
+    )
+
+    book, code = gtt_api.get_gtt_book("auth")
+
+    assert code == 200 and [r["trigger_id"] for r in book["data"]] == ["10045655"]
+    assert angel.order_reads == 0
 
 
 def test_a_rule_fired_before_its_order_shows_is_left_out_until_it_does(monkeypatch):
     angel = Book(monkeypatch, active=[], history=[FIRED_RULE], orders=[])
 
-    assert gtt_api.get_gtt_book("auth")[0]["data"] == []
+    assert gtt_api.get_gtt_book("auth", include_history=True)[0]["data"] == []
     angel.orders = [child(10050999, 90.5, "SL1")]
-    [row] = gtt_api.get_gtt_book("auth")[0]["data"]
+    [row] = gtt_api.get_gtt_book("auth", include_history=True)[0]["data"]
     assert row["legs"][0]["triggered_order_id"] == "SL1" and angel.order_reads == 2
 
 
 def test_active_rules_are_listed_when_the_fired_listing_fails(monkeypatch):
     Book(monkeypatch, active=[OCO_RULE], history=[], orders=[], history_ok=False)
 
-    book, code = gtt_api.get_gtt_book("auth")
+    book, code = gtt_api.get_gtt_book("auth", include_history=True)
 
     assert code == 200 and [r["trigger_id"] for r in book["data"]] == ["10045655"]

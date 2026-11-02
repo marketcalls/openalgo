@@ -392,6 +392,12 @@ def modify_gtt_order(data, auth):
         return {"status": "error", "message": error}, 502
 
     token = rule.get("symboltoken") or _resolve_token(data)
+    if not token:
+        message = (
+            f"Could not resolve Angel symboltoken for {data.get('symbol')}/{data.get('exchange')}"
+        )
+        logger.error(message)
+        return {"status": "error", "message": message}, 400
     response_data = _gtt_request("modifyRule", auth, transform_modify_gtt(data, token, rule_ids[0]))
     if not _is_ok(response_data):
         message = _error_message(response_data, "Failed to modify GTT rule")
@@ -513,13 +519,12 @@ def _fired_children(auth, rule_ids):
 
 
 def get_gtt_book(auth, include_history=False):
-    # include_history is accepted for interface parity: rules that can still fire and rules fired or
-    # cancelled today are listed either way; expired and older rules are not.
     """List the user's GTTs. Returns ``(response_dict, status_code)``.
 
-    Rules that can still fire come from ``ruleList`` with NEW / ACTIVE / SENTTOEXCHANGE, as before. A
-    fired rule is not in that list: Angel reports it under ``FORALL`` with ``status: null``. A rule fired
-    today is listed as ``triggered`` with ``triggered_order_id`` on the leg that fired (the order it
+    Rules that can still fire come from ``ruleList`` with NEW / ACTIVE / SENTTOEXCHANGE, as before; that
+    is the whole book unless ``include_history`` (request ``status: all``). With it, rules fired or
+    cancelled today are added; expired and older rules are not. A fired rule is not in the active list:
+    Angel reports it under ``FORALL`` with ``status: null``. A rule fired today is listed as ``triggered`` with ``triggered_order_id`` on the leg that fired (the order it
     placed, from the order book), so a caller can follow that order's fill (Angel has no TRIGGERED
     status, and a rule that just vanished from the book is indistinguishable from a lost read). A rule
     cancelled today is listed as ``cancelled`` for the same reason: a caller confirms its cancel. Fired
@@ -532,7 +537,7 @@ def get_gtt_book(auth, include_history=False):
             _error_status(error),
         )
     fired, cancelled, children = [], [], {}
-    history, error = _list_rules(auth, ("FORALL",))
+    history, error = _list_rules(auth, ("FORALL",)) if include_history else ([], None)
     if error is not None:
         logger.warning(f"Angel gtt_book: fired rules not listed this time: {error}")
     else:

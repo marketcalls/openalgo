@@ -29,18 +29,14 @@ DEFAULT_TIME_PERIOD_DAYS = 365
 # the book adds it, as "triggered", only once the order it placed is known.
 ACTIVE_GTT_STATUSES = ("NEW", "ACTIVE", "SENTTOEXCHANGE")
 
-# Display mapping. EXPIRED / TRIGGERED / REJECTED are NOT documented by Angel;
-# they are carried defensively in case the live API reports a terminal state the
-# docs omit. They can only ever be hit if ACTIVE_GTT_STATUSES is widened -- the
-# mapper drops any status absent from ACTIVE_GTT_STATUSES regardless.
+# Display mapping for the statuses the book lists: the active ones and CANCELLED.
+# A fired rule is shown as "triggered" by map_gtt_book itself; other states are
+# dropped there.
 _STATUS_MAP = {
     "NEW": "active",
     "ACTIVE": "active",
     "SENTTOEXCHANGE": "active",
     "CANCELLED": "cancelled",
-    "EXPIRED": "expired",
-    "TRIGGERED": "triggered",
-    "REJECTED": "rejected",
 }
 
 # Angel's GTT docs state that only DELIVERY and MARGIN product types are
@@ -118,10 +114,11 @@ def _trigger_fields(data):
     if is_oco(data):
         return {
             "gttType": "OCO",
-            "price": _fmt(data["target"]),
-            "triggerprice": _fmt(data["triggerprice_tg"]),
-            "stoplossprice": _fmt(data["stoploss"]),
-            "stoplosstriggerprice": _fmt(data["triggerprice_sl"]),
+            # float() first: a missing leg price raises instead of going out as "0".
+            "price": _fmt(float(data["target"])),
+            "triggerprice": _fmt(float(data["triggerprice_tg"])),
+            "stoplossprice": _fmt(float(data["stoploss"])),
+            "stoplosstriggerprice": _fmt(float(data["triggerprice_sl"])),
         }
     return {
         "price": _fmt(data.get("price") or 0),
