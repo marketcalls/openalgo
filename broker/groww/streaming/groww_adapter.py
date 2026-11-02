@@ -376,7 +376,10 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Groww's live feed (growwapi FeedConstants) only publishes NSE/BSE
         # cash, F&O and indices. There is no commodity or currency topic; the
         # server answers /ld/comm/... with a NATS "Permissions Violation".
-        if exchange in ("MCX", "NCDEX", "CDS", "BCD"):
+        # Allow-list rather than block-list, so commodity codes (MCX, NCO,
+        # NCDEX), currency (CDS, BCD) and any exchange added later are refused
+        # here instead of reaching an invalid topic.
+        if exchange not in ("NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"):
             return self._create_error_response(
                 "EXCHANGE_NOT_SUPPORTED",
                 f"Groww does not provide live streaming for {exchange}. "
