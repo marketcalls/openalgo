@@ -373,6 +373,16 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info(f"Groww only supports depth level 5, using 5 instead of {depth_level}")
             depth_level = 5
 
+        # Groww's live feed (growwapi FeedConstants) only publishes NSE/BSE
+        # cash, F&O and indices. There is no commodity or currency topic; the
+        # server answers /ld/comm/... with a NATS "Permissions Violation".
+        if exchange in ("MCX", "NCDEX", "CDS", "BCD"):
+            return self._create_error_response(
+                "EXCHANGE_NOT_SUPPORTED",
+                f"Groww does not provide live streaming for {exchange}. "
+                "Live prices are available for NSE, BSE, NFO, BFO and indices.",
+            )
+
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
         if not token_info:
