@@ -291,3 +291,104 @@ def test_request_path_reconnect_after_close_opens_no_socket(monkeypatch, fake_ws
     stream.reconnect()
 
     assert len(fake_ws.created) == 1
+
+
+# --- Feed sync retry ---------------------------------------------------------
+
+
+class _FlakyFeedClient:
+    """subscribeL1 raises for the first `fail_times` calls."""
+
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = []
+
+    def subscribeL1(self, tokens):
+        self.calls.append(list(tokens))
+        if len(self.calls) <= self.fail_times:
+            raise OSError("send failed")
+        return True
+
+    def unsubscribeL1(self):
+        return True
+
+    def subscribeL2(self, tokens):
+        return True
+
+    def unsubscribeL2(self):
+        return True
+
+    def disconnect(self):
+        pass
+
+
+def _retry_adapter(monkeypatch, client):
+    adapter = _bare_adapter(client)
+    adapter.connected = True
+    monkeypatch.setattr(adapter, "FEED_FLUSH_DEBOUNCE", 0.01)
+    monkeypatch.setattr(adapter, "FEED_RETRY_DELAY", 0.05)
+    adapter.subscriptions["INFY_NSE_2"] = {
+        "symbol": "INFY",
+        "exchange": "NSE",
+        "brexchange": "NSE",
+        "token": "1594",
+        "mode": 2,
+    }
+    return adapter
+
+
+def _wait_until(predicate, seconds=3.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_failed_feed_sync_is_retried_with_the_current_list(monkeypatch):
+    client = _FlakyFeedClient(fail_times=2)
+    adapter = _retry_adapter(monkeypatch, client)
+
+    adapter._request_feed_sync("L1")
+    assert _wait_until(lambda: len(client.calls) >= 1)
+    # A symbol added while the retry waits is in the list the retry sends
+    adapter.subscriptions["TCS_NSE_2"] = {
+        "symbol": "TCS",
+        "exchange": "NSE",
+        "brexchange": "NSE",
+        "token": "11536",
+        "mode": 2,
+    }
+
+    assert _wait_until(lambda: len(client.calls) == 3)
+    assert client.calls[-1] == ["1594_NSE", "11536_NSE"]
+    time.sleep(0.2)
+    assert len(client.calls) == 3  # no retry after the success
+    adapter.disconnect()
+
+
+def test_feed_sync_gives_up_after_max_retries(monkeypatch):
+    client = _FlakyFeedClient(fail_times=100)
+    adapter = _retry_adapter(monkeypatch, client)
+
+    adapter._request_feed_sync("L1")
+
+    expected = 1 + adapter.FEED_MAX_RETRIES
+    assert _wait_until(lambda: len(client.calls) >= expected)
+    time.sleep(0.3)
+    assert len(client.calls) == expected
+    adapter.disconnect()
+
+
+def test_disconnect_stops_a_pending_retry(monkeypatch):
+    client = _FlakyFeedClient(fail_times=100)
+    adapter = _retry_adapter(monkeypatch, client)
+    monkeypatch.setattr(adapter, "FEED_RETRY_DELAY", 0.5)
+
+    adapter._request_feed_sync("L1")
+    assert _wait_until(lambda: len(client.calls) == 1)
+    adapter.disconnect()
+
+    time.sleep(0.8)
+    assert len(client.calls) == 1

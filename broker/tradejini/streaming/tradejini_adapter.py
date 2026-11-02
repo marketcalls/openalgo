@@ -25,6 +25,11 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # Seconds of quiet before a dirty feed is re-sent. See _request_feed_sync
     # for why the sync is coalesced rather than sent per call.
     FEED_FLUSH_DEBOUNCE = 0.25
+    # A send that raises while connected is retried after FEED_RETRY_DELAY
+    # seconds, at most FEED_MAX_RETRIES times in a row. A sync skipped while
+    # disconnected is not retried here: the reconnect replays both feeds.
+    FEED_RETRY_DELAY = 5.0
+    FEED_MAX_RETRIES = 3
 
     def __init__(self):
         super().__init__()
@@ -313,6 +318,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         Takes its own stop event so a restart cannot revive it.
         """
+        failures = 0
         while not stop_event.is_set():
             if not self._feed_dirty.wait(timeout=1.0):
                 # Idle. Exit rather than spin here once a second for the life of
@@ -350,11 +356,43 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self._flush_thread = None
                     return
 
+            failed = {}
             for feed, cancel_when_empty in pending.items():
                 try:
                     self._sync_feed(feed, cancel_when_empty=cancel_when_empty)
                 except Exception as e:
                     self.logger.error(f"Error syncing {feed} feed: {e}")
+                    failed[feed] = cancel_when_empty
+
+            if not failed:
+                failures = 0
+                continue
+
+            failures += 1
+            if failures > self.FEED_MAX_RETRIES:
+                self.logger.error(
+                    f"Giving up on syncing {', '.join(failed)} after "
+                    f"{self.FEED_MAX_RETRIES} retries; the next subscription change "
+                    "or a reconnect will send the full list again"
+                )
+                failures = 0
+                continue
+
+            self.logger.warning(
+                f"Retrying {', '.join(failed)} feed sync in {self.FEED_RETRY_DELAY:.0f}s "
+                f"(retry {failures}/{self.FEED_MAX_RETRIES})"
+            )
+            # Interruptible: disconnect() sets stop_event and the worker exits.
+            if stop_event.wait(self.FEED_RETRY_DELAY):
+                return
+            # Requeue alongside anything that arrived meanwhile. The retry
+            # rebuilds the list from current state, so it sends the latest one.
+            with self.lock:
+                for feed, cancel_when_empty in failed.items():
+                    self._dirty_feeds[feed] = (
+                        self._dirty_feeds.get(feed, False) or cancel_when_empty
+                    )
+            self._feed_dirty.set()
 
         with self.lock:
             self._flush_thread = None
