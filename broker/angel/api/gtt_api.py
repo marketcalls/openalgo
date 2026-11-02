@@ -508,16 +508,17 @@ def _fired_children(auth, rule_ids):
 
 
 def get_gtt_book(auth, include_history=False):
-    # include_history is accepted for interface parity: rules that can still fire and rules fired today
-    # are listed either way; cancelled, expired and older fired rules are not.
+    # include_history is accepted for interface parity: rules that can still fire and rules fired or
+    # cancelled today are listed either way; expired and older rules are not.
     """List the user's GTTs. Returns ``(response_dict, status_code)``.
 
     Rules that can still fire come from ``ruleList`` with NEW / ACTIVE / SENTTOEXCHANGE, as before. A
     fired rule is not in that list: Angel reports it under ``FORALL`` with ``status: null``. A rule fired
     today is listed as ``triggered`` with ``triggered_order_id`` on the leg that fired (the order it
     placed, from the order book), so a caller can follow that order's fill (Angel has no TRIGGERED
-    status, and a rule that just vanished from the book is indistinguishable from a lost read). Fired
-    rules are best effort: if their listing fails, the active rules are still returned.
+    status, and a rule that just vanished from the book is indistinguishable from a lost read). A rule
+    cancelled today is listed as ``cancelled`` for the same reason: a caller confirms its cancel. Fired
+    and cancelled rules are best effort: if their listing fails, the active rules are still returned.
     """
     active, error = _list_rules(auth, ACTIVE_GTT_STATUSES)
     if error is not None:
@@ -525,15 +526,17 @@ def get_gtt_book(auth, include_history=False):
             {"status": "error", "message": _error_message(error, "Failed to fetch GTT book")},
             _error_status(error),
         )
-    fired, children = [], {}
+    fired, cancelled, children = [], [], {}
     history, error = _list_rules(auth, ("FORALL",))
     if error is not None:
         logger.warning(f"Angel gtt_book: fired rules not listed this time: {error}")
     else:
         known = {_rule_key(r) for r in active}
         today = _today_ist()
-        fired = [r for r in history if is_fired(r) and _rule_key(r) not in known
-                 and str(r.get("updateddate") or "")[:10] == today]
+        recent = [r for r in history if _rule_key(r) not in known
+                  and str(r.get("updateddate") or "")[:10] == today]
+        fired = [r for r in recent if is_fired(r)]
+        cancelled = [r for r in recent if (r.get("status") or "").upper() == "CANCELLED"]
         if fired:
             children = _fired_children(auth, [_rule_key(r) for r in fired])
-    return {"status": "success", "data": map_gtt_book(active + fired, children)}, 200
+    return {"status": "success", "data": map_gtt_book(active + fired + cancelled, children)}, 200

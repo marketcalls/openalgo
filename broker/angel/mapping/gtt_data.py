@@ -184,6 +184,7 @@ def map_gtt_book(rules, children=None):
     ``children`` maps a fired rule's id to the order it placed (``{"orderid", "price"}``). A fired rule
     with a known child is listed as ``triggered``, its child's id as ``triggered_order_id`` on the leg
     whose limit price it carries (an OCO's one fired leg); a fired rule without one is left out.
+    CANCELLED rows are listed as ``cancelled``.
 
     A SINGLE rule becomes one ``single`` entry; an OCO rule becomes one
     ``two-leg`` entry whose ``trigger_prices`` and ``legs`` are sorted by
@@ -201,9 +202,9 @@ def map_gtt_book(rules, children=None):
 
         status_raw = (rule.get("status") or "").upper()
         child = (children or {}).get(rule_key(rule)) if is_fired(rule) else None
-        # Rules that can still fire, and fired rules whose order is known; CANCELLED / EXPIRED /
-        # REJECTED are dropped at the broker mapper.
-        if status_raw not in ACTIVE_GTT_STATUSES and child is None:
+        # Rules that can still fire, cancelled rules the caller passes (the book passes today's, so a
+        # cancel can be confirmed), and fired rules whose order is known; EXPIRED / REJECTED are dropped.
+        if status_raw not in ACTIVE_GTT_STATUSES + ("CANCELLED",) and child is None:
             continue
 
         exchange = rule.get("exchange", "") or ""

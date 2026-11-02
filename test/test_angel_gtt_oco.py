@@ -288,7 +288,7 @@ def test_a_fired_oco_names_the_order_of_the_leg_that_fired(child_price, fired):
 
 
 def test_a_fired_rule_whose_order_is_unknown_is_left_out_and_active_legs_name_no_order():
-    rows = gtt_data.map_gtt_book([FIRED_RULE, CANCELLED_RULE, OCO_RULE])
+    rows = gtt_data.map_gtt_book([FIRED_RULE, OCO_RULE, {**OCO_RULE, "status": "EXPIRED", "id": 1}])
 
     assert [r["trigger_id"] for r in rows] == ["10045655"]
     assert [leg["triggered_order_id"] for leg in rows[0]["legs"]] == [None, None]
@@ -318,13 +318,15 @@ class Book:
 
 def test_the_book_lists_active_rules_and_rules_fired_today_with_their_order(monkeypatch):
     angel = Book(monkeypatch, active=[OCO_RULE],
-                 history=[CANCELLED_RULE, FIRED_RULE, OLD_FIRED_RULE, {**OCO_RULE, "status": None}],
+                 history=[CANCELLED_RULE, FIRED_RULE, OLD_FIRED_RULE, {**OCO_RULE, "status": None},
+             {**CANCELLED_RULE, "id": 1, "updateddate": "2026-10-31T13:58:48.382+05:30"}],
                  orders=[child(10050999, 107.0), child(10040000, 50.0, "OLD")])
 
     book, code = gtt_api.get_gtt_book("auth")
 
+    # a rule cancelled today is listed too, so a caller can confirm its cancel; older ones are not
     assert code == 200 and [(r["trigger_id"], r["status"]) for r in book["data"]] == [
-        ("10045655", "active"), ("10050999", "triggered")]
+        ("10045655", "active"), ("10050999", "triggered"), ("10051416", "cancelled")]
     assert [leg["triggered_order_id"] for leg in book["data"][1]["legs"]] == [None, "261102000085580"]
     gtt_api.get_gtt_book("auth")
     assert angel.order_reads == 1        # a fired rule's order never changes: read once
