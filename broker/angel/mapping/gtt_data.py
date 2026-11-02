@@ -234,14 +234,18 @@ def map_gtt_book(rules, children=None):
             pairs.sort(key=lambda pair: pair[0])
         if child is not None:
             # The fired leg is the one whose limit price the child order carries.
-            fired_leg = min((leg_ for _, leg_ in pairs), key=lambda leg_: abs(leg_["price"] - child["price"]))
+            fired_leg = min(
+                (leg_ for _, leg_ in pairs), key=lambda leg_: abs(leg_["price"] - child["price"])
+            )
             fired_leg["triggered_order_id"] = child["orderid"]
 
         normalised.append(
             {
                 "trigger_id": rule_key(rule),
                 "trigger_type": trigger_type,
-                "status": "triggered" if child is not None else _STATUS_MAP.get(status_raw, status_raw.lower()),
+                "status": "triggered"
+                if child is not None
+                else _STATUS_MAP.get(status_raw, status_raw.lower()),
                 "symbol": oa_symbol or br_symbol,
                 "exchange": exchange,
                 "trigger_prices": [trigger for trigger, _ in pairs],

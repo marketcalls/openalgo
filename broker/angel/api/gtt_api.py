@@ -47,10 +47,12 @@ from broker.angel.mapping.gtt_data import (
     ACTIVE_GTT_STATUSES,
     is_fired,
     is_oco,
-    rule_key as _rule_key,
     map_gtt_book,
     transform_modify_gtt,
     transform_place_gtt,
+)
+from broker.angel.mapping.gtt_data import (
+    rule_key as _rule_key,
 )
 from database.token_db import get_token
 from database.token_db_enhanced import get_symbol_info
@@ -503,7 +505,10 @@ def _fired_children(auth, rule_ids):
             unique = str(row.get("uniqueorderid") or "")
             rid = unique.rsplit("_", 1)[-1]
             if unique.startswith("GTT") and rid in missing and row.get("orderid"):
-                _CHILD_ORDERS[rid] = {"orderid": str(row["orderid"]), "price": float(row.get("price") or 0)}
+                _CHILD_ORDERS[rid] = {
+                    "orderid": str(row["orderid"]),
+                    "price": float(row.get("price") or 0),
+                }
     return {rid: _CHILD_ORDERS[rid] for rid in rule_ids if rid in _CHILD_ORDERS}
 
 
@@ -533,8 +538,11 @@ def get_gtt_book(auth, include_history=False):
     else:
         known = {_rule_key(r) for r in active}
         today = _today_ist()
-        recent = [r for r in history if _rule_key(r) not in known
-                  and str(r.get("updateddate") or "")[:10] == today]
+        recent = [
+            r
+            for r in history
+            if _rule_key(r) not in known and str(r.get("updateddate") or "")[:10] == today
+        ]
         fired = [r for r in recent if is_fired(r)]
         cancelled = [r for r in recent if (r.get("status") or "").upper() == "CANCELLED"]
         if fired:
