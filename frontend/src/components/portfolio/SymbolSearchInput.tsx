@@ -22,7 +22,22 @@ export function SymbolSearchInput({
   const [query, setQuery] = useState(value)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
+  const [previousExchange, setPreviousExchange] = useState(exchange)
+
+  if (previousExchange !== exchange) {
+    setPreviousExchange(exchange)
+    setActiveIndex(-1)
+  }
+
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
   const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (activeIndex < 0) return
+
+    optionRefs.current[activeIndex]?.scrollIntoView({
+      block: 'nearest',
+    })
+  }, [activeIndex])
 
   const listboxId = useId()
 
@@ -109,47 +124,54 @@ export function SymbolSearchInput({
             setActiveIndex(-1)
           }
         }}
-        onBlur={() => onSelect(query.trim().toUpperCase())}
+        onBlur={() => {
+          setOpen(false)
+          setActiveIndex(-1)
+          onSelect(query.trim().toUpperCase())
+        }}
       />
-      {open && query.trim().length >= 2 && (
-        <div
-          id={listboxId}
-          role="listbox"
-          className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border bg-popover shadow-lg"
-        >
-          {isFetching && results.length === 0 && (
-            <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
-          )}
-          {!isFetching && results.length === 0 && (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              Nothing on {exchange} matching “{query}”
-            </div>
-          )}
-          {suggestions.map((r, index) => (
-            <button
-              type="button"
-              role="option"
-              id={`${listboxId}-option-${index}`}
-              aria-selected={activeIndex === index}
-              key={`${r.symbol}-${r.exchange}`}
-              onMouseDown={(e) => {
-                // mousedown, not click: the input's blur would close the list
-                // before a click could land.
-                e.preventDefault()
-                choose(r.symbol)
-              }}
-              className={cn(
-                'flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent',
-                activeIndex === index && 'bg-accent'
-              )}
-            >
-              <span className="font-medium">{r.symbol}</span>
-              <span className="truncate text-xs text-muted-foreground">{r.name}</span>
-              <span className="ml-auto text-[10px] text-muted-foreground">{r.exchange}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        query.trim().length >= 2 &&
+        (results.length === 0 ? (
+          <div
+            aria-live="polite"
+            className="absolute z-50 mt-1 w-full rounded-md border bg-popover px-3 py-2 text-xs text-muted-foreground shadow-lg"
+          >
+            {isFetching ? 'Searching…' : `Nothing on ${exchange} matching “${query}”`}
+          </div>
+        ) : (
+          <div
+            id={listboxId}
+            role="listbox"
+            className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border bg-popover shadow-lg"
+          >
+            {suggestions.map((r, index) => (
+              <button
+                ref={(element) => {
+                  optionRefs.current[index] = element
+                }}
+                type="button"
+                role="option"
+                tabIndex={-1}
+                id={`${listboxId}-option-${index}`}
+                aria-selected={activeIndex === index}
+                key={`${r.symbol}-${r.exchange}`}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  choose(r.symbol)
+                }}
+                className={cn(
+                  'flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent',
+                  activeIndex === index && 'bg-accent'
+                )}
+              >
+                <span className="font-medium">{r.symbol}</span>
+                <span className="truncate text-xs text-muted-foreground">{r.name}</span>
+                <span className="ml-auto text-[10px] text-muted-foreground">{r.exchange}</span>
+              </button>
+            ))}
+          </div>
+        ))}
     </div>
   )
 }
