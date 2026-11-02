@@ -1,5 +1,9 @@
 """Tradejini streaming: socket lifecycle, bounded caches, and Depth price fields.
 
+NxtradStream (broker/tradejini/api/nxtradstream.py) is shared by the streaming
+adapter and the quote/depth request path in api/data.py, so the socket fixes
+cover both.
+
 - A connect racing disconnect() used to open a socket (plus its reader thread)
   that nobody owned, which kept streaming into the shared ZMQ bus. A
   disconnect mid-handshake left a socket only the garbage collector closed.
@@ -15,7 +19,8 @@ import time
 
 import pytest
 
-import broker.tradejini.streaming.nxtradstream as nx
+import broker.tradejini.api.data as tjdata
+import broker.tradejini.api.nxtradstream as nx
 import broker.tradejini.streaming.tradejini_adapter as ta
 
 
@@ -250,3 +255,39 @@ def test_unsubscribe_drops_cached_ticks(monkeypatch):
 
     assert adapter._last_l1 == {}
     assert adapter._last_l5 == {}
+
+
+# --- Quote/depth request path (api/data.py) ---------------------------------
+
+
+def test_request_path_close_after_connect_timeout_aborts_the_handshake(monkeypatch, fake_ws):
+    """A request gives up after 15s and closes while the handshake may still run."""
+    monkeypatch.setattr(tjdata, "get_api_key", lambda: "key")
+    monkeypatch.setattr(tjdata.time, "sleep", lambda _s: None)  # skip the 15s wait
+
+    ws = tjdata.TradejiniWebSocket()
+    assert ws.connect("token") is False  # never reached "connected"
+
+    app = fake_ws.created[0]
+    handshake = _HandshakingSocket()
+    app.sock = handshake
+    ws.close()  # the request's finally block
+
+    assert handshake.shut
+    assert app.sock is handshake
+
+
+def test_request_path_reconnect_after_close_opens_no_socket(monkeypatch, fake_ws):
+    """A drop's reconnect that loses the race with close() must not connect."""
+    monkeypatch.setattr(tjdata, "get_api_key", lambda: "key")
+    monkeypatch.setattr(tjdata.time, "sleep", lambda _s: None)
+
+    ws = tjdata.TradejiniWebSocket()
+    ws.connect("token")
+    stream = ws.nx_stream
+    ws.close()
+
+    # The reader thread checked _closing before close() set it, then reconnects
+    stream.reconnect()
+
+    assert len(fake_ws.created) == 1

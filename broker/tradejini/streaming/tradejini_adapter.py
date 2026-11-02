@@ -9,13 +9,13 @@ from typing import Any, Dict, List, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
 from broker.tradejini.api.auth_api import get_api_key
+from broker.tradejini.api.nxtradstream import NxtradStream
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
-from .nxtradstream import NxtradStream
 from .tradejini_mapping import TradejiniCapabilityRegistry, TradejiniExchangeMapper
 
 

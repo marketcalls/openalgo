@@ -178,6 +178,12 @@ class NxtradStream:
         self.token = ""
         self.version = version
 
+        # Set for good by disconnect(). Guarded by _conn_lock together with the
+        # creation of self.ws, so a connect racing a disconnect either creates
+        # the socket disconnect() then closes, or creates nothing.
+        self._stopped = False
+        self._conn_lock = threading.Lock()
+
     def connect(self, token):
         self.token = token
         self.__tryConnect()
@@ -193,17 +199,23 @@ class NxtradStream:
 
     def __tryConnect(self):
         url = self.host + "?token=" + self.token + "&version=" + self.version
-        # websocket.enableTrace(True)
-        self.ws = websocket.WebSocketApp(
-            url,
-            on_open=self.__on_open,
-            on_message=self.__on_message,
-            on_error=self.__on_error,
-            on_close=self.__on_close,
-        )
+        with self._conn_lock:
+            if self._stopped:
+                # A connect that lost the race with disconnect() must not open
+                # a socket nobody will close.
+                logger.info("Stream disconnected; not opening a new connection")
+                return
+            # websocket.enableTrace(True)
+            self.ws = websocket.WebSocketApp(
+                url,
+                on_open=self.__on_open,
+                on_message=self.__on_message,
+                on_error=self.__on_error,
+                on_close=self.__on_close,
+            )
 
-        self._ws_thread = threading.Thread(target=self.__task)
-        self._ws_thread.start()
+            self._ws_thread = threading.Thread(target=self.__task, daemon=True)
+            self._ws_thread.start()
 
     def subscribeEvents(self, type):
         req = {}
@@ -220,6 +232,14 @@ class NxtradStream:
         return self.__send_data(req)
 
     def subscribeL1(self, tokens):
+        # The request replaces the server-side L1 list, so drop cached quotes
+        # for tokens no longer on it; otherwise L1_dict keeps every token ever
+        # streamed, and a re-subscribed token inherits stale fields.
+        keep = set(tokens)
+        for key in list(self.L1_dict):
+            if key not in keep:
+                self.L1_dict.pop(key, None)
+
         req = {}
         req["type"] = "L1"
         req["action"] = "sub"
@@ -350,12 +370,27 @@ class NxtradStream:
         return self.__send_data(req)
 
     def disconnect(self):
+        with self._conn_lock:
+            self._stopped = True
+            ws = self.ws
         self.isConnected = False
+        if ws is None:
+            return
         try:
-            self.ws.close()
+            sock = ws.sock
+            if sock is not None and not sock.connected:
+                # Handshake in flight. WebSocketApp.close() would do nothing to
+                # it (WebSocket.close() returns early when not connected) and
+                # then drop its only reference, so the handshake finishes on a
+                # socket nobody can close until the garbage collector finds
+                # it. Abort it instead and keep the reference: if the raw
+                # socket is not assigned yet, the handshake completes and
+                # __on_open closes it through ws.close().
+                sock.shutdown()
+            else:
+                ws.close()
         except Exception:
             pass
-
 
     def isConnected(self):
         return self.isConnected
@@ -645,6 +680,15 @@ class NxtradStream:
         )
 
     def __on_open(self, ws):
+        if self._stopped:
+            # websocket-client sets keep_running when run_forever() starts, so
+            # a close() that landed before then was lost and the socket opened
+            # anyway. Close it here instead of leaving it streaming unowned.
+            try:
+                ws.close()
+            except Exception:
+                pass
+            return
         self.isConnected = True
         self._callback(self.connect_cb, self, {"s": "connected"})
 
