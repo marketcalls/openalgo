@@ -120,3 +120,73 @@ def test_empty_frames_pass_through():
     empty = pd.DataFrame(columns=COLUMNS)
     assert BrokerData._rebuild_day_last_bars(empty, SBIN_1M, "NSE", "SBIN", "5m").empty
     assert len(BrokerData._rebuild_day_last_bars(SBIN_5M, empty, "NSE", "SBIN", "5m")) == 4
+
+
+def test_repair_window_skips_a_single_day_reply():
+    one_day = SBIN_5M[SBIN_5M["timestamp"] < _ts("2026-10-31 00:00")]
+    assert BrokerData._day_end_repair_window(one_day) is None
+    assert BrokerData._day_end_repair_window(pd.DataFrame(columns=COLUMNS)) is None
+
+
+def test_repair_window_covers_only_the_returned_span():
+    start, end = BrokerData._day_end_repair_window(SBIN_5M)
+    assert start == _ts("2026-10-30 15:25")  # first day's last bar
+    assert end == _ts("2026-11-02 09:15") - 1  # just before the last day's first bar
+
+
+class _FakeTPSeries:
+    """Answers TPSeries like Shoonya: data only inside the bars it holds."""
+
+    def __init__(self, native, minute):
+        self.native = native
+        self.minute = minute
+        self.calls = []
+
+    def __call__(self, endpoint, auth, payload=None):
+        self.calls.append(payload)
+        rows = self.minute if payload["intrv"] == "1" else self.native
+        st, et = int(payload["st"]), int(payload["et"])
+        hit = rows[(rows["timestamp"] >= st) & (rows["timestamp"] <= et)]
+        if hit.empty:
+            return {"stat": "Not_Ok", "emsg": 'Error Occurred : 5 "no data"'}
+        return [
+            {
+                "stat": "Ok",
+                "ssboe": str(int(r.timestamp)),
+                "into": str(r.open),
+                "inth": str(r.high),
+                "intl": str(r.low),
+                "intc": str(r.close),
+                "intv": str(r.volume),
+                "oi": "0",
+            }
+            for r in hit.itertuples()
+        ]
+
+
+def _history(monkeypatch, native, minute, interval, start, end):
+    import broker.shoonya.api.data as shoonya_data
+
+    fake = _FakeTPSeries(native, minute)
+    monkeypatch.setattr(shoonya_data, "get_chart_api_response", fake)
+    monkeypatch.setattr(shoonya_data, "get_br_symbol", lambda s, e: "SBIN-EQ")
+    monkeypatch.setattr(shoonya_data, "get_token", lambda s, e: "3045")
+    out = BrokerData("token").get_history("SBIN", "NSE", interval, start, end)
+    return out, [c for c in fake.calls if c["intrv"] == "1"]
+
+
+def test_long_request_fetches_1m_only_where_bars_exist(monkeypatch):
+    # Five years requested, bars on two days: the old code asked for 1m in
+    # 5-day chunks across all five years (about 365 calls).
+    out, minute_calls = _history(monkeypatch, SBIN_5M, SBIN_1M, "5m", "2021-11-01", "2026-11-03")
+    assert len(minute_calls) == 1
+    assert int(minute_calls[0]["st"]) == _ts("2026-10-30 15:25")
+    assert int(minute_calls[0]["et"]) == _ts("2026-11-02 09:15") - 1
+    last = out[out["timestamp"] == _ts("2026-10-30 15:25")].iloc[0]
+    assert (last["high"], last["close"]) == (961.85, 961.85)
+
+
+def test_single_day_request_makes_no_1m_call(monkeypatch):
+    out, minute_calls = _history(monkeypatch, SBIN_5M, SBIN_1M, "5m", "2026-10-30", "2026-10-30")
+    assert minute_calls == []
+    assert len(out) == 2
