@@ -42,7 +42,11 @@ function renderInput() {
       <SymbolSearchInput value="" exchange="NSE" onSelect={onSelect} />
     </QueryClientProvider>
   )
-  return { onSelect, user, input: screen.getByRole('combobox') }
+  return {
+    onSelect,
+    user,
+    input: screen.getByRole('combobox', { name: 'Search symbol' }),
+  }
 }
 
 describe('SymbolSearchInput accessibility', () => {
@@ -54,9 +58,11 @@ describe('SymbolSearchInput accessibility', () => {
   it('exposes combobox semantics that control a listbox of options', async () => {
     const { input, user } = renderInput()
 
+    expect(input).toHaveAccessibleName('Search symbol')
     expect(input).toHaveAttribute('aria-autocomplete', 'list')
     expect(input).toHaveAttribute('aria-haspopup', 'listbox')
     expect(input).toHaveAttribute('aria-expanded', 'false')
+    expect(input).not.toHaveAttribute('aria-controls')
 
     await user.type(input, 'IN')
 
@@ -68,7 +74,35 @@ describe('SymbolSearchInput accessibility', () => {
     expect(options).toHaveLength(RESULTS.length)
     for (const option of options) {
       expect(option).toHaveAttribute('aria-selected', 'false')
+      expect(option).toHaveAttribute('tabindex', '-1')
     }
+  })
+
+  it('keeps loading and empty messages outside the listbox', async () => {
+    mocks.searchSymbols.mockResolvedValueOnce([])
+    const { input, user } = renderInput()
+
+    await user.type(input, 'ZZ')
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('Nothing on NSE matching “ZZ”')
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(input).toHaveAttribute('aria-expanded', 'true')
+    expect(input).not.toHaveAttribute('aria-controls')
+  })
+
+  it('scrolls the active option into view', async () => {
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView)
+    scrollIntoView.mockClear()
+    const { input, user } = renderInput()
+
+    await user.type(input, 'IN')
+    await screen.findAllByRole('option')
+    expect(scrollIntoView).not.toHaveBeenCalled()
+
+    await user.keyboard('{ArrowDown}')
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
   })
 
   it('queries the instrument master with the typed text and exchange', async () => {
@@ -155,6 +189,19 @@ describe('SymbolSearchInput accessibility', () => {
     expect(input).toHaveAttribute('aria-expanded', 'false')
     expect(input).not.toHaveAttribute('aria-activedescendant')
     expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('closes the list when focus leaves the input', async () => {
+    const { input, onSelect, user } = renderInput()
+    await user.type(input, 'IN')
+    await screen.findAllByRole('option')
+
+    await user.tab()
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(input).toHaveAttribute('aria-expanded', 'false')
+    expect(input).not.toHaveAttribute('aria-activedescendant')
+    expect(onSelect).toHaveBeenCalledWith('IN')
   })
 
   it('selects a suggestion with the mouse', async () => {
