@@ -1,4 +1,4 @@
-import { SessionCalendar } from 'openalgo-charts'
+import { type BarsRequest, SessionCalendar } from 'openalgo-charts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   prepareSessionHours,
@@ -213,7 +213,15 @@ describe('Historify older history pages', () => {
         countBack: 500,
       })
     ).resolves.toMatchObject({ bars: [] })
+    // Pin the page's range, not only that a request went out: it ends at the
+    // oldest bar on screen and never reaches before the stored history.
     expect(getBars).toHaveBeenCalled()
+    for (const [request] of getBars.mock.calls as unknown as [BarsRequest][]) {
+      expect(request.interval).toBe(interval)
+      expect(request.to).toBe(before)
+      expect(request.from).toBeGreaterThanOrEqual(start)
+      expect(request.from).toBeLessThanOrEqual(before)
+    }
     service.destroy()
   })
 })
