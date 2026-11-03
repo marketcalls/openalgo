@@ -3,21 +3,24 @@
 Simple EMA Crossover Strategy Example
 This strategy demonstrates how to integrate with OpenAlgo API
 """
-from openalgo import api
-import pandas as pd
-import numpy as np
-import time
-import threading
-from datetime import datetime, timedelta
+
 import os
+import threading
+import time
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+from openalgo import api
 
 # Read API credentials and endpoints from environment.
 # When this strategy is launched via OpenAlgo's /python runner,
 # OPENALGO_API_KEY is injected by the platform and HOST_SERVER /
 # WEBSOCKET_URL are inherited from OpenAlgo's .env file.
-api_key = os.getenv('OPENALGO_API_KEY')
-host    = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
-ws_url  = os.getenv('WEBSOCKET_URL', 'ws://127.0.0.1:8765')
+api_key = os.getenv("OPENALGO_API_KEY")
+host = os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
+ws_url = os.getenv("WEBSOCKET_URL", "ws://127.0.0.1:8765")
+history_source = os.getenv("HISTORY_SOURCE", "api").strip().lower()
 
 if not api_key:
     print("Error: OPENALGO_API_KEY environment variable not set")
@@ -26,7 +29,7 @@ if not api_key:
 
 # Set the strategy details and trading parameters
 strategy = "EMA Crossover Python"
-symbol = 'NHPC'  # OpenAlgo Symbol
+symbol = "NHPC"  # OpenAlgo Symbol
 exchange = "NSE"
 product = "MIS"
 quantity = 1
@@ -38,38 +41,43 @@ slow_period = 10
 # Set the API Key
 client = api(api_key=api_key, host=host, ws_url=ws_url)
 
+
 def calculate_ema_signals(df):
     """
     Calculate EMA crossover signals.
     """
-    close = df['close']
-    
+    close = df["close"]
+
     # Calculate EMAs
     ema_fast = close.ewm(span=fast_period, adjust=False).mean()
     ema_slow = close.ewm(span=slow_period, adjust=False).mean()
-    
+
     # Create crossover signals
     crossover = pd.Series(False, index=df.index)
     crossunder = pd.Series(False, index=df.index)
-    
+
     # Previous values of EMAs
     prev_fast = ema_fast.shift(1)
     prev_slow = ema_slow.shift(1)
-    
+
     # Current values of EMAs
     curr_fast = ema_fast
     curr_slow = ema_slow
-    
+
     # Generate crossover signals
     crossover = (prev_fast < prev_slow) & (curr_fast > curr_slow)
     crossunder = (prev_fast > prev_slow) & (curr_fast < curr_slow)
-    
-    return pd.DataFrame({
-        'EMA_Fast': ema_fast,
-        'EMA_Slow': ema_slow,
-        'Crossover': crossover,
-        'Crossunder': crossunder
-    }, index=df.index)
+
+    return pd.DataFrame(
+        {
+            "EMA_Fast": ema_fast,
+            "EMA_Slow": ema_slow,
+            "Crossover": crossover,
+            "Crossunder": crossunder,
+        },
+        index=df.index,
+    )
+
 
 def ema_strategy():
     """
@@ -89,7 +97,8 @@ def ema_strategy():
                 exchange=exchange,
                 interval="1m",
                 start_date=start_date,
-                end_date=end_date
+                end_date=end_date,
+                source=history_source,
             )
 
             # Check for valid data
@@ -99,18 +108,18 @@ def ema_strategy():
                 continue
 
             # Verify required columns
-            if 'close' not in df.columns:
+            if "close" not in df.columns:
                 raise KeyError("Missing 'close' column in DataFrame")
 
             # Round the close column
-            df['close'] = df['close'].round(2)
+            df["close"] = df["close"].round(2)
 
             # Calculate EMAs and signals
             signals = calculate_ema_signals(df)
 
             # Get latest signals
-            crossover = signals['Crossover'].iloc[-2]  # Using -2 to avoid partial candle
-            crossunder = signals['Crossunder'].iloc[-2]
+            crossover = signals["Crossover"].iloc[-2]  # Using -2 to avoid partial candle
+            crossunder = signals["Crossunder"].iloc[-2]
 
             # Execute Buy Order
             if crossover and position <= 0:
@@ -123,7 +132,7 @@ def ema_strategy():
                     price_type="MARKET",
                     product=product,
                     quantity=quantity,
-                    position_size=position
+                    position_size=position,
                 )
                 print("Buy Order Response:", response)
 
@@ -138,7 +147,7 @@ def ema_strategy():
                     price_type="MARKET",
                     product=product,
                     quantity=quantity,
-                    position_size=position
+                    position_size=position,
                 )
                 print("Sell Order Response:", response)
 
@@ -160,6 +169,7 @@ def ema_strategy():
 
         # Wait before the next cycle
         time.sleep(15)
+
 
 if __name__ == "__main__":
     print(f"Starting {fast_period}/{slow_period} EMA Crossover Strategy...")

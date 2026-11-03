@@ -155,7 +155,10 @@ def test_bootstrap_runs_the_script_as_main_with_its_own_folder_first(tmp_path):
     assert lines["CWD_ON_PATH"] == "False"
 
 
-@pytest.mark.skipif(not POSIX, reason="resource limits are POSIX only")
+@pytest.mark.skipif(
+    not POSIX or sys.platform == "darwin",
+    reason="resource limits require POSIX RLIMIT_AS enforcement; macOS ignores it",
+)
 def test_bootstrap_applies_the_limits(tmp_path):
     script = tmp_path / "limits.py"
     script.write_text(

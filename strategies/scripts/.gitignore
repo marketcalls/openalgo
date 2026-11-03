@@ -6,6 +6,8 @@
 
 # Ignore log files if any
 *.log
+*.runtime.json
+*.runtime.json.tmp
 
 # Ignore backup files
 *.bak
