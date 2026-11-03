@@ -102,6 +102,16 @@ def _wait_for_feed(ready, seconds: float) -> bool:
     return True
 
 
+def _price(value) -> float:
+    """A bar value as a float; NaN when it is missing or not a number."""
+    if value is None or value == "":
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def _l1_complete(quote_data, exchange: str) -> bool:
     """Whether an L1 quote holds every field a quote answer reads."""
     if not isinstance(quote_data, dict):
@@ -1040,12 +1050,15 @@ class BrokerData:
             if "timestamp" in df.columns:
                 df["timestamp"] = df.index.astype("int64") // 10**9
 
-            # Ensure all required columns exist
+            # Ensure all required columns exist. A missing price is NaN, so
+            # _repair_candles drops the bar instead of drawing it at zero.
             for col in ["open", "high", "low", "close", "volume"]:
                 if col not in df.columns:
-                    df[col] = 0.0
+                    df[col] = float("nan")
 
             df = self._repair_candles(df, exchange, symbol, interval)
+            if df.empty:
+                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
             # Reset index to include datetime as a column
             df = df.reset_index()
@@ -1096,6 +1109,8 @@ class BrokerData:
         for col in ohlc + ["volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        # +/-inf is as unplaceable as a missing price
+        df[ohlc] = df[ohlc].replace([float("inf"), float("-inf")], float("nan"))
         usable = df[ohlc].notna().all(axis=1)
         if not usable.all():
             logger.warning(
@@ -1117,7 +1132,7 @@ class BrokerData:
             df["high"] = high
             df["low"] = low
 
-        volume = df["volume"].fillna(0)
+        volume = df["volume"].replace([float("inf"), float("-inf")], float("nan")).fillna(0)
         negative = volume < 0
         if negative.any():
             logger.warning(
@@ -1209,20 +1224,29 @@ class BrokerData:
                     # Bars come back either as objects keyed
                     # time/open/high/low/close/volume, or as positional arrays
                     # [time, open, high, low, close, volume]. Accept both.
+                    # A missing price stays NaN so _repair_candles drops the
+                    # bar; defaulting it to 0 would draw a wick to zero. A bar
+                    # without a time cannot be placed and is skipped.
                     if isinstance(bar, dict):
-                        timestamp = int(bar.get("time", 0))
-                        open_price = float(bar.get("open", 0))
-                        high = float(bar.get("high", 0))
-                        low = float(bar.get("low", 0))
-                        close = float(bar.get("close", 0))
-                        volume = int(bar.get("volume", 0) or 0)
+                        if bar.get("time") is None:
+                            logger.warning(f"Skipping bar without a time: {bar}")
+                            continue
+                        timestamp = int(bar["time"])
+                        open_price = _price(bar.get("open"))
+                        high = _price(bar.get("high"))
+                        low = _price(bar.get("low"))
+                        close = _price(bar.get("close"))
+                        volume = _price(bar.get("volume"))
                     elif isinstance(bar, (list, tuple)) and len(bar) >= 5:
+                        if bar[0] is None:
+                            logger.warning(f"Skipping bar without a time: {bar}")
+                            continue
                         timestamp = int(bar[0])
-                        open_price = float(bar[1])
-                        high = float(bar[2])
-                        low = float(bar[3])
-                        close = float(bar[4])
-                        volume = int(bar[5]) if len(bar) > 5 else 0
+                        open_price = _price(bar[1])
+                        high = _price(bar[2])
+                        low = _price(bar[3])
+                        close = _price(bar[4])
+                        volume = _price(bar[5]) if len(bar) > 5 else float("nan")
                     else:
                         logger.warning(f"Skipping invalid bar format: {bar}")
                         continue

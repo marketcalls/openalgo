@@ -38,6 +38,9 @@ from .flattrade_websocket import FlattradeWebSocket
 
 # Configuration constants
 class Config:
+    # Attempts after which the delay sits at MAX_RECONNECT_DELAY and the log
+    # reports a long outage. It is not a give-up limit: a network outage keeps
+    # retrying until the broker is reachable again (issue #2324).
     MAX_RECONNECT_ATTEMPTS = 10
     BASE_RECONNECT_DELAY = 5
     MAX_RECONNECT_DELAY = 60
@@ -355,6 +358,9 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
         self._reconnect_timer = None  # Track reconnection timer for cleanup
+        # Set once a long outage has been reported, so the error is logged once
+        # per outage rather than on every 60s retry. Cleared on reconnect.
+        self._long_outage_logged = False
 
         # Auth-failure retry counter - deliberately SEPARATE from and much
         # tighter-bounded than reconnect_attempts/Config.MAX_RECONNECT_ATTEMPTS
@@ -445,6 +451,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.connected = True
             self.reconnect_attempts = 0
             self.auth_refresh_retries = 0
+            self._long_outage_logged = False
             self.logger.info("Connected to Flattrade WebSocket successfully")
         else:
             raise ConnectionError("Failed to connect to Flattrade WebSocket")
@@ -963,14 +970,28 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug("Skipping reconnection schedule - adapter stopped")
                 return
 
-            if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
-                self.logger.error("Maximum reconnection attempts reached")
-                self.running = False
-                return
+            # A network outage never stops the feed for good (issue #2324):
+            # setting running=False here left it down for the rest of the day,
+            # and the pool still reported it connected, so a reconnecting
+            # client was handed the dead feed. The delay stays at
+            # MAX_RECONNECT_DELAY until the broker is reachable. Only an auth
+            # rejection gives up, through _handle_auth_failure's own counter.
+            if (
+                self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS
+                and not self._long_outage_logged
+            ):
+                self._long_outage_logged = True
+                self.logger.error(
+                    f"Flattrade market data is still disconnected after "
+                    f"{self.reconnect_attempts} attempts. Retrying every "
+                    f"{Config.MAX_RECONNECT_DELAY}s until the connection is back."
+                )
 
             # Back off on whichever is worse: failed connect attempts, or
             # sessions that connected and were evicted seconds later.
-            backoff_level = max(self.reconnect_attempts, self._backoff_level)
+            backoff_level = min(
+                max(self.reconnect_attempts, self._backoff_level), Config.MAX_RECONNECT_ATTEMPTS
+            )
             delay = min(
                 Config.BASE_RECONNECT_DELAY * (2**backoff_level), Config.MAX_RECONNECT_DELAY
             )
@@ -1055,12 +1076,20 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.connected = True
                 self.reconnect_attempts = 0
                 self.auth_refresh_retries = 0
+                self._long_outage_logged = False
                 self.logger.info("Reconnected successfully")
-            else:
-                self.logger.error("Reconnection failed")
+                return
+            self.logger.error("Reconnection failed")
 
         except Exception as e:
             self.logger.error(f"Reconnection error: {e}")
+
+        # Schedule the next attempt here rather than relying on the socket's
+        # close callback: an error raised before the socket opened produces no
+        # callback at all, and that left the feed down for the day with
+        # running still True (issue #2324). _schedule_reconnection() replaces
+        # any timer a callback already set, so only one attempt is ever pending.
+        self._schedule_reconnection()
 
     def _resubscribe_all(self):
         """Resubscribe to all active subscriptions after reconnect"""

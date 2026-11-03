@@ -235,6 +235,7 @@ class NxtradStream:
         # The request replaces the server-side L1 list, so drop cached quotes
         # for tokens no longer on it; otherwise L1_dict keeps every token ever
         # streamed, and a re-subscribed token inherits stale fields.
+        tokens = list(tokens)  # iterated twice below
         keep = set(tokens)
         for key in list(self.L1_dict):
             if key not in keep:

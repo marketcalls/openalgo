@@ -291,3 +291,181 @@ def test_request_path_reconnect_after_close_opens_no_socket(monkeypatch, fake_ws
     stream.reconnect()
 
     assert len(fake_ws.created) == 1
+
+
+# --- Feed sync retry ---------------------------------------------------------
+
+
+class _FlakyFeedClient:
+    """subscribeL1 raises for the first `fail_times` calls."""
+
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = []
+
+    def subscribeL1(self, tokens):
+        self.calls.append(list(tokens))
+        if len(self.calls) <= self.fail_times:
+            raise OSError("send failed")
+        return True
+
+    def unsubscribeL1(self):
+        return True
+
+    def subscribeL2(self, tokens):
+        return True
+
+    def unsubscribeL2(self):
+        return True
+
+    def disconnect(self):
+        pass
+
+
+def _retry_adapter(monkeypatch, client):
+    adapter = _bare_adapter(client)
+    adapter.connected = True
+    monkeypatch.setattr(adapter, "FEED_FLUSH_DEBOUNCE", 0.01)
+    monkeypatch.setattr(adapter, "FEED_RETRY_DELAY", 0.05)
+    adapter.subscriptions["INFY_NSE_2"] = {
+        "symbol": "INFY",
+        "exchange": "NSE",
+        "brexchange": "NSE",
+        "token": "1594",
+        "mode": 2,
+    }
+    return adapter
+
+
+def _wait_until(predicate, seconds=3.0):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_failed_feed_sync_is_retried_with_the_current_list(monkeypatch):
+    client = _FlakyFeedClient(fail_times=2)
+    adapter = _retry_adapter(monkeypatch, client)
+
+    adapter._request_feed_sync("L1")
+    assert _wait_until(lambda: len(client.calls) >= 1)
+    # A symbol added while the retry waits is in the list the retry sends
+    adapter.subscriptions["TCS_NSE_2"] = {
+        "symbol": "TCS",
+        "exchange": "NSE",
+        "brexchange": "NSE",
+        "token": "11536",
+        "mode": 2,
+    }
+
+    assert _wait_until(lambda: len(client.calls) == 3)
+    assert client.calls[-1] == ["1594_NSE", "11536_NSE"]
+    time.sleep(0.2)
+    assert len(client.calls) == 3  # no retry after the success
+    adapter.disconnect()
+
+
+def test_feed_sync_gives_up_after_max_retries(monkeypatch):
+    client = _FlakyFeedClient(fail_times=100)
+    adapter = _retry_adapter(monkeypatch, client)
+
+    adapter._request_feed_sync("L1")
+
+    expected = 1 + adapter.FEED_MAX_RETRIES
+    assert _wait_until(lambda: len(client.calls) >= expected)
+    time.sleep(0.3)
+    assert len(client.calls) == expected
+    adapter.disconnect()
+
+
+def test_disconnect_stops_a_pending_retry(monkeypatch):
+    client = _FlakyFeedClient(fail_times=100)
+    adapter = _retry_adapter(monkeypatch, client)
+    monkeypatch.setattr(adapter, "FEED_RETRY_DELAY", 0.5)
+
+    adapter._request_feed_sync("L1")
+    assert _wait_until(lambda: len(client.calls) == 1)
+    adapter.disconnect()
+
+    time.sleep(0.8)
+    assert len(client.calls) == 1
+
+
+# --- Depth cache review fixes -----------------------------------------------
+
+
+def test_depth_waits_for_l1_when_the_book_arrives_first():
+    adapter, published = _depth_adapter()
+
+    adapter._on_data(None, dict(L5_TICK))
+    assert published == []  # a book alone would show LTP and OHLC as 0
+
+    adapter._on_data(None, dict(L1_TICK))
+    _, data = published[-1]
+    assert data["ltp"] == 1155.0
+    assert data["depth"]["buy"][0]["price"] == 1154.8
+
+
+def test_closed_session_drops_cached_halves():
+    adapter, published = _depth_adapter()
+    adapter._on_data(None, dict(L1_TICK))
+    adapter._on_data(None, dict(L5_TICK))
+    adapter.running = False  # no reconnect from this test
+
+    adapter._on_connection_event(None, {"s": "closed", "code": 1006, "reason": "drop"})
+
+    assert adapter._last_l1 == {}
+    assert adapter._last_l5 == {}
+    count = len(published)
+    adapter._on_data(None, dict(L1_TICK, ltp=1160.0))  # first tick of a new session
+    assert len(published) == count  # no stale book paired with it
+
+
+def test_dropping_depth_keeps_the_quote_but_not_the_book(monkeypatch):
+    adapter, _ = _depth_adapter()
+    adapter.subscriptions["INFY_NSE_1"] = {
+        "symbol": "INFY",
+        "exchange": "NSE",
+        "brexchange": "NSE",
+        "token": "1594",
+        "mode": 1,
+    }
+    adapter._on_data(None, dict(L1_TICK))
+    adapter._on_data(None, dict(L5_TICK))
+    monkeypatch.setattr(
+        ta.SymbolMapper,
+        "get_token_from_symbol",
+        staticmethod(lambda s, e: {"token": "1594", "brexchange": "NSE"}),
+    )
+
+    adapter.unsubscribe("INFY", "NSE", mode=3)
+    assert "1594_NSE" in adapter._last_l1
+    assert adapter._last_l5 == {}
+
+    # A book still in flight after the unsubscribe is not cached again
+    adapter._on_data(None, dict(L5_TICK))
+    assert adapter._last_l5 == {}
+
+
+class _SentWS:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, data):
+        self.sent.append(data)
+
+
+def test_subscribe_l1_accepts_a_generator():
+    import json
+
+    stream = nx.NxtradStream("example.invalid")
+    stream.isConnected = True
+    stream.ws = _SentWS()
+
+    stream.subscribeL1(t for t in ["2885_NSE", "500325_BSE"])
+
+    request = json.loads(stream.ws.sent[0])
+    assert request["tokens"] == [{"t": "2885_NSE"}, {"t": "500325_BSE"}]
