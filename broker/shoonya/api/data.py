@@ -909,6 +909,7 @@ class BrokerData:
         exchange: str,
         symbol: str,
         interval: str,
+        failed_ranges: list | tuple = (),
     ) -> pd.DataFrame:
         """Rebuild each trading day's last bar from that day's 1m bars (#2343).
 
@@ -927,6 +928,12 @@ class BrokerData:
         assuming any session open or close. Volume is the raw 1m sum, which
         equals TPSeries' own bar volume. A day with no 1m bars at or after its
         last bar keeps the bar Shoonya sent.
+
+        A 1m chunk that failed leaves a hole in `minute_bars`, and a chunk
+        boundary can fall inside a last bar's span, so rebuilding from what
+        arrived could produce a partial candle. A day whose span (its last bar
+        to just before the next day's first bar) overlaps any of
+        `failed_ranges` therefore keeps the bar Shoonya sent.
         """
         if bars.empty or minute_bars.empty:
             return bars
@@ -937,10 +944,19 @@ class BrokerData:
         minute_day = cls._ist_dates(minute_bars["timestamp"])
 
         changed = 0
+        skipped = 0
+        all_ts = bars["timestamp"].astype("int64")
         for day, idx in bars.groupby(bar_day)["timestamp"].idxmax().items():
-            window = minute_bars[
-                (minute_day == day) & (minute_bars["timestamp"] >= bars.at[idx, "timestamp"])
-            ]
+            last_ts = int(bars.at[idx, "timestamp"])
+            later = all_ts[all_ts > last_ts]
+            span_end = int(later.min()) - 1 if not later.empty else None
+            if any(
+                fail_end >= last_ts and (span_end is None or fail_start <= span_end)
+                for fail_start, fail_end in failed_ranges
+            ):
+                skipped += 1
+                continue
+            window = minute_bars[(minute_day == day) & (minute_bars["timestamp"] >= last_ts)]
             if window.empty:
                 continue
             rebuilt = {
@@ -961,6 +977,11 @@ class BrokerData:
                 f"HISTORY API - Rebuilt {changed} day-end candle(s) from 1m bars for "
                 f"{exchange}:{symbol} {interval}"
             )
+        if skipped:
+            logger.warning(
+                f"HISTORY API - Kept {skipped} day-end candle(s) as Shoonya sent them for "
+                f"{exchange}:{symbol} {interval}: the 1m bars covering them did not arrive"
+            )
         return bars
 
     def _fetch_chart_frame(
@@ -973,12 +994,16 @@ class BrokerData:
         start_ts: int,
         end_ts: int,
         label: str,
+        failed_ranges: list | None = None,
     ) -> pd.DataFrame:
         """Fetch [start_ts, end_ts] from a chart endpoint in chunks and parse it.
 
         Returns the raw candles as a frame (timestamp, open, high, low, close,
         volume, oi), unsorted and unrepaired. Raises on a dead session or when
-        every chunk failed; `label` names the request in that error.
+        every chunk failed; `label` names the request in that error. A single
+        failed chunk is tolerated, and when `failed_ranges` is given its
+        (start, end) epoch range is appended there so a caller can tell which
+        part of the frame is missing.
         """
         chunk_seconds = self._get_history_chunk_seconds(interval)
 
@@ -1010,6 +1035,8 @@ class BrokerData:
             except Exception as e:
                 logger.error(f"{endpoint} chunk request failed ({chunk_start}-{chunk_end}): {e}")
                 failed_chunks += 1
+                if failed_ranges is not None:
+                    failed_ranges.append((chunk_start, chunk_end))
                 chunk_start = chunk_end + 1
                 continue
 
@@ -1039,6 +1066,8 @@ class BrokerData:
                     f"stat={chunk_response.get('stat')} emsg={emsg}"
                 )
                 failed_chunks += 1
+                if failed_ranges is not None:
+                    failed_ranges.append((chunk_start, chunk_end))
                 chunk_start = chunk_end + 1
                 continue
 
@@ -1048,6 +1077,8 @@ class BrokerData:
                     f"{str(chunk_response)[:200]}"
                 )
                 failed_chunks += 1
+                if failed_ranges is not None:
+                    failed_ranges.append((chunk_start, chunk_end))
                 chunk_start = chunk_end + 1
                 continue
 
@@ -1301,6 +1332,7 @@ class BrokerData:
             # those from 1m bars. Only the span the repair reads is fetched.
             repair_window = self._day_end_repair_window(df) if interval not in ("D", "1m") else None
             if repair_window:
+                failed_ranges = []
                 try:
                     minute_df = self._fetch_chart_frame(
                         endpoint,
@@ -1312,11 +1344,14 @@ class BrokerData:
                         repair_window[1],
                         f"{symbol}/{oa_exchange} 1m between {repair_window[0]} and "
                         f"{repair_window[1]}",
+                        failed_ranges=failed_ranges,
                     )
                     minute_df = minute_df.sort_values("timestamp").drop_duplicates(
                         subset="timestamp", keep="last"
                     )
-                    df = self._rebuild_day_last_bars(df, minute_df, oa_exchange, symbol, interval)
+                    df = self._rebuild_day_last_bars(
+                        df, minute_df, oa_exchange, symbol, interval, failed_ranges
+                    )
                 except Exception as e:
                     # The bars Shoonya sent are still returned; only the
                     # last-bar repair is skipped.

@@ -137,13 +137,16 @@ def test_repair_window_covers_only_the_returned_span():
 class _FakeTPSeries:
     """Answers TPSeries like Shoonya: data only inside the bars it holds."""
 
-    def __init__(self, native, minute):
+    def __init__(self, native, minute, fail=None):
         self.native = native
         self.minute = minute
+        self.fail = fail
         self.calls = []
 
     def __call__(self, endpoint, auth, payload=None):
         self.calls.append(payload)
+        if self.fail and self.fail(payload):
+            raise OSError("[WinError 10035] A non-blocking socket operation could not be completed")
         rows = self.minute if payload["intrv"] == "1" else self.native
         st, et = int(payload["st"]), int(payload["et"])
         hit = rows[(rows["timestamp"] >= st) & (rows["timestamp"] <= et)]
@@ -164,10 +167,10 @@ class _FakeTPSeries:
         ]
 
 
-def _history(monkeypatch, native, minute, interval, start, end):
+def _history(monkeypatch, native, minute, interval, start, end, fail=None):
     import broker.shoonya.api.data as shoonya_data
 
-    fake = _FakeTPSeries(native, minute)
+    fake = _FakeTPSeries(native, minute, fail)
     monkeypatch.setattr(shoonya_data, "get_chart_api_response", fake)
     monkeypatch.setattr(shoonya_data, "get_br_symbol", lambda s, e: "SBIN-EQ")
     monkeypatch.setattr(shoonya_data, "get_token", lambda s, e: "3045")
@@ -190,3 +193,75 @@ def test_single_day_request_makes_no_1m_call(monkeypatch):
     out, minute_calls = _history(monkeypatch, SBIN_5M, SBIN_1M, "5m", "2026-10-30", "2026-10-30")
     assert minute_calls == []
     assert len(out) == 2
+
+
+# Five trading days whose repair span is longer than one 5-day 1m chunk. The
+# span starts at the first day's last bar (28-10 15:25), so the first chunk
+# ends at 02-11 15:25:00 and the second starts at 15:25:01, inside the last
+# bar of 02-11. Each day's last 5m bar comes back with the next day's 09:14
+# price folded in, as TPSeries sends it.
+_DAYS = [
+    ("2026-10-28", 100.0),
+    ("2026-10-29", 110.0),
+    ("2026-10-30", 120.0),
+    ("2026-11-02", 130.0),
+    ("2026-11-03", 140.0),
+]
+
+
+def _boundary_bars():
+    native, minute = [], []
+    for i, (day, base) in enumerate(_DAYS):
+        nxt = _DAYS[i + 1][1] + 5 if i + 1 < len(_DAYS) else None
+        native.append((f"{day} 09:15", base, base + 1, base - 1, base, 10.0))
+        top = max(base + 2, nxt) if nxt else base + 2
+        native.append((f"{day} 15:25", base, top, base - 1, nxt or base + 2, 50.0))
+        minute.append((f"{day} 09:14", base - 3, base - 3, base - 3, base - 3, 0.0))
+        minute.append((f"{day} 09:15", base, base + 1, base - 1, base, 10.0))
+        for m, close in (
+            (25, base),
+            (26, base + 1),
+            (27, base - 1),
+            (28, base + 2),
+            (29, base + 2),
+        ):
+            minute.append((f"{day} 15:{m}", close, close, close, close, 10.0))
+    return _bars(native), _bars(minute)
+
+
+def test_a_failed_1m_chunk_keeps_the_affected_day_end_bar(monkeypatch):
+    native, minute = _boundary_bars()
+    boundary = _ts("2026-11-02 15:25")
+    out, minute_calls = _history(
+        monkeypatch,
+        native,
+        minute,
+        "5m",
+        "2026-10-28",
+        "2026-11-03",
+        fail=lambda p: p["intrv"] == "1" and int(p["st"]) == boundary + 1,
+    )
+    assert len(minute_calls) == 2
+    bars = {
+        datetime.fromtimestamp(int(r.timestamp), IST).strftime("%m-%d %H:%M"): r
+        for r in out.itertuples()
+    }
+    # 02-11's last bar straddles the failed chunk: kept exactly as Shoonya sent
+    # it rather than rebuilt from the 15:25 minute alone (close 130.0).
+    kept = bars["11-02 15:25"]
+    assert (kept.high, kept.close, kept.volume) == (145.0, 145.0, 50.0)
+    # Days the first chunk covered in full are still repaired.
+    for day, base in _DAYS[:3]:
+        bar = bars[datetime.strptime(day, "%Y-%m-%d").strftime("%m-%d") + " 15:25"]
+        assert (bar.high, bar.close) == (base + 2, base + 2)
+
+
+def test_without_a_failure_every_day_end_bar_is_repaired(monkeypatch):
+    native, minute = _boundary_bars()
+    out, _ = _history(monkeypatch, native, minute, "5m", "2026-10-28", "2026-11-03")
+    bars = {
+        datetime.fromtimestamp(int(r.timestamp), IST).strftime("%m-%d %H:%M"): r
+        for r in out.itertuples()
+    }
+    last = bars["11-02 15:25"]
+    assert (last.high, last.close, last.volume) == (132.0, 132.0, 50.0)
