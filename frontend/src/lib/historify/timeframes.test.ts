@@ -1,5 +1,11 @@
-import { SessionCalendar } from 'openalgo-charts'
-import { describe, expect, it, vi } from 'vitest'
+import { type BarsRequest, SessionCalendar } from 'openalgo-charts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  prepareSessionHours,
+  resetSessionHours,
+  sessionCalendar,
+  sessionCalendarRevision,
+} from '@/lib/trading/sessionHours'
 import { createHistorifyTimeframes } from './timeframes'
 
 const calendar = new SessionCalendar({ timezone: 'Asia/Kolkata', sessions: ['0915-1530:23456'] })
@@ -147,6 +153,75 @@ describe('Historify custom history', () => {
     expect(getBars).not.toHaveBeenCalled()
     expect(service.feed.subscribeBars).toBeUndefined()
     expect(service.provider.supportsWarmup).toBe(true)
+    service.destroy()
+  })
+})
+
+describe('Historify older history pages', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    resetSessionHours()
+  })
+
+  // #2310: a page that ends at a session open was planned with no start date,
+  // so the calendar lookup found no years and derived intervals were refused.
+  it.each([
+    ['1m', '2026-10-26T03:45:00Z'],
+    ['3m', '2026-10-26T03:45:00Z'],
+    ['5m', '2026-10-23T03:45:00Z'],
+    ['15m', '2026-10-27T03:45:00Z'],
+    ['1h', '2026-10-26T03:45:00Z'],
+  ])('pages %s back from the session open at %s with the real exchange calendar', async (interval, stamp) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        json: async () => ({
+          status: 'success',
+          data: url.includes('timings')
+            ? [{ exchange: 'NSE', start_offset: 33_300_000, end_offset: 55_800_000 }]
+            : [],
+        }),
+      }))
+    )
+    const start = Date.parse('2026-10-01T03:45:00Z') / 1000
+    const end = Date.parse('2026-10-27T09:59:00Z') / 1000
+    const getBars = vi.fn(async () => [])
+    const service = createHistorifyTimeframes(
+      { getBars },
+      {
+        symbols: [
+          {
+            ...symbols[0],
+            exchange: 'NSE_INDEX',
+            firstBySource: { '1m': start, D: start },
+            lastBySource: { '1m': end, D: end },
+          },
+        ],
+        calendar: sessionCalendar,
+        calendarRevision: sessionCalendarRevision,
+        prepare: (request) => prepareSessionHours('key', request),
+      }
+    )
+    const before = Date.parse(stamp) / 1000
+    await expect(
+      service.feed.getBarsPage!({
+        symbol: 'TEST',
+        exchange: 'NSE_INDEX',
+        interval,
+        before,
+        countBack: 500,
+      })
+    ).resolves.toMatchObject({ bars: [] })
+    // Pin the page's range, not only that a request went out: it ends at the
+    // oldest bar on screen and never reaches before the stored history.
+    expect(getBars).toHaveBeenCalled()
+    for (const [request] of getBars.mock.calls as unknown as [BarsRequest][]) {
+      expect(request.interval).toBe(interval)
+      expect(request.to).toBe(before)
+      expect(request.from).toBeGreaterThanOrEqual(start)
+      expect(request.from).toBeLessThanOrEqual(before)
+    }
     service.destroy()
   })
 })

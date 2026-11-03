@@ -98,14 +98,27 @@ export function createHistorifyTimeframes(raw: DataFeed, options: Options) {
     resolve: (req) => native.feed.resolve(req),
     getBars,
     async getBarsPage(req) {
-      const plan = native.feed.resolve({ ...req, from: undefined })
       const symbol = findCatalogSymbol(options.symbols, req.symbol, req.exchange)
+      const floor = Date.UTC(1970, 0, 5) / 1000
+      // Plan on the page's own finite window, as the trading feed does. Without
+      // a start the calendar lookup took "now" as the start, found no years for
+      // a past page, and planned on a 24-hour day, which rejects a derived
+      // interval whose page ends at a session open (#2310).
+      const stored = Object.values(symbol?.firstBySource ?? {}).filter(Number.isFinite)
+      const window = {
+        ...req,
+        from: Math.max(
+          stored.length ? Math.min(...stored) : floor,
+          req.from ?? req.before - duration(req.interval) * req.countBack * 2
+        ),
+        to: req.before,
+      }
+      if (window.from < window.to) await options.prepare?.(window)
+      if (req.signal?.aborted) throw req.signal.reason
+      const plan = native.feed.resolve(window)
       const source = plan.source.interval as '1m' | 'D'
-      const earliest = symbol?.firstBySource?.[source] ?? Date.UTC(1970, 0, 5) / 1000
-      const from = Math.max(
-        earliest,
-        req.from ?? req.before - duration(req.interval) * req.countBack * 2
-      )
+      const earliest = symbol?.firstBySource?.[source] ?? floor
+      const from = Math.max(earliest, window.from)
       if (from >= req.before) return { bars: [], nextBefore: from, hasMore: false }
       const bars = (await getBars({ ...req, from, to: req.before }))
         .filter((bar) => bar.time < req.before)
