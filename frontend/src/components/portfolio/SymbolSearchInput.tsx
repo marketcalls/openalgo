@@ -6,8 +6,9 @@
  * queries the instrument master as they type and returns a symbol that is
  * known to exist on the exchange they picked.
  */
-import { useEffect, useRef, useState } from 'react'
+
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useId, useRef, useState } from 'react'
 import { chartinkApi } from '@/api/chartink'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -30,6 +31,8 @@ export function SymbolSearchInput({
   const [query, setQuery] = useState(value)
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
+  const [activeIndex, setActiveIndex] = useState(-1)
+  const listBoxId = useId()
 
   // Follow the value when the parent changes it (Distribute Equally, presets).
   useEffect(() => setQuery(value), [value])
@@ -37,7 +40,10 @@ export function SymbolSearchInput({
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent) => {
-      if (!box.current?.contains(e.target as Node)) setOpen(false)
+      if (!box.current?.contains(e.target as Node)) {
+        setOpen(false)
+        setActiveIndex(-1)
+      }
     }
     window.addEventListener('mousedown', close)
     return () => window.removeEventListener('mousedown', close)
@@ -51,11 +57,13 @@ export function SymbolSearchInput({
     enabled: open && query.trim().length >= 2,
     staleTime: 60_000,
   })
+  const maxIndex = Math.min(results.length, 25) - 1
 
   const choose = (symbol: string) => {
     setQuery(symbol)
     onSelect(symbol)
     setOpen(false)
+    setActiveIndex(-1)
   }
 
   return (
@@ -66,21 +74,54 @@ export function SymbolSearchInput({
         onChange={(e) => {
           setQuery(e.target.value.toUpperCase())
           setOpen(true)
+          setActiveIndex(-1)
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => {
           // Typing an exact ticker and pressing Enter should just work, without
           // waiting for the list.
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setOpen(true)
+            if (maxIndex < 0) return
+            setActiveIndex((prev) => (prev >= maxIndex ? 0 : prev + 1))
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setOpen(true)
+            if (maxIndex < 0) return
+            setActiveIndex((prev) => (prev <= 0 ? maxIndex : prev - 1))
+          }
           if (e.key === 'Enter') {
             e.preventDefault()
-            choose(query.trim().toUpperCase())
+            if (activeIndex >= 0) {
+              choose(results[activeIndex].symbol)
+            } else {
+              choose(query.trim().toUpperCase())
+            }
           }
-          if (e.key === 'Escape') setOpen(false)
+          if (e.key === 'Escape') {
+            setOpen(false)
+            setActiveIndex(-1)
+          }
         }}
-        onBlur={() => onSelect(query.trim().toUpperCase())}
+        onBlur={() => {
+          onSelect(query.trim().toUpperCase())
+          setActiveIndex(-1)
+        }}
+        role="combobox"
+        aria-expanded={open && query.trim().length >= 2}
+        aria-controls={listBoxId}
+        aria-autocomplete="list"
+        aria-haspopup="listbox"
+        aria-activedescendant={activeIndex >= 0 ? `${listBoxId}-option-${activeIndex}` : undefined}
       />
       {open && query.trim().length >= 2 && (
-        <div className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border bg-popover shadow-lg">
+        <div
+          className="absolute z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border bg-popover shadow-lg"
+          role="listbox"
+          id={listBoxId}
+        >
           {isFetching && results.length === 0 && (
             <div className="px-3 py-2 text-xs text-muted-foreground">Searching…</div>
           )}
@@ -89,7 +130,7 @@ export function SymbolSearchInput({
               Nothing on {exchange} matching “{query}”
             </div>
           )}
-          {results.slice(0, 25).map((r) => (
+          {results.slice(0, 25).map((r, index) => (
             <button
               type="button"
               key={`${r.symbol}-${r.exchange}`}
@@ -99,13 +140,17 @@ export function SymbolSearchInput({
                 e.preventDefault()
                 choose(r.symbol)
               }}
-              className="flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent"
+              className={cn(
+                'flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent',
+                activeIndex === index && 'bg-accent'
+              )}
+              role="option"
+              aria-selected={activeIndex === index}
+              id={`${listBoxId}-option-${index}`}
             >
               <span className="font-medium">{r.symbol}</span>
               <span className="truncate text-xs text-muted-foreground">{r.name}</span>
-              <span className="ml-auto text-[10px] text-muted-foreground">
-                {r.exchange}
-              </span>
+              <span className="ml-auto text-[10px] text-muted-foreground">{r.exchange}</span>
             </button>
           ))}
         </div>
