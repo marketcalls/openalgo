@@ -87,6 +87,7 @@ def test_the_index_snapshot_keeps_its_fields_and_precision(ws):
     index = ws.index_data[1]
     assert index["ltp"] == 1342
     assert index["prev_close_price"] == 1310
+    assert index["multiplier"] == 1
     assert index["precision"] == 2
     assert index["original_symbol"] == "NSE:INDIAVIX-INDEX"
 
@@ -102,3 +103,13 @@ def test_two_indices_in_a_row_both_arrive(ws):
     ws._parse_binary_message(_frame(_index(), second, _scrip()))
 
     assert [m["hsm_token"] for m in ws.received] == [IF, "if|nse_cm|Nifty 50", SF]
+
+
+def test_an_index_whose_frame_ends_before_the_tail_still_arrives(ws):
+    cut = _index()
+    cut = cut[: cut.index(b"\x00\x1e") + 2]
+    ws._parse_binary_message(_frame(cut))
+
+    assert [m["hsm_token"] for m in ws.received] == [IF]
+    assert ws.index_data[1]["ltp"] == 1342
+    assert "multiplier" not in ws.index_data[1]
