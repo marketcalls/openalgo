@@ -871,7 +871,39 @@ class BrokerData:
         return df
 
     @staticmethod
+    def _ist_dates(timestamps: pd.Series) -> pd.Series:
+        """Trading date (IST) of each epoch-second timestamp."""
+        return (
+            pd.to_datetime(timestamps.astype("int64"), unit="s", utc=True)
+            .dt.tz_convert("Asia/Kolkata")
+            .dt.date
+        )
+
+    @classmethod
+    def _day_end_repair_window(cls, bars: pd.DataFrame) -> tuple[int, int] | None:
+        """The 1m span _rebuild_day_last_bars reads, or None when nothing needs it.
+
+        Only a day followed by another day in the same reply can carry that
+        day's first 1m bar, so the last date is never repaired and a reply
+        covering one date needs no 1m bars at all. The span runs from the
+        first date's last bar to just before the last date's first bar, so it
+        is bounded by the bars Shoonya actually returned rather than by the
+        requested range: a five-year request against roughly a year of
+        intraday history fetches a year of 1m bars, not five.
+        """
+        if bars.empty:
+            return None
+        bar_day = cls._ist_dates(bars["timestamp"])
+        first_day, last_day = bar_day.min(), bar_day.max()
+        if first_day == last_day:
+            return None
+        start = int(bars.loc[bar_day == first_day, "timestamp"].max())
+        end = int(bars.loc[bar_day == last_day, "timestamp"].min()) - 1
+        return start, end
+
+    @classmethod
     def _rebuild_day_last_bars(
+        cls,
         bars: pd.DataFrame,
         minute_bars: pd.DataFrame,
         exchange: str,
@@ -899,17 +931,10 @@ class BrokerData:
         if bars.empty or minute_bars.empty:
             return bars
 
-        def ist_date(ts):
-            return (
-                pd.to_datetime(ts.astype("int64"), unit="s", utc=True)
-                .dt.tz_convert("Asia/Kolkata")
-                .dt.date
-            )
-
         bars = bars.reset_index(drop=True).copy()
         minute_bars = minute_bars.sort_values("timestamp").reset_index(drop=True)
-        bar_day = ist_date(bars["timestamp"])
-        minute_day = ist_date(minute_bars["timestamp"])
+        bar_day = cls._ist_dates(bars["timestamp"])
+        minute_day = cls._ist_dates(minute_bars["timestamp"])
 
         changed = 0
         for day, idx in bars.groupby(bar_day)["timestamp"].idxmax().items():
@@ -1273,8 +1298,9 @@ class BrokerData:
 
             # Intraday intervals above 1m: TPSeries folds the next trading
             # day's first 1m bar into each day's last bar (#2343), so rebuild
-            # those from 1m bars of the same range.
-            if interval not in ("D", "1m") and not df.empty:
+            # those from 1m bars. Only the span the repair reads is fetched.
+            repair_window = self._day_end_repair_window(df) if interval not in ("D", "1m") else None
+            if repair_window:
                 try:
                     minute_df = self._fetch_chart_frame(
                         endpoint,
@@ -1282,9 +1308,10 @@ class BrokerData:
                         exchange,
                         token,
                         None,
-                        start_ts,
-                        end_ts,
-                        f"{symbol}/{oa_exchange} 1m between {start_date_str} and {end_date_str}",
+                        repair_window[0],
+                        repair_window[1],
+                        f"{symbol}/{oa_exchange} 1m between {repair_window[0]} and "
+                        f"{repair_window[1]}",
                     )
                     minute_df = minute_df.sort_values("timestamp").drop_duplicates(
                         subset="timestamp", keep="last"
