@@ -416,6 +416,7 @@ GITIGNORE = {
         "frontend/dist/**/*.gz.tmp",
         "frontend/dist/",
         "frontend/.cache/",
+        "release/",
         ".npm/",
         "npm-debug.log*",
         "yarn-debug.log*",

@@ -32,6 +32,7 @@ need → drill into the specific file. Don't load everything at once.
 | Topic | Entry point |
 |---|---|
 | Ubuntu server install | [installation-guidelines/getting-started/ubuntu-server-installation.md](installation-guidelines/getting-started/ubuntu-server-installation.md) |
+| Windows desktop install, control panel, broker reset | [installation-guidelines/getting-started/windows-desktop-installation.md](installation-guidelines/getting-started/windows-desktop-installation.md) |
 | Docker | [docker/README.md](docker/README.md) |
 | Upgrade / SMTP / TOTP / forgot-password | https://docs.openalgo.in/installation-guidelines/getting-started/ |
 | Broker integration (36 plugins) | [broker-integration-guide.md](broker-integration-guide.md) |

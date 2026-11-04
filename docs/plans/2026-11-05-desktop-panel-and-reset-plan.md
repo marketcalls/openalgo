@@ -1,6 +1,9 @@
 # Phase 3 Plan: Desktop Panel and Reset (Eject)
 
-Date: 2026-11-05. Status: agreed. Only where the zip is hosted is open (section 9), and it does not block building.
+Date: 2026-11-05. Status: **built and tested, not yet committed** (M3.1 to M3.5; the owner
+asked for one commit at the end of Phase 3). Where the zip is hosted is still open
+(section 9); the zip is kept locally in `release/` for now. Operator guide:
+[windows-desktop-installation.md](../installation-guidelines/getting-started/windows-desktop-installation.md).
 Replaces the service-based recommendation in
 [2026-11-04-desktop-packaging-research.md](2026-11-04-desktop-packaging-research.md)
 (sections 3, 5 and 6). The crash analysis in that document (section 2) still holds
@@ -196,6 +199,14 @@ writes (system temp files for uploads and exports) are left to the OS.
 
 Size: medium.
 
+**Done 2026-11-05.** `launcher/keeper.py`, `launcher/control.py`,
+`test/test_launcher_keeper.py`. Verified with the real app: a server killed
+outright was running again 13 s later, and Stop ended it in 3 s with the ports
+released. Changed by testing: the first start on a new install took about two
+minutes (every module compiled), past the hang limit, so a server that has never
+answered now counts as starting until `start_timeout` (5 minutes), and as hung
+only after that.
+
 ## 6. M3.4: the panel
 
 One small window, no tray icon (a tray needs a third-party package):
@@ -243,6 +254,20 @@ Every message is written for a trader, per `CLAUDE.md`: "Port 5000 is used by
 another program", not an `OSError`.
 
 Size: medium.
+
+**Done 2026-11-05.** `launcher/panel.py`, `launcher/branding.py`,
+`test/test_launcher_panel.py`, `test/test_launcher_network.py`. Driven against the
+real app (Stopped, Running on port 5000, Stopped). Additions found while building:
+
+- **First-run broker setup.** The installer leaves no `.env`, and the app will not
+  start without a broker in it, so a new install opens on **Not set up yet** with a
+  **Set up your broker** button: the switch-broker dialog without the reset.
+- **Product name from the brand source.** Panel, keeper and reset messages read
+  `PRODUCT_NAME` from `utils/brand.py` and the client's `custom_brand/brand.json`
+  (`launcher/branding.py`), since the launcher cannot import the app.
+- **DPI aware**, so the window is sharp at 125% and 150% display scaling.
+- **tkinter needs the uv Python.** The project's development Python here has no
+  Tk; the standalone 3.12 that uv installs does, and all launcher tests pass on it.
 
 ## 7. M3.5: install script and release zip
 
@@ -300,29 +325,48 @@ ever a concern.
 
 ### What the client sees, from asking to dashboard
 
-1. **We send a download link** to `FastAlgo-<version>.zip` (about 30 to 50 MB).
+1. **We send a download link** to `FastAlgo-<version>.zip` (12.4 MB for 1.1.1).
    It holds the source and the built frontend, and nothing of Git. It is hosted
    wherever TinyCompute serves files from, behind a link only that client gets.
 2. **The client downloads it,** right-clicks, Extract All.
 3. **The client double-clicks `Install FastAlgo.cmd`.** A window shows progress
    for about 3 to 10 minutes, mostly the package download (about 300 to 500 MB).
    Windows asks "Yes" once, for the firewall.
-4. **The panel opens by itself,** starts the server, and opens the default
-   browser at `http://127.0.0.1:5000`. If Chrome is the default browser, that is
-   Chrome. A FastAlgo icon is now on the desktop for every later day.
-5. **First-time setup page:** create the FastAlgo login.
-6. **Broker credentials page:** enter the broker's API key and secret, and put
-   the redirect URL the page shows into the broker's developer portal.
+4. **The panel opens by itself** and shows **Not set up yet**. A FastAlgo icon is
+   now on the desktop for every later day.
+5. **Set up your broker:** choose the broker and enter its API key and secret.
+   The panel shows the redirect URL to put into the broker's developer portal, and
+   offers to start.
+6. **Open FastAlgo** in the default browser (Chrome, if it is the default), and
+   create the FastAlgo login on the first-time setup page.
 7. **Log in to the broker.** The dashboard opens, and the symbol list downloads
    in the background.
 
-Steps 5 to 7 are the same as on any FastAlgo install today. After a reset, the
-client repeats only steps 5 to 7.
+After a reset, the client repeats steps 6 and 7; the broker was chosen in the
+reset dialog.
 
 TinyCompute can do steps 2 to 7 on a remote-desktop call, which is likely how
 most installs go.
 
 Size: small to medium.
+
+**Done 2026-11-05.** `install/desktop/install-desktop.ps1`, `install/desktop/Install.cmd`,
+`scripts/build_release.py`. Rehearsed end to end from the built zip into a clean
+folder: uv downloaded and checksum-verified, private Python 3.12.14, source copied,
+dependencies installed, in 175 s; a second run took 2 s and skipped every finished
+step; first-run broker setup, start, running and stop all worked from the
+installed copy alone. Changed by testing:
+
+- **`--no-dev`.** `uv sync` installs the `dev` group by default; clients get no
+  test or audit tools. The panel's Repair uses the same command.
+- **The firewall rule's program path comes from `.venv\pyvenv.cfg`.** The process
+  that listens runs from uv's version folder (`cpython-3.12-...`), not the patch
+  folder `uv python find` reports (`cpython-3.12.14-...`), and a rule matches the
+  exact path. The shortcut uses the same path, which survives a patch upgrade.
+
+**Not exercised in testing, to keep this PC unchanged:** the firewall rule itself
+(it needs the Windows admin prompt), shortcuts on the real desktop, and a phone
+on the network. These are the first things to check on a real client install.
 
 ## 8. Later
 

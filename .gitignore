@@ -158,3 +158,6 @@ custom_brand/
 .reset-*/
 logs/
 agent_kill_switch
+
+# Desktop release zips, built locally by scripts/build_release.py.
+release/
