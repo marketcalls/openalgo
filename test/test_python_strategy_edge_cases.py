@@ -45,9 +45,7 @@ def calendar_db():
         poolclass=StaticPool,
     )
     mc.engine = engine
-    mc.db_session = scoped_session(
-        sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    )
+    mc.db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
     mc.Base.query = mc.db_session.query_property()
     mc.Base.metadata.create_all(engine)
     mc.clear_market_calendar_cache()
@@ -59,9 +57,14 @@ def calendar_db():
 
 
 @pytest.fixture()
-def ps_module(calendar_db):
+def ps_module(calendar_db, tmp_path, monkeypatch):
     """Reset state between tests."""
     from blueprints import python_strategy as ps
+
+    # Never the real strategies/strategy_configs.json: a test reaching
+    # save_configs() wrote its fixture entry there, the /python page listed it,
+    # and deleting it (no file_path) tried to delete the working directory.
+    monkeypatch.setattr(ps, "CONFIG_FILE", tmp_path / "strategy_configs.json")
 
     ps.STRATEGY_CONFIGS.clear()
     ps.RUNNING_STRATEGIES.clear()
@@ -448,9 +451,7 @@ def test_schedule_route_refuses_when_running(ps_module):
 
     app = Flask(__name__)
     with app.app_context():
-        is_owner, result = ps_module.verify_strategy_ownership(
-            "s", "alice", return_config=True
-        )
+        is_owner, result = ps_module.verify_strategy_ownership("s", "alice", return_config=True)
         assert is_owner is True
         # The route refuses if is_running is True
         assert result.get("is_running") is True
@@ -604,9 +605,7 @@ def test_cleanup_dead_processes_clears_restored_zombie(ps_module, monkeypatch):
     assert ps_module.STRATEGY_CONFIGS["zombie"]["pid"] is None
 
 
-def test_restore_adopts_live_strategy_when_contracts_not_ready(
-    ps_module, monkeypatch, tmp_path
-):
+def test_restore_adopts_live_strategy_when_contracts_not_ready(ps_module, monkeypatch, tmp_path):
     """A live strategy must not be marked stopped just because contracts are not ready.
 
     Otherwise the later master-contract hook can start a duplicate process.
@@ -816,3 +815,46 @@ def test_strategy_without_schedule_days_field(ps_module, tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# Deleting a strategy only ever deletes its own script
+# ---------------------------------------------------------------------------
+
+
+def test_delete_with_no_script_path_deletes_nothing(ps_module, monkeypatch, tmp_path):
+    """An entry with no file_path made Path("") == Path("."), and delete tried to
+    unlink the working directory ("Access is denied: '.'" on Windows)."""
+    monkeypatch.setattr(ps_module, "STRATEGIES_DIR", tmp_path / "scripts")
+    unlinked = []
+    monkeypatch.setattr(ps_module.Path, "unlink", lambda self, *a, **k: unlinked.append(self))
+    for config in ({}, {"file_path": ""}, {"file_path": "   "}, {"file_path": None}):
+        ps_module._delete_strategy_file("m", config)
+    assert unlinked == []
+
+
+def test_delete_never_touches_a_file_outside_the_strategies_folder(
+    ps_module, monkeypatch, tmp_path
+):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    outside = tmp_path / "app.py"
+    outside.write_text("keep me", encoding="utf-8")
+    monkeypatch.setattr(ps_module, "STRATEGIES_DIR", scripts)
+    ps_module._delete_strategy_file("x", {"file_path": str(outside)})
+    ps_module._delete_strategy_file("x", {"file_path": str(scripts / ".." / "app.py")})
+    assert outside.read_text(encoding="utf-8") == "keep me"
+
+
+def test_delete_removes_its_own_script(ps_module, monkeypatch, tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "abc.py"
+    script.write_text("print('hi')", encoding="utf-8")
+    monkeypatch.setattr(ps_module, "STRATEGIES_DIR", scripts)
+    ps_module._delete_strategy_file("abc", {"file_path": str(script)})
+    assert not script.exists()
+
+
+def test_fixture_keeps_tests_away_from_the_real_config_file(ps_module, tmp_path):
+    assert ps_module.CONFIG_FILE.is_relative_to(tmp_path)

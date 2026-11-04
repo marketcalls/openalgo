@@ -63,7 +63,7 @@ def calendar_db():
 
 
 @pytest.fixture()
-def ps_module(calendar_db):
+def ps_module(calendar_db, tmp_path, monkeypatch):
     """Reset state on the (single) python_strategy module instance.
 
     We deliberately don't re-import: `from blueprints import python_strategy`
@@ -73,6 +73,11 @@ def ps_module(calendar_db):
     cleanest fix is to import once and reset the per-test mutable state.
     """
     from blueprints import python_strategy as ps
+
+    # Never the real strategies/strategy_configs.json: a test reaching
+    # save_configs() wrote its fixture entry there, the /python page listed it,
+    # and deleting it (no file_path) tried to delete the working directory.
+    monkeypatch.setattr(ps, "CONFIG_FILE", tmp_path / "strategy_configs.json")
 
     ps.STRATEGY_CONFIGS.clear()
     ps.RUNNING_STRATEGIES.clear()

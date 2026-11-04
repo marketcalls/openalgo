@@ -2103,6 +2103,39 @@ def unschedule_strategy_route(strategy_id):
     ), 400
 
 
+def _delete_strategy_file(strategy_id: str, config: dict) -> None:
+    """Delete a strategy's script, only if it is a file inside STRATEGIES_DIR.
+
+    ``Path(config.get("file_path", ""))`` is ``Path(".")`` when the entry has no
+    path, so the old check (``exists()``, then ``unlink()``) tried to delete the
+    working directory: Windows refused with "Access is denied: '.'". A
+    damaged config naming any other existing file, ``app.py`` say, would have
+    deleted it. The upload route already confines files to STRATEGIES_DIR; this
+    holds delete to the same rule. The config entry is removed either way.
+    """
+    raw = config.get("file_path")
+    if not isinstance(raw, str) or not raw.strip():
+        logger.warning(f"Strategy {strategy_id} has no script path; removing its entry only")
+        return
+    file_path = Path(raw)
+    try:
+        resolved = file_path.resolve()
+        inside = resolved.is_relative_to(STRATEGIES_DIR.resolve())
+    except (OSError, ValueError):
+        inside = False
+    if not inside:
+        logger.warning(
+            f"Strategy {strategy_id} points outside the strategies folder ({file_path}); not deleting it"
+        )
+        return
+    if not resolved.is_file():
+        return
+    try:
+        resolved.unlink()
+    except Exception as e:
+        logger.exception(f"Failed to delete file {file_path}: {e}")
+
+
 @python_strategy_bp.route("/delete/<strategy_id>", methods=["POST"])
 @check_session_validity
 def delete_strategy(strategy_id):
@@ -2148,12 +2181,7 @@ def delete_strategy(strategy_id):
 
         # Delete file
         if strategy_id in STRATEGY_CONFIGS:
-            file_path = Path(STRATEGY_CONFIGS[strategy_id].get("file_path", ""))
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except Exception as e:
-                    logger.exception(f"Failed to delete file {file_path}: {e}")
+            _delete_strategy_file(strategy_id, STRATEGY_CONFIGS[strategy_id])
 
             # Remove from configs
             del STRATEGY_CONFIGS[strategy_id]
