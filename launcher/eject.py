@@ -46,6 +46,7 @@ if __package__ in (None, ""):  # run as a file rather than with -m
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from launcher import envfile, state
+from launcher.branding import display_name
 
 #: How many ``before-reset`` backups to keep. Older ones are deleted.
 KEEP_BACKUPS = 5
@@ -128,6 +129,7 @@ def backup(root: Path, items: list[state.Item], backup_dir: Path) -> Path:
 
 def _stage(root: Path, items: list[state.Item], staging: Path) -> None:
     """Move every item under ``staging``, or none of them."""
+    name = display_name(root)
     moved = []
     try:
         for item in items:
@@ -143,7 +145,7 @@ def _stage(root: Path, items: list[state.Item], staging: Path) -> None:
                 pass
         shutil.rmtree(staging, ignore_errors=True)
         raise ResetRefused(
-            f"A file is still in use: {item.rel}. Close FastAlgo, any strategy "
+            f"A file is still in use: {item.rel}. Close {name}, any strategy "
             "windows and any program that has this file open, then try again. "
             "Nothing was changed."
         ) from e
@@ -168,6 +170,7 @@ def reset(
     the app starting, the server is running, a file is in use, or the release's
     files cannot be identified.
     """
+    name = display_name(root)
     sample = root / ".sample.env"
     if not sample.is_file():
         raise ResetRefused(
@@ -183,7 +186,7 @@ def reset(
     busy = busy_ports(root)
     if busy:
         raise ResetRefused(
-            f"FastAlgo is still running (port {', '.join(map(str, busy))} is in use). "
+            f"{name} is still running (port {', '.join(map(str, busy))} is in use). "
             "Stop it in the panel, then try again. Nothing was changed."
         )
     try:
@@ -230,7 +233,7 @@ def reset(
     return the_plan, written
 
 
-def _print_plan(the_plan: state.Plan, keep: set[str]) -> None:
+def _print_plan(the_plan: state.Plan, keep: set[str], name: str) -> None:
     print("These will be removed:")
     for item in the_plan.items:
         kind = "folder" if item.is_dir else "file"
@@ -244,7 +247,7 @@ def _print_plan(the_plan: state.Plan, keep: set[str]) -> None:
     if "history" in keep:
         print("Kept: downloaded historical data.")
     for path in the_plan.outside:
-        print(f"Left alone (outside the FastAlgo folder): {path}")
+        print(f"Left alone (outside the {name} folder): {path}")
 
 
 def _secret(prompt: str) -> str:
@@ -261,7 +264,7 @@ def _secret(prompt: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m launcher.eject",
-        description="Reset FastAlgo to a fresh install, keeping its dependencies.",
+        description="Reset to a fresh install, keeping the dependencies.",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="show what would be removed, change nothing"
@@ -290,7 +293,8 @@ def main(argv: list[str] | None = None) -> int:
     except state.NoReleaseList:
         print("This installation has no list of its shipped files. Contact support.")
         return 1
-    _print_plan(the_plan, keep)
+    name = display_name(root)
+    _print_plan(the_plan, keep, name)
     if args.dry_run:
         return 0
 
@@ -324,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         print(e)
         return 1
     print(f"Backup saved to {written}")
-    print(f"Done. Start FastAlgo, create your login, then log in to {broker.name}.")
+    print(f"Done. Start {name}, create your login, then log in to {broker.name}.")
     print(f"Your broker app's redirect URL must be: {_env_values(root).get('REDIRECT_URL', '')}")
     return 0
 
