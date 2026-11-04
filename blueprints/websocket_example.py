@@ -3,6 +3,10 @@ Example blueprint showing how to use the WebSocket service layer
 for internal UI components without authentication overhead.
 """
 
+import ipaddress
+import re
+from urllib.parse import urlsplit, urlunsplit
+
 from flask import Blueprint, current_app, jsonify, render_template, request, session
 from flask_socketio import emit, join_room, leave_room
 
@@ -183,6 +187,51 @@ def api_get_websocket_apikey():
     return jsonify({"status": "success", "api_key": api_key}), 200
 
 
+_HOSTNAME = re.compile(r"[A-Za-z0-9.-]{1,253}")
+
+
+def _is_loopback(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _reachable_websocket_url(configured: str, request_host: str) -> str:
+    """The WebSocket URL as a browser on this request's host can reach it.
+
+    ``WEBSOCKET_URL`` defaults to ``ws://127.0.0.1:8765``. A browser on the same
+    PC reaches that; a phone or another PC on the network reaches itself, so
+    pages load and live prices never arrive. When the configured host is a
+    loopback address and the browser came in on a different host, answer with
+    the browser's host and the configured port and scheme. Any other configured
+    URL (a domain behind nginx, say) is returned as it is.
+
+    The request host only replaces a loopback address, only in this answer to
+    the logged-in user's own browser, and only if it looks like a host name or
+    an IP address.
+    """
+    try:
+        parts = urlsplit(configured)
+        browser_host = urlsplit(f"//{request_host}").hostname
+    except ValueError:
+        return configured
+    if not _is_loopback(parts.hostname) or not browser_host or _is_loopback(browser_host):
+        return configured
+    if not _HOSTNAME.fullmatch(browser_host):
+        try:
+            ipaddress.IPv6Address(browser_host)
+        except ValueError:
+            return configured
+        browser_host = f"[{browser_host}]"
+    netloc = f"{browser_host}:{parts.port}" if parts.port else browser_host
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 @websocket_bp.route("/api/websocket/config", methods=["GET"])
 def api_get_websocket_config():
     """Get WebSocket configuration including URL"""
@@ -196,7 +245,9 @@ def api_get_websocket_config():
 
     from flask import request
 
-    websocket_url = os.getenv("WEBSOCKET_URL", "ws://localhost:8765")
+    websocket_url = _reachable_websocket_url(
+        os.getenv("WEBSOCKET_URL", "ws://localhost:8765"), request.host
+    )
 
     # If the current request is HTTPS and the WebSocket URL is WS, upgrade to WSS
     if request.is_secure and websocket_url.startswith("ws://"):

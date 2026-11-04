@@ -32,6 +32,8 @@ _ensure_db_directory()
 # The full banner with "Ready" status prints later, right before the server accepts connections.
 if __name__ == "__main__":
     _debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
+    if os.getenv("FASTALGO_DESKTOP", "").strip().lower() in ("1", "true", "t", "yes"):
+        _debug = False  # see utils.desktop: the keeper never runs the reloader
     _is_reloader_parent = _debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
     if not _is_reloader_parent:
         # The product name, not utils.brand.display_name(): importing utils.brand
@@ -1113,6 +1115,15 @@ if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1", "t")
 
+    # Desktop mode (utils.desktop): started by the keeper with no terminal. The
+    # reloader would start a second process the keeper cannot see, and the
+    # interactive debugger has no business on a client's PC.
+    from utils.desktop import is_desktop, start_stop_watcher
+
+    desktop = is_desktop()
+    if desktop:
+        debug = False
+
     # Refuse to run the Werkzeug debugger on a non-loopback interface.
     # Werkzeug's interactive debugger is an RCE primitive — exposing it on a
     # public or LAN address is a critical risk, and a surprisingly common
@@ -1203,7 +1214,9 @@ if __name__ == "__main__":
         def _vl(t):
             return len(_ae.sub("", t))
 
-        _t = f" OpenAlgo v{_ver} "
+        from utils import brand as _brand
+
+        _t = f" {_brand.display_name()} v{_ver} "
         _sl = "Your Personal Algo Trading Platform"
         _samps = [
             "",
@@ -1265,4 +1278,18 @@ if __name__ == "__main__":
 
         install_signal_handlers()
 
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    # The keeper stops the server by writing a stop file, turned into SIGINT
+    # for the handlers above. After them, so the signal always has a handler.
+    start_stop_watcher()
+
+    # allow_unsafe_werkzeug: Flask-SocketIO refuses to start Werkzeug without a
+    # TTY, which is exactly how the desktop keeper starts it. Desktop mode only;
+    # a terminal start keeps the existing behaviour.
+    socketio.run(
+        app,
+        host=host_ip,
+        port=port,
+        debug=debug,
+        reloader_options=reloader_options,
+        allow_unsafe_werkzeug=desktop,
+    )

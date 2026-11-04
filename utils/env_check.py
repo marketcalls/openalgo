@@ -206,6 +206,15 @@ def check_env_version_compatibility() -> bool:
             print("   New features may not work properly with an outdated configuration!")
             print("=" * 70)
 
+            # The desktop keeper has no terminal: input() would raise EOFError,
+            # read as "no", and the server would exit before serving anything.
+            # Continue instead; the panel shows this warning from the log.
+            from utils.desktop import is_desktop
+
+            if is_desktop():
+                print("\nContinuing with the outdated configuration (desktop mode).")
+                return True
+
             # Give user a chance to continue anyway
             try:
                 response = input("\nContinue anyway? (y/N): ").lower().strip()

@@ -78,6 +78,11 @@ Tests run the server in a subprocess, as the eventlet tests already do.
 
 Size: small. This alone fixes the crash you hit when wrapping `python app.py`.
 
+**Done 2026-11-05.** `utils/desktop.py`, `test/test_desktop_mode.py`. Verified on the
+real app: without desktop mode a piped stdin still crashes as before; with it the
+server answers `/health/status` in about 8 s and stops on the stop file in about
+2 s with all three ports released.
+
 ## 4. M3.2: the state manifest and the reset
 
 **One file decides what is "state"**: `launcher/state.py`. Everything the
