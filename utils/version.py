@@ -5,7 +5,7 @@
 # OpenAlgo 2.0.2.5, which is recorded in NOTICE. pyproject.toml keeps the
 # upstream package metadata and is not shown to users.
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 
 def get_version() -> str:

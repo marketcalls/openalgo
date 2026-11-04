@@ -8,6 +8,43 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-05
+
+### Desktop Release
+
+7 commits since 1.1.1. Full notes:
+[version-1.2.0-released.md](releases/version-1.2.0-released.md). No database
+migration, no new required setting and no API change.
+
+### Highlights
+
+- **Desktop-safe start-up:** with `FASTALGO_DESKTOP=1`, the server starts with no
+  terminal, never prompts, and stops cleanly on request.
+- **Keeper:** restarts the server after a crash or hang, ends strategy processes
+  on Stop, and keeps the PC awake.
+- **Control panel:** Start, Stop, Open, ports, phone access, options, switch
+  broker and repair dependencies, plus first-run broker setup.
+- **Switch broker:** a reset to a fresh install that backs up the client's data,
+  keeps the dependencies, and keeps scripts and historical data by default.
+- **Installer and release zip:** `Install FastAlgo.cmd` resumes after a dropped
+  connection; `scripts/build_release.py` builds the zip.
+
+### Fixes
+
+- Deleting a `/python` strategy with no script path no longer tries to delete the
+  app's folder, and delete never touches a file outside `strategies/scripts`.
+  The two test fixtures that wrote into the real strategy config now use a
+  temporary folder.
+
+### Dependencies
+
+No dependencies changed.
+
+### Contributors
+
+- **@ranjeetthorat** - Phase 3 direction and decisions, and the report of the
+  strategy delete error.
+
 ## [1.1.1] - 2026-11-04
 
 ### Contact Release
