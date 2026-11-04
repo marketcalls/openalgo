@@ -56,7 +56,7 @@ def manage_api_key():
 
         # Return JSON if Accept header requests it (for React frontend)
         if request.headers.get("Accept") == "application/json":
-            return jsonify(
+            resp = jsonify(
                 {
                     "login_username": login_username,
                     "has_api_key": has_api_key,
@@ -64,6 +64,9 @@ def manage_api_key():
                     "order_mode": order_mode,
                 }
             )
+            resp.headers["Cache-Control"] = "no-store, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            return resp
 
         # Serve React app for browser navigation
         index_path = FRONTEND_DIST / "index.html"
@@ -92,9 +95,12 @@ def manage_api_key():
 
         if key_id is not None:
             logger.info(f"API key updated successfully for user: {user_id}")
-            return jsonify(
+            resp = jsonify(
                 {"message": "API key updated successfully.", "api_key": api_key, "key_id": key_id}
             )
+            resp.headers["Cache-Control"] = "no-store, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            return resp
         else:
             logger.error(f"Failed to update API key for user: {user_id}")
             return jsonify({"error": "Failed to update API key"}), 500
