@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink, LifeBuoy, Scale } from 'lucide-react'
+import { ArrowLeft, ExternalLink, LifeBuoy, Scale, Send } from 'lucide-react'
 import { Link } from 'react-router'
 import { BrandLockup } from '@/brand/BrandLockup'
 import { BRAND } from '@/brand/brand'
@@ -66,17 +66,30 @@ export default function About() {
             <p>
               For help with your installation, your broker connection or a strategy, contact us.
             </p>
-            <Button variant="outline" asChild>
-              <a
-                href={BRAND.supportUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2"
-              >
-                Get support
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" asChild>
+                <a
+                  href={BRAND.supportUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2"
+                >
+                  Get support
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </Button>
+              <Button variant="outline" asChild>
+                <a
+                  href={BRAND.supportTelegramUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2"
+                >
+                  <Send className="h-4 w-4" />
+                  Message us on Telegram
+                </a>
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

@@ -80,7 +80,8 @@ custom_brand/
 
 Reload the page and the client's name and logo appear. No rebuild or restart is needed.
 
-- Only the display name (up to 60 characters) and the logo can change. The product name, the attribution and the source link stay, as AGPL requires.
+- Only the display name (up to 60 characters), the logo and the Telegram support link can change. The product name, the attribution and the source link stay, as AGPL requires.
+- Telegram support link: add `"supportTelegramUrl": "https://t.me/<username>"` to `brand.json`. Without it, the footer and the About page link to the default in `brand.ts` and `utils/brand.py` (`https://t.me/RanjT55`). Only an `https://t.me/` username link is accepted; anything else falls back to the default.
 - The footer and About line become "Sharma Capital, powered by FastAlgo".
 - If `brand.json` is missing or invalid, or the logo file is not there, the app quietly shows the normal FastAlgo brand. A bad override can never break the login page.
 - How it works: Flask serves the override as `/brand-config.js` (`blueprints/react_app.py`), which loads before the React app. The React app reads it in `frontend/src/brand/brand.ts`.

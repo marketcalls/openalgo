@@ -78,3 +78,40 @@ def test_long_display_name_is_capped(client):
     c, brand_dir = client
     (brand_dir / "brand.json").write_text(json.dumps({"displayName": "x" * 200}), encoding="utf-8")
     assert len(_override(c.get("/brand-config.js"))["displayName"]) == 60
+
+
+def test_telegram_contact_is_exposed(client):
+    c, brand_dir = client
+    (brand_dir / "brand.json").write_text(
+        json.dumps({"supportTelegramUrl": " https://t.me/SharmaDesk "}), encoding="utf-8"
+    )
+    assert _override(c.get("/brand-config.js")) == {"supportTelegramUrl": "https://t.me/SharmaDesk"}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://t.me/SharmaDesk",
+        "https://t.me/abc",
+        "https://t.me.evil.example/SharmaDesk",
+        "https://evil.example/t.me/SharmaDesk",
+        "https://t.me/SharmaDesk/extra",
+        "javascript:alert(1)",
+        42,
+    ],
+)
+def test_telegram_contact_rejects_anything_but_a_username_link(client, bad):
+    c, brand_dir = client
+    (brand_dir / "brand.json").write_text(json.dumps({"supportTelegramUrl": bad}), encoding="utf-8")
+    assert _override(c.get("/brand-config.js")) == {}
+
+
+def test_telegram_contact_defaults_without_an_override(tmp_path, monkeypatch):
+    from utils import brand
+
+    monkeypatch.setattr(brand, "CUSTOM_BRAND_DIR", tmp_path)
+    assert brand.support_telegram_url() == "https://t.me/RanjT55"
+    (tmp_path / "brand.json").write_text(
+        json.dumps({"supportTelegramUrl": "https://t.me/SharmaDesk"}), encoding="utf-8"
+    )
+    assert brand.support_telegram_url() == "https://t.me/SharmaDesk"

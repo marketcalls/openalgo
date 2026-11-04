@@ -96,6 +96,15 @@ export function Footer({ className }: FooterProps) {
           <a href={`mailto:${BRAND.supportEmail}`} className="hover:underline">
             {BRAND.supportEmail}
           </a>
+          {' · '}
+          <a
+            href={BRAND.supportTelegramUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline"
+          >
+            Telegram
+          </a>
         </div>
       </div>
     </footer>

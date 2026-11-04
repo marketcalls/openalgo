@@ -4,11 +4,12 @@
  * Spec: docs/design/brand/design-language.md. Change a value here and every
  * screen that reads BRAND follows.
  *
- * Per-instance white-label: the server can override `displayName` and
- * `logoUrl` for one client's installation (custom_brand/brand.json, served as
- * /brand-config.js, see blueprints/react_app.py). Only those two fields can be
- * overridden. The product name, attribution and source link never change,
- * because AGPL attribution must stay intact.
+ * Per-instance white-label: the server can override `displayName`, `logoUrl`
+ * and `supportTelegramUrl` for one client's installation
+ * (custom_brand/brand.json, served as /brand-config.js, see
+ * blueprints/react_app.py). Only those fields can be overridden. The product
+ * name, attribution and source link never change, because AGPL attribution
+ * must stay intact.
  */
 
 import type { LogoWatermarkOptions } from 'openalgo-charts'
@@ -16,6 +17,7 @@ import type { LogoWatermarkOptions } from 'openalgo-charts'
 export interface BrandOverride {
   displayName?: string
   logoUrl?: string
+  supportTelegramUrl?: string
 }
 
 declare global {
@@ -41,6 +43,8 @@ const PRODUCT = {
   supportUrl: 'https://www.tinycompute.site',
   /** Shown in the footer, below the attribution line. */
   supportEmail: 'rthorat99@gmail.com',
+  /** Telegram contact for support. Overridable per installation in brand.json. */
+  supportTelegramUrl: 'https://t.me/RanjT55',
 
   /** AGPL attribution and source offer (section 13). Never remove. */
   attribution: 'Based on OpenAlgo, licensed under AGPL-3.0',
@@ -54,6 +58,8 @@ const PRODUCT = {
 } as const
 
 const NAME_MAX = 60
+/** Same rule as utils/brand.py: https, t.me, and a valid Telegram username. */
+const TELEGRAM_URL = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}$/
 
 /** Accept only well-formed override values; anything else falls back to the default. */
 export function sanitizeOverride(raw: unknown): BrandOverride {
@@ -67,6 +73,12 @@ export function sanitizeOverride(raw: unknown): BrandOverride {
   if (typeof source.logoUrl === 'string' && /^\/custom-brand\/[^/]+$/.test(source.logoUrl)) {
     override.logoUrl = source.logoUrl
   }
+  if (
+    typeof source.supportTelegramUrl === 'string' &&
+    TELEGRAM_URL.test(source.supportTelegramUrl.trim())
+  ) {
+    override.supportTelegramUrl = source.supportTelegramUrl.trim()
+  }
   return override
 }
 
@@ -78,6 +90,7 @@ export function buildBrand(override: BrandOverride = {}) {
     /** The name shown in the UI: the client's name when white-labelled, otherwise FastAlgo. */
     displayName,
     logoUrl: override.logoUrl ?? PRODUCT.logoUrl,
+    supportTelegramUrl: override.supportTelegramUrl ?? PRODUCT.supportTelegramUrl,
     isWhiteLabel,
     /** Footer and About line: "FastAlgo by TinyCompute", or "Client, powered by FastAlgo". */
     endorsement: isWhiteLabel

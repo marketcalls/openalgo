@@ -65,7 +65,9 @@ describe('Footer', () => {
 
     await waitFor(() => expect(json).toHaveBeenCalled())
     expect(screen.queryByText(/session/)).not.toBeInTheDocument()
-    expect(screen.getByText('Automate your trading strategy. Take fast trades.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Automate your trading strategy. Take fast trades.')
+    ).toBeInTheDocument()
     expect(separatorCount()).toBe(0)
   })
 
@@ -90,7 +92,9 @@ describe('Footer', () => {
     await request.catch(() => undefined)
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/auth/app-info'))
     expect(screen.getByText('FastAlgo by TinyCompute')).toBeInTheDocument()
-    expect(screen.getByText('Automate your trading strategy. Take fast trades.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Automate your trading strategy. Take fast trades.')
+    ).toBeInTheDocument()
     expect(separatorCount()).toBe(0)
   })
 
@@ -107,6 +111,10 @@ describe('Footer', () => {
     expect(screen.getByRole('link', { name: 'source code' })).toHaveAttribute(
       'href',
       'https://github.com/ranjeetthorat/ai-algo'
+    )
+    expect(screen.getByRole('link', { name: 'Telegram' })).toHaveAttribute(
+      'href',
+      'https://t.me/RanjT55'
     )
     expect(screen.getByRole('link', { name: 'rthorat99@gmail.com' })).toHaveAttribute(
       'href',
