@@ -135,12 +135,21 @@ it is usable by hand and on Linux later):
 4. Delete the state paths.
 5. Write a fresh `.env` from `.sample.env`, with new `APP_KEY` and
    `API_KEY_PEPPER` from `secrets.token_hex(32)` (as `install.sh` does), the
-   ports from `panel.json`, and no broker. `FERNET_SALT` is left as the
-   placeholder, which the app already replaces on first start.
+   network settings (ports, host, other-device access) carried over from the
+   old `.env`, and **the new broker's name and keys**. `FERNET_SALT` is left as
+   the placeholder, which the app already replaces on first start.
 6. Start. The app creates empty databases on start as it does today. The client
-   lands on `/setup`, creates the login, enters the new broker's keys on the
-   broker credentials page, and logs in, which downloads that broker's master
-   contract.
+   lands on `/setup`, creates the login, and logs in to the new broker, which
+   downloads that broker's master contract.
+
+**The reset asks for the new broker.** Found while testing M3.2 on a copy of a
+real installation: the app refuses to start until `.env` names a broker
+(`REDIRECT_URL` selects it, and the 5paisa, Flattrade and Dhan key formats are
+checked at start-up). A reset that left no broker would leave an installation
+that cannot start. So the reset dialog is really "Switch broker": choose the
+broker, enter its API key and secret (and the market data pair for XTS
+brokers). These are checked against the same rules as the start-up check
+before anything is touched.
 
 No dependency is reinstalled at any point, because `.venv` is never state.
 
@@ -150,6 +159,16 @@ from under it is the wrong place for it.
 
 Size: medium. The risk is in the list, so most of the work is the guard test and
 testing against a copy of a real, used installation.
+
+**Done 2026-11-05.** `launcher/state.py`, `launcher/envfile.py`,
+`launcher/eject.py` (`python -m launcher.eject`), `test/test_launcher_reset.py`.
+The state list was built from an inventory of every runtime writer, which also
+found `logs/` (the Angel client), `~/` (LiteLLM tokens) and `agent_kill_switch`
+outside the folders first listed. Rehearsed on a copy of a real development
+installation: 93.5 MB of state removed and backed up, historical data kept,
+the app started from the copy with no install step and came up with no users,
+no broker session and no symbols. Paths outside the app folder that the app also
+writes (system temp files for uploads and exports) are left to the OS.
 
 ## 5. M3.3: the keeper
 

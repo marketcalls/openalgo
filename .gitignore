@@ -152,3 +152,9 @@ docs/audit/qa_audit/**/~$*
 # Per-instance white-label brand (brand.json and client logo). Set up per client
 # installation, never committed. See blueprints/react_app.py.
 custom_brand/
+
+# Desktop launcher: the reset's staging folder (normally gone within a second),
+# the Angel streaming client's own log folder, and the agent kill switch file.
+.reset-*/
+logs/
+agent_kill_switch
