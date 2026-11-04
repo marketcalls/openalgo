@@ -254,6 +254,8 @@ The owner's decision replaces options A to C below. Clients never run install or
   - Run the `fd-audit` skill after removals that touch the database, streaming, threads or subprocesses.
 
 **Phase 3: cross-OS distribution and release**
+- Research and proposed milestones: [2026-11-04-desktop-packaging-research.md](2026-11-04-desktop-packaging-research.md).
+- Plan (Windows desktop panel, keeper and reset; replaces the service approach): [2026-11-05-desktop-panel-and-reset-plan.md](2026-11-05-desktop-panel-and-reset-plan.md).
 - Production uses gunicorn with eventlet, and gunicorn does not run on Windows. Desktop needs the threading server mode, so we must decide which modes we support.
 - Bundle a standalone Python with `uv` and the locked environment rather than freezing.
 - Keep client data outside the program folder.
