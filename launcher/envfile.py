@@ -151,3 +151,79 @@ def fresh_env(sample_text: str, broker: Broker, current_text: str | None = None)
     if port:
         redirect = _with_port(redirect, port)
     return set_value(text, "REDIRECT_URL", redirect)
+
+
+@dataclass(frozen=True)
+class Network:
+    """What the panel lets the client change about where the server listens."""
+
+    http_port: int
+    websocket_port: int
+    zmq_port: int
+    allow_lan: bool
+
+
+def read_network(text: str) -> Network:
+    values = read_values(text)
+
+    def port(key: str, default: int) -> int:
+        try:
+            return int(values.get(key, default))
+        except ValueError:
+            return default
+
+    return Network(
+        http_port=port("FLASK_PORT", 5000),
+        websocket_port=port("WEBSOCKET_PORT", 8765),
+        zmq_port=port("ZMQ_PORT", 5555),
+        allow_lan=values.get("FLASK_HOST_IP", "127.0.0.1").strip() == "0.0.0.0",
+    )
+
+
+def network_problem(network: Network) -> str | None:
+    """Why ``network`` cannot be used, for the client; None if it can."""
+    ports = (network.http_port, network.websocket_port, network.zmq_port)
+    if any(not 1024 <= p <= 65535 for p in ports):
+        return "Ports must be numbers from 1024 to 65535."
+    if len(set(ports)) != len(ports):
+        return "The three ports must all be different."
+    return None
+
+
+def apply_network(text: str, network: Network) -> str:
+    """Write ``network`` into every ``.env`` key that carries it.
+
+    The browser-facing addresses (``HOST_SERVER``, ``WEBSOCKET_URL``,
+    ``CORS_ALLOWED_ORIGINS``, ``REDIRECT_URL``) stay on 127.0.0.1: the broker's
+    login redirect must come back to this PC, and a phone is given a reachable
+    WebSocket address by the server itself (``blueprints/websocket_example.py``).
+    Only the listening hosts open up. ``ZMQ_HOST`` is the internal market data
+    bus and is never opened to the network.
+    """
+    listen = "0.0.0.0" if network.allow_lan else "127.0.0.1"
+    values = read_values(text)
+    changes = {
+        "FLASK_HOST_IP": listen,
+        "FLASK_PORT": str(network.http_port),
+        "HOST_SERVER": f"http://127.0.0.1:{network.http_port}",
+        "CORS_ALLOWED_ORIGINS": f"http://127.0.0.1:{network.http_port}",
+        "WEBSOCKET_HOST": listen,
+        "WEBSOCKET_PORT": str(network.websocket_port),
+        "WEBSOCKET_URL": f"ws://127.0.0.1:{network.websocket_port}",
+        "ZMQ_PORT": str(network.zmq_port),
+    }
+    if "REDIRECT_URL" in values:
+        changes["REDIRECT_URL"] = _with_port(values["REDIRECT_URL"], str(network.http_port))
+    for key, value in changes.items():
+        if key not in values:
+            continue
+        # An address someone pointed at a real domain (a tunnel, say) is theirs;
+        # only addresses on this PC follow the port.
+        if key in _ADDRESS_KEYS and urlsplit(values[key]).hostname not in _LOOPBACK:
+            continue
+        text = set_value(text, key, value)
+    return text
+
+
+_ADDRESS_KEYS = frozenset({"HOST_SERVER", "CORS_ALLOWED_ORIGINS", "WEBSOCKET_URL", "REDIRECT_URL"})
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
