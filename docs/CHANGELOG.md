@@ -8,6 +8,31 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-04
+
+### Contact Release
+
+2 commits since 1.1.0. Full notes:
+[version-1.1.1-released.md](releases/version-1.1.1-released.md). No database
+migration, no setting and no API change.
+
+### Highlights
+
+- A Telegram support link in the footer of every page, on the About page and on
+  the static site.
+- The link is configurable: the default sits in `brand.ts` and `utils/brand.py`,
+  one installation can override it with `supportTelegramUrl` in
+  `custom_brand/brand.json`, and the static site reads it from
+  `static/site-config.js`.
+
+### Dependencies
+
+No dependencies changed.
+
+### Contributors
+
+- **@ranjeetthorat** - the Telegram support link and its configuration.
+
 ## [1.1.0] - 2026-10-23
 
 ### Cleanup Release
