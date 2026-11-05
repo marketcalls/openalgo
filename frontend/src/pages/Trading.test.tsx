@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event'
 import type { ComponentProps } from 'react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +7,7 @@ import { LAYOUTS } from '@/lib/chart/layouts'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
 import type { TradingTerminal } from '@/lib/trading/terminal'
 import type { WorkspaceReplaySnapshot } from '@/lib/trading/workspaceReplay'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@/test/test-utils'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@/test/test-utils'
 import Trading from './Trading'
 
 const fake = vi.hoisted(() => ({
@@ -32,17 +33,38 @@ const fake = vi.hoisted(() => ({
     drawStats: () => ({}),
     currentInterval: () => '5m',
     replayPickingBar: () => false,
+    loadSymbol: vi.fn(async () => true),
+    whenReady: () => fake.ready,
   },
+  ready: Promise.resolve(),
   publish: null as null | ((grid: PreparedChartGrid) => void),
   lock: null as null | ((pending: boolean) => void),
   changed: vi.fn(),
   markSaved: vi.fn(),
   missingPane: '',
 }))
-vi.mock('@/stores/authStore', () => ({
-  useAuthStore: (selector: (state: unknown) => unknown) =>
-    selector({ isAuthenticated: true, user: { username: 'fixture' } }),
-}))
+vi.mock('@/stores/authStore', () => {
+  const state = {
+    isAuthenticated: true,
+    user: { username: 'fixture', broker: 'fixturebroker' },
+    logout: () => {},
+  }
+  // The page reads one field through a selector; the header's account
+  // controls, shared with the navbar, read the whole store.
+  return {
+    useAuthStore: (selector?: (value: typeof state) => unknown) =>
+      selector ? selector(state) : state,
+  }
+})
+vi.mock('@/hooks/useProfileMenuItems', async () => {
+  const { User, Key } = await import('lucide-react')
+  return {
+    useProfileMenuItems: () => [
+      { href: '/profile', label: 'Profile', icon: User },
+      { href: '/apikey', label: 'API Key', icon: Key },
+    ],
+  }
+})
 vi.mock('openalgo-charts', () => ({ createLinkGroup: () => ({ setOptions() {}, destroy() {} }) }))
 vi.mock('@/hooks/useChartWorkspaceCatalog', () => ({
   useChartWorkspaceCatalog: () => ({ catalog: null, loading: false, pending: false, error: null }),
@@ -98,8 +120,21 @@ vi.mock('@/components/trading/ChartPane', () => ({
     )
   },
 }))
-vi.mock('@/components/layout/Navbar', () => ({ Navbar: () => null }))
-vi.mock('@/components/trading/DrawingRail', () => ({ DrawingRail: () => null }))
+vi.mock('@/components/trading/DrawingRail', async (importOriginal) => {
+  // The real tab, and a stand-in rail that says whether it is folded and
+  // offers the fold, so the page's half of folding is what is under test.
+  const actual = await importOriginal<typeof import('@/components/trading/DrawingRail')>()
+  return {
+    ...actual,
+    DrawingRail: (props: { folded?: boolean; onFold?(): void }) => (
+      <div data-testid="drawing-rail" hidden={props.folded}>
+        <button type="button" onClick={props.onFold}>
+          Hide drawing tools
+        </button>
+      </div>
+    ),
+  }
+})
 vi.mock('@/components/trading/IndicatorTemplates', () => ({ IndicatorTemplates: () => null }))
 vi.mock('@/components/trading/WorkspaceMenu', () => ({ WorkspaceMenu: () => null }))
 vi.mock('@/components/trading/dock/TradingDock', () => ({ TradingDock: () => null }))
@@ -128,6 +163,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
+  fake.ready = Promise.resolve()
 })
 
 describe('workspace replay page ownership', () => {
@@ -239,5 +276,105 @@ describe('chart grid dividers', () => {
     render(<Trading />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
     expect(screen.queryByRole('separator')).toBeNull()
+  })
+})
+
+describe('terminal header', () => {
+  it('replaces the app navbar with the way out and the account controls, all named', async () => {
+    const user = userEvent.setup()
+    const { container } = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+
+    // The page has no navbar of its own any more: the row is the header.
+    expect(container.querySelector('[data-testid="navbar-row"]')).toBeNull()
+
+    const dashboard = screen.getByRole('link', { name: 'Dashboard' })
+    expect(dashboard).toHaveAttribute('href', '/dashboard')
+    expect(screen.getByRole('button', { name: 'Switch to Analyze mode' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /^Switch to (dark|light) mode$/ })).toBeEnabled()
+    const profile = screen.getByRole('button', { name: 'Open user menu' })
+    expect(screen.getByText('fixturebroker')).toBeInTheDocument()
+    expect(screen.getByText('Live', { exact: true })).toBeInTheDocument()
+
+    // All four sit outside the chart toolbar's scrolling region, so a narrow
+    // screen scrolls the chart controls and never these.
+    const host = container.querySelector('[data-workspace-toolbar]') as HTMLElement
+    for (const control of [
+      dashboard,
+      profile,
+      screen.getByRole('button', { name: 'Switch to Analyze mode' }),
+      screen.getByRole('button', { name: /^Switch to (dark|light) mode$/ }),
+    ]) {
+      expect(host.contains(control)).toBe(false)
+      expect(host.parentElement?.contains(control)).toBe(true)
+    }
+
+    await user.click(profile)
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByRole('menuitem', { name: 'Profile' })).toBeVisible()
+    expect(within(menu).getByRole('menuitem', { name: 'Logout' })).toBeVisible()
+  })
+})
+
+describe('folding the drawing rail', () => {
+  it('folds behind a tab that unfolds it, and remembers the choice across a remount', async () => {
+    const user = userEvent.setup()
+    const first = render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(screen.getByTestId('drawing-rail')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Show drawing tools' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Hide drawing tools' }))
+    // Folded, not removed: the rail keeps its tool and its chords.
+    expect(screen.getByTestId('drawing-rail')).not.toBeVisible()
+    const tab = screen.getByRole('button', { name: 'Show drawing tools' })
+    expect(localStorage.getItem('oa-trading-rail-folded')).toBe('1')
+
+    // The tab keeps its press from the chart, whose pointer handling listens
+    // above the page's root.
+    const pressed = vi.fn()
+    document.addEventListener('pointerdown', pressed)
+    fireEvent.pointerDown(tab)
+    document.removeEventListener('pointerdown', pressed)
+    expect(pressed).not.toHaveBeenCalled()
+
+    first.unmount()
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    expect(screen.getByTestId('drawing-rail')).not.toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Show drawing tools' }))
+    expect(screen.getByTestId('drawing-rail')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Show drawing tools' })).toBeNull()
+    expect(localStorage.getItem('oa-trading-rail-folded')).toBe('0')
+  })
+})
+
+describe('opening a chart from a link', () => {
+  it('loads the linked instrument once the chart is ready, then drops it from the address', async () => {
+    let settle = () => {}
+    fake.ready = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    window.history.replaceState(null, '', '/trading?symbol=NIFTY28MAR2420800CE&exchange=NFO')
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    await waitFor(() => expect(window.location.search).toBe(''))
+    // Loaded before the chart had a feed, the pane's own first load would
+    // overtake it and the trader would land on the wrong instrument.
+    expect(fake.terminal.loadSymbol).not.toHaveBeenCalled()
+
+    await act(async () => settle())
+    expect(fake.terminal.loadSymbol).toHaveBeenCalledExactlyOnceWith({
+      symbol: 'NIFTY28MAR2420800CE',
+      exchange: 'NFO',
+    })
+  })
+
+  it('drops a symbol without its exchange instead of guessing one', async () => {
+    window.history.replaceState(null, '', '/trading?symbol=SBIN')
+    render(<Trading />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Replay p0' })).toBeVisible())
+    await waitFor(() => expect(window.location.search).toBe(''))
+    expect(fake.terminal.loadSymbol).not.toHaveBeenCalled()
   })
 })

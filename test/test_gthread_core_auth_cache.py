@@ -249,7 +249,11 @@ def test_a_relogin_during_a_token_fill_is_not_undone(user, monkeypatch):
     release.set()
     thread.join(10)
 
-    assert result["token"] == "tok-1"
+    # The re-login landed between the reader's query and the pin of its keys,
+    # so the reader starts again and returns the new session rather than the
+    # one it had read (database.auth_db._read_coherently): a token is only
+    # ever handed out with its own broker's keys.
+    assert result["token"] == "tok-2"
     # Before the fix the superseded token was cached and every order after the
     # re-login went out with it, until the next clear or the session-long TTL.
     assert auth_db.get_auth_token(user) == "tok-2"

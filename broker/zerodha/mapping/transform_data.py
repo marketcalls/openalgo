@@ -18,7 +18,7 @@ def _kite_qty(value, symbol, exchange, default="0", field="Quantity"):
     return to_kite_quantity(value, symbol, exchange, field=field)
 
 
-def transform_data(data):
+def transform_data(data, tag="openalgo"):
     """
     Transforms the new API request structure to the current expected structure.
     """
@@ -45,7 +45,7 @@ def transform_data(data):
         ),
         "validity": "DAY",
         "market_protection": "-1",
-        "tag": "openalgo",
+        "tag": tag,
     }
 
     # Extended mapping for fields that might need conditional logic or additional processing

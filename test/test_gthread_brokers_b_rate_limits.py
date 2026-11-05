@@ -45,10 +45,8 @@ class SleepRecorder:
         self.calls.append(seconds)
 
 
-def _record_sleeps(monkeypatch, module) -> SleepRecorder:
-    recorder = SleepRecorder()
-    monkeypatch.setattr(module.time, "sleep", recorder)
-    return recorder
+def _record_sleeps(module_sleep, module) -> SleepRecorder:
+    return module_sleep(module, SleepRecorder())
 
 
 def _assert_plain_sentence(message: str):
@@ -87,8 +85,10 @@ def _full_upstox_limiter(rl, kind="data"):
     return limiter
 
 
-def test_upstox_a_full_half_hour_is_refused_under_gthread(upstox_rl, gthread, monkeypatch):
-    sleeps = _record_sleeps(monkeypatch, upstox_rl)
+def test_upstox_a_full_half_hour_is_refused_under_gthread(
+    upstox_rl, gthread, monkeypatch, module_sleep
+):
+    sleeps = _record_sleeps(module_sleep, upstox_rl)
     limiter = _full_upstox_limiter(upstox_rl)
 
     with pytest.raises(BrokerBusyError) as refused:
@@ -101,8 +101,10 @@ def test_upstox_a_full_half_hour_is_refused_under_gthread(upstox_rl, gthread, mo
     _assert_plain_sentence(str(refused.value))
 
 
-def test_upstox_still_waits_the_half_hour_outside_gthread(upstox_rl, not_gthread, monkeypatch):
-    sleeps = _record_sleeps(monkeypatch, upstox_rl)
+def test_upstox_still_waits_the_half_hour_outside_gthread(
+    upstox_rl, not_gthread, monkeypatch, module_sleep
+):
+    sleeps = _record_sleeps(module_sleep, upstox_rl)
     limiter = _full_upstox_limiter(upstox_rl)
 
     limiter.acquire()
@@ -111,9 +113,11 @@ def test_upstox_still_waits_the_half_hour_outside_gthread(upstox_rl, not_gthread
     assert limiter.depth() == 6
 
 
-def test_upstox_a_short_wait_is_still_slept_under_gthread(upstox_rl, gthread, monkeypatch):
+def test_upstox_a_short_wait_is_still_slept_under_gthread(
+    upstox_rl, gthread, monkeypatch, module_sleep
+):
     """Only a wait past the ceiling is refused; ordinary pacing is unchanged."""
-    sleeps = _record_sleeps(monkeypatch, upstox_rl)
+    sleeps = _record_sleeps(module_sleep, upstox_rl)
     limiter = upstox_rl.SlidingWindowLimiter("t", 2, 100, 100)
     limiter.acquire()
     limiter.acquire()
@@ -177,11 +181,11 @@ def test_upstox_smart_order_never_reads_a_refused_book_as_flat(upstox_rl, gthrea
 
 
 def test_upstox_retry_after_past_the_ceiling_is_not_slept_under_gthread(
-    upstox_rl, gthread, monkeypatch
+    upstox_rl, gthread, monkeypatch, module_sleep
 ):
     from broker.upstox.api import data as upstox_data
 
-    sleeps = _record_sleeps(monkeypatch, upstox_data)
+    sleeps = _record_sleeps(module_sleep, upstox_data)
     monkeypatch.setattr(upstox_data, "apply_rate_limit", lambda category: None)
     calls = []
 
@@ -206,10 +210,12 @@ def test_upstox_retry_after_past_the_ceiling_is_not_slept_under_gthread(
     assert len(calls) == 1 and sleeps.calls == []
 
 
-def test_upstox_retry_after_is_honoured_outside_gthread(upstox_rl, not_gthread, monkeypatch):
+def test_upstox_retry_after_is_honoured_outside_gthread(
+    upstox_rl, not_gthread, monkeypatch, module_sleep
+):
     from broker.upstox.api import data as upstox_data
 
-    sleeps = _record_sleeps(monkeypatch, upstox_data)
+    sleeps = _record_sleeps(module_sleep, upstox_data)
     monkeypatch.setattr(upstox_data, "apply_rate_limit", lambda category: None)
     calls = []
 
@@ -291,8 +297,8 @@ def iifl_rl(monkeypatch):
     return rate_limiter
 
 
-def test_iifl_a_long_backlog_is_refused_under_gthread(iifl_rl, gthread, monkeypatch):
-    sleeps = _record_sleeps(monkeypatch, iifl_rl)
+def test_iifl_a_long_backlog_is_refused_under_gthread(iifl_rl, gthread, monkeypatch, module_sleep):
+    sleeps = _record_sleeps(module_sleep, iifl_rl)
     backlog = time.time() + 100
     iifl_rl._last_call_time = backlog
 
@@ -304,8 +310,10 @@ def test_iifl_a_long_backlog_is_refused_under_gthread(iifl_rl, gthread, monkeypa
     _assert_plain_sentence(str(refused.value))
 
 
-def test_iifl_still_waits_out_the_backlog_outside_gthread(iifl_rl, not_gthread, monkeypatch):
-    sleeps = _record_sleeps(monkeypatch, iifl_rl)
+def test_iifl_still_waits_out_the_backlog_outside_gthread(
+    iifl_rl, not_gthread, monkeypatch, module_sleep
+):
+    sleeps = _record_sleeps(module_sleep, iifl_rl)
     iifl_rl._last_call_time = time.time() + 100
 
     iifl_rl.apply_rate_limit()
@@ -313,9 +321,11 @@ def test_iifl_still_waits_out_the_backlog_outside_gthread(iifl_rl, not_gthread, 
     assert len(sleeps.calls) == 1 and sleeps.calls[0] > 99
 
 
-def test_iifl_orders_do_not_queue_behind_data_under_gthread(iifl_rl, gthread, monkeypatch):
+def test_iifl_orders_do_not_queue_behind_data_under_gthread(
+    iifl_rl, gthread, monkeypatch, module_sleep
+):
     """IIFL caps orders separately; under gthread an order has its own clock."""
-    sleeps = _record_sleeps(monkeypatch, iifl_rl)
+    sleeps = _record_sleeps(module_sleep, iifl_rl)
     iifl_rl._last_call_time = time.time() + 100  # an option chain's OI fan-out
 
     iifl_rl.apply_rate_limit("order")
@@ -324,8 +334,10 @@ def test_iifl_orders_do_not_queue_behind_data_under_gthread(iifl_rl, gthread, mo
     assert iifl_rl._last_order_call_time > 0
 
 
-def test_iifl_orders_share_the_one_clock_outside_gthread(iifl_rl, not_gthread, monkeypatch):
-    sleeps = _record_sleeps(monkeypatch, iifl_rl)
+def test_iifl_orders_share_the_one_clock_outside_gthread(
+    iifl_rl, not_gthread, monkeypatch, module_sleep
+):
+    sleeps = _record_sleeps(module_sleep, iifl_rl)
     iifl_rl._last_call_time = time.time() + 100
 
     iifl_rl.apply_rate_limit("order")
@@ -396,8 +408,10 @@ def indmoney_rl(monkeypatch):
     return rate_limiter
 
 
-def test_indmoney_a_long_backlog_is_refused_under_gthread(indmoney_rl, gthread, monkeypatch):
-    sleeps = _record_sleeps(monkeypatch, indmoney_rl)
+def test_indmoney_a_long_backlog_is_refused_under_gthread(
+    indmoney_rl, gthread, monkeypatch, module_sleep
+):
+    sleeps = _record_sleeps(module_sleep, indmoney_rl)
     backlog = time.monotonic() + 100
     indmoney_rl._next_free["quote"] = backlog
 
@@ -410,9 +424,9 @@ def test_indmoney_a_long_backlog_is_refused_under_gthread(indmoney_rl, gthread, 
 
 
 def test_indmoney_still_waits_out_the_backlog_outside_gthread(
-    indmoney_rl, not_gthread, monkeypatch
+    indmoney_rl, not_gthread, monkeypatch, module_sleep
 ):
-    sleeps = _record_sleeps(monkeypatch, indmoney_rl)
+    sleeps = _record_sleeps(module_sleep, indmoney_rl)
     indmoney_rl._next_free["quote"] = time.monotonic() + 100
 
     indmoney_rl.apply_rate_limit("quote")

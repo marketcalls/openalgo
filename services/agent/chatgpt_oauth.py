@@ -73,6 +73,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from services.agent import litellm_loader
 from utils.logging import get_logger
 from utils.real_threading import Event, Lock, Thread, join
 from utils.runtime import original as _original_module
@@ -274,19 +275,20 @@ def _bits() -> _LiteLlmChatGpt:
         return _litellm_bits
 
     try:
-        from litellm.llms.chatgpt.authenticator import (
-            DEVICE_CODE_POLL_SLEEP_SECONDS,
-            DEVICE_CODE_TIMEOUT_SECONDS,
-            Authenticator,
-        )
-        from litellm.llms.chatgpt.common_utils import (
-            CHATGPT_AUTH_BASE,
-            CHATGPT_CLIENT_ID,
-            CHATGPT_DEVICE_CODE_URL,
-            CHATGPT_DEVICE_TOKEN_URL,
-            CHATGPT_DEVICE_VERIFY_URL,
-            CHATGPT_OAUTH_TOKEN_URL,
-        )
+        # Through the loader, never a bare `from litellm... import`: this runs
+        # beside the catalogue's own first import when /agent/config opens,
+        # and the two deadlock in Python's import system (see litellm_loader).
+        authenticator = litellm_loader.load("litellm.llms.chatgpt.authenticator")
+        common = litellm_loader.load("litellm.llms.chatgpt.common_utils")
+        DEVICE_CODE_POLL_SLEEP_SECONDS = authenticator.DEVICE_CODE_POLL_SLEEP_SECONDS
+        DEVICE_CODE_TIMEOUT_SECONDS = authenticator.DEVICE_CODE_TIMEOUT_SECONDS
+        Authenticator = authenticator.Authenticator
+        CHATGPT_AUTH_BASE = common.CHATGPT_AUTH_BASE
+        CHATGPT_CLIENT_ID = common.CHATGPT_CLIENT_ID
+        CHATGPT_DEVICE_CODE_URL = common.CHATGPT_DEVICE_CODE_URL
+        CHATGPT_DEVICE_TOKEN_URL = common.CHATGPT_DEVICE_TOKEN_URL
+        CHATGPT_DEVICE_VERIFY_URL = common.CHATGPT_DEVICE_VERIFY_URL
+        CHATGPT_OAUTH_TOKEN_URL = common.CHATGPT_OAUTH_TOKEN_URL
     except Exception as exc:
         logger.exception("LiteLLM's ChatGPT subscription provider is not available")
         raise ChatGptOAuthUnavailable(

@@ -9,6 +9,8 @@ credentials below are still setdefault(), since those are only placeholders.
 
 import os
 
+import pytest
+
 os.environ.setdefault("API_KEY_PEPPER", "0" * 64)
 os.environ.setdefault("APP_KEY", "test-only-app-key")
 
@@ -49,6 +51,34 @@ os.environ["LATENCY_DATABASE_URL"] = "sqlite:///db/latency-test.db"
 # the first place to look when debugging. Worse, setup_logging truncates that
 # file to its last 1000 lines on startup, so a test run could evict real errors.
 os.environ["LOG_DIR"] = "log/test"
+
+# utils.broker_keys reads the .env file itself to learn which broker .env sets
+# (os.environ holds whichever broker was logged in last). Point it at a file
+# that does not exist, so no test reads the operator's broker keys and every
+# test starts with no .env broker. A test that needs one writes its own file
+# and points env_file_path at it.
+from pathlib import Path  # noqa: E402
+
+import utils.broker_keys as _broker_keys  # noqa: E402
+
+_broker_keys.env_file_path = lambda: Path(__file__).resolve().parent / "__no_env_file_for_tests__"
+_broker_keys._STARTUP_VALUES = dict.fromkeys(_broker_keys.ENV_VARS.values())
+
+
+@pytest.fixture(autouse=True)
+def _free_the_broker_login_slot():
+    """A test that stops while a login holds the broker slot must not refuse the next one's.
+
+    Nor may a test's staged or pinned keys (a token read outside a request
+    pins for a minute), or the record of what it published, reach the next:
+    every test runs in the same thread and context.
+    """
+    _broker_keys._slot.update(broker=None, holders=set(), until=0.0)
+    _broker_keys._staged.set(None)
+    _broker_keys._published["state"] = None
+    yield
+    _broker_keys._staged.set(None)
+    _broker_keys._published["state"] = None
 
 
 # These are manual diagnostics, not pytest modules. test_bot_web.py starts the
@@ -98,3 +128,42 @@ def _isolate_openscript_state() -> None:
 
 
 _isolate_openscript_state()
+
+
+# A fake sleep for one module, never for the whole interpreter.
+#
+# ``monkeypatch.setattr(module.time, "sleep", fake)`` looks local but is not:
+# ``module.time`` is the one shared ``time`` module, so every thread in the
+# process gets the fake. The suite shares one interpreter with threads earlier
+# tests left running, and chartink's order loop idles on ``time.sleep(0.1)``.
+# Given a recorder, that loop spun at full speed appending 0.1 to the test's
+# list, the test's ``assert slept == []`` failed on millions of entries, and
+# formatting that failure while the loop held the GIL ran past the 120s timeout
+# (gthread-migration on main, run 38561590951).
+#
+# This swaps the module's own ``time`` name for a proxy instead: the fake
+# answers ``sleep`` and everything else is the real module.
+class _ModuleTime:
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        import time
+
+        return getattr(time, name)
+
+
+@pytest.fixture
+def module_sleep(monkeypatch):
+    """Return ``patch(module, fake)``, which fakes ``time.sleep`` for that module only."""
+    import time
+
+    def patch(module, fake):
+        current = getattr(module, "time", None)
+        assert current is time or isinstance(current, _ModuleTime), (
+            f"{module.__name__} does not reach sleep through 'import time'"
+        )
+        monkeypatch.setattr(module, "time", _ModuleTime(fake))
+        return fake
+
+    return patch

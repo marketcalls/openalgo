@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type QuotesData, tradingApi } from '@/api/trading'
+import { ChartSymbolLink } from '@/components/trading/ChartSymbolLink'
 import GttTab from '@/components/trading/GttTab'
 import {
   AlertDialog,
@@ -716,7 +717,9 @@ export default function OrderBook() {
 
                         return (
                           <TableRow key={`${order.orderid}-${index}`}>
-                            <TableCell className="font-medium">{order.symbol}</TableCell>
+                            <TableCell className="font-medium">
+                              <ChartSymbolLink symbol={order.symbol} exchange={order.exchange} />
+                            </TableCell>
                             <TableCell>
                               <Badge variant="outline">{order.exchange}</Badge>
                             </TableCell>

@@ -20,17 +20,11 @@
  * arbitrary multiples: a user can ask for 3M, and pre-registering every count
  * anyone might type is not a list worth keeping.
  *
- * The timezone is deliberate. A calendar bar opens at local midnight on the
- * first day of its period, so the zone decides which day a month starts on.
- * Indian exchange sessions are IST, which is what `DEFAULT_TIMEZONE` is.
+ * Calendar tokens are shared across exchanges. Leave their timezone unset so
+ * the source calendar determines boundaries, independently of display labels.
  */
 
-import {
-  type CalendarUnit,
-  DEFAULT_TIMEZONE,
-  isKnownInterval,
-  registerInterval,
-} from 'openalgo-charts'
+import { type CalendarUnit, isKnownInterval, registerInterval } from 'openalgo-charts'
 
 /** Codes above a week, and the calendar unit each one buckets by. */
 const CALENDAR_UNITS: Record<string, CalendarUnit> = {
@@ -66,7 +60,6 @@ export function ensureInterval(code: string): boolean {
       mode: 'calendar',
       unit: CALENDAR_UNITS[match[2]],
       count,
-      timezone: DEFAULT_TIMEZONE,
     },
   })
   return true

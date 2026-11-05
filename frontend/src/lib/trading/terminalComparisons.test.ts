@@ -86,12 +86,14 @@ function chart() {
 }
 
 function helper(
-  getBars = vi.fn(async (_request: BarsRequest) => [bar(60, 200), bar(120, 220), bar(180, 240)])
+  getBars = vi.fn(async (_request: BarsRequest) => [bar(60, 200), bar(120, 220), bar(180, 240)]),
+  bucketStart?: (request: BarsRequest, time: number) => number | null
 ) {
   const sockets: Socket[] = []
   const onChange = vi.fn()
   const instance = new TerminalComparisons({
     feed: { getBars },
+    bucketStart,
     now: () => 240,
     onChange,
     ws: {
@@ -133,6 +135,16 @@ afterEach(() => {
 })
 
 describe('terminal comparison ownership', () => {
+  it('keeps the native history anchor when calendar alignment is unknown', async () => {
+    const { instance, sockets } = helper(undefined, () => null)
+    await instance.replace([spec()], 'price')
+    await instance.bind(chart(), context)
+    sockets[0].open()
+    sockets[0].tick(250, 190)
+    expect(instance.rows()[0].close).toBe(250)
+    expect(instance.rows()[0].change).toBeCloseTo((250 / 220 - 1) * 100)
+  })
+
   it.each([
     'linear',
     'logarithmic',

@@ -1,7 +1,11 @@
 # blueprints/broker_credentials.py
 """
-Broker credentials management API.
-Handles reading and updating broker credentials in the .env file.
+Server settings the Profile Broker tab saves to .env: the ngrok tunnel, the
+Host Server URL and the WebSocket URL, and the server status it shows.
+
+Broker keys are kept on the Broker Configuration page instead
+(blueprints/broker_config.py), as in OpenAlgo Desktop. Reachable once signed
+in to OpenAlgo, before any broker login.
 """
 
 import os
@@ -9,19 +13,23 @@ import re
 
 from flask import Blueprint, jsonify, request
 
+from limiter import limiter
 from utils.env_check import update_env_values
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, check_signed_in
 
 logger = get_logger(__name__)
 
 broker_credentials_bp = Blueprint("broker_credentials_bp", __name__, url_prefix="/api/broker")
 
+WRITE_RATE_LIMIT = "20 per minute"
+
 
 def get_env_path():
-    """Get the absolute path to the .env file."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.normpath(os.path.join(base_dir, "..", ".env"))
+    """The .env file this install reads, the same one utils.broker_keys reads."""
+    from utils.broker_keys import env_file_path
+
+    return str(env_file_path())
 
 
 def get_env_value(key: str) -> str:
@@ -56,257 +64,114 @@ def mask_secret(value: str, show_chars: int = 4) -> str:
     return value[:show_chars] + "*" * 8
 
 
-def get_broker_from_redirect_url(redirect_url: str) -> str:
-    """Extract broker name from redirect URL."""
-    try:
-        match = re.search(r"/([^/]+)/callback$", redirect_url)
-        if match:
-            return match.group(1).lower()
-    except Exception:
-        pass
-    return ""
+def _error(message, status=400):
+    return jsonify({"status": "error", "message": message}), status
+
+
+def _clean(value):
+    """A submitted value, stripped; None when it has a line break or control character."""
+    value = str(value if value is not None else "").strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return None
+    return value
 
 
 @broker_credentials_bp.route("/credentials", methods=["GET"])
-@check_session_validity
+@check_signed_in
 def get_credentials():
-    """Get current broker credentials (masked)."""
+    """The server settings, for the Profile Broker tab."""
     try:
-        # Get current values from environment
-        broker_api_key = get_env_value("BROKER_API_KEY")
-        broker_api_secret = get_env_value("BROKER_API_SECRET")
-        broker_api_key_market = get_env_value("BROKER_API_KEY_MARKET")
-        broker_api_secret_market = get_env_value("BROKER_API_SECRET_MARKET")
-        redirect_url = get_env_value("REDIRECT_URL")
         valid_brokers = get_env_value("VALID_BROKERS")
-        ngrok_allow = get_env_value("NGROK_ALLOW")
-        host_server = get_env_value("HOST_SERVER")
-        websocket_url = get_env_value("WEBSOCKET_URL")
-
-        # Get port configuration
-        flask_host = get_env_value("FLASK_HOST_IP") or "127.0.0.1"
-        flask_port = get_env_value("FLASK_PORT") or "5000"
-        websocket_host = get_env_value("WEBSOCKET_HOST") or "127.0.0.1"
-        websocket_port = get_env_value("WEBSOCKET_PORT") or "8765"
-        zmq_host = get_env_value("ZMQ_HOST") or "127.0.0.1"
-        zmq_port = get_env_value("ZMQ_PORT") or "5555"
-
-        # Get current broker from redirect URL
-        current_broker = get_broker_from_redirect_url(redirect_url)
-
-        # Parse valid brokers list
-        brokers_list = [b.strip() for b in valid_brokers.split(",") if b.strip()]
-
         return jsonify(
             {
                 "status": "success",
                 "data": {
-                    "broker_api_key": mask_secret(broker_api_key, 6),
-                    "broker_api_key_raw_length": len(broker_api_key),
-                    "broker_api_secret": mask_secret(broker_api_secret, 4),
-                    "broker_api_secret_raw_length": len(broker_api_secret),
-                    "broker_api_key_market": mask_secret(broker_api_key_market, 6),
-                    "broker_api_key_market_raw_length": len(broker_api_key_market),
-                    "broker_api_secret_market": mask_secret(broker_api_secret_market, 4),
-                    "broker_api_secret_market_raw_length": len(broker_api_secret_market),
-                    "redirect_url": redirect_url,
-                    "current_broker": current_broker,
-                    "valid_brokers": brokers_list,
-                    "ngrok_allow": ngrok_allow.upper() == "TRUE",
-                    "host_server": host_server,
-                    "websocket_url": websocket_url,
-                    # Server status info
+                    "valid_brokers": [b.strip() for b in valid_brokers.split(",") if b.strip()],
+                    "ngrok_allow": get_env_value("NGROK_ALLOW").upper() == "TRUE",
+                    "host_server": get_env_value("HOST_SERVER"),
+                    "websocket_url": get_env_value("WEBSOCKET_URL"),
                     "server_status": {
-                        "flask": {"host": flask_host, "port": flask_port},
-                        "websocket": {"host": websocket_host, "port": websocket_port},
-                        "zmq": {"host": zmq_host, "port": zmq_port},
+                        "flask": {
+                            "host": get_env_value("FLASK_HOST_IP") or "127.0.0.1",
+                            "port": get_env_value("FLASK_PORT") or "5000",
+                        },
+                        "websocket": {
+                            "host": get_env_value("WEBSOCKET_HOST") or "127.0.0.1",
+                            "port": get_env_value("WEBSOCKET_PORT") or "8765",
+                        },
+                        "zmq": {
+                            "host": get_env_value("ZMQ_HOST") or "127.0.0.1",
+                            "port": get_env_value("ZMQ_PORT") or "5555",
+                        },
                     },
                 },
             }
         )
-    except Exception as e:
-        logger.exception(f"Error getting broker credentials: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception:
+        logger.exception("Error getting the server settings")
+        return _error("Could not read the server settings. Try again.", 500)
 
 
 @broker_credentials_bp.route("/credentials", methods=["POST"])
-@check_session_validity
+@check_signed_in
+@limiter.limit(WRITE_RATE_LIMIT)
 def update_credentials():
-    """Update broker credentials in .env file."""
+    """Save the ngrok tunnel, Host Server URL and WebSocket URL to .env.
+
+    Read at startup, so a restart applies them. Every value is checked before
+    anything is written.
+    """
     try:
-        # Support both JSON and form data
-        if request.is_json:
-            data = request.get_json() or {}
-            broker_api_key = data.get("broker_api_key", "").strip()
-            broker_api_secret = data.get("broker_api_secret", "").strip()
-            broker_api_key_market = data.get("broker_api_key_market", "").strip()
-            broker_api_secret_market = data.get("broker_api_secret_market", "").strip()
-            redirect_url = data.get("redirect_url", "").strip()
-            ngrok_allow = data.get("ngrok_allow", "")
-            host_server = data.get("host_server", "").strip()
-            websocket_url = data.get("websocket_url", "").strip()
-            has_ngrok_key = "ngrok_allow" in data
-        else:
-            # Form data
-            broker_api_key = request.form.get("broker_api_key", "").strip()
-            broker_api_secret = request.form.get("broker_api_secret", "").strip()
-            broker_api_key_market = request.form.get("broker_api_key_market", "").strip()
-            broker_api_secret_market = request.form.get("broker_api_secret_market", "").strip()
-            redirect_url = request.form.get("redirect_url", "").strip()
-            ngrok_allow = request.form.get("ngrok_allow", "").strip()
-            host_server = request.form.get("host_server", "").strip()
-            websocket_url = request.form.get("websocket_url", "").strip()
-            has_ngrok_key = "ngrok_allow" in request.form
+        data = (request.get_json(silent=True) or {}) if request.is_json else request.form
+        host_server = _clean(data.get("host_server"))
+        websocket_url = _clean(data.get("websocket_url"))
+        if host_server is None or websocket_url is None:
+            return _error("A value contains a line break. Paste it again as a single line.")
 
-        # Validate redirect URL format
-        if redirect_url:
-            if not re.match(r"^https?://.+/[^/]+/callback$", redirect_url):
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Invalid redirect URL format. Must end with /<broker>/callback",
-                    }
-                ), 400
-
-            # Validate broker name
-            broker_name = get_broker_from_redirect_url(redirect_url)
-            valid_brokers_str = get_env_value("VALID_BROKERS")
-            valid_brokers = {b.strip().lower() for b in valid_brokers_str.split(",") if b.strip()}
-
-            if broker_name and broker_name not in valid_brokers:
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Invalid broker '{broker_name}'. Valid brokers: {', '.join(sorted(valid_brokers))}",
-                    }
-                ), 400
-
-            # Validate broker-specific API key formats
-            if broker_name == "fivepaisa" and broker_api_key:
-                if ":::" not in broker_api_key or broker_api_key.count(":::") != 2:
-                    return jsonify(
-                        {
-                            "status": "error",
-                            "message": "5paisa API key must be in format: 'User_Key:::User_ID:::client_id'",
-                        }
-                    ), 400
-
-            elif broker_name == "flattrade" and broker_api_key:
-                if ":::" not in broker_api_key or broker_api_key.count(":::") != 1:
-                    return jsonify(
-                        {
-                            "status": "error",
-                            "message": "Flattrade API key must be in format: 'client_id:::api_key'",
-                        }
-                    ), 400
-
-            elif broker_name == "dhan" and broker_api_key:
-                if ":::" not in broker_api_key or broker_api_key.count(":::") != 1:
-                    return jsonify(
-                        {
-                            "status": "error",
-                            "message": "Dhan API key must be in format: 'client_id:::api_key'",
-                        }
-                    ), 400
+        updates = {}
+        # ngrok_allow by key presence, not value truthiness, so it can be set
+        # to FALSE.
+        if "ngrok_allow" in data:
+            ngrok_value = str(data.get("ngrok_allow")).strip().upper()
+            updates["NGROK_ALLOW"] = "TRUE" if ngrok_value == "TRUE" else "FALSE"
+        if host_server:
+            if not re.match(r"^https?://.+", host_server):
+                return _error("Invalid HOST_SERVER format. Must start with http:// or https://")
+            updates["HOST_SERVER"] = host_server
+        if websocket_url:
+            if not re.match(r"^wss?://.+", websocket_url):
+                return _error("Invalid WEBSOCKET_URL format. Must start with ws:// or wss://")
+            updates["WEBSOCKET_URL"] = websocket_url
+        if not updates:
+            return _error("No settings provided to update")
 
         env_path = get_env_path()
         if not os.path.exists(env_path):
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to read .env file: Environment file not found",
-                }
-            ), 500
-
-        # Collect the new values (only if provided - empty string means keep
-        # existing). Nothing is written until every value has been validated,
-        # and then all of them go to .env in one locked read-modify-write.
-        updates = {}
-
-        if broker_api_key:
-            updates["BROKER_API_KEY"] = broker_api_key
-
-        if broker_api_secret:
-            updates["BROKER_API_SECRET"] = broker_api_secret
-
-        if broker_api_key_market:
-            updates["BROKER_API_KEY_MARKET"] = broker_api_key_market
-
-        if broker_api_secret_market:
-            updates["BROKER_API_SECRET_MARKET"] = broker_api_secret_market
-
-        if redirect_url:
-            updates["REDIRECT_URL"] = redirect_url
-
-        # Check for ngrok_allow by key presence, not value truthiness
-        # This allows setting it to FALSE (disabling ngrok)
-        if has_ngrok_key:
-            ngrok_allow_str = str(ngrok_allow).strip().upper()
-            ngrok_value = "TRUE" if ngrok_allow_str == "TRUE" else "FALSE"
-            updates["NGROK_ALLOW"] = ngrok_value
-
-        if host_server:
-            # Validate host_server URL format
-            if not re.match(r"^https?://.+", host_server):
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Invalid HOST_SERVER format. Must start with http:// or https://",
-                    }
-                ), 400
-            updates["HOST_SERVER"] = host_server
-
-        if websocket_url:
-            # Validate websocket_url format
-            if not re.match(r"^wss?://.+", websocket_url):
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Invalid WEBSOCKET_URL format. Must start with ws:// or wss://",
-                    }
-                ), 400
-            updates["WEBSOCKET_URL"] = websocket_url
-
-        if not updates:
-            return jsonify({"status": "error", "message": "No credentials provided to update"}), 400
-
-        updated_fields = list(updates)
-
-        # A line break inside a value would start a new line in .env, which
-        # corrupts it or smuggles in another setting, so it is refused here.
-        for key, value in updates.items():
-            if "\n" in value or "\r" in value:
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": f"The value for {key} contains a line break. "
-                        "Paste it again as a single line.",
-                    }
-                ), 400
-
-        # Write every value in one read-modify-write under the lock all .env
-        # writers share, through an atomic replace. Two saves at once used to
-        # read the same file and the second write dropped the first one's
-        # values, and a save interrupted mid-write left .env truncated.
+            return _error("Failed to read .env file: Environment file not found", 500)
+        # One read-modify-write under the lock every .env writer shares,
+        # through an atomic replace, so two saves at once keep both.
         try:
             update_env_values(env_path, updates)
-            logger.info(f"Updated broker credentials: {', '.join(updated_fields)}")
-        except Exception as e:
-            logger.exception(f"Error writing .env file: {e}")
-            return jsonify({"status": "error", "message": f"Failed to write .env file: {e}"}), 500
-
+        except Exception:
+            logger.exception("Error writing .env file")
+            return _error(
+                "Could not write the .env file. Check that OpenAlgo can write to it, "
+                "then try again.",
+                500,
+            )
+        updated = list(updates)
+        logger.info(f"Updated server settings: {', '.join(updated)}")
         return jsonify(
             {
                 "status": "success",
-                "message": f"Credentials updated successfully. Updated: {', '.join(updated_fields)}",
-                "updated_fields": updated_fields,
+                "message": f"Settings updated successfully. Updated: {', '.join(updated)}",
+                "updated_fields": updated,
                 "restart_required": True,
             }
         )
-
-    except Exception as e:
-        logger.exception(f"Error updating broker credentials: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    except Exception:
+        logger.exception("Error updating the server settings")
+        return _error("Could not save the settings. Try again.", 500)
 
 
 @broker_credentials_bp.route("/capabilities", methods=["GET"])

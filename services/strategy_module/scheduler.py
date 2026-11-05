@@ -146,7 +146,7 @@ def start(paused: bool = False) -> BackgroundScheduler:
             replace_existing=True,
         )
         _scheduler.start(paused=paused)
-        logger.info("Strategy module scheduler started (timezone %s, paused=%s)", IST, paused)
+        logger.debug("Strategy module scheduler started (timezone %s, paused=%s)", IST, paused)
         return _scheduler
 
 
@@ -462,7 +462,7 @@ def sync_all_jobs() -> dict[str, int]:
             if _remove_job(scheduler, job.id):
                 orphans += 1
 
-    logger.info(
+    logger.debug(
         "Strategy module schedule rebuilt: %d strategies, %d jobs, %d orphans removed",
         len(seen),
         len(installed),

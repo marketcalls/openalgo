@@ -169,8 +169,9 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `start_time` | string | Yes | Start time in HH:MM format (IST) |
-| `stop_time` | string | Yes | Stop time in HH:MM format (IST) |
-| `days` | array | Yes | Days to run: `mon`, `tue`, `wed`, `thu`, `fri`, `sat` |
+| `stop_time` | string or null | Yes, except CRYPTO | Stop time in HH:MM format (IST). Leave it out, empty or null on a CRYPTO strategy to run it 24/7: no stop job is created, and the start job brings the script back if it exits. Equal to `start_time` is refused, since that window has no length. |
+| `days` | array | Yes | Days to run: `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun` |
+| `exchange` | string | No | The strategy's exchange. `GET /python/api/exchanges` follows the logged-in broker's `plugin.json` `broker_type`: a crypto broker is offered CRYPTO alone, and a stock broker every Indian exchange but not CRYPTO. Refusing a `stop_time` equal to `start_time` applies to CRYPTO only. |
 
 ### Response
 

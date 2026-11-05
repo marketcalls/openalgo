@@ -2,7 +2,8 @@ import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Navbar } from '@/components/layout/Navbar'
+import { Link, useSearchParams } from 'react-router'
+import { AccountControls } from '@/components/layout/AccountControls'
 
 // Lazy, because the panel pulls the markdown renderer and the syntax
 // highlighter's grammars and themes behind it. Statically imported, every
@@ -38,18 +39,19 @@ const WatchlistPanel = lazy(() =>
   import('@/components/trading/WatchlistPanel').then((m) => ({ default: m.WatchlistPanel }))
 )
 
+import type { MagnetMode } from 'openalgo-charts/draw'
+import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import {
   BOTTOM_BAR_PX,
   type BottomBarControl,
   ChartBottomBar,
 } from '@/components/trading/ChartBottomBar'
 import { ChartPane } from '@/components/trading/ChartPane'
-import { DrawingRail } from '@/components/trading/DrawingRail'
+import { DrawingRail, DrawingRailTab } from '@/components/trading/DrawingRail'
 import {
-  type ChartOrderBridgeRef,
   ChartOrderBridgeContext,
+  type ChartOrderBridgeRef,
 } from '@/components/trading/dock/chartOrderBridge'
-import { GridDividers } from '@/components/trading/GridDividers'
 import { DOCK_ID } from '@/components/trading/dock/DockShell'
 import {
   type DockTab,
@@ -58,13 +60,13 @@ import {
   writeDockTab,
 } from '@/components/trading/dock/dockState'
 import { TradingDock } from '@/components/trading/dock/TradingDock'
+import { GridDividers } from '@/components/trading/GridDividers'
 import { IndicatorTemplates } from '@/components/trading/IndicatorTemplates'
 import { ObjectsPanel } from '@/components/trading/ObjectsPanel'
 import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
-import { idForScript } from '@/lib/trading/openscriptFiles'
-import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import { TickBox } from '@/components/trading/TickBox'
 import { Tip } from '@/components/trading/Tip'
+import { TB_BTN, TB_ICON, TB_ON, ToolbarDivider } from '@/components/trading/toolbarStyles'
 import { WorkspaceGrid } from '@/components/trading/WorkspaceGrid'
 import { WorkspaceMenu } from '@/components/trading/WorkspaceMenu'
 import { type ReplayPickSource, WorkspaceReplayBar } from '@/components/trading/WorkspaceReplayBar'
@@ -73,6 +75,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
@@ -82,9 +85,11 @@ import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 import { LAYOUTS, LayoutIcon, type LayoutPreset } from '@/lib/chart/layouts'
 import { clearLog, fetchLog, type LoggedFire } from '@/lib/trading/alertLog'
-import { historyChord } from '@/lib/trading/chartHistory'
-import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
 import { alertRuntimeKey, removeWorkspaceAlertRuntime } from '@/lib/trading/alertRuntime'
+import { historyChord } from '@/lib/trading/chartHistory'
+import { hasChartRequest, readChartRequest, withoutChartRequest } from '@/lib/trading/chartLink'
+import { chartMayTakeKey } from '@/lib/trading/drawingKeys'
+import { ChromeIcon, lineStroke24 } from '@/lib/trading/glyphs'
 import {
   type GridWeights,
   parseAreas,
@@ -93,8 +98,8 @@ import {
   tracksTemplate,
   writeGridWeights,
 } from '@/lib/trading/gridSizes'
+import { idForScript } from '@/lib/trading/openscriptFiles'
 import type { PreparedChartGrid } from '@/lib/trading/preparedGrid'
-import type { MagnetMode } from 'openalgo-charts/draw'
 import type {
   AlertFire,
   AlertsView,
@@ -134,6 +139,25 @@ const PANEL_KEY = 'oa-trading-panel'
  * Buy button live because storage was cleared or blocked.
  */
 const ARMED_KEY = 'oa-trading-armed'
+/** The drawing rail folded away ('1') or shown ('0'), beside the rail's last tools. */
+const RAIL_FOLDED_KEY = 'oa-trading-rail-folded'
+
+/** Shown unless the trader folded it: an unreadable key keeps the tools in reach. */
+function readRailShown(): boolean {
+  try {
+    return localStorage.getItem(RAIL_FOLDED_KEY) !== '1'
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Where the folded rail's tab sits, from the bottom of the chart area: the
+ * bottom bar's strip, the grid's 8px gutter and a pane's 1px border, then
+ * centred on the 22px time axis, so the tab sits at the left end of the axis
+ * row rather than over the plot or the watermark in its corner.
+ */
+const RAIL_TAB_BOTTOM = BOTTOM_BAR_PX + 8 + 1 + (22 - 26) / 2
 /**
  * How many firings the session log keeps.
  *
@@ -259,7 +283,18 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const [stay, setStay] = useState(false)
   /** A tool held by a double-click on the rail, until Escape or another pick. */
   const [latched, setLatched] = useState(false)
-  const [showRail, setShowRail] = useState(true)
+  // Folded or not, remembered beside the rail's other choices. The rail stays
+  // mounted while folded, so the armed tool, the drawings and the chords carry
+  // on; a tool armed by its chord does not unfold it. The chart's right-click
+  // "Hide drawing tools" folds it the same way.
+  const [showRail, setShowRail] = useState(readRailShown)
+  useEffect(() => {
+    try {
+      localStorage.setItem(RAIL_FOLDED_KEY, showRail ? '0' : '1')
+    } catch {
+      // Storage refused: the fold holds for this visit.
+    }
+  }, [showRail])
   const [stats, setStats] = useState<DrawStats>(NO_DRAW)
   // Undo / delete act on the pane you last drew in; arming a tool hits them all,
   // so whichever pane you click next is the one that gets the shape.
@@ -1129,6 +1164,34 @@ function TradingWorkspace({ account }: { account: string | null }) {
     )
     if (document) void openWorkspace(document).catch(() => {})
   })
+  /**
+   * A chart link from the order book, trade book or positions page.
+   *
+   * Applied after the saved workspace has had its turn: declared after the
+   * restore above, which locks the page synchronously when it opens one, so a
+   * restore can never land on top of the instrument the link asked for. The
+   * parameters are dropped once applied, so a refresh keeps whatever the
+   * trader has charted since.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  const handledChartQuery = useRef<string | null>(null)
+  useEffect(() => {
+    if (!hasChartRequest(searchParams)) return
+    const query = searchParams.toString()
+    if (handledChartQuery.current === query) return
+    if (workspacePending.current || workspaceCatalog.loading) return
+    if (workspaceCatalog.catalog && !restoreAttempted.current) return
+    const request = readChartRequest(searchParams)
+    if (request) {
+      const target = panelTarget()
+      if (!target) return
+      void target.whenReady().then(() => {
+        if (!workspacePending.current) sendToFocusedPane(request)
+      })
+    }
+    handledChartQuery.current = query
+    setSearchParams(withoutChartRequest(searchParams), { replace: true })
+  })
   const workspaceMenu = (
     <WorkspaceMenu
       {...workspaceCatalog}
@@ -1174,7 +1237,20 @@ function TradingWorkspace({ account }: { account: string | null }) {
   const activeLayoutId = workspace.current?.payload.layout.preset ?? layoutId
   const activeLayoutLabel = LAYOUTS.find((item) => item.id === activeLayoutId)?.label ?? 'Custom'
 
-  /** Workspace controls share one row with the selected chart's controls. */
+  const chartIds =
+    workspace.current?.geometry.panes.map((pane) => pane.id) ??
+    layout.cells.map((_, index) => `p${index}`)
+
+  /**
+   * Workspace controls share one row with the selected chart's controls.
+   *
+   * Which chart the row drives is chosen here too, under the layouts, once
+   * there is more than one chart to choose between. It used to be a "Chart 1"
+   * button of its own at the head of the row, which on a single chart was a
+   * label for the only chart there is. Clicking a chart still selects it, and
+   * the selected chart's frame carries the accent, so the row needs no word
+   * to say which one it is driving.
+   */
   const layoutPicker = (
     <DropdownMenu>
       <Tip
@@ -1184,17 +1260,17 @@ function TradingWorkspace({ account }: { account: string | null }) {
         }}
       >
         <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8 shrink-0"
+          <button
+            type="button"
+            className={cn(TB_BTN, TB_ICON)}
+            data-workspace-control
             aria-label={`Chart layout: ${activeLayoutLabel}`}
           >
-            <LayoutGrid className="h-4 w-4" />
-          </Button>
+            <LayoutGrid className="h-4 w-4" strokeWidth={lineStroke24(16)} />
+          </button>
         </DropdownMenuTrigger>
       </Tip>
-      <DropdownMenuContent align="start" className="w-56">
+      <DropdownMenuContent align="start" className="w-56" data-workspace-control>
         <div className="grid grid-cols-4 gap-1 p-1">
           {LAYOUTS.map((l) => (
             <DropdownMenuItem
@@ -1213,6 +1289,24 @@ function TradingWorkspace({ account }: { account: string | null }) {
             </DropdownMenuItem>
           ))}
         </div>
+        {chartIds.length > 1 && (
+          <>
+            <DropdownMenuSeparator />
+            <div className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+              Selected chart
+            </div>
+            {chartIds.map((id, index) => (
+              <DropdownMenuItem
+                key={id}
+                onSelect={() => focusPane(terminalsRef.current[id] ?? null, id)}
+                className={cn('text-[13px]', id === focusedPane && 'bg-primary/10 text-primary')}
+              >
+                Chart {index + 1}
+                {paneSymbols[id] ? `: ${paneSymbols[id]}` : ''}
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -1244,15 +1338,14 @@ function TradingWorkspace({ account }: { account: string | null }) {
         {/* Wrapped, so the label still shows while the button is disabled. */}
         <span className="inline-flex shrink-0">
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon"
+            <button
+              type="button"
               disabled={paneCount < 2}
-              className={cn('h-8 w-8 shrink-0', syncOn && paneCount > 1 && 'text-primary')}
+              className={cn(TB_BTN, TB_ICON, syncOn && paneCount > 1 && TB_ON)}
               aria-label="Chart sync"
             >
-              <LinkIcon className="h-4 w-4" />
-            </Button>
+              <LinkIcon className="h-4 w-4" strokeWidth={lineStroke24(16)} />
+            </button>
           </DropdownMenuTrigger>
         </span>
       </Tip>
@@ -1318,10 +1411,10 @@ function TradingWorkspace({ account }: { account: string | null }) {
     >
       <label
         className={cn(
-          'flex h-8 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md border px-2 text-xs font-medium transition-colors',
+          'flex h-7 shrink-0 cursor-pointer select-none items-center gap-2 rounded-md px-2 text-xs font-medium transition-colors',
           armed
-            ? 'border-destructive/60 bg-destructive/10 text-destructive'
-            : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            ? 'bg-destructive/15 text-destructive ring-1 ring-inset ring-destructive/40'
+            : 'text-foreground/80 hover:bg-accent hover:text-foreground'
         )}
       >
         <Switch
@@ -1347,67 +1440,37 @@ function TradingWorkspace({ account }: { account: string | null }) {
           say which way the switch is thrown, and a trader should not have to
           learn a second vocabulary to read a toggle. */}
         <span className="whitespace-nowrap">
-          {/* The name goes below lg, as Indicators and Replay drop their labels:
-            with it the single-pane toolbar at 1024px pushed the LED and the
-            camera into hidden horizontal scroll. */}
-          <span className="hidden lg:inline">One-Click </span>
-          {armed ? 'ON' : 'off'}
+          {/* The name stays at every width, because "off" alone does not say
+            what is off. The state word is the part that gives way: the switch
+            beside it already shows the state, and when it is on the whole
+            control is in the on-state red. The word comes back from 2xl, where
+            the row has room. The accessible name is the switch's own
+            aria-label, so it never depends on this text. */}
+          One-Click
+          <span className="hidden 2xl:inline"> {armed ? 'ON' : 'off'}</span>
         </span>
       </label>
     </Tip>
   )
 
-  const chartIds =
-    workspace.current?.geometry.panes.map((pane) => pane.id) ??
-    layout.cells.map((_, index) => `p${index}`)
-  const chartSelector = (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 shrink-0"
-          data-workspace-control
-          aria-label={`Selected chart: ${chartIds.indexOf(focusedPane) + 1}`}
-        >
-          Chart {chartIds.indexOf(focusedPane) + 1}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" data-workspace-control>
-        {chartIds.map((id, index) => (
-          <DropdownMenuItem
-            key={id}
-            onSelect={() => focusPane(terminalsRef.current[id] ?? null, id)}
-            className={cn(id === focusedPane && 'bg-primary/10 text-primary')}
-          >
-            Chart {index + 1}
-            {paneSymbols[id] ? `: ${paneSymbols[id]}` : ''}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
   const workspaceControls = (
     <>
-      {/* These four are the workspace, not this chart: the grid, what syncs
-          across it, the saved layouts and whether a click sends an order. The
-          rule they broke was having no rule -- two of them were text at one
-          height beside bordered controls at another, so they read as labels
-          somebody had left in the toolbar rather than things you press. */}
-      <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+      {/* These are the workspace, not this chart: the grid and what syncs
+          across it, the saved layouts and studies, and whether a click
+          anywhere in it sends an order. Three groups, each behind a hairline. */}
+      <ToolbarDivider />
       {layoutPicker}
       {syncPicker}
+      <ToolbarDivider />
       {workspaceMenu}
       <IndicatorTemplates key={account} {...workspaceCatalog} target={panelTarget} />
+      <ToolbarDivider />
       {armedControl}
     </>
   )
 
   return (
     <ChartOrderBridgeContext.Provider value={orderBridge}>
-      {/* Full-bleed page: the nav must match the chart width, not
-          Layout's centred container. See NavbarProps.fluid. */}
-      <Navbar fluid />
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Rail + grid */}
         <div aria-live="polite">
@@ -1435,10 +1498,35 @@ function TradingWorkspace({ account }: { account: string | null }) {
             </p>
           )}
         </div>
-        <div ref={setToolbarHost} className="min-w-0 shrink-0" data-workspace-toolbar />
+        {/* The terminal's one header. The app's navbar is not on this page:
+            the chart takes the viewport, and the way back to the dashboard
+            and the account controls the navbar carries (broker, Live or
+            Analyze, light or dark, the profile menu) sit at the two ends of
+            this row instead. They stay put while the chart controls between
+            them scroll on a narrow screen. */}
+        <div className="oa-terminal-band flex h-10 shrink-0 items-center border-b">
+          <Tip tip={{ title: 'Dashboard', sub: 'Leave the terminal for the dashboard' }}>
+            <Link to="/dashboard" aria-label="Dashboard" className={cn(TB_BTN, 'ml-1 gap-1')}>
+              <ChromeIcon id="chevron-left" size={14} className="opacity-70" />
+              <span className="hidden md:inline">Dashboard</span>
+            </Link>
+          </Tip>
+          <ToolbarDivider />
+          <div
+            ref={setToolbarHost}
+            className="h-full min-w-0 flex-1 [&>[role=toolbar]]:h-full"
+            data-workspace-toolbar
+          />
+          <ToolbarDivider />
+          <div className="flex shrink-0 items-center gap-0.5 pr-2">
+            <AccountControls variant="toolbar" />
+          </div>
+        </div>
         <main className="flex min-h-0 flex-1" inert={workspace.pending ? true : undefined}>
-          {showRail && apiKey && wsUrl && (
+          {apiKey && wsUrl && (
             <DrawingRail
+              folded={!showRail}
+              onFold={() => setShowRail(false)}
               stats={railStats}
               latched={latched}
               onPick={pickTool}
@@ -1476,6 +1564,9 @@ function TradingWorkspace({ account }: { account: string | null }) {
               <div className="relative h-full">
                 {/* The grid stops above the bottom bar's strip, kept clear from
                     the first render so nothing moves when the bar arrives. */}
+                {!showRail && (
+                  <DrawingRailTab onUnfold={() => setShowRail(true)} bottom={RAIL_TAB_BOTTOM} />
+                )}
                 <div className="absolute inset-x-0 top-0" style={{ bottom: BOTTOM_BAR_PX }}>
                   {!workspace.current && (
                     <div
@@ -1494,7 +1585,6 @@ function TradingWorkspace({ account }: { account: string | null }) {
                           paneLabel={`Chart ${i + 1}`}
                           toolbarHost={toolbarHost}
                           focused={focusedPane === `p${i}`}
-                          chartSelector={chartSelector}
                           apiKey={apiKey}
                           wsUrl={wsUrl}
                           style={{ gridArea: cell }}
@@ -1553,7 +1643,6 @@ function TradingWorkspace({ account }: { account: string | null }) {
                       active={workspace.current === owner}
                       toolbarHost={toolbarHost}
                       focusedPaneId={focusedPane}
-                      chartSelector={chartSelector}
                       apiKey={apiKey}
                       wsUrl={wsUrl}
                       sharedTool={tool}

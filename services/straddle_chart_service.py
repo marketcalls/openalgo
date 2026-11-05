@@ -297,7 +297,7 @@ def get_straddle_chart_data(
             straddle = round(ce_price + pe_price, 2)
             synthetic_future = round(atm_strike + ce_price - pe_price, 2)
 
-            # Convert timestamp to Unix seconds (UTC) for lightweight-charts
+            # Convert timestamp to Unix seconds (UTC) for the chart
             unix_seconds = int(ts.timestamp())
 
             series.append(

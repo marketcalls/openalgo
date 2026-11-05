@@ -151,7 +151,9 @@ def install() -> bool:
     if not is_monkey_patched("thread"):
         return False
     try:
-        from litellm.litellm_core_utils import asyncify
+        from services.agent import litellm_loader
+
+        asyncify = litellm_loader.load("litellm.litellm_core_utils.asyncify")
 
         original = asyncify.run_async_function
         asyncify.run_async_function = run_async_function

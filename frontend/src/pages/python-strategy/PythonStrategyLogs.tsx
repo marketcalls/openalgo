@@ -6,6 +6,7 @@ import {
   FileText,
   HardDrive,
   RefreshCw,
+  Code2,
   ScrollText,
   Trash2,
 } from 'lucide-react'
@@ -218,6 +219,12 @@ export default function PythonStrategyLogs() {
           >
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/python/${strategy.id}/edit`}>
+              <Code2 className="h-4 w-4 mr-2" />
+              Edit Code
+            </Link>
           </Button>
           <Button
             variant="destructive"

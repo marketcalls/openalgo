@@ -18,10 +18,10 @@ import type {
   IndicatorBarSource,
   IndicatorInputCondition,
   IndicatorState,
-  SeriesTransformSpec,
   LinkGroup,
   SeriesMarker,
   SeriesMarkers,
+  SeriesTransformSpec,
 } from 'openalgo-charts'
 import {
   AlertController,
@@ -30,6 +30,7 @@ import {
   type AlertSource,
   type AlertsDocument,
   type Bar,
+  type BarsRequest,
   BuySellButtons,
   CandleBuilder,
   ChartObjects,
@@ -95,6 +96,15 @@ import type { AlertFacts } from './alertMessage'
 import { fillAlertMessage } from './alertMessage'
 import { askToNotify } from './alertNotify'
 import { mergeAlertRuntime } from './alertRuntime'
+import { csvOptions, type DataExportOptions } from './chartDataExport'
+import { chartMotionOptions } from './chartMotion'
+import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
+import {
+  type ComparisonScale,
+  comparisonScaleOf,
+  isComparisonScale,
+  storedComparisonMode,
+} from './comparisonScale'
 import { ExpressionFeed, isChartExpression, resolveLeg } from './expressionFeed'
 import {
   type IndicatorTemplateMode,
@@ -102,31 +112,29 @@ import {
   readStoredIndicators,
   type StoredIndicatorRecord,
 } from './indicatorTemplates'
-import { chartMotionOptions } from './chartMotion'
-import { CHART_READY, type ChartStateView, chartLoadFailed, chartNoData } from './chartState'
 import { openInterestCapability } from './openInterest'
 import {
   isPriceAxisSetting,
   PRICE_AXIS_DEFAULTS,
-  PriceAxisController,
   type PriceAxisCommand,
-  pinOnceMeasured,
+  PriceAxisController,
   type PriceAxisMenu,
+  pinOnceMeasured,
   priceAxisPatch,
   priceAxisSettingsView,
   priceAxisShortcuts,
 } from './priceAxis'
 import { parseRangeChoice, type RangeChoice, serializeRangeChoice } from './rangeChoice'
 import { replayTiming } from './replayTiming'
-import { applySessionHours } from './sessionHours'
-import { csvOptions, type DataExportOptions } from './chartDataExport'
-import { TerminalComparisons } from './terminalComparisons'
 import {
-  type ComparisonScale,
-  comparisonScaleOf,
-  isComparisonScale,
-  storedComparisonMode,
-} from './comparisonScale'
+  applySessionHours,
+  prepareSessionHours,
+  sessionCalendar,
+  sessionCalendarRevision,
+} from './sessionHours'
+import { TerminalComparisons } from './terminalComparisons'
+import { createTradingTimeframes } from './timeframeFeed'
+import { chartTimeframePreferences } from './timeframePreferences'
 import type { PreparedReplayMember } from './workspaceReplay'
 import {
   createWorkspacePanePreferences,
@@ -213,15 +221,8 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
-import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
-import {
-  applyChartDialogMetrics,
-  buildChartTheme,
-  mutedTradeColors,
-  resolveCssColor,
-  volumeColor,
-} from './chartTheme'
 import { type HistoryDirection, TerminalHistory } from './chartHistory'
+import { CurrentDrawingSource, profileObjectProvider } from './chartObjectsAdapter'
 import {
   foldedStudyIds,
   panesToFold,
@@ -229,6 +230,14 @@ import {
   type StudyMenu,
   studyMenuAt,
 } from './chartPaneActions'
+import {
+  applyChartDialogMetrics,
+  buildChartTheme,
+  mutedTradeColors,
+  quietVolumeStyle,
+  resolveCssColor,
+  volumeColor,
+} from './chartTheme'
 import { CHART_TYPES, volumeUnderElements } from './chartTypes'
 import { COMPARISON_PALETTE } from './comparisonColors'
 import {
@@ -413,6 +422,8 @@ export interface TerminalCallbacks {
   onWorkspaceChange?(): void
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
   onIntervalChange?(interval: string): void
+  /** The chart type changed from inside the terminal, such as an undo or redo. */
+  onChartTypeChange?(chartType: string): void
   onContextMenu?(menu: TerminalContextMenu): void
   onToast(msg: string, kind: ToastKind): void
   onWsState(state: string): void
@@ -1181,6 +1192,7 @@ export class TradingTerminal {
    * must never be confidently wrong about a price.
    */
   private cachedBars: ReturnType<typeof withBarCache> | null = null
+  private timeframes: ReturnType<typeof createTradingTimeframes> | null = null
   /** One owner for warm history, authoritative repair, paging and live merges. */
   private data: DataLoadingController | null = null
   private offData: (() => void) | null = null
@@ -1346,8 +1358,8 @@ export class TradingTerminal {
    */
   private alertFacts(event: { time?: number; index?: number; price?: number }): AlertFacts {
     const bars = this.shownBars
-    // On a transformed chart an element's own volume is not traded volume (a
-    // Kagi line keeps its thickness there), so read what the volume bars show.
+    // On a Kagi chart an element's own volume is its line thickness, not traded
+    // volume, so read what the volume bars show on every transformed chart.
     const at = this.withDrawnVolume(
       (typeof event.index === 'number' && event.index >= 0 && event.index < bars.length
         ? bars[event.index]
@@ -1732,9 +1744,10 @@ export class TradingTerminal {
   /**
    * A drawn element with the volume the volume bars show under it.
    *
-   * On a transformed chart an element's own `volume` is not traded volume: a
-   * Kagi line keeps its thickness there (1 or 0) and a brick carries none. The
-   * readout reads the volume summed under the element instead, as it is drawn.
+   * On a Kagi chart an element's own `volume` is not traded volume: the line
+   * keeps its thickness there (1 or 0). Other elements carry their traded volume
+   * since openalgo-charts 2.6.8, but the readout reads the volume summed under
+   * the element on every transformed chart, so it always matches the bars drawn.
    */
   private withDrawnVolume(bar: Bar | null): Bar | null {
     if (!bar || !this.transformed()) return bar
@@ -1896,11 +1909,12 @@ export class TradingTerminal {
 
   private volumeCandleStyle(): SeriesStyle {
     const theme = this.chart?.theme()
-    return {
+    const style: SeriesStyle = {
       upColor: theme?.upColor,
       downColor: theme?.downColor,
       ...this.chart?.primarySeriesInfo()?.style,
     }
+    return theme ? quietVolumeStyle(style, theme.background) : style
   }
 
   private volumeAvailable(): boolean {
@@ -2499,6 +2513,13 @@ export class TradingTerminal {
       // pane under the pointer instead, and a second press puts the stack back.
       // Reset stays on the toolbar button, the right-click menu and Home.
       doubleClick: 'maximize',
+      // The wheel zooms about the latest bar, which stays at the right edge while
+      // history compresses or opens out beside it; Ctrl or Cmd with the wheel
+      // zooms about the pointer. The engine's default holds the bar under the
+      // pointer instead, so a zoom out with the pointer in the middle or over the
+      // empty space past the last bar pushed the bars left and the gap beside
+      // the latest one kept widening.
+      zoomAnchor: 'right',
       shortcuts: {
         disabledCommands: ['screenshot', 'toggleGridVert', 'toggleGridHorz'],
         customShortcuts: [
@@ -2793,21 +2814,23 @@ export class TradingTerminal {
     // broker session, the same bar cache, and the same rule about never
     // serving a forming bar from it. Nothing about the key reaches a chart
     // setting, so a saved layout carries the study's symbol and no credential.
-    this.chart.setBarsProvider(async (request) => {
-      const feed = this.cachedBars ?? this.rest
-      if (!feed) return []
-      const bars = await feed.getBars({
-        symbol: request.symbol,
-        // An indicator naming only a symbol means "on this chart's exchange",
-        // which is the common case for a benchmark on the same venue.
-        exchange: request.exchange ?? this.sym?.exchange ?? '',
-        interval: request.interval,
-        from: request.from,
-        to: request.to,
-        signal: request.signal,
+    if (this.timeframes) this.chart.setBarsProvider(this.timeframes.provider)
+    else
+      this.chart.setBarsProvider(async (request) => {
+        const feed = this.timeframes?.feed ?? this.cachedBars ?? this.rest
+        if (!feed) return []
+        const bars = await feed.getBars({
+          symbol: request.symbol,
+          // An indicator naming only a symbol means "on this chart's exchange",
+          // which is the common case for a benchmark on the same venue.
+          exchange: request.exchange ?? this.sym?.exchange ?? '',
+          interval: request.interval,
+          from: request.from,
+          to: request.to,
+          signal: request.signal,
+        })
+        return bars
       })
-      return bars
-    })
   }
 
   /** Safe link metadata for the active chart branding, if it supplies a destination. */
@@ -4636,8 +4659,18 @@ export class TradingTerminal {
     chartRuns: boolean
   ): IndicatorField {
     if (field.type !== 'interval' || field.options !== undefined) return field
+    const choices = [
+      ...new Set([
+        ...this.availableIntervals,
+        ...chartTimeframePreferences().custom(),
+        'W',
+        'M',
+        'Q',
+        'Y',
+      ]),
+    ]
     const offered = chartRuns
-      ? this.availableIntervals.filter((code) => isKnownInterval(code))
+      ? choices.filter((code) => this.supportsInterval(code) && isKnownInterval(code))
       : this.availableIntervals
     // The empty entry is "the chart's own interval", which is how a study says
     // it is not folding at all.
@@ -5171,12 +5204,20 @@ export class TradingTerminal {
 
   private installComparisons(): void {
     const chart = this.chart
-    const feed = this.cachedBars ?? this.rest
+    const feed = this.timeframes?.feed ?? this.cachedBars ?? this.rest
     if (!chart || !feed || this.destroyed) return
     let setup = Promise.resolve()
     if (!this.comparisons) {
       const comparisons = new TerminalComparisons({
         feed,
+        ...(this.timeframes
+          ? {
+              bucketStart: (request: BarsRequest, time: number) =>
+                sessionCalendar({ ...request, from: time, to: time + 1 })
+                  ? this.timeframes!.bucketStart(request, time)
+                  : null,
+            }
+          : {}),
         ws: { url: this.wsUrl, apiKey: this.apiKey },
         now: () => this.gridNow(),
         onChange: () => {
@@ -6442,7 +6483,12 @@ export class TradingTerminal {
     if (this.position && this.posLine) this.posLine.setLeftLabel(this.posLabel())
     if (this.tradeBtns && !this.depthActive) this.tradeBtns.setMark(e.ltp)
     if (this.builder) {
-      const u = this.builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq })
+      let u
+      try {
+        u = this.builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq })
+      } catch {
+        return
+      } // A late after-hours quote must not open a new session candle.
       if (u) {
         this.liveBucket = u.bar.time
         // Key the upsert on time rather than the builder's isNew flag, so a
@@ -6488,7 +6534,29 @@ export class TradingTerminal {
     // 09:15 for hourly candles instead of snapping them to the Unix epoch.
     const sessionAnchorSec = this.rawBars[this.rawBars.length - 1]?.time ?? 0
     this.builder = sec
-      ? new CandleBuilder({ intervalSec: sec, volumeMode: 'ltq-sum', sessionAnchorSec })
+      ? new CandleBuilder({
+          intervalSec: sec,
+          volumeMode: 'ltq-sum',
+          sessionAnchorSec,
+          ...(this.timeframes &&
+          sessionCalendar({
+            symbol: '',
+            exchange: this.sym?.exchange || this.exprLegExchange,
+            interval: this.interval,
+          })
+            ? {
+                bucketStart: (time) =>
+                  this.timeframes!.bucketStart(
+                    {
+                      symbol: this.sym?.symbol ?? '',
+                      exchange: this.sym?.exchange || this.exprLegExchange,
+                      interval: this.interval,
+                    },
+                    time
+                  ),
+              }
+            : {}),
+        })
       : null
     // History normally ends *inside* the bar currently forming. An unseeded
     // builder has no current bar, so its first tick opens a second one for that
@@ -6558,7 +6626,29 @@ export class TradingTerminal {
     // bucket short, the first tick opens a provisional bar and the repair after
     // the bar closes brings the open it missed.
     this.builder = sec
-      ? new CandleBuilder({ intervalSec: sec, volumeMode: 'ltq-sum', sessionAnchorSec })
+      ? new CandleBuilder({
+          intervalSec: sec,
+          volumeMode: 'ltq-sum',
+          sessionAnchorSec,
+          ...(this.timeframes &&
+          sessionCalendar({
+            symbol: '',
+            exchange: this.sym?.exchange || this.exprLegExchange,
+            interval: this.interval,
+          })
+            ? {
+                bucketStart: (time) =>
+                  this.timeframes!.bucketStart(
+                    {
+                      symbol: this.sym?.symbol ?? '',
+                      exchange: this.sym?.exchange || this.exprLegExchange,
+                      interval: this.interval,
+                    },
+                    time
+                  ),
+              }
+            : {}),
+        })
       : null
     if (this.builder && this.rawBars.length) {
       this.builder.seed(this.rawBars[this.rawBars.length - 1])
@@ -6781,7 +6871,7 @@ export class TradingTerminal {
       from: to - lookbackDays(this.interval) * 86400,
       to,
     }
-    const inner = this.cachedBars ?? this.rest
+    const inner = this.timeframes?.feed ?? this.cachedBars ?? this.rest
     if (!inner) return false
     const feed = this.exprFeed ?? new ExpressionFeed(inner, () => this.exprLegExchange)
     let bars: readonly Bar[]
@@ -6883,7 +6973,7 @@ export class TradingTerminal {
     opts: { silent?: boolean; strict?: boolean },
     ticket: number
   ): Promise<boolean> {
-    const feed = this.cachedBars ?? this.rest
+    const feed = this.timeframes?.feed ?? this.cachedBars ?? this.rest
     if (!feed) return false
     /**
      * Claim this load. Two awaits follow -- the symbol lookup and the bars --
@@ -7053,9 +7143,17 @@ export class TradingTerminal {
   }
 
   /* ── toolbar setters (called by the React page) ───────────────────────── */
+  /** Native choices work without a calendar; custom choices require compatible source metadata. */
+  supportsInterval(code: string, exchange = this.sym?.exchange ?? 'NSE'): boolean {
+    return (
+      this.timeframes?.supports(code, { symbol: this.sym?.symbol ?? '', exchange }) ??
+      this.availableIntervals.includes(code)
+    )
+  }
+
   setInterval(iv: string): string {
     if (iv === this.interval) return iv
-    if (!this.availableIntervals.includes(iv)) {
+    if (!this.supportsInterval(iv)) {
       this.toast(`The connected feed does not support ${iv}`, 'err')
       return this.interval
     }
@@ -7091,6 +7189,7 @@ export class TradingTerminal {
     this.stopReplay()
     this.ctype = v
     this.lsSet('ctype', v)
+    this.cb.onChartTypeChange?.(v)
     if (interval !== this.interval) {
       this.setInterval(interval)
       this.toast(`Using ${interval} bars for ${CHART_TYPES[v].label}`, '')
@@ -7713,7 +7812,26 @@ export class TradingTerminal {
     } catch (error) {
       if (this.initialWorkspacePane) this.destroy()
       throw error
+    } finally {
+      this.settleReady()
     }
+  }
+
+  private settleReady: () => void = () => {}
+  private readonly ready = new Promise<void>((resolve) => {
+    this.settleReady = resolve
+  })
+
+  /**
+   * Settles once `init` has finished, whether or not it succeeded.
+   *
+   * The pane is handed to the page before its data feed exists and before it
+   * has loaded its remembered instrument. A symbol loaded from outside before
+   * this settles is either refused for want of a feed or overtaken by that
+   * first load, so a caller that is not reacting to a click waits for it.
+   */
+  whenReady(): Promise<void> {
+    return this.ready
   }
 
   private async initialize(): Promise<void> {
@@ -7732,7 +7850,38 @@ export class TradingTerminal {
       },
     })
     this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
-    this.exprFeed = new ExpressionFeed(this.cachedBars, () => this.exprLegExchange)
+    this.trade = new OpenAlgoTradeFeed({ baseUrl: '', apiKey: this.apiKey, strategy: STRATEGY })
+
+    // broker-supported intervals → the timeframe dropdown
+    let groups: IntervalGroup[]
+    let capabilitiesKnown = true
+    try {
+      const j = await this.api<{ data?: IntervalData }>('intervals')
+      groups = intervalGroups(j.data || {})
+    } catch (error) {
+      if (this.initialWorkspacePane) throw error
+      capabilitiesKnown = false
+      groups = intervalGroups({ minutes: ['1m', '5m', '15m'], hours: ['1h'], days: ['D'] })
+    }
+    // The pane may have closed while intervals loaded. Do not reopen its resources.
+    if (this.destroyed) {
+      if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
+      return
+    }
+    this.availableIntervals = groups.flatMap((group) => group.items)
+    const savedSymbol = this.initialWorkspacePane ?? savedInstrument(this.lsGet('symbol'))
+    const exchange = savedSymbol?.exchange ?? 'NSE'
+    await prepareSessionHours(this.apiKey, { symbol: '', exchange, interval: 'D' })
+    if (this.destroyed) return
+    this.timeframes = createTradingTimeframes(this.cachedBars, {
+      providerId: 'openalgo',
+      nativeIntervals: this.availableIntervals,
+      calendar: (request) => (capabilitiesKnown ? sessionCalendar(request) : null),
+      calendarRevision: sessionCalendarRevision,
+      prepare: (request) => prepareSessionHours(this.apiKey, request),
+      now: nowSec,
+    })
+    this.exprFeed = new ExpressionFeed(this.timeframes.feed, () => this.exprLegExchange)
     // Repair follows the stream: one small refresh a moment after each bar
     // closes, an immediate one when the stream skips a bucket, and each asks
     // history for the last few bars only. The 30-second poll stays, now as a
@@ -7753,23 +7902,7 @@ export class TradingTerminal {
     this.offData = this.data.subscribe((snapshot) => this.applyDataSnapshot(snapshot))
     document.addEventListener('visibilitychange', this.onVisibilityChange)
     this.onVisibilityChange()
-    this.trade = new OpenAlgoTradeFeed({ baseUrl: '', apiKey: this.apiKey, strategy: STRATEGY })
 
-    // broker-supported intervals → the timeframe dropdown
-    let groups: IntervalGroup[]
-    try {
-      const j = await this.api<{ data?: IntervalData }>('intervals')
-      groups = intervalGroups(j.data || {})
-    } catch (error) {
-      if (this.initialWorkspacePane) throw error
-      groups = intervalGroups({ minutes: ['1m', '5m', '15m'], hours: ['1h'], days: ['D'] })
-    }
-    // The pane may have closed while intervals loaded. Do not reopen its resources.
-    if (this.destroyed) {
-      if (this.initialWorkspacePane) throw new Error('Workspace preparation was cancelled')
-      return
-    }
-    this.availableIntervals = groups.flatMap((group) => group.items)
     if (this.initialWorkspacePane) {
       const pane = this.initialWorkspacePane
       // Only what this pane holds: the validation below reads the registry for
@@ -7779,7 +7912,10 @@ export class TradingTerminal {
       this.assertWorkspacePreparation()
       validateWorkspacePaneSupport(pane, {
         chartTypes: new Set(Object.keys(CHART_TYPES)),
-        intervals: new Set(this.availableIntervals),
+        intervals: new Set([
+          ...this.availableIntervals,
+          ...(this.supportsInterval(pane.interval, pane.exchange) ? [pane.interval] : []),
+        ]),
         indicators: new Set(registeredIndicators().map((study) => study.id)),
       })
       if (
@@ -7789,7 +7925,9 @@ export class TradingTerminal {
         throw new Error(`Unsupported workspace profile interval: ${pane.interval}`)
       this.interval = pane.interval
     } else {
-      this.interval = pickInterval(groups, this.lsGet('interval'))
+      const saved = this.lsGet('interval')
+      this.interval =
+        saved && this.supportsInterval(saved, exchange) ? saved : pickInterval(groups, saved)
     }
     if (!this.initialWorkspacePane && isProfileKind(this.ctype)) {
       const interval = this.compatibleProfileInterval(this.ctype)
@@ -7934,6 +8072,8 @@ export class TradingTerminal {
     this.offData = null
     this.data?.destroy()
     this.data = null
+    this.timeframes?.destroy()
+    this.timeframes = null
     this.detachAlerts()
     this.detachObjects()
     this.detachDrawing()

@@ -51,6 +51,27 @@ def test_auth_token(auth_token):
         return False, f"Error validating authentication: {str(e)}"
 
 
+def get_client_id(auth_token):
+    """The Dhan client id a token belongs to, as Dhan reports it, or None.
+
+    Read from the fund limits, which name the account. Used at login to check
+    the token is for the account whose client id is configured.
+    """
+    headers = {
+        "access-token": auth_token,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    try:
+        res = get_httpx_client().get(get_url("/v2/fundlimit"), headers=headers)
+        data = json.loads(res.text)
+    except Exception:
+        logger.exception("Could not read the Dhan account of a token")
+        return None
+    client_id = data.get("dhanClientId") if isinstance(data, dict) else None
+    return str(client_id) if client_id else None
+
+
 def get_margin_data(auth_token):
     """Fetch margin data from Dhan API using the provided auth token."""
     api_key = os.getenv("BROKER_API_KEY")

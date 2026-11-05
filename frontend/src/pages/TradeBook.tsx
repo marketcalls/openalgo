@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { ChartSymbolLink } from '@/components/trading/ChartSymbolLink'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -547,7 +548,9 @@ export default function TradeBook() {
                 <TableBody>
                   {sortedAndFilteredTrades.map((trade, index) => (
                     <TableRow key={`${trade.orderid}-${index}`}>
-                      <TableCell className="font-medium">{trade.symbol}</TableCell>
+                      <TableCell className="font-medium">
+                        <ChartSymbolLink symbol={trade.symbol} exchange={trade.exchange} />
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline">{trade.exchange}</Badge>
                       </TableCell>

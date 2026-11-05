@@ -872,6 +872,10 @@ def _sample_ciphertexts(db_path: str, limit: int = 20) -> list:
         ("api_keys", "api_key_encrypted"),
         ("users", "totp_secret"),
         ("flow_workflows", "api_key"),
+        ("broker_keys", "api_key"),
+        ("broker_keys", "api_secret"),
+        ("broker_keys", "api_key_market"),
+        ("broker_keys", "api_secret_market"),
     ]
     samples: list = []
     try:
@@ -948,6 +952,11 @@ def _migrate_fernet_db(env_path: str, pepper: str, new_salt: str) -> None:
         ("api_keys", "id", "api_key_encrypted"),
         ("users", "id", "totp_secret"),
         ("flow_workflows", "id", "api_key"),
+        # Broker keys saved in OpenAlgo (database/broker_keys_db.py).
+        ("broker_keys", "id", "api_key"),
+        ("broker_keys", "id", "api_secret"),
+        ("broker_keys", "id", "api_key_market"),
+        ("broker_keys", "id", "api_secret_market"),
     ]
 
     migrated = skipped = 0
@@ -1209,6 +1218,113 @@ def _generate_keys_on_first_run(env_path: str) -> None:
         )
 
 
+#: Secrets a new .env gets, each a fresh random value of the form the app uses.
+_NEW_ENV_SECRETS = {
+    "APP_KEY": lambda: secrets.token_hex(32),
+    "API_KEY_PEPPER": lambda: secrets.token_hex(32),
+    "FERNET_SALT": lambda: secrets.token_hex(16),
+}
+
+#: Broker lines a new .env leaves empty: the trader adds broker keys in
+#: OpenAlgo after signing in (Broker Configuration).
+_NEW_ENV_EMPTY = (
+    "BROKER_API_KEY",
+    "BROKER_API_SECRET",
+    "BROKER_API_KEY_MARKET",
+    "BROKER_API_SECRET_MARKET",
+    "REDIRECT_URL",
+)
+
+
+def create_env_from_sample(env_path: str, sample_path: str) -> bool:
+    """Create .env for a new install, from .sample.env, ready to start.
+
+    A first `uv run app.py` used to stop at "Error: .env file not found" until
+    the trader copied .sample.env by hand and replaced its placeholders. Now the
+    file is written for them: every setting as the sample has it, a fresh
+    APP_KEY, API_KEY_PEPPER and FERNET_SALT, and the broker lines empty so the
+    broker is added in OpenAlgo after signing in.
+
+    Only for a new install. When any database file already exists in db/, a new
+    pepper and salt would make every stored password, API key and broker token
+    unreadable, so nothing is written and the trader is told to restore their
+    .env.
+
+    The file is created with owner-only permissions where the platform has them
+    (it holds the keys), through a temporary file and an atomic rename, so an
+    interrupted start never leaves a half-written .env.
+
+    Args:
+        env_path: Where .env belongs.
+        sample_path: The .sample.env shipped with OpenAlgo.
+
+    Returns:
+        bool: True when .env was created.
+    """
+    if os.path.exists(env_path) or not os.path.isfile(sample_path):
+        return False
+
+    root = os.path.dirname(os.path.abspath(env_path))
+    db_dir = os.path.join(root, "db")
+    # Any database file means an existing install, whatever its name: a second
+    # instance keeps openalgo2.db, and logs.db or sandbox.db alone still hold
+    # data written under the old keys.
+    existing = (
+        sorted(name for name in os.listdir(db_dir) if name.endswith((".db", ".duckdb")))
+        if os.path.isdir(db_dir)
+        else []
+    )
+    if existing:
+        print("\nError: .env file not found, but this install already has a database.")
+        print("OpenAlgo will not create a new .env: new security keys would make your")
+        print("saved password, API key and broker sessions unreadable.")
+        print("\nSolution: restore your .env from a backup, or copy .sample.env to .env")
+        print("and put back the APP_KEY, API_KEY_PEPPER and FERNET_SALT you used before.")
+        return False
+
+    with open(sample_path, encoding="utf-8", newline="") as f:
+        lines = f.read().splitlines(keepends=True)
+
+    written = []
+    for line in lines:
+        stripped = line.lstrip()
+        key = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+        if stripped.startswith("#") or not key:
+            written.append(line)
+            continue
+        ending = "\r\n" if line.endswith("\r\n") else ("\n" if line.endswith("\n") else "")
+        if key in _NEW_ENV_SECRETS:
+            written.append(f"{key} = '{_NEW_ENV_SECRETS[key]()}'{ending}")
+        elif key in _NEW_ENV_EMPTY:
+            written.append(f"{key} = ''{ending}")
+        else:
+            written.append(line)
+
+    temp_path = f"{env_path}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write("".join(written))
+        os.replace(temp_path, env_path)
+    except OSError as e:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        print(f"\nError: .env file not found, and it could not be created ({e.strerror}).")
+        print("Solution: Copy .sample.env to .env and configure your settings")
+        return False
+
+    print("Created .env from .sample.env with new security keys (APP_KEY, API_KEY_PEPPER,")
+    print("FERNET_SALT). Keep it private and back it up: those keys protect your data.")
+    print("No broker is set in it. Sign in to OpenAlgo and add your broker keys in Broker Configuration.")
+    return True
+
+
+class _NoEnvBroker(Exception):
+    """The .env file sets no broker, so its REDIRECT_URL checks do not apply."""
+
+
 def load_and_check_env_variables() -> None:
     """
     Load environment variables from .env and check for required critical variables.
@@ -1219,6 +1335,13 @@ def load_and_check_env_variables() -> None:
     # Configure LLVMLITE/NUMBA paths FIRST (before any imports can trigger loading)
     # This fixes "failed to map segment from shared object" on hardened Linux servers
     configure_llvmlite_paths()
+
+    # A new install with no .env gets one, made from .sample.env with fresh
+    # security keys, before anything reads it.
+    project_root = os.path.join(os.path.dirname(__file__), "..")
+    create_env_from_sample(
+        os.path.join(project_root, ".env"), os.path.join(project_root, ".sample.env")
+    )
 
     # Check version compatibility
     if not check_env_version_compatibility():
@@ -1253,9 +1376,8 @@ def load_and_check_env_variables() -> None:
     # Define the required environment variables
     required_vars = [
         "ENV_CONFIG_VERSION",  # Version tracking for configuration compatibility
-        "BROKER_API_KEY",
-        "BROKER_API_SECRET",
-        "REDIRECT_URL",
+        # BROKER_API_KEY, BROKER_API_SECRET and REDIRECT_URL are optional: an
+        # install may keep its broker keys in OpenAlgo instead (Broker Configuration).
         "APP_KEY",
         "API_KEY_PEPPER",  # Added API_KEY_PEPPER as it's required for security
         "DATABASE_URL",
@@ -1296,6 +1418,17 @@ def load_and_check_env_variables() -> None:
     broker_api_key = os.getenv("BROKER_API_KEY", "")
     broker_api_secret = os.getenv("BROKER_API_SECRET", "")
     redirect_url = os.getenv("REDIRECT_URL", "")
+
+    # With no broker in .env, the trader adds broker keys in OpenAlgo after
+    # signing in. An empty REDIRECT_URL sets none, and so does the "<broker>"
+    # placeholder of a .env copied from .sample.env unchanged. The .env broker,
+    # when there is one, is validated below and always comes first.
+    env_sets_broker = bool(redirect_url.strip()) and "<broker>" not in redirect_url
+    if not env_sets_broker:
+        print(
+            "No broker is set in .env. Sign in to OpenAlgo and add your broker keys "
+            "in Broker Configuration."
+        )
 
     # Extract broker name from redirect URL for validation
     broker_name = None
@@ -1379,29 +1512,12 @@ def load_and_check_env_variables() -> None:
         print("Example: WEBSOCKET_PORT='8765'")
         sys.exit(1)
 
-    # Check REDIRECT_URL configuration
-    redirect_url = os.getenv("REDIRECT_URL")
-    default_value = "http://127.0.0.1:5000/<broker>/callback"
-
-    if redirect_url == default_value:
-        print("\nError: Default REDIRECT_URL detected in .env file.")
-        print("The application cannot start with the default configuration.")
-        print("\nPlease:")
-        print("1. Open your .env file")
-        print("2. Change the REDIRECT_URL to use your specific broker")
-        print("3. Save the file")
-        print("\nExample: If using Zerodha, change:")
-        print(f"  REDIRECT_URL = '{default_value}'")
-        print("to:")
-        print("  REDIRECT_URL = 'http://127.0.0.1:5000/zerodha/callback'")
-        sys.exit(1)
-
-    if "<broker>" in redirect_url:
-        print("\nError: Invalid REDIRECT_URL configuration detected.")
-        print("The application cannot start with '<broker>' in REDIRECT_URL.")
-        print("\nPlease update your .env file to use your specific broker name.")
-        print("Example: http://127.0.0.1:5000/zerodha/callback")
-        sys.exit(1)
+    # Check REDIRECT_URL configuration. The "<broker>" placeholder used to stop
+    # startup here; now it means no broker is set in .env (see env_sets_broker
+    # above), so a .env copied from .sample.env unchanged starts, with its
+    # placeholder keys already replaced by _generate_keys_on_first_run and
+    # _ensure_fernet_salt.
+    redirect_url = os.getenv("REDIRECT_URL") or ""
 
     # Validate broker name
     valid_brokers_str = os.getenv("VALID_BROKERS", "")
@@ -1415,6 +1531,9 @@ def load_and_check_env_variables() -> None:
 
     try:
         import re
+
+        if not env_sets_broker:
+            raise _NoEnvBroker
 
         match = re.search(r"/([^/]+)/callback$", redirect_url)
         if not match:
@@ -1431,6 +1550,8 @@ def load_and_check_env_variables() -> None:
             print("\nPlease update your REDIRECT_URL with a valid broker name.")
             sys.exit(1)
 
+    except _NoEnvBroker:
+        pass
     except Exception as e:
         print("\nError: Could not validate REDIRECT_URL format.")
         print(f"Details: {str(e)}")

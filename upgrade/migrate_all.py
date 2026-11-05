@@ -92,6 +92,9 @@ MIGRATIONS = [
     ("migrate_agent_voice.py", "Agent Voice Surface Settings"),
     ("migrate_agent_voice_phrase_removal.py", "Agent Voice Approval Phrase Removal"),
     ("migrate_alert_log.py", "Chart Alert Log (/trading alerts history)"),
+    ("migrate_qty_freeze_nov_2026.py", "NSE Index Freeze Limits (2 November 2026)"),
+    ("migrate_muhurat_2026.py", "Diwali Muhurat 2026 Published Timings"),
+    ("migrate_broker_keys.py", "Broker Keys, Session Sign-out and Broker Login State"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,

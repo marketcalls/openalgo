@@ -91,6 +91,18 @@ def _get_adapter_class(broker_name: str) -> type[BaseBrokerWebSocketAdapter]:
         raise ValueError(f"Unsupported broker: {broker_name}. No adapter available.") from e
 
 
+def _use_broker_keys(broker_name: str) -> None:
+    """Put the broker's keys in this process's environment; log, never raise."""
+    try:
+        from utils.broker_keys import BrokerKeysRefused, use_broker_keys
+
+        use_broker_keys(broker_name, check_live=False)
+    except BrokerKeysRefused as exc:
+        logger.warning(f"No keys for {broker_name} in this process: {exc}")
+    except Exception:
+        logger.exception(f"Could not put the {broker_name} keys in place")
+
+
 def create_broker_adapter(
     broker_name: str, use_pooling: bool | None = None
 ) -> BaseBrokerWebSocketAdapter | None:
@@ -117,6 +129,15 @@ def create_broker_adapter(
 
     # Get the adapter class
     adapter_class = _get_adapter_class(broker_name)
+
+    # The adapter reads the broker's keys from this process's environment when
+    # it initializes. Under gunicorn and Docker this proxy is its own process,
+    # so a login the app handled never reached this environment: put this
+    # broker's keys in place here (.env first, then the keys saved in
+    # OpenAlgo). Called after the import above, so the module's own .env
+    # loading cannot land on top of them. The broker comes from the stored
+    # session, so it is already the logged-in one.
+    _use_broker_keys(broker_name)
 
     if pooling_enabled:
         logger.info(

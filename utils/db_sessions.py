@@ -36,6 +36,7 @@ logger = get_logger(__name__)
 # (module path, attribute name) for every scoped_session in the project.
 SCOPED_SESSION_MODULES = [
     ("database.auth_db", "db_session"),
+    ("database.broker_keys_db", "db_session"),
     ("database.traffic_db", "logs_session"),
     ("database.apilog_db", "db_session"),
     ("database.latency_db", "latency_session"),

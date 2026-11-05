@@ -16,9 +16,16 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-# Retrieve the BROKER_API_KEY environment variable
-broker_api_key = os.getenv("BROKER_API_KEY")
-api_key, user_id, client_id = broker_api_key.split(":::")
+def _fivepaisa_keys():
+    """The app key, user id and client code packed in BROKER_API_KEY.
+
+    Read when a call is made, not at import: the broker's keys can be put in
+    place after startup (keys saved in OpenAlgo, utils/broker_keys.py), and a
+    key without the 'User_Key:::User_ID:::client_id' layout then fails the call
+    that needs it rather than the import of every 5paisa module.
+    """
+    api_key, user_id, client_id = (os.getenv("BROKER_API_KEY") or "").split(":::")
+    return api_key, user_id, client_id
 
 
 def normalize_exchange_for_query(symbol: str, exchange: str) -> str:
@@ -152,9 +159,9 @@ class BrokerData:
 
             # Prepare request payload
             json_data = {
-                "head": {"key": api_key},
+                "head": {"key": _fivepaisa_keys()[0]},
                 "body": {
-                    "ClientCode": client_id,
+                    "ClientCode": _fivepaisa_keys()[2],
                     "Exchange": map_exchange(exchange),
                     "ExchangeType": map_exchange_type(normalized_exchange),
                     "ScripCode": token,
@@ -229,9 +236,9 @@ class BrokerData:
 
             # Get market snapshot for overall data
             snapshot_data = {
-                "head": {"key": api_key},
+                "head": {"key": _fivepaisa_keys()[0]},
                 "body": {
-                    "ClientCode": client_id,
+                    "ClientCode": _fivepaisa_keys()[2],
                     "Data": [
                         {
                             "Exchange": map_exchange(exchange),
@@ -275,9 +282,9 @@ class BrokerData:
 
             # Get market depth data
             depth_data = {
-                "head": {"key": api_key},
+                "head": {"key": _fivepaisa_keys()[0]},
                 "body": {
-                    "ClientCode": client_id,
+                    "ClientCode": _fivepaisa_keys()[2],
                     "Exchange": map_exchange(exchange),
                     "ExchangeType": map_exchange_type(normalized_exchange),
                     "ScripCode": token,
@@ -379,9 +386,9 @@ class BrokerData:
 
             # Prepare request payload
             json_data = {
-                "head": {"key": api_key},
+                "head": {"key": _fivepaisa_keys()[0]},
                 "body": {
-                    "ClientCode": client_id,
+                    "ClientCode": _fivepaisa_keys()[2],
                     "Data": [
                         {
                             "Exchange": map_exchange(exchange),
@@ -563,8 +570,8 @@ class BrokerData:
 
         # Build request payload
         json_data = {
-            "head": {"key": api_key},
-            "body": {"ClientCode": client_id, "Data": data_array},
+            "head": {"key": _fivepaisa_keys()[0]},
+            "body": {"ClientCode": _fivepaisa_keys()[2], "Data": data_array},
         }
 
         # Get the shared httpx client

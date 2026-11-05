@@ -1,10 +1,33 @@
+/**
+ * The intraday P&L tracker: the day's MTM curve with its drawdown beneath it,
+ * the four summary cards above, and a screenshot of the lot.
+ *
+ * Drawn by openalgo-charts, the engine /trading uses, driven the way the other
+ * read-only charts drive it (`BacktestChart`, `CandleViz`): `createChart` on a
+ * host div, the app's theme tokens through `buildChartTheme`, and a theme
+ * change applied with `setTheme` rather than by rebuilding the chart.
+ *
+ * Times arrive from the backend as real UTC milliseconds. They become real UTC
+ * seconds here and nothing more: the engine labels them in IST itself, which
+ * is its default zone.
+ */
+
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import {
+  type Chart,
+  createChart,
+  type PriceLine,
+  type SeriesApi,
+  type SeriesStyle,
+  withAlpha,
+} from 'openalgo-charts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { buildChartTheme } from '@/lib/trading/chartTheme'
 import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { useThemeStore } from '@/stores/themeStore'
+import { type AppMode, type ThemeMode, useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 async function fetchCSRFToken(): Promise<string> {
@@ -17,34 +40,64 @@ async function fetchCSRFToken(): Promise<string> {
 
 // Use html2canvas-pro which has native oklch color support
 import html2canvas from 'html2canvas-pro'
-import {
-  BaselineSeries,
-  ColorType,
-  CrosshairMode,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-} from 'lightweight-charts'
 
 // PnL and drawdown are plotted in separate panes rather than sharing one price
 // scale. Drawdown is always <= 0 and usually an order of magnitude smaller than
 // MTM, so overlaying the two flattened both. Split 3:1 in favour of the PnL
 // curve, which is the one being read closely.
 const CHART_HEIGHT = 500
-const PNL_PANE_RATIO = 3
-const DRAWDOWN_PANE_RATIO = 1
-const PNL_PANE_HEIGHT = Math.round(
-  (CHART_HEIGHT * PNL_PANE_RATIO) / (PNL_PANE_RATIO + DRAWDOWN_PANE_RATIO)
-)
-const DRAWDOWN_PANE_HEIGHT = CHART_HEIGHT - PNL_PANE_HEIGHT
+const PNL_PANE_WEIGHT = 3
+const DRAWDOWN_PANE_WEIGHT = 1
 
-// Series colors deliberately mirror the metric cards above the chart, so each
-// card points at the series it summarises: green and red for MTM either side of
-// break-even, amber for drawdown. Tailwind 500-weight hex values, because the
-// canvas cannot parse the oklch CSS tokens the cards use.
-const COLOR_PROFIT = '#22c55e' // green-500, matches a positive Current MTM
-const COLOR_LOSS = '#ef4444' // red-500, matches a negative Current MTM
-const COLOR_DRAWDOWN = '#eab308' // yellow-500, matches the Max Drawdown card
+// Drawdown keeps the amber of the Max Drawdown card above the chart, so the
+// card points at the series it summarises. The theme has no token for it: its
+// colours that carry a meaning are profit and loss, and those are what the MTM
+// curve wears. Tailwind's yellow-500, as hex because the canvas cannot parse
+// the oklch the card's class resolves to.
+const COLOR_DRAWDOWN = '#eab308'
+
+/**
+ * The chart's palette and the MTM curve's colours for the current theme.
+ *
+ * The MTM curve is split at break-even in the theme's profit and loss colours,
+ * so the colour itself says whether the day is green or red and the crossing
+ * is obvious. Its value tag says where the day stands, green at or above zero
+ * and red below, not which way the last minute moved; the engine colours that
+ * tag from the theme's last-price pair, so the pair is set to the one colour.
+ */
+function chartLook(mode: ThemeMode, appMode: AppMode, lastPnl: number | null) {
+  const base = buildChartTheme(mode, appMode)
+  const standing = lastPnl !== null && lastPnl < 0 ? base.downColor : base.upColor
+  const pnl: SeriesStyle = {
+    baseValue: 0,
+    topColor: base.upColor,
+    bottomColor: base.downColor,
+    areaTopColor: withAlpha(base.upColor, 0.28),
+    areaBottomColor: withAlpha(base.downColor, 0.28),
+    lineWidth: 2,
+  }
+  return { theme: { ...base, lastPriceUp: standing, lastPriceDown: standing }, pnl }
+}
+
+// Drawdown is also baselined at zero so the fill hangs from break-even down to
+// the curve, which reads as depth rather than as a line floating in the middle
+// of the pane. It is never positive, so the top half is defined but unused.
+//
+// Its own value tag is off: the engine colours a series' tag from the theme's
+// last-price pair, which here means the MTM curve's green or red, and a green
+// tag on the drawdown would read as a profit. The current drawdown is marked
+// instead by an amber price line, `DRAWDOWN_LINE_ID`, kept at the last value.
+const DRAWDOWN_STYLE: SeriesStyle = {
+  baseValue: 0,
+  topColor: COLOR_DRAWDOWN,
+  bottomColor: COLOR_DRAWDOWN,
+  areaTopColor: withAlpha(COLOR_DRAWDOWN, 0),
+  areaBottomColor: withAlpha(COLOR_DRAWDOWN, 0.3),
+  lineWidth: 2,
+  lastValueVisible: false,
+  priceLineVisible: false,
+}
+const DRAWDOWN_LINE_ID = 'pnl-drawdown-now'
 
 interface PnLDataPoint {
   time: number
@@ -63,8 +116,8 @@ interface PnLData {
 }
 
 export default function PnLTracker() {
-  const { mode } = useThemeStore()
-  const isDarkMode = mode === 'dark'
+  const mode = useThemeStore((state) => state.mode)
+  const appMode = useThemeStore((state) => state.appMode)
   const { user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
 
@@ -83,205 +136,100 @@ export default function PnLTracker() {
   // Refs
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const screenshotContainerRef = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<IChartApi | null>(null)
-  const pnlSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
-  const drawdownSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
-  const watermarkRef = useRef<HTMLDivElement | null>(null)
-  // Stable ref for formatCurrency — always holds the latest function without
-  // being a useCallback/useEffect dependency.  The chart price formatter reads
-  // from this ref so it always uses the current broker format, while initChart
-  // does NOT need formatCurrency in its dependency array.  This prevents the
-  // cascade: user?.broker changes → formatCurrency new ref → initChart new ref
-  // → both useEffects fire → duplicate chart init + duplicate API requests.
+  const chartRef = useRef<Chart | null>(null)
+  const pnlSeriesRef = useRef<SeriesApi | null>(null)
+  const drawdownSeriesRef = useRef<SeriesApi | null>(null)
+  // The last MTM drawn, which decides the colour of its value tag.
+  const lastPnlRef = useRef<number | null>(null)
+  // The amber mark at the current drawdown, made with the first data.
+  const drawdownLineRef = useRef<PriceLine | null>(null)
+  // Stable ref for formatCurrency: always holds the latest function without
+  // being a useCallback/useEffect dependency. The chart price formatter reads
+  // from this ref so it always uses the current broker format, while the chart
+  // is built once and never rebuilt for a change of broker.
   const formatCurrencyRef = useRef(formatCurrency)
   useEffect(() => {
     formatCurrencyRef.current = formatCurrency
   }, [formatCurrency])
 
-  // Initialize chart
-  const initChart = useCallback(() => {
-    if (!chartContainerRef.current) return
+  // Apply the current theme, and the MTM curve's colours, to the live chart.
+  // Reads the store rather than taking the theme as an argument, so the data
+  // loader can call it without depending on the theme and refetching on a
+  // theme switch.
+  const applyLook = useCallback(() => {
+    const chart = chartRef.current
+    const pnlSeries = pnlSeriesRef.current
+    if (!chart || !pnlSeries) return
+    const { mode: m, appMode: a } = useThemeStore.getState()
+    const look = chartLook(m, a, lastPnlRef.current)
+    chart.setTheme(look.theme)
+    pnlSeries.applyOptions(look.pnl)
+  }, [])
 
-    // Remove existing chart
-    if (chartRef.current) {
-      chartRef.current.remove()
-      chartRef.current = null
-    }
-
-    // Remove existing watermark before creating a new one — prevents stacking
-    // multiple watermark divs when initChart is called more than once (e.g. on
-    // theme change or dependency array re-evaluation).
-    if (watermarkRef.current?.parentNode) {
-      watermarkRef.current.parentNode.removeChild(watermarkRef.current)
-      watermarkRef.current = null
-    }
-
+  // Built once. The engine tracks its container's size itself, so there is no
+  // resize listener, and a theme change is the effect below: the theme is read
+  // here for the first paint only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: theme excluded; handled by the re-theme effect
+  useEffect(() => {
     const container = chartContainerRef.current
+    if (!container) return
 
+    const look = chartLook(mode, appMode, lastPnlRef.current)
     const chart = createChart(container, {
-      width: container.offsetWidth,
-      height: CHART_HEIGHT,
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: isDarkMode ? '#a6adbb' : '#333',
-        panes: {
-          enableResize: true,
-          separatorColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-          separatorHoverColor: isDarkMode ? 'rgba(166, 173, 187, 0.4)' : 'rgba(0, 0, 0, 0.35)',
-        },
-      },
-      grid: {
-        vertLines: {
-          color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-          style: 1,
-          visible: true,
-        },
-        horzLines: {
-          color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-          style: 1,
-          visible: true,
-        },
-      },
-      rightPriceScale: {
-        borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-        scaleMargins: { top: 0.1, bottom: 0.1 },
-      },
-      timeScale: {
-        borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: number) => {
-          const date = new Date(time * 1000)
-          const istOffset = 5.5 * 60 * 60 * 1000
-          const istDate = new Date(date.getTime() + istOffset)
-          const hours = istDate.getUTCHours().toString().padStart(2, '0')
-          const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
-          return `${hours}:${minutes}`
-        },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: {
-          width: 1,
-          color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
-          style: 2,
-          labelVisible: false,
-        },
-        horzLine: {
-          width: 1,
-          color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
-          style: 2,
-          labelBackgroundColor: isDarkMode ? '#1f2937' : '#2563eb',
-        },
-      },
+      theme: look.theme,
+      ariaLabel: 'Intraday PnL curve and drawdown',
+      // A read-only report: the keyboard belongs to the page, and the hover
+      // zoom rail is chrome this chart does not need.
+      shortcuts: false,
+      timeNavigator: false,
     })
+    const money = (price: number) => formatCurrencyRef.current(price)
 
-    // Add watermark
-    const watermark = document.createElement('div')
-    watermark.style.position = 'absolute'
-    watermark.style.zIndex = '2'
-    watermark.style.color = isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.15)'
-    watermark.style.fontFamily = 'Arial, sans-serif'
-    watermark.style.fontSize = '48px'
-    watermark.style.fontWeight = 'bold'
-    watermark.style.userSelect = 'none'
-    watermark.style.pointerEvents = 'none'
-    watermark.textContent = 'OpenAlgo'
-    container.appendChild(watermark)
-    watermarkRef.current = watermark
+    // PnL in the upper pane, split at break-even.
+    const pnlSeries = chart.addSeries('baseline', {
+      paneIndex: 0,
+      priceScaleId: 'right',
+      style: look.pnl,
+      priceFormat: { type: 'custom', formatter: money },
+    })
+    pnlSeries.priceScale().setOptions({ marginTop: 0.1, marginBottom: 0.1 })
 
-    // Position watermark
-    const positionWatermark = () => {
-      if (!watermark || !container) return
-      // Centre within the PnL pane rather than the whole chart, so the 3:1 split
-      // does not leave the watermark straddling the pane separator.
-      //
-      // paneSize() reads live chart internals and throws once the chart has been
-      // disposed — which happens here, because this runs from a setTimeout and
-      // from the resize handler, both of which can outlive a re-init on theme
-      // change. Fall back to the configured height; the watermark is cosmetic
-      // and must never take the resize handler down with it.
-      let topPaneHeight = PNL_PANE_HEIGHT
-      try {
-        topPaneHeight = chart.paneSize(0).height || PNL_PANE_HEIGHT
-      } catch {
-        // Chart already disposed; the constant is still the right answer.
-      }
-      watermark.style.left = `${container.offsetWidth / 2 - watermark.offsetWidth / 2}px`
-      watermark.style.top = `${topPaneHeight / 2 - watermark.offsetHeight / 2}px`
-    }
-    setTimeout(positionWatermark, 0)
-
-    // PnL in the upper pane, split at break-even so the colour itself says
-    // whether the day is green or red, and the crossing point is obvious.
-    const pnlSeries = chart.addSeries(
-      BaselineSeries,
-      {
-        baseValue: { type: 'price', price: 0 },
-        topLineColor: COLOR_PROFIT,
-        topFillColor1: 'rgba(34, 197, 94, 0.28)',
-        topFillColor2: 'rgba(34, 197, 94, 0.02)',
-        bottomLineColor: COLOR_LOSS,
-        bottomFillColor1: 'rgba(239, 68, 68, 0.02)',
-        bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
-        lineWidth: 2,
-        priceScaleId: 'right',
-        priceFormat: {
-          type: 'custom',
-          formatter: (price: number) => formatCurrencyRef.current(price),
-        },
-      },
-      0
-    )
-
-    // Drawdown in its own pane. Also baselined at zero so the fill hangs from
-    // break-even down to the curve, which reads as depth rather than as a line
-    // floating in the middle of the pane.
-    const drawdownSeries = chart.addSeries(
-      BaselineSeries,
-      {
-        baseValue: { type: 'price', price: 0 },
-        // Drawdown is never positive; the top half is defined but unused.
-        topLineColor: COLOR_DRAWDOWN,
-        topFillColor1: 'rgba(234, 179, 8, 0)',
-        topFillColor2: 'rgba(234, 179, 8, 0)',
-        bottomLineColor: COLOR_DRAWDOWN,
-        bottomFillColor1: 'rgba(234, 179, 8, 0.04)',
-        bottomFillColor2: 'rgba(234, 179, 8, 0.30)',
-        lineWidth: 2,
-        priceScaleId: 'right',
-        priceFormat: {
-          type: 'custom',
-          formatter: (price: number) => formatCurrencyRef.current(price),
-        },
-      },
-      1
-    )
+    // Drawdown in its own pane, under the curve it measures.
+    const drawdownSeries = chart.addSeries('baseline', {
+      paneIndex: 1,
+      priceScaleId: 'right',
+      style: DRAWDOWN_STYLE,
+      priceFormat: { type: 'custom', formatter: money },
+    })
+    drawdownSeries.priceScale().setOptions({ marginTop: 0.1, marginBottom: 0.1 })
 
     // Adding the series creates the second pane; size them 3:1 now that it exists.
-    const panes = chart.panes()
-    if (panes.length > 1) {
-      panes[0].setHeight(PNL_PANE_HEIGHT)
-      panes[1].setHeight(DRAWDOWN_PANE_HEIGHT)
-    }
+    chart.setPaneWeight(0, PNL_PANE_WEIGHT)
+    chart.setPaneWeight(1, DRAWDOWN_PANE_WEIGHT)
 
     chartRef.current = chart
     pnlSeriesRef.current = pnlSeries
     drawdownSeriesRef.current = drawdownSeries
 
-    // Handle resize
-    const handleResize = () => {
-      if (chartRef.current && container) {
-        chartRef.current.applyOptions({ width: container.offsetWidth })
-        positionWatermark()
-      }
-    }
-    window.addEventListener('resize', handleResize)
-
     return () => {
-      window.removeEventListener('resize', handleResize)
+      chart.destroy()
+      // `destroy` releases the engine's listeners; clearing the host is what
+      // guarantees a remount starts on an empty div rather than stacking a
+      // second canvas on the first.
+      container.innerHTML = ''
+      chartRef.current = null
+      pnlSeriesRef.current = null
+      drawdownSeriesRef.current = null
+      drawdownLineRef.current = null
     }
-  }, [isDarkMode])
+  }, [])
+
+  // Re-theme the chart in place. No rebuild and no refetch: the data is the
+  // same whichever theme it is drawn in.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: applyLook reads the theme from the store; mode and appMode are the trigger
+  useEffect(() => {
+    applyLook()
+  }, [mode, appMode, applyLook])
 
   // Load PnL data
   const loadPnLData = useCallback(async () => {
@@ -315,17 +263,18 @@ export default function PnLTracker() {
           maxDrawdown: data.max_drawdown,
         })
 
-        // Update chart
+        // Update chart. Milliseconds to seconds, still real UTC: see the
+        // module docstring.
         if (pnlSeriesRef.current && data.pnl_series && Array.isArray(data.pnl_series)) {
           const pnlData = data.pnl_series
-            .map((point) => ({
-              time: Math.floor(point.time / 1000) as import('lightweight-charts').UTCTimestamp,
-              value: point.value,
-            }))
+            .map((point) => ({ time: Math.floor(point.time / 1000), value: point.value }))
             .sort((a, b) => a.time - b.time)
 
           if (pnlData.length > 0) {
             pnlSeriesRef.current.setData(pnlData)
+            lastPnlRef.current = pnlData[pnlData.length - 1].value
+            // The value tag follows where the day now stands.
+            applyLook()
           }
         }
 
@@ -335,19 +284,34 @@ export default function PnLTracker() {
           Array.isArray(data.drawdown_series)
         ) {
           const drawdownData = data.drawdown_series
-            .map((point) => ({
-              time: Math.floor(point.time / 1000) as import('lightweight-charts').UTCTimestamp,
-              value: point.value,
-            }))
+            .map((point) => ({ time: Math.floor(point.time / 1000), value: point.value }))
             .sort((a, b) => a.time - b.time)
 
           if (drawdownData.length > 0) {
             drawdownSeriesRef.current.setData(drawdownData)
+            // The current drawdown, marked in amber on its own axis.
+            const now = drawdownData[drawdownData.length - 1].value
+            const label = formatCurrencyRef.current(now)
+            if (drawdownLineRef.current) {
+              drawdownLineRef.current.setOptions({ price: now, label })
+            } else if (chartRef.current) {
+              drawdownLineRef.current = chartRef.current.addPriceLine(
+                {
+                  id: DRAWDOWN_LINE_ID,
+                  price: now,
+                  color: COLOR_DRAWDOWN,
+                  lineWidth: 1,
+                  dashed: true,
+                  label,
+                },
+                1
+              )
+            }
           }
         }
 
         if (chartRef.current) {
-          chartRef.current.timeScale().fitContent()
+          chartRef.current.fitContent()
         }
       } else {
         showToast.error(result.message || 'Failed to load PnL data', 'positions')
@@ -357,7 +321,7 @@ export default function PnLTracker() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [applyLook])
 
   // Take screenshot - html2canvas-pro supports oklch colors natively
   const takeScreenshot = async () => {
@@ -394,13 +358,36 @@ export default function PnLTracker() {
       // exported PNG does not sit on a colour the app never shows. Reading the
       // computed style also keeps it correct for any future theme.
       const pageBackground =
-        getComputedStyle(document.body).backgroundColor || (isDarkMode ? '#1f2937' : '#ffffff')
+        getComputedStyle(document.body).backgroundColor || (mode === 'dark' ? '#1f2937' : '#ffffff')
+
+      // The chart goes into the image as the engine's own export of itself,
+      // not as html2canvas' copy of its canvases. html2canvas copies a canvas
+      // by reading its pixels back, and the chart's canvases live for the whole
+      // visit, so from the second capture on Chrome flags every one of them
+      // for repeated readback. The engine's export is one fresh canvas per
+      // capture, with the axes and the corner mark already in it.
+      const chartHost = chartContainerRef.current
+      const chartImage = chartRef.current?.takeScreenshot().toDataURL('image/png') ?? null
 
       const canvas = await html2canvas(screenshotContainerRef.current, {
         backgroundColor: pageBackground,
         scale: 2,
         logging: false,
         useCORS: true,
+        ignoreElements: (element) =>
+          chartImage !== null &&
+          element instanceof HTMLCanvasElement &&
+          chartHost?.contains(element) === true,
+        onclone: (clonedDocument) => {
+          if (chartImage === null) return
+          const clonedHost = clonedDocument.querySelector('[data-pnl-chart]')
+          if (!clonedHost) return
+          const image = clonedDocument.createElement('img')
+          image.src = chartImage
+          image.alt = ''
+          image.style.cssText = 'position:absolute;inset:0;width:100%;height:100%'
+          clonedHost.appendChild(image)
+        },
       })
 
       canvas.toBlob(
@@ -431,33 +418,10 @@ export default function PnLTracker() {
     }
   }
 
-  // Initialize chart and load data
+  // Load the day once the chart above exists to take it.
   useEffect(() => {
-    const resizeCleanup = initChart()
     loadPnLData()
-
-    return () => {
-      // Remove the resize listener registered inside initChart
-      resizeCleanup?.()
-      if (chartRef.current) {
-        chartRef.current.remove()
-        chartRef.current = null
-      }
-      if (watermarkRef.current?.parentNode) {
-        watermarkRef.current.parentNode.removeChild(watermarkRef.current)
-        watermarkRef.current = null
-      }
-    }
-  }, [initChart, loadPnLData])
-
-  // Re-initialize chart on theme change
-  useEffect(() => {
-    if (chartRef.current) {
-      const resizeCleanup = initChart()
-      loadPnLData()
-      return resizeCleanup
-    }
-  }, [initChart, loadPnLData])
+  }, [loadPnLData])
 
   return (
     <div className="container mx-auto py-6 px-4">
@@ -594,7 +558,12 @@ export default function PnLTracker() {
             </div>
           </CardHeader>
           <CardContent>
-            <div ref={chartContainerRef} className="relative" style={{ height: '500px' }} />
+            <div
+              ref={chartContainerRef}
+              data-pnl-chart=""
+              className="relative"
+              style={{ height: CHART_HEIGHT }}
+            />
           </CardContent>
         </Card>
       </div>

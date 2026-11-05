@@ -106,3 +106,14 @@ describe('parseQuickInterval', () => {
     expect(parseQuickInterval('10s', [...BROKER, '10s'])).toEqual({ code: '10s' })
   })
 })
+
+describe('capability-aware quick intervals', () => {
+  it('accepts derived seven minutes and calendar multiples without accepting unavailable seconds', () => {
+    const accepts = (code: string) => ['7m', '2h', '3M', 'Q'].includes(code)
+    expect(parseQuickInterval('7', ['1m', 'D'], accepts)).toEqual({ code: '7m' })
+    expect(parseQuickInterval('2h', ['1m', 'D'], accepts)).toEqual({ code: '2h' })
+    expect(parseQuickInterval('3M', ['1m', 'D'], accepts)).toEqual({ code: '3M' })
+    expect(parseQuickInterval('Q', ['1m', 'D'], accepts)).toEqual({ code: 'Q' })
+    expect(parseQuickInterval('5s', ['1m', 'D'], accepts)).toHaveProperty('error')
+  })
+})

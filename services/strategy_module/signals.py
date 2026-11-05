@@ -42,7 +42,7 @@ from typing import Any
 import pytz
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, session, state
+from services.strategy_module import broker_binding, order_dispatch, session, state
 from utils.keyed_locks import KeyedLocks
 from utils.logging import get_logger
 
@@ -260,6 +260,7 @@ def _day_run_locked(strategy: Any) -> tuple[int | None, str | None]:
     mode = "live" if live_enabled else "sandbox"
     api_key = _api_key_for(user_id)
     broker = ""
+    broker_account = None
     if mode == "live" and api_key:
         try:
             from database.auth_db import get_auth_token_broker
@@ -267,6 +268,11 @@ def _day_run_locked(strategy: Any) -> tuple[int | None, str | None]:
             _token, broker = get_auth_token_broker(api_key)
         except Exception:
             logger.exception("Could not read the broker for a signal run")
+        # The day's orders are held to this broker and, when the session names
+        # one, this account. With no broker logged in yet the run records its
+        # mode, and its first Live order binds it (broker_binding).
+        if broker:
+            broker_account = order_dispatch.session_account(user_id)
 
     if not store.claim_strategy_for_run(strategy_id):
         # Something else opened one between the read above and here.
@@ -280,6 +286,7 @@ def _day_run_locked(strategy: Any) -> tuple[int | None, str | None]:
         mode=mode,
         broker=broker or mode,
         trigger_source="webhook",
+        broker_account=broker_account,
     )
     if not run:
         store.release_strategy(strategy_id)
@@ -722,6 +729,12 @@ def _place(
 
     run = store.get_run(run_id)
     mode = str(run.mode) if run else "sandbox"
+    # The run's broker, not the session's: a signal for a run that started on
+    # one broker is refused while OpenAlgo is logged in to another, and its
+    # claim is released below like any other refusal.
+    binding = (
+        broker_binding.for_run(run_id, api_key=api_key, user_id=user_id) if mode == "live" else None
+    )
 
     action = (
         order_dispatch.exit_action(position) if exiting else ("BUY" if position == "B" else "SELL")
@@ -839,7 +852,7 @@ def _place(
             severity="critical",
         )
 
-    result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+    result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order, binding=binding)
 
     if row_id is not None:
         from services.strategy_module.engine import _record_acknowledgement

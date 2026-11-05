@@ -54,6 +54,7 @@ interface Options {
   ws: OpenAlgoWsConfig
   onChange?: () => void
   now?: () => number
+  bucketStart?: (request: BarsRequest, time: number) => number | null
   /** How a comparison's price reads in its legend row. Two decimals by default. */
   formatPrice?: (value: number) => string
 }
@@ -458,6 +459,19 @@ export class TerminalComparisons {
                 volumeMode: 'ltq-sum',
                 sessionAnchorSec: last.time,
                 lateTickPolicy: 'dropOlderThanPrevBar',
+                ...(this.options.bucketStart
+                  ? {
+                      bucketStart: (time) =>
+                        this.options.bucketStart!(
+                          {
+                            symbol: entry.spec.symbol,
+                            exchange: entry.spec.exchange,
+                            interval: this.context!.interval,
+                          },
+                          time
+                        ) ?? last.time + Math.floor((time - last.time) / seconds) * seconds,
+                    }
+                  : {}),
               })
             : null
         if (last) entry.builder?.seed(last)
@@ -516,7 +530,12 @@ export class TerminalComparisons {
         : (this.options.now?.() ?? Math.floor(Date.now() / 1000))
     for (const entry of this.entries.values()) {
       if (event.symbol !== entry.spec.symbol || event.exchange !== entry.spec.exchange) continue
-      const update = entry.builder?.onTick({ time, price: event.ltp, ltq: event.ltq })
+      let update
+      try {
+        update = entry.builder?.onTick({ time, price: event.ltp, ltq: event.ltq })
+      } catch {
+        continue
+      } // Outside the known exchange session, keep the last candle.
       if (update) entry.data.pushBar(update.bar, { provisional: update.provisional })
     }
   }
@@ -598,7 +617,11 @@ export class TerminalComparisons {
     }
     this.selectedMode = mode
     this.controller?.setMode(this.engineMode())
-    if (rebasingMode(mode) === null && restoreMode !== null && scale?.options.mode !== restoreMode) {
+    if (
+      rebasingMode(mode) === null &&
+      restoreMode !== null &&
+      scale?.options.mode !== restoreMode
+    ) {
       scale?.setOptions({ mode: restoreMode })
     }
     this.syncAxis()

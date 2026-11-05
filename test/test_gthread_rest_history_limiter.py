@@ -136,11 +136,11 @@ def test_gthread_refusal_reaches_the_caller_as_a_429(monkeypatch):
     assert called == []
 
 
-def test_without_gthread_a_long_queue_waits_and_is_never_refused(monkeypatch):
+def test_without_gthread_a_long_queue_waits_and_is_never_refused(monkeypatch, module_sleep):
     monkeypatch.setattr(runtime, "gthread_active", lambda: False)
     monkeypatch.setattr(history_service, "_next_history_slot", time.monotonic() + 30)
     slept = []
-    monkeypatch.setattr(history_service.time, "sleep", lambda seconds: slept.append(seconds))
+    module_sleep(history_service, lambda seconds: slept.append(seconds))
 
     history_service._enforce_rate_limit()
 

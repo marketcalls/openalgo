@@ -8,11 +8,30 @@ catalogue kept showing ten models and a run kept getting a Cloudflare page.
 
 `test_an_openai_entry_for_the_same_name_does_not_block_registration` is that
 defect, and it fails on the guard that caused it.
+
+LiteLLM 1.106.6 ships every model the supplement used to add, so the real map
+is empty and every test here would pass on nothing. The fixture puts the last
+entry back beside whatever the map holds, so the guards keep running against
+the shape the next entry will have, and a real entry is still checked.
 """
 
 from types import SimpleNamespace
 
+import pytest
+
 from services.agent import chatgpt_models
+
+#: The last model the supplement carried before LiteLLM shipped it.
+STAND_IN = "gpt-6-astra"
+
+
+@pytest.fixture(autouse=True)
+def _a_supplement(monkeypatch):
+    monkeypatch.setattr(
+        chatgpt_models,
+        "SUPPLEMENTAL",
+        {STAND_IN: {"max_input_tokens": 922000}, **chatgpt_models.SUPPLEMENTAL},
+    )
 
 
 def _litellm(cost=None, by_provider=None):
@@ -58,7 +77,7 @@ class TestTheBareNameCollision:
         # belongs to a different provider.
         fake = _litellm(
             cost={
-                "gpt-6-astra": {
+                STAND_IN: {
                     "litellm_provider": "openai",
                     "input_cost_per_token": 2.5e-06,
                 }
@@ -67,27 +86,27 @@ class TestTheBareNameCollision:
 
         added = chatgpt_models.register(fake)
 
-        assert "chatgpt/gpt-6-astra" in added
-        assert fake.model_cost["chatgpt/gpt-6-astra"]["litellm_provider"] == "chatgpt"
+        assert f"chatgpt/{STAND_IN}" in added
+        assert fake.model_cost[f"chatgpt/{STAND_IN}"]["litellm_provider"] == "chatgpt"
 
     def test_the_openai_entry_is_left_exactly_as_it_was(self):
         openai_entry = {"litellm_provider": "openai", "input_cost_per_token": 2.5e-06}
-        fake = _litellm(cost={"gpt-6-astra": dict(openai_entry)})
+        fake = _litellm(cost={STAND_IN: dict(openai_entry)})
 
         chatgpt_models.register(fake)
 
-        assert fake.model_cost["gpt-6-astra"] == openai_entry
+        assert fake.model_cost[STAND_IN] == openai_entry
 
 
 class TestLitellmsOwnEntryWins:
     def test_a_real_chatgpt_entry_is_never_overwritten(self):
         shipped = {"litellm_provider": "chatgpt", "mode": "responses", "shipped": True}
-        fake = _litellm(cost={"chatgpt/gpt-6-astra": dict(shipped)})
+        fake = _litellm(cost={f"chatgpt/{STAND_IN}": dict(shipped)})
 
         added = chatgpt_models.register(fake)
 
-        assert "chatgpt/gpt-6-astra" not in added
-        assert fake.model_cost["chatgpt/gpt-6-astra"] == shipped
+        assert f"chatgpt/{STAND_IN}" not in added
+        assert fake.model_cost[f"chatgpt/{STAND_IN}"] == shipped
 
 
 class TestTheEntriesThemselves:

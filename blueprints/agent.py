@@ -823,8 +823,11 @@ def test_model(model_id: int):
     try:
         # Imported here rather than at module scope: importing litellm costs
         # seconds of process start-up, and every other route in this blueprint
-        # works without it.
-        import litellm
+        # works without it. Through the loader, so this first import cannot
+        # race the catalogue's and deadlock (services/agent/litellm_loader.py).
+        from services.agent import litellm_loader
+
+        litellm = litellm_loader.load()
 
         # Streamed, because streaming is the only way the agent ever runs a
         # model: `stream.py` calls `agent.run(stream=True)` and nothing else.

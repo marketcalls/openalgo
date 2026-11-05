@@ -21,6 +21,26 @@ class FyersDataMapper:
         """Initialize the data mapper"""
         pass
 
+    @staticmethod
+    def _price_scale(fyers_data: dict[str, Any]) -> tuple[int, int]:
+        """
+        Return (divisor, precision) that turn an HSM integer price into rupees.
+
+        The official SDK (fyers-apiv3 FyersWebsocket/data_ws.py) decodes every
+        scrip, depth and index price as raw / (10 ** precision * multiplier).
+        precision is per instrument: 2 for equity, F&O and commodity, 4 for
+        currency (USDINR ticks in 0.0025), so a fixed /100 left CDS/BCD prices
+        100x too large (USDINR 9574.25 on the socket vs 95.7425 from REST).
+        The index feed carries neither field, so the defaults keep it at /100.
+        """
+        precision = fyers_data.get("precision", 2)
+        multiplier = fyers_data.get("multiplier", 1)
+        if not multiplier or multiplier <= 0:
+            # The SDK would divide by zero here; never let a bad field zero or
+            # skip the conversion.
+            multiplier = 1
+        return (10**precision) * multiplier, precision
+
     def map_to_openalgo_ltp(self, fyers_data: dict[str, Any]) -> dict[str, Any] | None:
         """
         Map Fyers data to OpenAlgo LTP format
@@ -52,27 +72,8 @@ class FyersDataMapper:
                 f"LTP Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}"
             )
 
-            # Apply multiplier and precision to LTP
-            ltp = fyers_data.get("ltp", 0)
-            multiplier = fyers_data.get("multiplier", 100)  # Default 100
-            precision = fyers_data.get("precision", 2)  # Default 2
-
-            # Apply segment-specific conversion
-            segment_divisor = 1
-            if exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
-                # These exchanges send prices in paisa/paise format. CDS/BCD
-                # were missing here: currency ticks passed through 100x too
-                # large, and the sandbox WS fill path booked USDINR at 9654.75
-                # instead of 96.5475 (caught by live QA on 2026-07-23; the
-                # REST-quote fill path masked it because REST returns rupees).
-                segment_divisor = 100
-
-            # Convert to actual price
-            if multiplier > 0:
-                ltp = ltp / multiplier / segment_divisor
-
-            # Round to precision
-            ltp = round(ltp, precision)
+            divisor, precision = self._price_scale(fyers_data)
+            ltp = round(fyers_data.get("ltp", 0) / divisor, precision)
 
             # Map to OpenAlgo LTP format
             openalgo_data = {
@@ -117,41 +118,34 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
 
-            # Get multiplier and precision from data
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
-
-            # Check if this is an index based on symbol or type
-            is_index = (
-                "-INDEX" in symbol
-                or "-INDEX" in symbol.upper()
-                or "INDEX" in symbol.upper()
-                or fyers_data.get("type") == "if"  # Index feed type in HSM
-            )
-
-            # Apply segment-specific conversion
-            segment_divisor = 1
-            if not is_index and exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
-                # CDS/BCD included: currency feed is paise-scaled like the
-                # others (verified empirically -- see LTP mapping above).
-                segment_divisor = 100
+            divisor, precision = self._price_scale(fyers_data)
 
             def convert_price(value):
-                if not value or multiplier <= 0:
+                if not value:
                     return 0.0
-                # Apply multiplier and segment conversion
-                return round(value / multiplier / segment_divisor, precision)
+                return round(value / divisor, precision)
+
+            ltp = convert_price(fyers_data.get("ltp", 0))
+            prev_close = convert_price(fyers_data.get("prev_close_price", 0))
+
+            # The HSM frame carries no ch/chp fields; the official SDK derives
+            # them from ltp and prev_close_price, so do the same here
+            change = 0.0
+            change_percent = 0.0
+            if ltp and prev_close:
+                change = round(ltp - prev_close, precision)
+                change_percent = round(change / prev_close * 100, 2)
 
             # Map to OpenAlgo Quote format
             openalgo_data = {
                 "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
-                "ltp": convert_price(fyers_data.get("ltp", 0)),
+                "ltp": ltp,
                 "open": convert_price(fyers_data.get("open_price", 0)),
                 "high": convert_price(fyers_data.get("high_price", 0)),
                 "low": convert_price(fyers_data.get("low_price", 0)),
-                "close": convert_price(fyers_data.get("prev_close_price", 0)),
+                "close": prev_close,
                 "bid_price": convert_price(fyers_data.get("bid_price", 0)),
                 "ask_price": convert_price(fyers_data.get("ask_price", 0)),
                 "bid_size": fyers_data.get("bid_size", 0),
@@ -166,8 +160,8 @@ class FyersDataMapper:
                 "last_trade_quantity": fyers_data.get("last_traded_qty", 0),
                 "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
                 "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
-                "change": convert_price(fyers_data.get("ch", 0)),
-                "change_percent": fyers_data.get("chp", 0),
+                "change": change,
+                "change_percent": change_percent,
                 "timestamp": int(time.time()),
                 "data_type": "Quote",
             }
@@ -205,23 +199,11 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
 
-            # Apply multiplier and precision
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
-
-            # Apply segment-specific conversion based on exchange
-            segment_divisor = 1
-            if exchange in ("BSE", "MCX", "NSE", "NFO", "CDS", "BCD"):
-                # All paise-scaled segments, including currency (CDS/BCD --
-                # previously missing, which let 100x-scaled depth prices
-                # through to the sandbox fill path).
-                segment_divisor = 100
+            divisor, precision = self._price_scale(fyers_data)
 
             def convert_price(value):
-                if value and multiplier > 0:
-                    # First apply the multiplier conversion, then segment-specific conversion
-                    price = value / multiplier / segment_divisor
-                    return round(price, precision)
+                if value:
+                    return round(value / divisor, precision)
                 return 0.0
 
             # Build buy and sell arrays (matching other brokers' format)
@@ -255,17 +237,13 @@ class FyersDataMapper:
                         }
                     )
 
-            # Calculate LTP (average of best bid and ask if available)
-            ltp = 0
-            if buy_levels and sell_levels:
-                ltp = (buy_levels[0]["price"] + sell_levels[0]["price"]) / 2
-
-            # Map to OpenAlgo Depth format (matching other brokers)
+            # Map to OpenAlgo Depth format (matching other brokers). A Fyers
+            # depth message has no LTP, so none is set here: the adapter adds
+            # the real one from the quote feed when it has it.
             openalgo_data = {
                 "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
-                "ltp": ltp,
                 "depth": {"buy": buy_levels, "sell": sell_levels},
                 "timestamp": int(time.time()),
                 "data_type": "Depth",
@@ -300,24 +278,12 @@ class FyersDataMapper:
             buy_levels = tbt_depth.get("buy", [])
             sell_levels = tbt_depth.get("sell", [])
 
-            # Calculate LTP from best bid/ask
-            ltp = 0
-            if buy_levels and sell_levels:
-                best_bid = buy_levels[0]["price"] if buy_levels else 0
-                best_ask = sell_levels[0]["price"] if sell_levels else 0
-                if best_bid > 0 and best_ask > 0:
-                    ltp = (best_bid + best_ask) / 2
-                elif best_bid > 0:
-                    ltp = best_bid
-                elif best_ask > 0:
-                    ltp = best_ask
-
-            # Map to OpenAlgo Depth format
+            # Map to OpenAlgo Depth format. TBT depth has no LTP; the adapter
+            # adds the real one from the quote feed when it has it.
             openalgo_data = {
                 "symbol": symbol,
                 "exchange": exchange,
                 "token": ticker,
-                "ltp": round(ltp, 2),
                 "depth": {"buy": buy_levels, "sell": sell_levels},
                 "total_buy_qty": tbt_depth.get("total_buy_qty", 0),
                 "total_sell_qty": tbt_depth.get("total_sell_qty", 0),
@@ -334,10 +300,11 @@ class FyersDataMapper:
             logger.debug(f"Error mapping TBT Depth data: {e}")
             return None
 
-    def map_index_to_synthetic_depth(self, fyers_data: dict[str, Any]) -> dict[str, Any] | None:
+    def map_index_to_depth(self, fyers_data: dict[str, Any]) -> dict[str, Any] | None:
         """
-        Map Fyers index data to synthetic OpenAlgo Depth format
-        Since indices don't have real depth, create synthetic depth from quote data
+        Map Fyers index data to OpenAlgo Depth format
+        An index has no order book, so the depth levels are empty and only the
+        real index value is sent
 
         Args:
             fyers_data: Raw index data from Fyers HSM WebSocket
@@ -371,46 +338,8 @@ class FyersDataMapper:
             if not raw_ltp:
                 return None
 
-            # Apply multiplier and precision conversion for index data
-            multiplier = fyers_data.get("multiplier", 100)
-            precision = fyers_data.get("precision", 2)
-
-            # For indices, apply proper price conversion
-            if multiplier > 0:
-                ltp = round(raw_ltp / multiplier, precision)
-            else:
-                ltp = raw_ltp
-
-            # Create synthetic depth levels around LTP
-            # For indices, we'll create small bid-ask spreads around the LTP
-            spread_bps = 5  # 0.05% spread on each side
-            spread = ltp * spread_bps / 10000
-
-            # Create 5 synthetic bid levels (decreasing prices)
-            buy_levels = []
-            for i in range(5):
-                level_spread = spread * (i + 1)
-                buy_price = round(ltp - level_spread, 2)
-                buy_levels.append(
-                    {
-                        "price": buy_price,
-                        "quantity": 1000 * (6 - i),  # Higher quantity at better prices
-                        "orders": 1,
-                    }
-                )
-
-            # Create 5 synthetic ask levels (increasing prices)
-            sell_levels = []
-            for i in range(5):
-                level_spread = spread * (i + 1)
-                ask_price = round(ltp + level_spread, 2)
-                sell_levels.append(
-                    {
-                        "price": ask_price,
-                        "quantity": 1000 * (6 - i),  # Higher quantity at better prices
-                        "orders": 1,
-                    }
-                )
+            divisor, precision = self._price_scale(fyers_data)
+            ltp = round(raw_ltp / divisor, precision)
 
             # Map to OpenAlgo Depth format
             openalgo_data = {
@@ -418,7 +347,7 @@ class FyersDataMapper:
                 "exchange": exchange,
                 "token": fyers_data.get("exchange_token", ""),
                 "ltp": ltp,
-                "depth": {"buy": buy_levels, "sell": sell_levels},
+                "depth": {"buy": [], "sell": []},
                 "timestamp": int(time.time()),
                 "data_type": "Depth",
             }
@@ -426,7 +355,7 @@ class FyersDataMapper:
             return openalgo_data
 
         except Exception as e:
-            logger.debug(f"Error mapping Index to synthetic Depth data: {e}")
+            logger.debug(f"Error mapping Index to Depth data: {e}")
             return None
 
     def map_fyers_data(
@@ -455,8 +384,8 @@ class FyersDataMapper:
         elif requested_type == "Depth" and fyers_type == "dp":
             return self.map_to_openalgo_depth(fyers_data)
         elif requested_type == "Depth" and fyers_type == "if":
-            # Index depth request - create synthetic depth from index data
-            return self.map_index_to_synthetic_depth(fyers_data)
+            # Index depth request - indices have no order book
+            return self.map_index_to_depth(fyers_data)
         elif fyers_type == "sf":
             # Default to Quote for symbol feed
             return self.map_to_openalgo_quote(fyers_data)

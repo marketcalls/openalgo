@@ -33,7 +33,7 @@ It is several products sharing one broker session:
 | Unified Broker API | `/api/v1/` | REST API used by TradingView, Amibroker, Excel, Python, MCP clients |
 | Python Strategy Host | `/python` | In-browser editor, strategies run as scheduled subprocesses |
 | Flow (no-code builder) | `/flow` | Node graph: market data to indicators to conditions to orders |
-| Options and Portfolio tools | `/tools` | 18 analytics tools (option chain, Greeks, max pain, backtesters) |
+| Options and Portfolio tools | `/tools` | 20 analytics tools (option chain, Greeks, max pain, backtesters) |
 | Charting Terminal | `/trading` | Chart based trading |
 | Scalping Terminal | `/scalping` | Keyboard driven options scalping |
 

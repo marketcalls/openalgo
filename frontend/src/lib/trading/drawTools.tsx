@@ -1,6 +1,8 @@
 /** The host owns grouping; names and glyphs come from the pinned chart package. */
 import type { ReactNode } from 'react'
-import { DRAW_TOOL_ICON_ATTRS, DRAW_TOOL_METADATA } from './drawingToolMetadata'
+import { RAIL_TOOL_PATHS } from './chromeIcons'
+import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
+import { toolGlyph } from './glyphs'
 
 export interface DrawToolDef {
   id: string | null
@@ -215,46 +217,15 @@ export const DRAW_GROUPS: DrawGroupDef[] = [
   },
 ]
 
-/** Render public path data as React elements, keeping SVG attributes consistent. */
-export function drawToolIcon(iconKey: string): ReactNode {
-  const metadata = DRAW_TOOL_METADATA[iconKey]
-  if (metadata) {
-    return (
-      <svg {...DRAW_TOOL_ICON_ATTRS} strokeWidth={1.5} aria-hidden="true">
-        <path d={metadata.path} />
-      </svg>
-    )
-  }
-  const s = {
-    fill: 'none' as const,
-    stroke: 'currentColor',
-    strokeWidth: 1.5,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-  }
-  switch (iconKey) {
-    case 'cursor':
-      return (
-        <svg viewBox="0 0 24 24" {...s}>
-          <path d="M12 3v5M12 16v5M3 12h5M16 12h5" />
-          <circle cx="12" cy="12" r="1.2" />
-        </svg>
-      )
-    case 'lock':
-      return (
-        <svg viewBox="0 0 24 24" {...s}>
-          <rect x="5" y="10.5" width="14" height="9" rx="2" />
-          <path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3" />
-        </svg>
-      )
-    case 'magnet':
-      return (
-        <svg viewBox="0 0 24 24" {...s}>
-          <path d="M6 4v6a4 4 0 0 0 8 0V4" />
-          <path d="M6 4h3v6M11 4h3v6" />
-        </svg>
-      )
-    default:
-      return null
-  }
+/**
+ * Render public path data as React elements, keeping SVG attributes consistent.
+ *
+ * `size` is the box the glyph is shown in, so the stroke can keep the engine's
+ * line at any size: the rail shows tools at the 20px they are drawn for, a
+ * menu row at 16px. The cursor and magnet are the engine's rail glyphs, on the
+ * same grid as the tools rather than hand-drawn beside them.
+ */
+export function drawToolIcon(iconKey: string, size?: number, className?: string): ReactNode {
+  const path = DRAW_TOOL_METADATA[iconKey]?.path ?? RAIL_TOOL_PATHS[iconKey]
+  return path ? toolGlyph(path, iconKey, size, className) : null
 }

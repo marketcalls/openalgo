@@ -2,7 +2,7 @@
 
 Covers the matrix:
   - 14-Apr-2026: NSE/BSE/NFO/BFO/CDS/BCD closed, MCX evening 17:00-23:55
-  - 8-Nov-2026 (Sunday): SPECIAL_SESSION (Diwali Muhurat) 18:00-19:15 NSE/BSE
+  - 8-Nov-2026 (Sunday): SPECIAL_SESSION (Diwali Muhurat) 14:20-15:30 NSE/BSE
   - Plain Sunday: only CRYPTO trades
   - CRYPTO is unaffected by all of the above
 

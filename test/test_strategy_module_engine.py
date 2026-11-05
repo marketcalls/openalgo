@@ -847,6 +847,8 @@ def test_stop_cancels_a_working_entry_through_run_mode_then_polls_terminal_fact(
             "mode": "sandbox",
             "api_key": "test-api-key",
             "broker_order_id": "SB-1",
+            # A sandbox run is bound to no broker.
+            "binding": None,
         }
         return DispatchResult(ok=True, broker_order_id="SB-1", response={})
 
@@ -856,6 +858,8 @@ def test_stop_cancels_a_working_entry_through_run_mode_then_polls_terminal_fact(
             "mode": "sandbox",
             "api_key": "test-api-key",
             "broker_order_id": "SB-1",
+            # A sandbox run is bound to no broker.
+            "binding": None,
         }
         return SimpleNamespace(
             ok=True,
@@ -926,8 +930,12 @@ def test_stop_cancel_success_polling_a_partial_fill_exits_only_authoritative_qua
 
     assert result["ok"] is True
     assert result["stop_pending"] is True
-    cancel.assert_called_once_with(mode="sandbox", api_key="test-api-key", broker_order_id="SB-1")
-    poll.assert_called_once_with(mode="sandbox", api_key="test-api-key", broker_order_id="SB-1")
+    cancel.assert_called_once_with(
+        mode="sandbox", api_key="test-api-key", broker_order_id="SB-1", binding=None
+    )
+    poll.assert_called_once_with(
+        mode="sandbox", api_key="test-api-key", broker_order_id="SB-1", binding=None
+    )
     assert exit_orders[0]["quantity"] == "25"
     entry = next(row for row in store.list_orders(run_id) if row["kind"] == "entry")
     assert entry["status"] == "complete"

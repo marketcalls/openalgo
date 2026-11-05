@@ -69,7 +69,7 @@ The PnL (Profit & Loss) Tracker provides real-time intraday P&L monitoring by co
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  P&L Chart (LightWeight Charts)                                     │   │
+│  │  P&L Chart (openalgo-charts)                                        │   │
 │  │                                                                      │   │
 │  │       ₹                                                              │   │
 │  │    4000│        ╭──────╮                                            │   │
@@ -284,8 +284,8 @@ The PnL tracker relies on these services (no dedicated database):
 The React frontend:
 - Polls `/pnltracker/api/pnl` periodically
 - Renders metrics cards (current MTM, max, min, drawdown)
-- Uses LightWeight Charts for interactive P&L visualization
-- Shows separate drawdown chart below main chart
+- Draws the P&L curve with openalgo-charts, the engine the /trading terminal uses
+- Shows the drawdown in its own pane below the P&L curve, on the same time axis
 
 ### Legacy Compatibility Route
 

@@ -14,6 +14,7 @@ workspace/
     feeds/        live WebSocket       (/live-feed)
     data/         cached OHLCV
     output/       rendered .html / .png / .csv
+  execution/    /python strategies, by the python-strategy skill
   research/     ad-hoc analysis, notebooks, one-off scripts
   backtests/    backtest runs and their results
   notes/        working notes

@@ -919,7 +919,7 @@ def is_daily_aggregated_interval(interval: str) -> bool:
         return False
 
     # Weekly, Monthly, Quarterly, Yearly need aggregation from D data
-    return parsed["type"] in ("weekly", "monthly", "quarterly", "yearly")
+    return interval != "D" and parsed["type"] in ("daily", "weekly", "monthly", "quarterly", "yearly")
 
 
 def get_ohlcv(
@@ -1183,49 +1183,25 @@ def _get_daily_aggregated_ohlcv(
         # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
         ist_offset = 19800
 
-        # Build the GROUP BY expression based on interval type
-        if interval_type == "weekly":
-            # Group by ISO week number, adjusting for multi-week intervals
-            # ISO week starts on Monday
-            if interval_value == 1:
-                group_expr = f"DATE_TRUNC('week', to_timestamp(timestamp + {ist_offset}))"
-            else:
-                # For multi-week intervals, group weeks together
-                group_expr = f"""
-                    DATE_TRUNC('week', to_timestamp(timestamp + {ist_offset})) -
-                    INTERVAL ((EXTRACT(WEEK FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) WEEK
-                """
-        elif interval_type == "monthly":
-            # Group by calendar month
-            if interval_value == 1:
-                group_expr = f"DATE_TRUNC('month', to_timestamp(timestamp + {ist_offset}))"
-            else:
-                # For multi-month intervals, group months together
-                group_expr = f"""
-                    DATE_TRUNC('month', to_timestamp(timestamp + {ist_offset})) -
-                    INTERVAL ((EXTRACT(MONTH FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) MONTH
-                """
-        elif interval_type == "quarterly":
-            # Group by calendar quarter (3 months)
-            months = parsed.get("months", 3)
-            if months == 3:
-                group_expr = f"DATE_TRUNC('quarter', to_timestamp(timestamp + {ist_offset}))"
-            else:
-                # For multi-quarter intervals
-                group_expr = f"""
-                    DATE_TRUNC('quarter', to_timestamp(timestamp + {ist_offset})) -
-                    INTERVAL ((EXTRACT(QUARTER FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) QUARTER
-                """
-        elif interval_type == "yearly":
-            # Group by calendar year
-            if interval_value == 1:
-                group_expr = f"DATE_TRUNC('year', to_timestamp(timestamp + {ist_offset}))"
-            else:
-                # For multi-year intervals
-                group_expr = f"""
-                    DATE_TRUNC('year', to_timestamp(timestamp + {ist_offset})) -
-                    INTERVAL ((EXTRACT(YEAR FROM to_timestamp(timestamp + {ist_offset})) % {interval_value})) YEAR
-                """
+        # Use continuous civil-day and absolute-month anchors. Restarting a
+        # multiple at January splits one candle across two calendar years.
+        instant = f"to_timestamp(timestamp + {ist_offset})"
+        if interval_type in ("daily", "weekly"):
+            days = interval_value * (7 if interval_type == "weekly" else 1)
+            anchor = 4 if interval_type == "weekly" else 0  # Monday 1970-01-05
+            group_expr = (
+                f"DATE_TRUNC('day', {instant}) - "
+                f"((FLOOR((timestamp + {ist_offset}) / 86400) - {anchor}) "
+                f"% {days})::BIGINT * INTERVAL '1 day'"
+            )
+        elif interval_type in ("monthly", "quarterly", "yearly"):
+            months = parsed["months"]
+            group_expr = (
+                f"DATE_TRUNC('month', {instant}) - "
+                f"((EXTRACT(YEAR FROM {instant}) * 12 + "
+                f"EXTRACT(MONTH FROM {instant}) - 1) % {months})::BIGINT "
+                "* INTERVAL '1 month'"
+            )
         else:
             logger.error(f"Unsupported interval type for daily aggregation: {interval_type}")
             return pd.DataFrame()

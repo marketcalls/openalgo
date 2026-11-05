@@ -90,7 +90,7 @@ class SandboxOrders(Base):
     rejection_reason = Column(Text, nullable=True)
     margin_blocked = Column(
         DECIMAL(10, 2), nullable=True, default=0.00
-    )  # Margin blocked at order placement
+    )  # NULL means a recorded zero; migrated legacy rows retain default zero
     # Set only on an order a GTT leg placed, and written in the same INSERT as
     # the order itself. That atomicity is the point: SandboxGTTLeg.triggered_order_id
     # is written in a later commit, so a crash in between would leave the order

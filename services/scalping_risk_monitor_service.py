@@ -236,6 +236,11 @@ class ScalpingRiskMonitor:
     def is_running(self) -> bool:
         return self._ws is not None and getattr(self._ws, "connected", False)
 
+    def protected_count(self) -> int:
+        """How many positions a stop or target is watching now."""
+        with self._lock:
+            return len(self._states)
+
     # ------------------------------------------------------------------ sync (event)
     def sync(self) -> None:
         """Reconcile watched symbols with the active SL states.

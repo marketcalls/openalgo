@@ -294,6 +294,7 @@ def load_prices(
     broker: str | None = None,
     min_sessions: int = 2,
     allowed_exchanges: tuple[str, ...] = SUPPORTED_EXCHANGES,
+    cache: bool = True,
 ) -> PriceMatrix:
     """
     Load closes for ``symbols`` into one aligned matrix.
@@ -302,6 +303,11 @@ def load_prices(
     ``source`` is ``'db'`` (Historify/DuckDB) or ``'api'`` (broker) and is the
     caller's choice, never inferred -- the two answer differently and a result
     has to be able to say which it used.
+
+    ``cache=False`` skips the matrix cache for a caller that keeps its own
+    expiring one. The cache here never expires within a day, which suits a
+    backtest re-reading one window, but not a view that should pick up a
+    Historify download made a minute ago.
 
     Raises ``MissingHistory`` if any symbol is empty for the window, and
     ``UnsupportedExchange`` for anything outside NSE/BSE.
@@ -326,12 +332,13 @@ def load_prices(
         min_sessions,
     )
     if source == "db":
-        with _cache_lock:
-            hit = _cache.get(key)
-            if hit is not None:
-                _cache.move_to_end(key)
-                logger.debug("portfolio.data: cache hit for %s", ",".join(symbols))
-                return hit
+        if cache:
+            with _cache_lock:
+                hit = _cache.get(key)
+                if hit is not None:
+                    _cache.move_to_end(key)
+                    logger.debug("portfolio.data: cache hit for %s", ",".join(symbols))
+                    return hit
 
         # One query, all symbols. See the module docstring for why this does
         # not go through the history service.
@@ -340,7 +347,8 @@ def load_prices(
             logger.debug(
                 "portfolio.data: %s bars for %s from duckdb", len(series[symbol]), symbol
             )
-        return _remember(key, _assemble(series, symbols, start_date, end_date, source, min_sessions))
+        matrix = _assemble(series, symbols, start_date, end_date, source, min_sessions)
+        return _remember(key, matrix) if cache else matrix
 
     series = {}
     for symbol, ex in zip(symbols, checked, strict=True):

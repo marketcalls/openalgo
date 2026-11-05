@@ -1,7 +1,7 @@
 /**
  * Bridges the app's shadcn CSS theme tokens into an openalgo-charts `ChartTheme`
  * so the canvas chrome (background, grid, axes, crosshair) matches whatever
- * theme the app is in — live light, live dark, or the analyzer violet palette.
+ * theme the app is in: live light, live dark, or the analyzer violet palette.
  *
  * Tokens are oklch, which the canvas color parser doesn't read; we resolve each
  * to a plain rgb() string by painting it onto a 1×1 canvas and reading the pixel
@@ -100,16 +100,98 @@ export function isLightTheme(mode: ThemeMode, appMode: AppMode): boolean {
   return appMode === 'live' && mode === 'light'
 }
 
-/** Build the canvas theme from the base palette + the app's live token colors. */
+/**
+ * The candle pair for each ground.
+ *
+ * Tuned rather than taken from the engine's defaults, which are one pair for
+ * every host. On a near-black or navy ground both colours sit at the same
+ * lightness, so neither direction shouts over the other, and both clear 6:1
+ * against the background. On white they are a step darker, because the
+ * last-price tag prints white text on them and has to stay readable (4.6:1
+ * and 4.9:1). The analyzer shares the dark pair: the mode is told by its
+ * violet chrome, and an up candle must mean the same thing in both.
+ */
+export const CANDLE_PAIRS = {
+  dark: { up: '#14b887', down: '#f0525f' },
+  light: { up: '#00855d', down: '#d42f34' },
+} as const
+
+/** How far the grid sits from the background towards the text colour. */
+const GRID_STEP = { dark: 0.06, light: 0.055 }
+
+/** WCAG contrast ratio of two colours this module can read, or 0 when it cannot. */
+export function contrastRatio(a: string, b: string): number {
+  const x = parseRgb(a)
+  const y = parseRgb(b)
+  if (!x || !y) return 0
+  const lum = (c: [number, number, number]) => {
+    const [r, g, bl] = c.map((v) => {
+      const n = v / 255
+      return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4
+    })
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl
+  }
+  const [hi, lo] = [lum(x), lum(y)].sort((m, n) => n - m)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/** `color` at `alpha`, for the two forms this module reads; anything else is kept as it is. */
+function withAlpha(color: string, alpha: number): string {
+  const c = parseRgb(color)
+  return c ? `rgba(${c[0]},${c[1]},${c[2]},${alpha})` : color
+}
+
+/**
+ * Build the canvas theme from the base palette and the app's live tokens.
+ *
+ * Every surface comes from the app's own tokens, so the chart sits inside the
+ * chrome of whichever mode is on rather than beside it. The accent is the
+ * app's primary: the operator's neutral or colour in Live and the violet in
+ * Analyze. It is the line chart's colour and its gradient, the crosshair's
+ * value pills, a new drawing's default colour, and, through the bottom bar's
+ * tokens, that bar's active buttons, so one switch of mode recolours all of
+ * them together.
+ */
 export function buildChartTheme(mode: ThemeMode, appMode: AppMode): ChartTheme {
-  const base = isLightTheme(mode, appMode) ? lightTheme : darkTheme
+  const light = isLightTheme(mode, appMode)
+  const base = light ? lightTheme : darkTheme
+  const pair = light ? CANDLE_PAIRS.light : CANDLE_PAIRS.dark
+  const background = token('--background')
+  const foreground = token('--foreground')
+  const accent = token('--primary')
+  // Printed on the last-price tag and on the crosshair's pills alike.
+  const tagText = light ? '#ffffff' : background
+  // The accent pill only where its text can be read on it; an accent theme
+  // light enough to fail falls back to the text colour, which never does.
+  const pill = contrastRatio(accent, tagText) >= 4.5 ? accent : foreground
   return {
     ...base,
-    background: token('--background'),
-    grid: token('--card'),
+    background,
+    grid: mixColors(background, foreground, light ? GRID_STEP.light : GRID_STEP.dark),
     axisText: token('--muted-foreground'),
     axisLine: token('--border'),
+    paneSeparator: token('--border'),
     crosshair: token('--muted-foreground'),
+    crosshairLabelBackground: pill,
+    upColor: pair.up,
+    downColor: pair.down,
+    wickUpColor: pair.up,
+    wickDownColor: pair.down,
+    lineColor: accent,
+    // The fill under an area chart: the accent at the line, gone by the floor.
+    areaTopColor: withAlpha(accent, light ? 0.22 : 0.3),
+    areaBottomColor: withAlpha(accent, 0),
+    baselineTopLine: pair.up,
+    baselineTopFill: withAlpha(pair.up, light ? 0.14 : 0.18),
+    baselineBottomLine: pair.down,
+    baselineBottomFill: withAlpha(pair.down, light ? 0.14 : 0.18),
+    lastPriceUp: pair.up,
+    lastPriceDown: pair.down,
+    lastPriceText: tagText,
+    buy: pair.up,
+    sell: pair.down,
+    profit: pair.up,
+    loss: pair.down,
   }
 }
 
@@ -155,7 +237,28 @@ export function applyChartDialogMetrics(root: HTMLElement): void {
 
 /** Volume-histogram color that reads well against the current theme. */
 export function volumeColor(mode: ThemeMode, appMode: AppMode): string {
-  return isLightTheme(mode, appMode) ? '#d4d4d8' : '#33415e'
+  if (isLightTheme(mode, appMode)) return '#d9d9de'
+  return appMode === 'analyzer' ? '#332f55' : '#34343c'
+}
+
+/** How far direction-coloured volume sinks towards the chart background. */
+const VOLUME_BLEND = 0.5
+
+/**
+ * The candle pair as the volume histogram wears it: the same two hues, half
+ * way to the background. Volume at full candle strength is a second chart
+ * drawn under the first, and the eye goes to it before the price. Opaque, so
+ * a bar reads the same over the grid as between its lines.
+ */
+export function quietVolumeStyle<T extends { upColor?: string; downColor?: string }>(
+  style: T,
+  background: string
+): T {
+  return {
+    ...style,
+    ...(style.upColor ? { upColor: mixColors(style.upColor, background, VOLUME_BLEND) } : {}),
+    ...(style.downColor ? { downColor: mixColors(style.downColor, background, VOLUME_BLEND) } : {}),
+  }
 }
 
 /**

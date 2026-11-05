@@ -777,7 +777,7 @@ def test_stop_pending_is_durable_before_exit_dispatch_and_waits_for_the_fill(bro
 def test_stop_is_not_dispatched_when_its_durable_request_cannot_be_written(broker):
     _strategy_id, run_id = _filled_batch_run(broker)
 
-    with patch.object(store, "request_run_stop", return_value=False):
+    with patch.object(store, "record_run_stop_request", return_value=None):
         result = engine.stop_run(run_id, USER, reason="manual")
 
     assert result["ok"] is False
@@ -1132,8 +1132,9 @@ def test_manual_retry_keeps_the_first_automatic_stop_cause_and_exit_kind(broker)
         for event in store.list_events(sid)
         if event["kind"] == "run_stop_requested"
     ]
+    # Said once, with the first cause: the retry neither rewrites it nor
+    # repeats it (a pending stop is retried every few seconds).
     assert requested_messages == [
-        "Stop requested (overall_target); exit orders are being attempted",
         "Stop requested (overall_target); exit orders are being attempted",
     ]
 

@@ -3,7 +3,7 @@
  *
  * Sits in the right rail beside the watchlist and the objects panel and wears
  * the same clothes: `PanelShell` owns the width and the drag handle,
- * `PANEL_HEADER` lands the header rule on the same line as the pane toolbar's,
+ * `PANEL_HEADER` gives it the terminal toolbar's band and height,
  * and every control is a shadcn token so the panel cannot drift from the app
  * around it.
  *

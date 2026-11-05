@@ -12,20 +12,10 @@
  * Lives inside the pane rather than being portalled, so it stays visible in
  * full screen where only the fullscreen element and its descendants paint.
  */
-import {
-  BringToFront,
-  CopyPlus,
-  Ellipsis,
-  EyeOff,
-  Lock,
-  MoveHorizontal,
-  PaintBucket,
-  Rows3,
-  SendToBack,
-} from 'lucide-react'
 import type { FibLevel } from 'openalgo-charts/draw'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { DrawLevels } from '@/lib/trading/drawingActions'
+import { ChromeIcon } from '@/lib/trading/glyphs'
 import type { DrawSelection } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { DrawingLevelsEditor } from './DrawingLevelsEditor'
@@ -226,7 +216,7 @@ export function DrawingStyleBar({
           onClick={() => toggle('fill')}
           className={cn(btn, wide, sel.fill.on && 'text-foreground')}
         >
-          <PaintBucket className="h-4 w-4" strokeWidth={1.6} />
+          <ChromeIcon id="fill" />
         </button>
       )}
       {sel.extend && (
@@ -237,7 +227,7 @@ export function DrawingStyleBar({
           onClick={() => toggle('extend')}
           className={cn(btn, wide, (sel.extend.left || sel.extend.right) && 'text-primary')}
         >
-          <MoveHorizontal className="h-4 w-4" strokeWidth={1.6} />
+          <ChromeIcon id="fit" />
         </button>
       )}
       {sel.levels && (
@@ -248,7 +238,7 @@ export function DrawingStyleBar({
           onClick={() => toggle('levels')}
           className={cn(btn, wide)}
         >
-          <Rows3 className="h-4 w-4" strokeWidth={1.6} />
+          <ChromeIcon id="legend" />
         </button>
       )}
       {sel.hasText && (
@@ -259,17 +249,7 @@ export function DrawingStyleBar({
           onClick={onEditText}
           className={cn(btn, wide)}
         >
-          <svg
-            viewBox="0 0 24 24"
-            className="h-4 w-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.7}
-            strokeLinecap="round"
-            aria-hidden="true"
-          >
-            <path d="M5 5.5h14M12 5.5V19" />
-          </svg>
+          <ChromeIcon id="text" />
         </button>
       )}
 
@@ -282,23 +262,7 @@ export function DrawingStyleBar({
         onClick={() => onStyle({ locked: !sel.locked })}
         className={cn(btn, wide, sel.locked && 'text-primary')}
       >
-        <svg
-          viewBox="0 0 24 24"
-          className="h-4 w-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.7}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="4.5" y="10.5" width="15" height="9.5" rx="2" />
-          {sel.locked ? (
-            <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
-          ) : (
-            <path d="M8 10.5V7a4 4 0 0 1 7.6-1.7" />
-          )}
-        </svg>
+        <ChromeIcon id={sel.locked ? 'lock' : 'unlock'} />
       </button>
       <button
         type="button"
@@ -307,18 +271,7 @@ export function DrawingStyleBar({
         onClick={onDelete}
         className={btn}
       >
-        <svg
-          viewBox="0 0 24 24"
-          className="h-4 w-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.7}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M3.5 6.5h17M9.5 6.5v-3h5v3M6 6.5l1 14h10l1-14" />
-        </svg>
+        <ChromeIcon id="trash" />
       </button>
       <button
         type="button"
@@ -328,7 +281,7 @@ export function DrawingStyleBar({
         onClick={() => toggle('more')}
         className={btn}
       >
-        <Ellipsis className="h-4 w-4" strokeWidth={1.6} />
+        <ChromeIcon id="more" />
       </button>
 
       {open === 'color' && (
@@ -475,19 +428,19 @@ export function DrawingStyleBar({
           </div>
           {sel.fill && (
             <button type="button" className={cn(row, narrow)} onClick={() => setOpen('fill')}>
-              <PaintBucket className="h-3.5 w-3.5 opacity-70" />
+              <ChromeIcon id="fill" size={14} className="opacity-70" />
               Fill...
             </button>
           )}
           {sel.extend && (
             <button type="button" className={cn(row, narrow)} onClick={() => setOpen('extend')}>
-              <MoveHorizontal className="h-3.5 w-3.5 opacity-70" />
+              <ChromeIcon id="fit" size={14} className="opacity-70" />
               Extend...
             </button>
           )}
           {sel.levels && (
             <button type="button" className={cn(row, narrow)} onClick={() => toggle('levels')}>
-              <Rows3 className="h-3.5 w-3.5 opacity-70" />
+              <ChromeIcon id="legend" size={14} className="opacity-70" />
               Levels...
             </button>
           )}
@@ -512,7 +465,7 @@ export function DrawingStyleBar({
               onStyle({ locked: !sel.locked })
             }}
           >
-            <Lock className="h-3.5 w-3.5 opacity-70" />
+            <ChromeIcon id="lock" size={14} className="opacity-70" />
             {sel.locked ? 'Unlock' : 'Lock'}
           </button>
           <button
@@ -523,7 +476,7 @@ export function DrawingStyleBar({
               onDuplicate()
             }}
           >
-            <CopyPlus className="h-3.5 w-3.5 opacity-70" />
+            <ChromeIcon id="duplicate" size={14} className="opacity-70" />
             Duplicate
           </button>
           <button
@@ -534,7 +487,7 @@ export function DrawingStyleBar({
               onOrder('front')
             }}
           >
-            <BringToFront className="h-3.5 w-3.5 opacity-70" />
+            <ChromeIcon id="front" size={14} className="opacity-70" />
             Bring to front
           </button>
           <button
@@ -545,7 +498,7 @@ export function DrawingStyleBar({
               onOrder('back')
             }}
           >
-            <SendToBack className="h-3.5 w-3.5 opacity-70" />
+            <ChromeIcon id="back" size={14} className="opacity-70" />
             Send to back
           </button>
           <button
@@ -556,7 +509,7 @@ export function DrawingStyleBar({
               onHide()
             }}
           >
-            <EyeOff className="h-3.5 w-3.5 opacity-70" />
+            <ChromeIcon id="eye-off" size={14} className="opacity-70" />
             Hide
           </button>
         </div>

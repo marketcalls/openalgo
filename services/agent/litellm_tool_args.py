@@ -14,7 +14,7 @@ tool call the backend streams the arguments as ``function_call_arguments.delta``
 events. For a batch of parallel calls it frequently sends **no deltas at all**:
 each call's complete arguments arrive once, in
 ``response.function_call_arguments.done`` and again in
-``response.output_item.done``. LiteLLM 1.104.0 builds the chat stream from the
+``response.output_item.done``. LiteLLM 1.104.0, and still 1.106.6, builds the chat stream from the
 ``output_item.added`` event (id and name, empty arguments) and the deltas, and
 deliberately ignores both ``done`` events on a per-stream iterator, so agno
 assembles ``arguments: ""`` and pydantic refuses the call.
@@ -225,8 +225,10 @@ def install() -> bool:
         if _installed:
             return True
         try:
-            from litellm.completion_extras.litellm_responses_transformation import (
-                transformation,
+            from services.agent import litellm_loader
+
+            transformation = litellm_loader.load(
+                "litellm.completion_extras.litellm_responses_transformation.transformation"
             )
 
             iterator_cls = transformation.OpenAiResponsesToChatCompletionStreamIterator

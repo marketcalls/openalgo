@@ -1,12 +1,22 @@
-import {
-  ColorType,
-  CrosshairMode,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  LineSeries,
-} from 'lightweight-charts'
+/**
+ * Option Greeks: the ATM call's and put's IV, Delta, Theta, Vega and Gamma over
+ * the session, one tab per metric, the call beside the put.
+ *
+ * Drawn by openalgo-charts, the engine /trading uses, driven the way the other
+ * read-only charts drive it (`BacktestChart`, `CandleViz`): `createChart` on a
+ * host div per panel, the app's theme tokens through `buildChartTheme`, and a
+ * theme change applied with `setTheme` rather than by rebuilding ten charts.
+ *
+ * The call is drawn in the theme's up colour and the put in its down colour,
+ * the green and red the panel headings and the info bar already use for them.
+ *
+ * Times arrive from the backend as real UTC seconds and are handed over as
+ * they are: the engine labels them in IST itself, which is its default zone,
+ * and switches from clock to date at a day boundary on a multi-day range.
+ */
+
 import { Check, ChevronsUpDown } from 'lucide-react'
+import { type Chart, createChart, type SeriesApi } from 'openalgo-charts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type IVChartData, ivChartApi } from '@/api/iv-chart'
 import { Button } from '@/components/ui/button'
@@ -30,7 +40,8 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { serverSentence } from '@/lib/serverSentence'
-import { useThemeStore } from '@/stores/themeStore'
+import { buildChartTheme } from '@/lib/trading/chartTheme'
+import { type AppMode, type ThemeMode, useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 // FNO_EXCHANGES and DEFAULT_UNDERLYINGS are now provided by useSupportedExchanges() hook
@@ -85,14 +96,29 @@ function convertExpiryForAPI(expiry: string): string {
   return expiry.replace(/-/g, '').toUpperCase()
 }
 
+const SIDES = ['ce', 'pe'] as const
+type Side = (typeof SIDES)[number]
+
 interface ChartInstance {
-  chart: IChartApi
-  series: ISeriesApi<'Line'>
+  chart: Chart
+  series: SeriesApi
+  side: Side
+}
+
+/**
+ * One panel's palette: the app's theme, with the side's colour as its line and
+ * its current-value tag. The tag would otherwise turn green or red with the
+ * last move, which on a put drawn in red reads as a second, unrelated signal.
+ */
+function sideTheme(mode: ThemeMode, appMode: AppMode, side: Side) {
+  const theme = buildChartTheme(mode, appMode)
+  const color = side === 'ce' ? theme.upColor : theme.downColor
+  return { theme: { ...theme, lastPriceUp: color, lastPriceDown: color }, color }
 }
 
 export default function IVChart() {
-  const { mode } = useThemeStore()
-  const isDarkMode = mode === 'dark'
+  const mode = useThemeStore((state) => state.mode)
+  const appMode = useThemeStore((state) => state.appMode)
   const { toolsFnoExchanges, defaultToolsFnoExchange, defaultUnderlyings } = useSupportedExchanges()
 
   // Control state
@@ -142,82 +168,6 @@ export default function IVChart() {
     return cbs
   }, [])
 
-  // ── Chart creation helpers ──────────────────────────────────────
-
-  const makeChartOptions = useCallback(
-    (width: number) => ({
-      width,
-      height: CHART_HEIGHT,
-      layout: {
-        background: { type: ColorType.Solid as const, color: 'transparent' },
-        textColor: isDarkMode ? '#a6adbb' : '#333',
-      },
-      grid: {
-        vertLines: {
-          color: isDarkMode ? 'rgba(166,173,187,0.1)' : 'rgba(0,0,0,0.1)',
-          style: 1 as const,
-          visible: true,
-        },
-        horzLines: {
-          color: isDarkMode ? 'rgba(166,173,187,0.1)' : 'rgba(0,0,0,0.1)',
-          style: 1 as const,
-          visible: true,
-        },
-      },
-      rightPriceScale: {
-        borderColor: isDarkMode ? 'rgba(166,173,187,0.2)' : 'rgba(0,0,0,0.2)',
-        scaleMargins: { top: 0.1, bottom: 0.1 },
-      },
-      timeScale: {
-        borderColor: isDarkMode ? 'rgba(166,173,187,0.2)' : 'rgba(0,0,0,0.2)',
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: number) => {
-          const d = new Date(time * 1000)
-          const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000)
-          const hh = ist.getUTCHours().toString().padStart(2, '0')
-          const mm = ist.getUTCMinutes().toString().padStart(2, '0')
-          if (parseInt(selectedDays, 10) > 1) {
-            const dd = ist.getUTCDate().toString().padStart(2, '0')
-            const mo = (ist.getUTCMonth() + 1).toString().padStart(2, '0')
-            return `${dd}/${mo} ${hh}:${mm}`
-          }
-          return `${hh}:${mm}`
-        },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: {
-          width: 1 as const,
-          color: isDarkMode ? 'rgba(166,173,187,0.5)' : 'rgba(0,0,0,0.3)',
-          style: 2 as const,
-          labelVisible: false,
-        },
-        horzLine: {
-          width: 1 as const,
-          color: isDarkMode ? 'rgba(166,173,187,0.5)' : 'rgba(0,0,0,0.3)',
-          style: 2 as const,
-          labelBackgroundColor: isDarkMode ? '#1f2937' : '#2563eb',
-        },
-      },
-    }),
-    [isDarkMode, selectedDays]
-  )
-
-  const addWatermark = useCallback(
-    (container: HTMLDivElement) => {
-      const el = document.createElement('div')
-      el.style.cssText = `position:absolute;z-index:2;font-family:Arial,sans-serif;font-size:28px;font-weight:bold;user-select:none;pointer-events:none;color:${isDarkMode ? 'rgba(166,173,187,0.12)' : 'rgba(0,0,0,0.06)'}`
-      el.textContent = 'OpenAlgo'
-      container.appendChild(el)
-      setTimeout(() => {
-        el.style.left = `${container.offsetWidth / 2 - el.offsetWidth / 2}px`
-        el.style.top = `${container.offsetHeight / 2 - el.offsetHeight / 2}px`
-      }, 0)
-    },
-    [isDarkMode]
-  )
-
   // ── Data update ─────────────────────────────────────────────────
 
   const updateAllCharts = useCallback((data: IVChartData) => {
@@ -230,55 +180,55 @@ export default function IVChart() {
         const seriesData = data.series.find((s) => s.option_type === optType)
         if (!seriesData) continue
 
+        // Real UTC seconds, handed over as they are: see the module docstring.
         const points = seriesData.iv_data
           .filter((p) => p[metric] !== null)
-          .map((p) => ({
-            time: p.time as import('lightweight-charts').UTCTimestamp,
-            value: p[metric] as number,
-          }))
+          .map((p) => ({ time: p.time, value: p[metric] as number }))
           .sort((a, b) => a.time - b.time)
 
         inst.series.setData(points)
-        inst.chart.timeScale().fitContent()
+        inst.chart.fitContent()
       }
     }
   }, [])
 
   // ── Chart initialization (all 10 charts) ────────────────────────
 
+  // Built once. The engine tracks each container's size itself, so a window
+  // resize or a tab switch needs nothing from here, and a theme change is the
+  // effect below: the theme is read here for the first paint only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: theme excluded; handled by the re-theme effect
   useEffect(() => {
-    // Tear down previous charts
-    for (const [, inst] of chartsRef.current) inst.chart.remove()
-    chartsRef.current.clear()
-    // Clear watermarks from containers
-    for (const [, el] of containerRefs.current) el.innerHTML = ''
-
-    // Use width from any visible container (IV tab is active by default)
-    const refContainer = containerRefs.current.get('iv-ce')
-    const fallbackW = refContainer?.offsetWidth || 500
+    const built = chartsRef.current
+    const hosts: HTMLDivElement[] = []
 
     for (const metric of METRICS) {
-      for (const type of ['ce', 'pe'] as const) {
-        const key = `${metric}-${type}`
+      for (const side of SIDES) {
+        const key = `${metric}-${side}`
         const container = containerRefs.current.get(key)
         if (!container) continue
 
-        const w = container.offsetWidth > 0 ? container.offsetWidth : fallbackW
-        const color = type === 'ce' ? '#22c55e' : '#ef4444'
         const cfg = METRIC_CONFIG[metric]
-        const title = type === 'ce' ? cfg.ceTitle : cfg.peTitle
+        const title = side === 'ce' ? cfg.ceTitle : cfg.peTitle
+        const { theme, color } = sideTheme(mode, appMode, side)
 
-        const chart = createChart(container, makeChartOptions(w))
-        const series = chart.addSeries(LineSeries, {
-          color,
-          lineWidth: 2,
-          priceScaleId: 'right',
-          title,
-          priceFormat: { type: 'custom' as const, formatter: cfg.formatter },
+        const chart = createChart(container, {
+          theme,
+          ariaLabel: `${title} chart`,
+          // A read-only study: the keyboard belongs to the page, and the hover
+          // zoom rail is more chrome than a half-width panel has room for.
+          shortcuts: false,
+          timeNavigator: false,
         })
+        const series = chart.addSeries('line', {
+          priceScaleId: 'right',
+          style: { color, lineWidth: 2, title },
+          priceFormat: { type: 'custom', formatter: cfg.formatter },
+        })
+        series.priceScale().setOptions({ marginTop: 0.1, marginBottom: 0.1 })
 
-        addWatermark(container)
-        chartsRef.current.set(key, { chart, series })
+        built.set(key, { chart, series, side })
+        hosts.push(container)
       }
     }
 
@@ -286,23 +236,25 @@ export default function IVChart() {
     if (chartDataRef.current) updateAllCharts(chartDataRef.current)
 
     return () => {
-      for (const [, inst] of chartsRef.current) inst.chart.remove()
-      chartsRef.current.clear()
+      for (const [, inst] of built) inst.chart.destroy()
+      built.clear()
+      // `destroy` releases the engine's listeners; clearing the host is what
+      // guarantees a remount starts on an empty div rather than stacking a
+      // second canvas on the first.
+      for (const host of hosts) host.innerHTML = ''
     }
-  }, [makeChartOptions, addWatermark, updateAllCharts])
+  }, [updateAllCharts])
 
-  // ── Window resize ───────────────────────────────────────────────
+  // ── Theme ───────────────────────────────────────────────────────
 
+  // Re-theme every chart in place, and recolour each line with its side.
   useEffect(() => {
-    const onResize = () => {
-      for (const [key, inst] of chartsRef.current) {
-        const c = containerRefs.current.get(key)
-        if (c && c.offsetWidth > 0) inst.chart.applyOptions({ width: c.offsetWidth })
-      }
+    for (const [, inst] of chartsRef.current) {
+      const { theme, color } = sideTheme(mode, appMode, inst.side)
+      inst.chart.setTheme(theme)
+      inst.series.applyOptions({ color })
     }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+  }, [mode, appMode])
 
   // ── Data fetching ───────────────────────────────────────────────
 
@@ -431,17 +383,13 @@ export default function IVChart() {
 
   // ── Tab change with resize ──────────────────────────────────────
 
+  // The engine follows its container's size on its own. Fitting the tab that
+  // has just come into view keeps the whole range in it, as it always has.
   const handleTabChange = (value: string) => {
     setActiveTab(value as MetricKey)
     requestAnimationFrame(() => {
-      for (const type of ['ce', 'pe']) {
-        const key = `${value}-${type}`
-        const inst = chartsRef.current.get(key)
-        const c = containerRefs.current.get(key)
-        if (inst && c && c.offsetWidth > 0) {
-          inst.chart.applyOptions({ width: c.offsetWidth })
-          inst.chart.timeScale().fitContent()
-        }
+      for (const side of SIDES) {
+        chartsRef.current.get(`${value}-${side}`)?.chart.fitContent()
       }
     })
   }

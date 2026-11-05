@@ -2,7 +2,7 @@
 
 ## Introduction
 
-OpenAlgo ships with **twelve built-in analytical tools** for options trading and market analysis. They live under the `/tools` page and use the active broker's REST and WebSocket market data where each tool requires it.
+OpenAlgo ships with **thirteen built-in analytical tools** for options trading and market analysis. They live under the `/tools` page and use the active broker's REST and WebSocket market data where each tool requires it.
 
 Availability depends on the plugin's supported exchanges, broker response fields, account market-data entitlement, and the symbols or expiries requested. A plugin being installed does not guarantee that every analytical page has the data it needs.
 
@@ -102,7 +102,19 @@ Gamma Exposure (GEX) analysis for market-maker positioning.
 - **Top Gamma Strikes** ranking
 - Useful for identifying expected support/resistance zones
 
-### 11. IV Smile (`/ivsmile`)
+### 11. Strike Profile (`/strikeprofile`)
+
+Gamma exposure (GEX) and delta exposure (DEX) for every strike of several expiries at once, as a strike by expiry heatmap.
+
+- Values are in rupees crore. **GEX** is what hedgers would trade for a 1% move in the underlying (calls positive, puts negative). **DEX** is the delta-weighted open interest (call delta x OI + put delta x OI, times spot).
+- One column per expiry, labelled with days to expiry, so a near expiry and a far one sit side by side.
+- **Peaks** marks each expiry's own largest positive and negative strike (All), only the larger of the two (Max), or none (Off). A near expiry always carries far more gamma than a far one, so the peaks are what make a level on a far expiry visible.
+- **Shade** colours cells against the whole grid (Global) or against each expiry's own largest value (Per expiry).
+- **Flip** is the underlying price at which total GEX across the selected expiries changes sign, found by re-pricing every option's gamma at nearby prices. **C wall** and **P wall** are the strikes with the most call and put GEX.
+- Range buttons (2%, 5%, 10%, All) choose the strikes shown around spot; Chart shows the net per strike summed across expiries; two panes show GEX and DEX together.
+- Each selected expiry is one option chain request, so the nearest six are selected by default. Select more from the expiry list when your broker answers quickly.
+
+### 12. IV Smile (`/ivsmile`)
 
 Implied Volatility smile curve with skew analysis.
 
@@ -111,7 +123,7 @@ Implied Volatility smile curve with skew analysis.
 - Skew measurement between OTM puts and OTM calls
 - Per-expiry toggle
 
-### 12. OI Profile (`/oiprofile`)
+### 13. OI Profile (`/oiprofile`)
 
 Futures candlestick with OI profile overlay.
 
@@ -119,6 +131,20 @@ Futures candlestick with OI profile overlay.
 - **OI butterfly** showing CE vs PE OI distribution
 - **Daily OI change** across strikes
 - Combines price action with positioning data in one view
+
+### 14. Sector Rotation (`/sector-rotation`)
+
+A relative rotation map: the NSE sector indices brokers commonly publish, or any stocks and indices you add, placed on four quadrants against a benchmark, with the trail each took to get there.
+
+- **RS-Ratio** (horizontal) shows whether the symbol's recent relative strength against the benchmark is running above its longer trend. **RS-Momentum** (vertical) shows whether that relative strength is still accelerating. Both are centred on 100, and recent bars count most.
+- The quadrants read clockwise: **Improving** (weak but turning up), **Leading** (strong and rising), **Weakening** (strong but slowing), **Lagging** (weak and falling).
+- **Benchmark**: Nifty 50, Nifty 500, Bank Nifty, Sensex, Nifty Next 50, Midcap Nifty or Fin Nifty. **Timeframe**: daily, or weekly bars ending Friday built from daily closes. **Tail** sets how many bars of trail to draw.
+- **Data source**: **Broker API** needs an active broker login; **Historify** works without one, once you have downloaded daily history for the indices in Historify. Consumer Durables, Healthcare, India Defence and Oil & Gas are left off the default map because many brokers do not publish them; add them from search when your source has them. A symbol with no history is listed under *Not on the map* with the reason instead of failing the whole map.
+- **Add symbols** with the search box: pick the exchange (NSE or BSE equity, NSE, BSE, MCX or global indices) and search the master contract. Remove a row with the cross on hover, or go back to the sector set with **Reset to sectors**. Up to 40 symbols per map; on the broker source each is one history request.
+- The ranking table toggles each symbol on or off the map and shows how many days (or weeks) it has spent in its current quadrant.
+- Your benchmark, timeframe, tail, data source, symbol list and hidden rows are saved in the browser and restored on your next visit.
+- **Save image** downloads the map and the ranking as a PNG, titled with the benchmark, timeframe and date.
+- The map describes where symbols stand today; it does not predict what happens next.
 
 ## Tips
 

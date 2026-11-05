@@ -1246,7 +1246,12 @@ def test_the_subscription_models_are_offered_by_the_catalogue():
     for name in chatgpt_models.SUPPLEMENTAL:
         assert f"chatgpt/{name}" in ids, name
     assert len(models) >= 10
-    assert all(model.supports_function_calling for model in models)
+    # LiteLLM lists `gpt-rosalind-discovery` with no capability flags at all, so
+    # the picker shows it as "tool support unknown". No plan model may read as
+    # unable to call tools, and no other may lose its answer.
+    assert not [model.id for model in models if model.supports_function_calling is False]
+    unknown = {model.id for model in models if model.supports_function_calling is None}
+    assert unknown <= {"chatgpt/gpt-rosalind-discovery"}
     assert all(model.input_price_per_million is None for model in models)
 
 

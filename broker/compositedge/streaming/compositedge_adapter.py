@@ -391,7 +391,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             # Don't log the actual token value for security, but log its type and length
             token_info = (
-                f"type={type(token)}, len={len(str(token))}, value={str(token)[:4]}...{str(token)[-4:]}"
+                f"type={type(token)}, len={len(str(token))}"
                 if token
                 else "None"
             )

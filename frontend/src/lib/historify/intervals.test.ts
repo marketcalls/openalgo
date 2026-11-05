@@ -42,13 +42,10 @@ describe('parseInterval', () => {
     }
   })
 
-  it('rejects <n>D, which parses on the server and then returns nothing', () => {
-    // It types as "daily", which is neither the intraday branch nor the
-    // daily-aggregated one, so the query reads a stored row named "1D" that is
-    // never written. D is the only daily token.
-    expect(parseInterval('1D')).toBeNull()
-    expect(parseInterval('2D')).toBeNull()
-    expect(parseInterval('3D')).toBeNull()
+  it('reads multi-day candles from stored daily observations', () => {
+    expect(parseInterval('1D')).toEqual({ unit: 'D', value: 1, source: 'D' })
+    expect(parseInterval('2D')).toEqual({ unit: 'D', value: 2, source: 'D' })
+    expect(parseInterval('3D')).toEqual({ unit: 'D', value: 3, source: 'D' })
   })
 
   it('rejects seconds, which the store has no rows for', () => {
@@ -122,8 +119,8 @@ describe('composeInterval', () => {
     }
   })
 
-  it('offers no day unit, because no multi-day token works', () => {
-    expect(CUSTOM_UNITS.some((u) => (u.value as string) === 'D')).toBe(false)
+  it('offers a day unit backed by daily aggregation', () => {
+    expect(CUSTOM_UNITS.some((u) => (u.value as string) === 'D')).toBe(true)
   })
 })
 
@@ -212,8 +209,8 @@ describe('unavailableReason', () => {
   })
 
   it('explains an unusable token rather than reporting silence', () => {
-    const reason = unavailableReason('1D', storedSources(['1m', 'D']))
+    const reason = unavailableReason('1s', storedSources(['1m', 'D']))
     expect(reason).toBeTruthy()
-    expect(reason).toContain('1D')
+    expect(reason).toContain('1s')
   })
 })

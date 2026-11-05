@@ -6,7 +6,26 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { mixColors, mutedTradeColors } from './chartTheme'
+import { mixColors, mutedTradeColors, quietVolumeStyle } from './chartTheme'
+
+describe('quietVolumeStyle', () => {
+  it('takes each candle colour half way to the background', () => {
+    expect(quietVolumeStyle({ upColor: '#00aa00', downColor: '#aa0000' }, '#000000')).toEqual({
+      upColor: 'rgb(0,85,0)',
+      downColor: 'rgb(85,0,0)',
+    })
+    expect(quietVolumeStyle({ upColor: '#00aa00' }, '#ffffff')).toEqual({
+      upColor: 'rgb(128,213,128)',
+    })
+  })
+
+  it('keeps the rest of the style and a colour it cannot read', () => {
+    expect(quietVolumeStyle({ upColor: 'teal', visible: true }, '#000000')).toEqual({
+      upColor: 'teal',
+      visible: true,
+    })
+  })
+})
 
 describe('mixColors', () => {
   it('returns the colour itself at 0 and the target at 1', () => {

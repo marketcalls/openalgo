@@ -32,6 +32,7 @@ export interface CatalogSymbol {
    * dataset whose newest candle is a few days old, which is every dataset over
    * a weekend, opens on an empty window and reports having no bars at all.
    */
+  firstBySource?: Partial<Record<SourceInterval, number>>
   lastBySource: Partial<Record<SourceInterval, number>>
   /** Total candles held across every interval, for ordering by substance. */
   records: number
@@ -59,6 +60,14 @@ export function toCatalogSymbols(
     if (existing) {
       for (const source of storedSources([row.interval])) {
         existing.sources.add(source)
+        const first = Number(row.first_timestamp)
+        if (Number.isFinite(first)) {
+          existing.firstBySource ??= {}
+          existing.firstBySource[source] = Math.min(
+            existing.firstBySource[source] ?? Infinity,
+            first
+          )
+        }
         const last = Number(row.last_timestamp)
         if (Number.isFinite(last) && last > (existing.lastBySource[source] ?? 0)) {
           existing.lastBySource[source] = last
@@ -83,6 +92,11 @@ export function toCatalogSymbols(
       strike: Number.isFinite(meta.strike) ? meta.strike : undefined,
       instrumenttype: meta.instrumenttype || undefined,
       sources: storedSources([row.interval]),
+      firstBySource: Object.fromEntries(
+        [...storedSources([row.interval])]
+          .filter(() => Number.isFinite(Number(row.first_timestamp)))
+          .map((source) => [source, Number(row.first_timestamp)])
+      ),
       lastBySource: Object.fromEntries(
         [...storedSources([row.interval])]
           .filter(() => Number.isFinite(Number(row.last_timestamp)))

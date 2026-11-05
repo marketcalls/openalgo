@@ -3,6 +3,8 @@ Shared httpx client module with connection pooling support for all broker APIs
 with automatic protocol negotiation (HTTP/2 when available, HTTP/1.1 fallback)
 """
 
+import threading
+from contextlib import contextmanager
 from typing import Optional
 
 import httpx
@@ -21,6 +23,133 @@ logger = get_logger(__name__)
 GTHREAD_POOL_TIMEOUT_SECONDS = 10.0
 
 REQUEST_TIMEOUT_SECONDS = 120.0
+
+#: Shown when an order was sent but the broker's reply never arrived.
+UNANSWERED_ORDER_MESSAGE = (
+    "The connection to the broker dropped after the order was sent, so it may "
+    "have been placed. Check the order book before placing it again."
+)
+
+# A read can simply be sent again: it changes nothing at the broker, and the
+# connection that failed has been dropped, so the second try opens a new one.
+# Timeouts are left out, since retrying one would double an already long wait.
+_RETRYABLE_READ_ERRORS = (httpx.NetworkError, httpx.RemoteProtocolError)
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# Raised before the request left OpenAlgo, so the broker never saw it. Any
+# other transport error on a write means it may have arrived.
+_NOT_SENT_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.LocalProtocolError,
+    httpx.UnsupportedProtocol,
+    httpx.ProxyError,
+)
+
+# Writes sent but never answered, for the code that is watching this thread.
+# threading.local is per greenlet under eventlet and per thread otherwise,
+# which is the unit a broker call runs in under every worker.
+_watch = threading.local()
+
+
+@contextmanager
+def watch_for_unanswered_writes():
+    """Collect writes made in this thread whose response was lost.
+
+    A non-empty list after a failed order means the order may have reached the
+    broker (issues #2067, #2293): on Windows a read on the shared HTTP/2
+    connection can fail with WinError 10035 after the broker accepted it.
+    Brokers handle that error in different ways, some returning an error
+    response and some raising, so the service layer asks here instead.
+
+    Yields:
+        list[str]: "METHOD host" for each write sent and not answered.
+    """
+    previous = getattr(_watch, "lost", None)
+    lost: list[str] = []
+    _watch.lost = lost
+    try:
+        yield lost
+    finally:
+        _watch.lost = previous
+
+
+def request_may_have_been_sent(error: httpx.TransportError) -> bool:
+    """Whether a failed write may have reached its remote endpoint."""
+    return not isinstance(error, _NOT_SENT_ERRORS)
+
+
+class _BrokerTransport(httpx.HTTPTransport):
+    """Retries a broken read once, and records a broken write instead."""
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return super().handle_request(request)
+        except _RETRYABLE_READ_ERRORS as e:
+            if request.method not in _READ_METHODS:
+                self._record_unanswered(request, e)
+                raise
+            logger.warning(f"{request.method} to {request.url.host} failed ({e}), retrying once")
+            return super().handle_request(request)
+        except httpx.TransportError as e:
+            if request.method not in _READ_METHODS:
+                self._record_unanswered(request, e)
+            raise
+
+    @staticmethod
+    def _record_unanswered(request: httpx.Request, error: Exception) -> None:
+        if isinstance(error, httpx.TransportError) and not request_may_have_been_sent(error):
+            return
+        logger.error(f"{request.method} to {request.url.host} sent but not answered: {error}")
+        lost = getattr(_watch, "lost", None)
+        if lost is not None:
+            lost.append(f"{request.method} {request.url.host}")
+
+
+class _BrokerClient(httpx.Client):
+    """HTTPX client using the broker transport while retaining env proxy mounts."""
+
+    def _init_transport(
+        self,
+        verify=True,
+        cert=None,
+        trust_env=True,
+        http1=True,
+        http2=False,
+        limits=httpx.Limits(),
+        transport=None,
+    ):
+        if transport is not None:
+            return transport
+        return _BrokerTransport(
+            verify=verify,
+            cert=cert,
+            trust_env=trust_env,
+            http1=http1,
+            http2=http2,
+            limits=limits,
+        )
+
+    def _init_proxy_transport(
+        self,
+        proxy,
+        verify=True,
+        cert=None,
+        trust_env=True,
+        http1=True,
+        http2=False,
+        limits=httpx.Limits(),
+    ):
+        return _BrokerTransport(
+            verify=verify,
+            cert=cert,
+            trust_env=trust_env,
+            http1=http1,
+            http2=http2,
+            limits=limits,
+            proxy=proxy,
+        )
 
 
 def _build_client() -> httpx.Client:
@@ -230,15 +359,17 @@ def _create_http_client() -> httpx.Client:
         else:
             timeout = REQUEST_TIMEOUT_SECONDS
 
-        client = httpx.Client(
+        limits = httpx.Limits(
+            max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
+            max_connections=100,  # Increased from 50 for 10+ concurrent strategies
+            keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
+        )
+
+        client = _BrokerClient(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=timeout,
-            limits=httpx.Limits(
-                max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
-                max_connections=100,  # Increased from 50 for 10+ concurrent strategies
-                keepalive_expiry=30.0,  # Reduced from 120s to recycle stale connections faster
-            ),
+            limits=limits,
             # Add verify parameter to handle SSL/TLS issues in standalone mode
             verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
             # Add event hooks for latency tracking

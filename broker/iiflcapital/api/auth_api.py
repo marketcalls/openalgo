@@ -14,13 +14,21 @@ def _generate_checksum(client_id: str, auth_code: str, app_secret: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def get_login_url() -> str:
-    """Generate IIFL Capital login URL from environment variables."""
+def get_login_url(state: str | None = None) -> str:
+    """Generate IIFL Capital login URL from environment variables.
+
+    Args:
+        state: The login's state, carried on the return address so OpenAlgo can
+            match IIFL's answer to the login it started (as OpenAlgo Desktop
+            does). IIFL returns to the callback address as given.
+    """
     app_key = os.getenv("BROKER_API_KEY", "").strip()
     redirect_url = os.getenv("REDIRECT_URL", "").strip()
 
     if not app_key or not redirect_url:
         return ""
+    if state:
+        redirect_url = f"{redirect_url}?state={quote_plus(state)}"
 
     # Send both redirect parameter casings for compatibility with different
     # IIFL deployments. Keep redirect URL unescaped to avoid provider-side
