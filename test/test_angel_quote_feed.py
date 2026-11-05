@@ -80,8 +80,10 @@ def _subscribe(ad, symbol, exchange, token, exchange_type, mode):
     ad._token_index[(token, exchange_type)] = sub
 
 
-NSE_LEVELS = [(0, 100 + i, 150000 - 5 * i, 3 + i) for i in range(5)] + [
-    (1, 200 + i, 150010 + 5 * i, 4 + i) for i in range(5)
+# Buy/Sell flag per the SmartAPI spec (10-websocket-streaming-2-0.md:152):
+# 1 is buy, 0 is sell. Bids below asks, as a real book is.
+NSE_LEVELS = [(1, 100 + i, 150000 - 5 * i, 3 + i) for i in range(5)] + [
+    (0, 200 + i, 150010 + 5 * i, 4 + i) for i in range(5)
 ]
 
 
@@ -145,8 +147,12 @@ def test_snap_quote_keeps_quote_fields(adapter):
     assert data["volume"] == 123456
     assert data["last_quantity"] == 25
     assert data["last_trade_quantity"] == 25
-    prices = [lvl["price"] for lvl in data["depth"]["buy"] + data["depth"]["sell"]]
-    assert all(p > 1000 for p in prices)
+    assert data["depth"]["buy"] == [
+        {"price": (150000 - 5 * i) / 100, "quantity": 100 + i, "orders": 3 + i} for i in range(5)
+    ]
+    assert data["depth"]["sell"] == [
+        {"price": (150010 + 5 * i) / 100, "quantity": 200 + i, "orders": 4 + i} for i in range(5)
+    ]
 
 
 def test_quote_publishes_last_quantity_next_to_last_trade_quantity(adapter):
