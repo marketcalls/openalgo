@@ -355,6 +355,18 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             actual_symbol, exchange, data_callback, original_symbol
                         )
                         if success:
+                            # The TBT feed carries only the book. Subscribe the
+                            # scrip's symbol feed too, so every 50-level depth
+                            # message carries the quote (LTP, OHLC, volume),
+                            # as the 5-level path does. This registration only
+                            # fills the quote snapshot; it publishes nothing.
+                            self._enqueue_hsm_subscribe(
+                                "SymbolUpdate",
+                                exchange,
+                                actual_symbol,
+                                self._quote_feed_only,
+                                self._QUOTE_FEED_FOR_TBT,
+                            )
                             self.logger.info(
                                 f"Subscribed to 50-level depth (TBT) for {exchange}:{actual_symbol}"
                             )
@@ -547,6 +559,32 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # OpenAlgo modes served by each FyersAdapter feed slot
     _SLOT_MODES = {"SymbolUpdate": (1, 2), "DepthUpdate": (3,)}
 
+    # Registry key for a symbol-feed subscription made only so 50-level (TBT)
+    # depth can borrow the quote. It is not an OpenAlgo mode, so the symbol
+    # feed's dispatcher (modes 1 and 2) never publishes for it.
+    _QUOTE_FEED_FOR_TBT = 0
+
+    @staticmethod
+    def _quote_feed_only(_data) -> None:
+        """Callback for the TBT quote-feed registration: nothing to publish."""
+
+    def _release_tbt_quote_feed(self, exchange: str, actual_symbol: str) -> None:
+        """Drop the quote-feed registration of a 50-level depth subscription.
+
+        The FyersAdapter symbol-feed slot is released only when no LTP or Quote
+        subscription for the scrip still uses it. HSM has no selective
+        unsubscribe, so the feed itself keeps streaming either way.
+        """
+        full_symbol = f"{exchange}:{actual_symbol}"
+        self._hsm_callback_registry.pop((self._QUOTE_FEED_FOR_TBT, full_symbol), None)
+        still_used = any(f"{exchange}:{actual_symbol}:{m}" in self.subscriptions for m in (1, 2))
+        if (
+            not still_used
+            and self.fyers_adapter
+            and hasattr(self.fyers_adapter, "subscription_callbacks")
+        ):
+            self.fyers_adapter.subscription_callbacks.pop(f"SymbolUpdate_{full_symbol}", None)
+
     def _flush_hsm_batch(self) -> None:
         """
         Drain the batched subscribe queue and dispatch one
@@ -737,6 +775,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             subscription = self.tbt_subscriptions[subscription_key]
             fyers_ticker = subscription.get("ticker")
+            self._release_tbt_quote_feed(exchange, subscription.get("actual_symbol", symbol))
 
             # Unsubscribe from TBT client
             if self.tbt_client and fyers_ticker:
@@ -854,16 +893,27 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Failed to map TBT depth data for {ticker}")
                 return
 
-            # TBT depth carries no LTP: use the real one from the quote feed
-            # when that symbol is subscribed there, never a bid/ask midpoint
+            # TBT depth carries no LTP, OHLC or volume. Merge the latest quote
+            # from the scrip's symbol feed (subscribed with the depth), so a
+            # quote client receiving this depth topic is not blanked. Before
+            # the first symbol-feed message the fields are left out, never a
+            # bid/ask midpoint or a 0.
             actual_symbol = subscription.get("actual_symbol", symbol)
-            ltp = (
-                self.fyers_adapter.get_last_ltp(exchange, actual_symbol)
+            quote_fields = (
+                self.fyers_adapter.get_latest_quote(exchange, actual_symbol)
                 if self.fyers_adapter
                 else None
             )
-            if ltp:
-                mapped_data["ltp"] = ltp
+            if quote_fields:
+                mapped_data.update(quote_fields)
+            else:
+                ltp = (
+                    self.fyers_adapter.get_last_ltp(exchange, actual_symbol)
+                    if self.fyers_adapter
+                    else None
+                )
+                if ltp:
+                    mapped_data["ltp"] = ltp
 
             # Add subscription mode for proper topic generation
             mapped_data["subscription_mode"] = 3  # Depth mode

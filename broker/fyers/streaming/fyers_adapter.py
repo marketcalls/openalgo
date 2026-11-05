@@ -380,6 +380,16 @@ class FyersAdapter:
         """Last traded price seen on the sf/if feed, or None if not subscribed there"""
         return self.last_ltp.get(f"{exchange}:{symbol}")
 
+    def get_latest_quote(self, exchange: str, symbol: str) -> dict | None:
+        """Quote fields from the latest sf/if message for a scrip, or None.
+
+        Only fields Fyers actually sent are present, so a caller merging them
+        into a depth message never publishes a placeholder.
+        """
+        latest_quote, _ = self._quote_state()
+        fields = latest_quote.get(f"{exchange}:{symbol}")
+        return dict(fields) if fields else None
+
     def _quote_state(self) -> tuple[dict, dict]:
         """The latest-quote and awaiting-depth maps, created on first use."""
         if getattr(self, "latest_quote", None) is None:

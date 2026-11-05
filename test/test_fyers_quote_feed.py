@@ -387,3 +387,97 @@ def test_unmapped_topic_is_not_routed_to_the_only_subscription(stack):
     stack.ws.symbol_mappings[other] = "NSE:SBINX-EQ"
     stack.send(_snapshot(21, other, QUOTE_FIELDS, {**BASE, "ltp": 12345}))
     assert stack.topics() == []
+
+
+# --- 50-level (TBT) depth: carries the quote from the symbol feed ------------
+
+import broker.fyers.streaming.fyers_websocket_adapter as fwa_mod  # noqa: E402
+
+TBT_SYM = f"{SYM}:50"
+TBT_BOOK = {
+    "buy": [{"price": 801.45, "quantity": 10, "orders": 2}],
+    "sell": [{"price": 801.5, "quantity": 20, "orders": 3}],
+    "total_buy_qty": 91000,
+    "total_sell_qty": 88000,
+}
+
+
+class FakeTbtClient:
+    def __init__(self):
+        self.subscribed, self.unsubscribed = [], []
+
+    def subscribe(self, tickers, channel="1"):
+        self.subscribed.extend(tickers)
+        return True
+
+    def unsubscribe(self, tickers):
+        self.unsubscribed.extend(tickers)
+
+    def disconnect(self):
+        pass
+
+
+@pytest.fixture()
+def tbt(stack, monkeypatch):
+    monkeypatch.setattr(fwa_mod, "get_br_symbol", lambda s, e: BRSYM)
+    stack.outer.tbt_client = FakeTbtClient()
+    stack.outer.data_mapper = FyersDataMapper()
+    stack.outer._disconnect_tbt = lambda: None
+    return stack
+
+
+def _subscribe_tbt(s, *extra_modes):
+    assert s.outer.subscribe(TBT_SYM, EXCH, 3)["status"] == "success"
+    for mode in extra_modes:
+        assert s.outer.subscribe(SYM, EXCH, mode)["status"] == "success"
+    s.outer._hsm_batch_timer.cancel()
+    s.outer._flush_hsm_batch()
+
+
+def _tbt_depth(s):
+    s.published.clear()
+    s.outer._on_tbt_depth_update(BRSYM, dict(TBT_BOOK))
+    return [d for t, d in s.published if t.endswith("_DEPTH")][-1]
+
+
+def test_tbt_depth_also_subscribes_the_symbol_feed(tbt):
+    _subscribe_tbt(tbt)
+    assert BRSYM in tbt.outer.tbt_client.subscribed
+    assert SF in tbt.ad.ws_client.sent
+
+
+def test_tbt_quote_feed_publishes_nothing_on_its_own(tbt):
+    _subscribe_tbt(tbt)
+    tbt.send(_snapshot(SF_ID, SF, QUOTE_FIELDS, BASE))
+    assert tbt.topics() == []
+
+
+def test_tbt_depth_carries_every_quote_field(tbt):
+    _subscribe_tbt(tbt)
+    tbt.send(_snapshot(SF_ID, SF, QUOTE_FIELDS, BASE))
+    depth = _tbt_depth(tbt)
+    for key, value in QUOTE_KEYS.items():
+        assert depth[key] == value, key
+    assert depth["depth"]["buy"][0]["price"] == 801.45
+
+
+def test_tbt_depth_before_any_quote_has_no_invented_fields(tbt):
+    _subscribe_tbt(tbt)
+    depth = _tbt_depth(tbt)
+    for key in ("ltp", "open", "close", "volume"):
+        assert key not in depth or depth[key] not in (0, 0.0), key
+
+
+def test_unsubscribing_tbt_releases_the_quote_feed(tbt):
+    _subscribe_tbt(tbt)
+    tbt.outer.unsubscribe(TBT_SYM, EXCH, 3)
+    assert (tbt.outer._QUOTE_FEED_FOR_TBT, FULL) not in tbt.outer._hsm_callback_registry
+    assert f"SymbolUpdate_{FULL}" not in tbt.ad.subscription_callbacks
+
+
+def test_unsubscribing_tbt_keeps_a_live_quote_subscription(tbt):
+    _subscribe_tbt(tbt, 2)
+    tbt.outer.unsubscribe(TBT_SYM, EXCH, 3)
+    assert f"SymbolUpdate_{FULL}" in tbt.ad.subscription_callbacks
+    tbt.send(_snapshot(SF_ID, SF, QUOTE_FIELDS, BASE))
+    assert tbt.topics() == ["NSE_SBIN_QUOTE"]
