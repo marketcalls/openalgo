@@ -80,6 +80,17 @@ _QUOTE_EXTRA_FIELDS = (
 )
 
 
+# Core quote fields, OpenAlgo name -> merged-state key. Published only when the
+# state holds them.
+_KNOWN_QUOTE_FIELDS = (
+    ("volume", "volume"),
+    ("open", "open"),
+    ("high", "high"),
+    ("low", "low"),
+    ("close", "prev_close"),
+)
+
+
 def _quote_extras(state):
     """The optional quote fields present in a merged packet state."""
     return {name: state[key] for name, key in _QUOTE_EXTRA_FIELDS if key in state}
@@ -420,25 +431,21 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if is_partial_update and symbol_key not in self._symbol_state:
                     logger.debug(f"Initializing state for partial update: {symbol_key}")
                     # Create initial state with proper default values
+                    # Only fields the packet carried go in: a price or volume
+                    # it left out is unknown, not 0, and a 0 here would be
+                    # published to quote subscribers as if it were real.
                     initial_state = {
                         "tk": parsed_data.get("tk", ""),
                         "e": parsed_data.get("e", ""),
                         "ts": parsed_data.get("ts", ""),
-                        "ltp": 0.0,
-                        "open": 0.0,
-                        "high": 0.0,
-                        "low": 0.0,
-                        "prev_close": 0.0,
-                        "volume": 0.0,
-                        "bid": 0.0,
-                        "ask": 0.0,
                         "bids": [],
                         "asks": [],
                     }
+                    seeded = ("ltp", "open", "high", "low", "prev_close", "volume", "bid", "ask")
 
                     # **CRITICAL**: Copy any non-zero/non-empty values from the partial update
                     for key, value in parsed_data.items():
-                        if key in initial_state:
+                        if key in initial_state or key in seeded:
                             # Don't overwrite with zero values for price fields
                             if key in ["open", "high", "low", "prev_close", "bid", "ask"]:
                                 if value != 0.0 and value != 21474836.48:  # Kotak's invalid value
@@ -561,6 +568,14 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # is left out when the packet has none (no trade yet).
                 trade_time = _ltt_millis(parsed_data)
                 extras = _quote_extras(parsed_data)
+                # OHLC, volume and previous close only once a packet has
+                # carried them: a first mini touch line has a price and none
+                # of these, and sending 0 would read as a real value.
+                known_quote = {
+                    name: parsed_data[key]
+                    for name, key in _KNOWN_QUOTE_FIELDS
+                    if key in parsed_data
+                }
 
                 for mode in active_modes:
                     mode_map = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
@@ -577,15 +592,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         # publish on a non-zero price meant a mode-2 subscriber
                         # received nothing at all - not even the book's OHLC and
                         # volume - until the instrument's first trade of the day.
-                        publish_data = {
-                            "ltp": effective_ltp,
-                            "volume": parsed_data.get("volume", 0),
-                            "open": parsed_data.get("open", 0.0),
-                            "high": parsed_data.get("high", 0.0),
-                            "low": parsed_data.get("low", 0.0),
-                            "close": parsed_data.get("prev_close", 0.0),
-                            **extras,
-                        }
+                        publish_data = {"ltp": effective_ltp, **known_quote, **extras}
                         if trade_time is not None:
                             publish_data["ltt"] = trade_time
                             publish_data["last_trade_time"] = trade_time
@@ -654,11 +661,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         # field as well.
                         publish_data = {
                             "ltp": effective_ltp,
-                            "volume": parsed_data.get("volume", 0),
-                            "open": parsed_data.get("open", 0.0),
-                            "high": parsed_data.get("high", 0.0),
-                            "low": parsed_data.get("low", 0.0),
-                            "close": parsed_data.get("prev_close", 0.0),
+                            **known_quote,
                             **extras,
                             "depth": {
                                 "buy": depth_buy,
@@ -911,6 +914,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._symbol_state.clear()
                 self._depth_poll_state.clear()
                 self._kotak_to_openalgo.clear()
+                self._alias_registry().clear()
                 self._symbol_modes.clear()
                 self.subscriptions.clear()
                 self._reconnect_attempts = 0
@@ -1104,6 +1108,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._symbol_state.clear()
                 self._depth_poll_state.clear()
                 self._kotak_to_openalgo.clear()
+                self._alias_registry().clear()
                 self._symbol_modes.clear()
                 self.subscriptions.clear()
 

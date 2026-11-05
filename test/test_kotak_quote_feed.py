@@ -337,3 +337,37 @@ def test_the_index_feed_stays_while_another_symbol_still_uses_its_name(feed):
 
     _unsubscribe_index(feed, "NIFTY50", "26999")
     assert feed._enqueued == [("nse_cm", "Nifty 50", "ifu")]
+
+
+# --- review follow-ups ---------------------------------------------------------
+
+
+def test_a_first_mini_tick_publishes_no_zero_ohlc_or_volume(feed):
+    """A mini touch line with no earlier state carries a price and nothing
+    else; the fields it lacks are left out instead of going out as 0."""
+    _map(feed, {2, 3})
+    feed.client._handle_binary(mini(ltp=214000))
+
+    q = _last(feed, "_QUOTE")
+    assert q["ltp"] == 2140.0
+    for key in ("open", "high", "low", "volume"):
+        assert key not in q, key
+    assert not [t for t, d in feed.published if any(d.get(k) == 0 for k in ("open", "volume"))]
+
+
+def test_disconnect_forgets_the_index_aliases(feed):
+    _subscribe_index(feed, "NIFTY", "26000")
+    assert feed._alias_registry()
+
+    feed._ws_client = MagicMock()
+    feed._reconnect_timer = None
+    feed._batch_timer = None
+    feed._subscription_queue = []
+    feed.cleanup_zmq = lambda: None
+    feed.disconnect()
+    assert feed._alias_registry() == {}
+
+    # A late index packet no longer reaches the unsubscribed symbol.
+    feed.published.clear()
+    feed.client._handle_binary(index_packet())
+    assert feed.published == []
