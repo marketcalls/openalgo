@@ -162,12 +162,9 @@ class FyersDataMapper:
                 "upper_circuit": convert_price(fyers_data.get("upper_ckt", 0)),
                 "lower_circuit": convert_price(fyers_data.get("lower_ckt", 0)),
                 "last_traded_time": last_traded_time,
-                "last_trade_time": last_traded_time,
                 "exchange_time": fyers_data.get("exch_feed_time", 0),
                 "avg_trade_price": avg_trade_price,
-                "average_price": avg_trade_price,
                 "last_trade_quantity": last_trade_quantity,
-                "last_quantity": last_trade_quantity,
                 "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
                 "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
                 "change": change,
@@ -176,6 +173,17 @@ class FyersDataMapper:
                 "timestamp": int(time.time()),
                 "data_type": "Quote",
             }
+
+            # The reference names go out only when the frame carried their
+            # source. Index (if) frames have no trade time, average price or
+            # traded quantity, and a 0 there would read as real data.
+            for name, raw_key, value in (
+                ("last_trade_time", "last_traded_time", last_traded_time),
+                ("average_price", "avg_trade_price", avg_trade_price),
+                ("last_quantity", "last_traded_qty", last_trade_quantity),
+            ):
+                if raw_key in fyers_data:
+                    openalgo_data[name] = value
 
             return openalgo_data
 

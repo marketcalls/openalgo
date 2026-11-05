@@ -577,6 +577,21 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         full_symbol = f"{exchange}:{actual_symbol}"
         self._hsm_callback_registry.pop((self._QUOTE_FEED_FOR_TBT, full_symbol), None)
+
+        # A depth unsubscribed before the batch flush still has its quote-feed
+        # request queued; drop it, or the flush would subscribe a feed that
+        # nothing needs any more.
+        with self._hsm_batch_lock:
+            self._hsm_batch_queue = [
+                item
+                for item in self._hsm_batch_queue
+                if not (
+                    item["mode"] == self._QUOTE_FEED_FOR_TBT
+                    and item["exchange"] == exchange
+                    and item["symbol"] == actual_symbol
+                )
+            ]
+
         still_used = any(f"{exchange}:{actual_symbol}:{m}" in self.subscriptions for m in (1, 2))
         if (
             not still_used
@@ -584,6 +599,14 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             and hasattr(self.fyers_adapter, "subscription_callbacks")
         ):
             self.fyers_adapter.subscription_callbacks.pop(f"SymbolUpdate_{full_symbol}", None)
+
+        # With nothing else reading the scrip's quote, forget the stored one, so
+        # a later 50-level subscription merges only a quote from its own feed.
+        quote_still_read = still_used or f"{exchange}:{actual_symbol}:3" in self.subscriptions
+        if not quote_still_read and self.fyers_adapter:
+            forget = getattr(self.fyers_adapter, "forget_quote", None)
+            if forget:
+                forget(exchange, actual_symbol)
 
     def _flush_hsm_batch(self) -> None:
         """

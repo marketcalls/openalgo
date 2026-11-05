@@ -465,7 +465,7 @@ def test_tbt_depth_before_any_quote_has_no_invented_fields(tbt):
     _subscribe_tbt(tbt)
     depth = _tbt_depth(tbt)
     for key in ("ltp", "open", "close", "volume"):
-        assert key not in depth or depth[key] not in (0, 0.0), key
+        assert key not in depth, key
 
 
 def test_unsubscribing_tbt_releases_the_quote_feed(tbt):
@@ -481,3 +481,69 @@ def test_unsubscribing_tbt_keeps_a_live_quote_subscription(tbt):
     assert f"SymbolUpdate_{FULL}" in tbt.ad.subscription_callbacks
     tbt.send(_snapshot(SF_ID, SF, QUOTE_FIELDS, BASE))
     assert tbt.topics() == ["NSE_SBIN_QUOTE"]
+
+
+# --- review follow-ups ---------------------------------------------------------
+
+
+def test_index_quote_leaves_out_reference_fields_it_has_no_source_for():
+    """An index (if) frame has no trade time, average price or traded
+    quantity; their reference names are left out rather than sent as 0."""
+    mapper = FyersDataMapper()
+    index_frame = {
+        "symbol": "NSE:NIFTY50-INDEX",
+        "type": "if",
+        "ltp": 2400000,
+        "prev_close_price": 2390000,
+        "high_price": 2410000,
+        "low_price": 2380000,
+        "open_price": 2395000,
+        "exch_feed_time": 1793170001,
+    }
+    quote = mapper.map_fyers_data(index_frame, "Quote")
+    for key in ("last_trade_time", "average_price", "last_quantity"):
+        assert key not in quote, key
+
+    stock_frame = dict(BASE, symbol=BRSYM, type="sf")
+    quote = mapper.map_fyers_data(stock_frame, "Quote")
+    assert quote["last_trade_time"] == 1793170000
+    assert quote["average_price"] == 800.1
+    assert quote["last_quantity"] == 7
+
+
+def _keep_connection_open(s):
+    """Another symbol stays subscribed, so unsubscribing ours does not close
+    the Fyers connection (the case where an orphaned feed would linger)."""
+    s.outer.subscriptions["NSE:INFY:2"] = {"symbol": "INFY", "exchange": "NSE", "mode": 2}
+
+
+def test_tbt_unsubscribed_before_the_flush_subscribes_no_quote_feed(tbt):
+    _keep_connection_open(tbt)
+    assert tbt.outer.subscribe(TBT_SYM, EXCH, 3)["status"] == "success"
+    tbt.outer.unsubscribe(TBT_SYM, EXCH, 3)
+    if tbt.outer._hsm_batch_timer is not None:
+        tbt.outer._hsm_batch_timer.cancel()
+    tbt.outer._flush_hsm_batch()
+
+    assert SF not in tbt.ad.ws_client.sent
+    assert (tbt.outer._QUOTE_FEED_FOR_TBT, FULL) not in tbt.outer._hsm_callback_registry
+
+
+def test_tbt_resubscription_does_not_merge_the_old_quote(tbt):
+    _keep_connection_open(tbt)
+    _subscribe_tbt(tbt)
+    tbt.send(_snapshot(SF_ID, SF, QUOTE_FIELDS, BASE))
+    tbt.outer.unsubscribe(TBT_SYM, EXCH, 3)
+    assert tbt.ad.get_latest_quote(EXCH, SYM) is None
+
+    _subscribe_tbt(tbt)
+    depth = _tbt_depth(tbt)
+    for key in ("ltp", "open", "close", "volume"):
+        assert key not in depth, key
+
+
+def test_tbt_release_keeps_the_quote_a_5_level_depth_still_reads(tbt):
+    _subscribe_tbt(tbt, 3)
+    tbt.send(_snapshot(SF_ID, SF, QUOTE_FIELDS, BASE))
+    tbt.outer.unsubscribe(TBT_SYM, EXCH, 3)
+    assert tbt.ad.get_latest_quote(EXCH, SYM) is not None

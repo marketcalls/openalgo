@@ -390,6 +390,14 @@ class FyersAdapter:
         fields = latest_quote.get(f"{exchange}:{symbol}")
         return dict(fields) if fields else None
 
+    def forget_quote(self, exchange: str, symbol: str) -> None:
+        """Drop the stored quote of a scrip nothing reads any more."""
+        full_symbol = f"{exchange}:{symbol}"
+        latest_quote, awaiting = self._quote_state()
+        latest_quote.pop(full_symbol, None)
+        awaiting.pop(full_symbol, None)
+        self.last_ltp.pop(full_symbol, None)
+
     def _quote_state(self) -> tuple[dict, dict]:
         """The latest-quote and awaiting-depth maps, created on first use."""
         if getattr(self, "latest_quote", None) is None:
