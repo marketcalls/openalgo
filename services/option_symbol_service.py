@@ -614,6 +614,12 @@ def find_atm_strike_from_actual(ltp: float, available_strikes: list) -> float | 
         logger.error(f"Cannot find ATM strike from a non-numeric LTP: {ltp!r}")
         return None
 
+    if ltp <= 0:
+        # A broker with no price yet answers 0, and the strike closest to 0 is
+        # the lowest one listed, which would be reported as the ATM strike.
+        logger.error(f"Cannot find ATM strike from a non-positive LTP: {ltp!r}")
+        return None
+
     # Find the strike closest to LTP
     atm_strike = min(available_strikes, key=lambda x: abs(x - ltp))
 
