@@ -162,14 +162,26 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning("Received data without token")
                 return
 
+            # Tokens are unique only within an exchange segment, so a tick is
+            # routed on the packet's exchange type and token together. A tick
+            # for NSE token 22 must not reach a BSE subscription to token 22.
+            packet_exchange_type = quote_data.get("exchange_type")
             matching_subscriptions = []
             with self.lock:
                 for sub in self.subscriptions.values():
-                    if sub["token"] == token:
-                        matching_subscriptions.append(sub)
+                    if str(sub["token"]) != str(token):
+                        continue
+                    if packet_exchange_type is not None and str(sub.get("exchange_type")) != str(
+                        packet_exchange_type
+                    ):
+                        continue
+                    matching_subscriptions.append(dict(sub))
 
             if not matching_subscriptions:
-                self.logger.warning(f"Received data for unsubscribed token: '{token}'")
+                self.logger.warning(
+                    f"Received data for unsubscribed token: '{token}' "
+                    f"(exchange type {packet_exchange_type})"
+                )
                 return
 
             packet_mode = quote_data.get("subscription_mode", 1)
@@ -322,6 +334,18 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         try:
             normalized = {"ltp": float(quote_data.get("ltp", 0))}
 
+            # Last traded timestamp is on the wire only in the full (mode 3)
+            # packet; the shorter packets carry the exchange timestamp. The
+            # parser fills absent fields with 0, which is not a time.
+            trade_time = quote_data.get("last_traded_timestamp") or quote_data.get(
+                "exchange_timestamp"
+            )
+            if trade_time:
+                normalized["last_trade_time"] = trade_time
+                normalized["ltt"] = trade_time
+            if quote_data.get("exchange_timestamp"):
+                normalized["exchange_timestamp"] = quote_data["exchange_timestamp"]
+
             if mode >= 2:
                 normalized.update(
                     {
@@ -333,6 +357,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         "volume": int(quote_data.get("volume", 0)),
                         "oi": int(quote_data.get("oi", 0)),
                         "last_trade_quantity": int(quote_data.get("last_traded_qty", 0)),
+                        "last_quantity": int(quote_data.get("last_traded_qty", 0)),
                         "average_price": float(quote_data.get("avg_price", 0)),
                         "total_buy_quantity": int(quote_data.get("total_buy_qty", 0)),
                         "total_sell_quantity": int(quote_data.get("total_sell_qty", 0)),
