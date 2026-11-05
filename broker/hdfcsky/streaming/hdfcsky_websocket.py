@@ -22,7 +22,9 @@ Protocol (docs: "Market Data - WebSocket"):
     `packetType` selects which sub-message is populated: mbpData for cash /
     F&O / currency / commodity packets, indexData for NSE_INDEX / BSE_INDEX,
     greekData for the option-greek packets, and HEARTBEAT frames carry
-    nothing else.
+    nothing else. The *_CIRC and *_OI packet types reuse mbpData for a PARTIAL
+    refresh (band or open interest only), so they are tagged `kind` "circuit" /
+    "oi" and never presented as a full quote.
 """
 
 import json
@@ -52,28 +54,49 @@ from utils.real_threading import wait_for as _cooperative_wait
 
 _real_threading = _runtime.original("threading")
 
-# packetType values that carry an MBPData payload (cash, F&O, currency,
-# commodity, circuit and OI packets), resolved from the generated enum so a
-# proto update cannot silently desync this list.
-_MBP_PACKET_TYPES = frozenset(
+# packetType values that carry an MBPData payload, resolved from the generated
+# enum so a proto update cannot silently desync these lists.
+#
+# All three groups use `mbpData`, but only the *_ALL group populates it fully.
+# The CIRC and OI packets are partial refreshes that leave every other field at
+# its proto3 default -- a circuit packet therefore reads as lastTradedPrice 0,
+# volume 0, empty book. They must never be handed on as a complete quote, so
+# they are tagged separately and the adapter merges them into the last full
+# snapshot instead of replacing it.
+_QUOTE_PACKET_TYPES = frozenset(
     getattr(pb, name)
-    for name in (
-        "NSE_CM_ALL",
-        "NSE_CD_ALL",
-        "NSE_FO_ALL",
-        "BSE_CM",
-        "BSE_FO_ALL",
-        "MCX_PKT",
-        "NSE_CM_CIRC",
-        "NSE_CD_CIRC",
-        "NSE_FO_CIRC",
-        "NSE_CD_OI",
-        "NSE_FO_OI",
-        "BSE_FO_OI",
-    )
+    for name in ("NSE_CM_ALL", "NSE_CD_ALL", "NSE_FO_ALL", "BSE_CM", "BSE_FO_ALL", "MCX_PKT")
 )
+_CIRCUIT_PACKET_TYPES = frozenset((pb.NSE_CM_CIRC, pb.NSE_CD_CIRC, pb.NSE_FO_CIRC))
+_OI_PACKET_TYPES = frozenset((pb.NSE_CD_OI, pb.NSE_FO_OI, pb.BSE_FO_OI))
+
 _INDEX_PACKET_TYPES = frozenset((pb.NSE_INDEX, pb.BSE_INDEX))
 _GREEK_PACKET_TYPES = frozenset((pb.NSE_FO_GREEK, pb.BSE_FO_GREEK))
+
+# packetType -> OpenAlgo exchange. `instrumentId` is only unique WITHIN an
+# exchange: 840 tokens in the live security master appear on more than one
+# OpenAlgo exchange (836 NSE/CDS pairs alone, plus BSE_INDEX SENSEX sharing
+# token 1 with an NSE scrip). The packet type is the only thing on the wire
+# that disambiguates them, so every tick carries the exchange it resolves to
+# and the adapter keys its subscription state on (exchange, token).
+_PACKET_TYPE_EXCHANGE = {
+    pb.NSE_CM_ALL: "NSE",
+    pb.NSE_CM_CIRC: "NSE",
+    pb.NSE_CD_ALL: "CDS",
+    pb.NSE_CD_CIRC: "CDS",
+    pb.NSE_CD_OI: "CDS",
+    pb.NSE_FO_ALL: "NFO",
+    pb.NSE_FO_CIRC: "NFO",
+    pb.NSE_FO_OI: "NFO",
+    pb.NSE_FO_GREEK: "NFO",
+    pb.BSE_CM: "BSE",
+    pb.BSE_FO_ALL: "BFO",
+    pb.BSE_FO_OI: "BFO",
+    pb.BSE_FO_GREEK: "BFO",
+    pb.MCX_PKT: "MCX",
+    pb.NSE_INDEX: "NSE_INDEX",
+    pb.BSE_INDEX: "BSE_INDEX",
+}
 
 
 class HDFCSkyWebSocket:
@@ -107,7 +130,12 @@ class HDFCSkyWebSocket:
         self.lock = _real_threading.Lock()
 
         # Subscription state, keyed by scripId ("NSE_2885").
-        self.subscribed: dict[str, str] = {}  # scripId -> subscription type
+        self.subscribed: dict[str, str] = {}  # scripId -> subscription type SENT
+        # scripId -> subscription type WANTED. Written the moment a subscribe
+        # is queued and cleared the moment an unsubscribe is issued, so a frame
+        # that was queued before an unsubscribe cannot resubscribe the
+        # instrument when the drain reaches it.
+        self.desired: dict[str, str] = {}
         self.pending_subscriptions: deque = deque()
         self._subscription_thread: threading.Thread | None = None
 
@@ -271,6 +299,7 @@ class HDFCSkyWebSocket:
 
         with self.lock:
             for scrip_id in scrip_ids:
+                self.desired[scrip_id] = subscription_type
                 self.pending_subscriptions.append((scrip_id, subscription_type))
 
         if not self._subscription_thread or not self._subscription_thread.is_alive():
@@ -290,10 +319,10 @@ class HDFCSkyWebSocket:
     def _process_pending_subscriptions(self):
         while self.pending_subscriptions and self.running:
             if not self.connected:
-                # Never drop queued subscriptions here: _resubscribe_all replays
-                # only already-sent scrips, so clearing pending would lose these
-                # permanently. Wait for the (re)connection instead -- the drain
-                # resumes once the feed is back, and stop() ends the wait.
+                # Wait for the (re)connection rather than dropping the queue --
+                # the drain resumes once the feed is back, and stop() ends the
+                # wait. Anything queued is also in `desired`, so the reconnect
+                # replay covers it even if this loop is torn down first.
                 if self._stop_event.wait(1.0):
                     return
                 continue
@@ -331,6 +360,18 @@ class HDFCSkyWebSocket:
         try:
             if not self.connected or not self.ws:
                 return False
+            with self.lock:
+                # Drop anything unsubscribed, or re-queued at another tier,
+                # since this frame was built. Without this a mode downgrade
+                # followed immediately by a full unsubscribe would leave the
+                # instrument live at the broker after OpenAlgo dropped it.
+                scrip_ids = [
+                    scrip_id
+                    for scrip_id in scrip_ids
+                    if self.desired.get(scrip_id) == subscription_type
+                ]
+            if not scrip_ids:
+                return True
             message = {
                 "heart_beat": False,
                 "subscribe": [
@@ -351,22 +392,39 @@ class HDFCSkyWebSocket:
         try:
             if not self.ws:
                 return False
+            wanted = {scrip_id for scrip_id in scrip_ids if scrip_id}
             with self.lock:
+                # Retract ALL local state before sending, in one step. The
+                # frame can fail, and state split across a failure is what
+                # resurrects an instrument: leaving it in `subscribed` while
+                # `desired` has dropped it means the reconnect replay puts it
+                # back. Purge queued frames for the same reason.
                 payload = [
-                    {"scripId": scrip_id, "type": self.subscribed.get(scrip_id, "ALL")}
+                    {
+                        "scripId": scrip_id,
+                        "type": self.subscribed.get(scrip_id, self.desired.get(scrip_id, "ALL")),
+                    }
                     for scrip_id in scrip_ids
                     if scrip_id
                 ]
+                for scrip_id in wanted:
+                    self.desired.pop(scrip_id, None)
+                    self.subscribed.pop(scrip_id, None)
+                if wanted:
+                    self.pending_subscriptions = deque(
+                        item for item in self.pending_subscriptions if item[0] not in wanted
+                    )
             if not payload:
                 return True
             if self.connected:
                 # Capital S: the documented key is "unSubscribe".
                 self.ws.send(json.dumps({"heart_beat": False, "unSubscribe": payload}))
-            with self.lock:
-                for scrip_id in scrip_ids:
-                    self.subscribed.pop(scrip_id, None)
             return True
         except Exception as e:
+            # State is already retracted, so a failed frame cannot resurrect
+            # the instrument: the reconnect replay works off `desired`, and a
+            # send failure here means the socket is on its way down anyway --
+            # the broker drops the whole subscription set with it.
             self.logger.error(f"Error unsubscribing: {e}")
             return False
 
@@ -384,11 +442,17 @@ class HDFCSkyWebSocket:
         return self.connected and self.running
 
     def _resubscribe_all(self):
+        """Replay the WANTED subscription set after a reconnect.
+
+        `desired` is the authority, not `subscribed`: replaying what was last
+        successfully sent would resurrect an instrument whose unSubscribe frame
+        failed, and would miss one whose subscribe frame never got out.
+        """
         with self.lock:
-            if not self.subscribed:
+            if not self.desired:
                 return
             by_type: dict[str, list[str]] = {}
-            for scrip_id, sub_type in self.subscribed.items():
+            for scrip_id, sub_type in self.desired.items():
                 by_type.setdefault(sub_type, []).append(scrip_id)
         for sub_type, scrip_ids in by_type.items():
             for start in range(0, len(scrip_ids), self.MAX_SCRIPS_PER_SUBSCRIBE):
@@ -398,12 +462,15 @@ class HDFCSkyWebSocket:
                         json.dumps(
                             {
                                 "heart_beat": False,
-                                "subscribe": [
-                                    {"scripId": s, "type": sub_type} for s in batch
-                                ],
+                                "subscribe": [{"scripId": s, "type": sub_type} for s in batch],
                             }
                         )
                     )
+                    with self.lock:
+                        # Keep `subscribed` (what was sent) in step with
+                        # `desired` (what is wanted) after a replay.
+                        for scrip_id in batch:
+                            self.subscribed[scrip_id] = sub_type
                     if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
                         return
                 except Exception as e:
@@ -576,7 +643,14 @@ class HDFCSkyWebSocket:
 
         # packetTimestamp is in milliseconds when the server sets it.
         timestamp = int(packet.packetTimestamp) or int(time.time() * 1000)
-        tick = {"token": token, "timestamp": timestamp, "packet_type": packet_type}
+        tick = {
+            "token": token,
+            "timestamp": timestamp,
+            "packet_type": packet_type,
+            # None for packet types the map does not cover; the adapter then
+            # falls back to a unique-token lookup rather than guessing.
+            "exchange": _PACKET_TYPE_EXCHANGE.get(packet_type),
+        }
 
         if packet_type in _INDEX_PACKET_TYPES:
             index = packet.indexData
@@ -610,7 +684,24 @@ class HDFCSkyWebSocket:
             )
             return tick
 
-        if packet_type in _MBP_PACKET_TYPES or packet.HasField("mbpData"):
+        if packet_type in _CIRCUIT_PACKET_TYPES:
+            # Circuit refresh: only the band moved. Everything else on the
+            # message is a proto3 default and must not overwrite live values.
+            mbp = packet.mbpData
+            tick.update(
+                {
+                    "kind": "circuit",
+                    "lower_limit": mbp.lowerCircuitLimit,
+                    "upper_limit": mbp.upperCircuitLimit,
+                }
+            )
+            return tick
+
+        if packet_type in _OI_PACKET_TYPES:
+            tick.update({"kind": "oi", "oi": packet.mbpData.oi})
+            return tick
+
+        if packet_type in _QUOTE_PACKET_TYPES or packet.HasField("mbpData"):
             mbp = packet.mbpData
             tick.update(
                 {
