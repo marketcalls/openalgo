@@ -352,8 +352,17 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 after = self._needed_upstox_mode(instrument_key)
 
             if after is not None:
-                if after != before:
-                    self.ws_client.subscribe([instrument_key], after)
+                if after != before and not self.ws_client.subscribe([instrument_key], after):
+                    # The key is still held in the old mode: keep this
+                    # subscription recorded so the state matches the feed and
+                    # a retry can try the change again.
+                    with self.lock:
+                        if sub_info is not None:
+                            self.subscriptions.setdefault(correlation_id, sub_info)
+                    return self._create_error_response(
+                        "UNSUBSCRIBE_FAILED",
+                        f"Failed to change {symbol} on {exchange} to {after} mode",
+                    )
                 self.logger.info(
                     f"Unsubscribed {symbol} on {exchange} mode {mode}; "
                     f"{instrument_key} stays subscribed in {after} mode"

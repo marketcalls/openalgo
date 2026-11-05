@@ -229,8 +229,53 @@ def test_client_moves_a_key_between_modes():
 
     assert client.subscribe([KEY], "ltpc")
     assert client.subscribe([KEY], "full")
-    assert client._keys_by_mode == {"ltpc": set(), "full": {KEY}}
+    assert client._keys_by_mode == {"full": {KEY}}
     # Back down to ltpc once the full subscriber leaves: must be sent, not deduplicated.
     assert client.subscribe([KEY], "ltpc")
     assert client.ws.send.call_count == 3
-    assert client._keys_by_mode == {"ltpc": {KEY}, "full": set()}
+    assert client._keys_by_mode == {"ltpc": {KEY}}
+
+
+# --- review follow-ups ---------------------------------------------------------
+
+
+def _client():
+    from broker.upstox.streaming.upstox_client import UpstoxWebSocketClient
+
+    client = UpstoxWebSocketClient.__new__(UpstoxWebSocketClient)
+    client.logger = logging.getLogger("test_upstox_quote_feed")
+    client._connected = True
+    client.ws = MagicMock()
+    client._subscriptions = set()
+    client._keys_by_mode = {}
+    return client
+
+
+def test_an_emptied_mode_does_not_trigger_the_combined_cap():
+    """Moving every key out of a mode must not leave the connection counted
+    as multi-mode, which would cap later subscribes at the combined limit."""
+    client = _client()
+    assert client.subscribe([KEY], "ltpc")
+    assert client.subscribe([KEY], "full")  # the only ltpc key moves to full
+    assert client.subscribe([KEY], "ltpc")  # and back: full is now empty
+
+    many = [f"NSE_EQ|K{i}" for i in range(client.DEFAULT_MODE_COMBINED_LIMIT + 10)]
+    keys, dropped = client._enforce_key_limits(many, "ltpc")
+    limit = client.MODE_KEY_LIMITS.get("ltpc", client.DEFAULT_MODE_KEY_LIMIT)
+    assert len(keys) == min(len(many), limit - 1)
+    assert dropped == len(many) - len(keys)
+
+
+def test_a_failed_mode_change_on_unsubscribe_is_reported(adapter):
+    _add_sub(adapter, 2)
+    _add_sub(adapter, 1)
+    adapter.ws_client.subscribe.return_value = False
+    token_info = {"token": "45450", "brexchange": "NSE_FO"}
+    with patch(
+        "broker.upstox.streaming.upstox_adapter.SymbolMapper.get_token_from_symbol",
+        return_value=token_info,
+    ):
+        result = adapter.unsubscribe("NIFTY28NOV2423000CE", "NFO", 2)
+
+    assert result["status"] == "error"
+    assert "NIFTY28NOV2423000CE_NFO_2" in adapter.subscriptions, "kept for a retry"

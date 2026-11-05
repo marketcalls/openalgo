@@ -362,9 +362,12 @@ class UpstoxWebSocketClient:
                 self._subscriptions.update(chunk)
                 # Upstox holds one mode per key: a `sub` in this mode moves the
                 # key out of whichever mode it was in before.
-                for other_mode, other_keys in self._keys_by_mode.items():
+                for other_mode in list(self._keys_by_mode):
                     if other_mode != mode:
+                        other_keys = self._keys_by_mode[other_mode]
                         other_keys.difference_update(chunk)
+                        if not other_keys:
+                            del self._keys_by_mode[other_mode]
                 self._keys_by_mode.setdefault(mode, set()).update(chunk)
             self.logger.debug(f"Subscribed to {len(keys)} instruments in {mode} mode")
             return True
@@ -413,7 +416,9 @@ class UpstoxWebSocketClient:
                 return [], dropped
 
         # Combined cap: only bites once a second mode is live on this connection.
-        modes_in_use = set(self._keys_by_mode) | {mode}
+        # A mode whose keys have all moved or been unsubscribed holds none and
+        # does not count.
+        modes_in_use = {m for m, held in self._keys_by_mode.items() if held} | {mode}
         if len(modes_in_use) > 1:
             budget = min(
                 self.MODE_COMBINED_LIMITS.get(m, self.DEFAULT_MODE_COMBINED_LIMIT)
