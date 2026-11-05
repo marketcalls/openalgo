@@ -331,16 +331,9 @@ QUOTE_KEYS = {
     "mode",
     "ltp",
     "ltt",
+    "last_trade_time",
     "timestamp",
     "volume",
-    "last_quantity",
-    "average_price",
-    "total_buy_quantity",
-    "total_sell_quantity",
-    "open",
-    "high",
-    "low",
-    "close",
     "oi",
     "open_interest",
     "upper_circuit",
@@ -359,6 +352,7 @@ def test_depth_tick_fans_out_to_every_mode():
         "mode": "ltp",
         "ltp": 1290.5,
         "ltt": 1761700000123,
+        "last_trade_time": 1761700000123,
         "timestamp": 1,
     }
 
@@ -369,8 +363,19 @@ def test_depth_tick_fans_out_to_every_mode():
     assert quote["volume"] == 4000
     assert quote["upper_circuit"] == 1419.5
     assert quote["lower_circuit"] == 1161.5
-    for k in ("open", "high", "low", "close", "last_quantity", "average_price", "oi"):
-        assert quote[k] == 0
+    assert quote["oi"] == 0
+    # The Sahi stream carries none of these: they are left out, never sent as 0.
+    for k in (
+        "open",
+        "high",
+        "low",
+        "close",
+        "last_quantity",
+        "average_price",
+        "total_buy_quantity",
+        "total_sell_quantity",
+    ):
+        assert k not in quote
 
     depth = out["NSE_RELIANCE_DEPTH"]
     assert set(depth) == QUOTE_KEYS | {"depth"}
@@ -400,7 +405,14 @@ def test_index_ltp_without_time_and_derivative_oi():
     _, tick = pb.decode_server_message(server(2, vfield(1, 26000) + vfield(4, 2456735)))
     ((topic, ltp),) = build_payloads(pb.KIND_LTP, tick, "NIFTY", "NSE_INDEX", {1}, 7)
     assert topic == "NSE_INDEX_NIFTY_LTP"
-    assert ltp["ltp"] == 24567.35 and ltp["ltt"] == 0 and ltp["exchange"] == "NSE_INDEX"
+    assert ltp["ltp"] == 24567.35 and ltp["exchange"] == "NSE_INDEX"
+    # Indices carry no last_trade_time: no 0 (1970) timestamp is published.
+    assert "ltt" not in ltp and "last_trade_time" not in ltp
+
+    _, tick = pb.decode_server_message(server(4, vfield(1, 26000) + vfield(4, 2456735)))
+    out = dict(build_payloads(pb.KIND_DEPTH, tick, "NIFTY", "NSE_INDEX", {2, 3}, 7))
+    for payload in out.values():
+        assert "ltt" not in payload and "last_trade_time" not in payload
 
     _, tick = pb.decode_server_message(server(3, vfield(1, 5) + vfield(4, 1) + vfield(10, 1500)))
     ((_, quote),) = build_payloads(pb.KIND_QUOTE, tick, "NIFTYFUT", "NFO", {2}, 0)
