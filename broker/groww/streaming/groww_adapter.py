@@ -332,6 +332,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_client = None
             self.subscriptions.clear()
             self.subscription_keys.clear()
+            # Quotes are published from this cache, so a session's last values
+            # must not reappear on the first ticks after a reconnect.
+            self.market_cache.clear()
 
             # Clean up ZeroMQ resources
             self.cleanup_zmq()

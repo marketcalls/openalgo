@@ -94,3 +94,40 @@ def test_index_quote_omits_fields_the_tick_does_not_carry(adapter):
     assert data["ltp"] == 24350.75
     for key in ("open", "high", "low", "close", "volume"):
         assert key not in data
+
+
+def test_disconnect_clears_the_merged_cache(adapter):
+    _add_sub(adapter, "SBIN", "NSE", 2, "3045")
+    adapter._on_data(
+        {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "mode": "ltp",
+            "ltp_data": {"ltp": 812.5, "open": 805.0, "high": 815.0, "timestamp": 1730790000000},
+        }
+    )
+    assert adapter.market_cache.snapshot("NSE", "CASH", "3045")
+
+    adapter.running = True
+    adapter.batch_timer = None
+    adapter.batch_lock = threading.Lock()
+    adapter.subscription_queue = []
+    adapter.subscription_keys = {}
+    adapter.ws_client = None
+    adapter.cleanup_zmq = lambda: None
+    adapter.disconnect()
+
+    # After a reconnect, a sparse first tick shows only what it carries.
+    _add_sub(adapter, "SBIN", "NSE", 2, "3045")
+    adapter.published.clear()
+    adapter._on_data(
+        {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "mode": "ltp",
+            "ltp_data": {"ltp": 813.0, "timestamp": 1730800000000},
+        }
+    )
+    data = adapter.published[-1][1]
+    assert data["ltp"] == 813.0
+    assert "open" not in data and "high" not in data
