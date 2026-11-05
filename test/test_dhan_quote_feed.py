@@ -192,3 +192,17 @@ def test_unsubscribe_all_clears_prev_close(adapter):
     feed(adapter, prev_close_frame(1280.5, 120))
     adapter.unsubscribe_all()
     assert adapter.prev_close_data == {}
+
+
+def test_disconnect_clears_prev_close(adapter):
+    subscribe(adapter, 2)
+    feed(adapter, prev_close_frame(1280.5, 120))
+    assert adapter.prev_close_data
+
+    adapter.running = True
+    adapter.connected = True
+    adapter.batch_timer = None
+    adapter._stop_fallback_monitor_internal = lambda: None
+    adapter.cleanup_zmq = lambda: None
+    adapter.disconnect()
+    assert adapter.prev_close_data == {}

@@ -266,6 +266,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.depth_20_data_received.clear()
                 self.depth_20_fallbacks.clear()
                 self.subscription_queue.clear()
+                # Dhan sends a fresh Prev Close packet on every subscribe, so a
+                # value from this session must not stand in for it after a
+                # reconnect.
+                self.prev_close_data.clear()
 
             self.logger.debug("Dhan adapter state cleared")
 
