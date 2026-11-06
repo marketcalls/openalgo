@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
 
@@ -656,11 +657,58 @@ class SamcoWebSocket:
             "exchange_timestamp": int(time.time() * 1000),
         }
 
+        # Fields published only when Samco actually sent them (merged state), so
+        # a stream that never reports one does not publish an invented 0.
+        if data.get("avgPr") not in (None, ""):
+            result["average_price"] = self._safe_float(data.get("avgPr"))
+        total_buy = data.get("tbq") or data.get("tBQ")
+        if total_buy not in (None, ""):
+            result["total_buy_quantity"] = self._safe_int(total_buy)
+        total_sell = data.get("taq") or data.get("tSQ")
+        if total_sell not in (None, ""):
+            result["total_sell_quantity"] = self._safe_int(total_sell)
+        trade_time_ms = self._parse_trade_time(data)
+        if trade_time_ms:
+            result["last_trade_time_ms"] = trade_time_ms
+
         # Add depth data if available
         if depth_buy or depth_sell:
             result["depth"] = {"buy": depth_buy, "sell": depth_sell}
 
         return result
+
+    # lTrdT / ltt are IST wall-clock strings ("01 Oct 2019, 06:47:03 PM"),
+    # lttUTC the same instant in UTC (docs 13-streaming-data.md).
+    _TRADE_TIME_FORMAT = "%d %b %Y, %I:%M:%S %p"
+    _IST = timezone(timedelta(hours=5, minutes=30))
+
+    def _parse_trade_time(self, data: dict) -> int | None:
+        """Return the exchange last-trade time as epoch milliseconds, or None.
+
+        Prefers lTrdT/ltt (IST), then lttUTC. A purely numeric value is taken
+        as epoch milliseconds (seconds if it is too small to be milliseconds).
+        Anything unparseable or non-positive yields None so ltt is omitted.
+        """
+        candidates = (
+            (data.get("lTrdT"), self._IST),
+            (data.get("ltt"), self._IST),
+            (data.get("lttUTC"), UTC),
+        )
+        for value, tz in candidates:
+            if value in (None, ""):
+                continue
+            text = str(value).strip()
+            try:
+                if text.replace(".", "", 1).isdigit():
+                    number = int(float(text))
+                    if number <= 0:
+                        continue
+                    return number if number >= 10**11 else number * 1000
+                parsed = datetime.strptime(text, self._TRADE_TIME_FORMAT).replace(tzinfo=tz)
+                return int(parsed.timestamp() * 1000)
+            except (ValueError, TypeError, OverflowError):
+                continue
+        return None
 
     def _safe_float(self, value) -> float:
         """Safely convert value to float"""
