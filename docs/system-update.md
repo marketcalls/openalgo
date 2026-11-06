@@ -18,7 +18,7 @@ Every route requires a logged-in session. `POST` also needs the Flask-WTF
 
 | Layout | Detected by | What a click does |
 |---|---|---|
-| Server | `/var/python/openalgo` is a git checkout with a systemd unit `openalgo` | Detached updater: stop service, back up `db/*`, pull, sync deps, migrate, start service |
+| Server | git checkout at `/var/python/openalgo` (the `openalgo` systemd unit is stopped/started when present) | Detached updater: stop service, back up `db/*`, pull, sync deps (plus `requirements-nginx.txt` + gunicorn/eventlet when the unit and `.venv` are present), migrate, start service |
 | Docker | `/.dockerenv` exists | Writes `/app/tmp/update_requested.json`; the host watcher pulls, rebuilds and recreates the container |
 | Local | any other checkout | Same sequence with **no sudo and no service restart** (and no compose side effect unless this checkout's own compose services are actually running) |
 

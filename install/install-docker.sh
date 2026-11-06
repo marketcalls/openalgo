@@ -869,7 +869,19 @@ check_status "Nginx reload failed"
 # Build and start Docker container
 log "\n=== Building Docker Image ===" "$BLUE"
 log "Includes automated frontend build. This may take 2-5 minutes depending on your server..." "$YELLOW"
-sudo docker compose build
+# Bake real version stamps into the image — without them /system-update would
+# report "unknown" until the first web-triggered rebuild. Run the git queries
+# through $SUDO: the clone at $INSTALL_PATH is root-owned, so as the invoking
+# user git rejects it ("dubious ownership") and every stamp would be "unknown".
+# Passed through sudo explicitly because sudo's env_reset would drop them
+# otherwise. The remote URL is sanitized here too — a credential-bearing URL
+# must not reach a build ARG or a process listing (the Dockerfile strips it
+# again, but only after compose has seen it).
+export GIT_SHA="$($SUDO git -C "$INSTALL_PATH" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+export GIT_BRANCH="$($SUDO git -C "$INSTALL_PATH" branch --show-current 2>/dev/null || echo main)"
+GIT_REMOTE_RAW="$($SUDO git -C "$INSTALL_PATH" remote get-url origin 2>/dev/null || echo unknown)"
+export GIT_REMOTE="$(printf '%s' "$GIT_REMOTE_RAW" | sed -E 's#(://)[^/@]+@#\1#')"
+sudo env GIT_SHA="$GIT_SHA" GIT_BRANCH="$GIT_BRANCH" GIT_REMOTE="$GIT_REMOTE" docker compose build
 check_status "Docker build failed"
 
 log "\n=== Starting Docker Container ===" "$BLUE"

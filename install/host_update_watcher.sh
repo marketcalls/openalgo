@@ -30,7 +30,13 @@ if ! have_flag; then
   exit 0  # nothing requested — quiet exit, no log spam
 fi
 
-FLAG_JSON="$(read_flag)"
+FLAG_JSON="$(read_flag || true)"
+# A partially written flag is possible for a split second; re-read once before
+# declaring the request malformed.
+if ! printf '%s' "$FLAG_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d.get("force"), bool) else 1)' 2>/dev/null; then
+  sleep 1
+  FLAG_JSON="$(read_flag || true)"
+fi
 log "Update requested: $FLAG_JSON"
 
 # Validate the request before acting on it — any existing file used to pass.
@@ -40,7 +46,7 @@ if ! printf '%s' "$FLAG_JSON" | python3 -c 'import json,sys; d=json.load(sys.std
   clear_flag
   exit 1
 fi
-FORCE="$(printf '%s' "$FLAG_JSON" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("force") else "0")')"
+FORCE="$(printf '%s' "$FLAG_JSON" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("force") else "0")' || echo 0)"
 
 # --- market-hours guard (authoritative) ---
 if [ "$FORCE" != "1" ]; then
@@ -60,7 +66,12 @@ START="$(date -u '+%FT%TZ')"
 write_result "{\"state\": \"running\", \"started_at\": \"$START\", \"summary\": \"git pull + compose build + up -d in progress\"}"
 clear_flag
 
-cd "$APP"
+# A failed cd must not leave state=running forever, blocking future updates.
+if ! cd "$APP"; then
+  log "cannot cd to $APP"
+  write_result "{\"state\": \"error\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"watcher cannot cd to $APP\"}"
+  exit 1
+fi
 
 # Host is authoritative for branch (container has no git; flag only hints).
 BRANCH="$(git branch --show-current 2>/dev/null || echo main)"
@@ -70,12 +81,21 @@ if ! git pull >>"$LOG" 2>&1; then
   write_result "{\"state\": \"error\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"git pull failed — see host log/host_watcher.log\"}"
   exit 1
 fi
-_UPSTREAM_REMOTE="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null | cut -d/ -f1)"
-export GIT_SHA="$(git rev-parse --short HEAD)"
+# @{u} fails when the branch tracks a raw URL remote (no remote-tracking ref
+# is stored for those) — then use the configured remote URL itself, so the
+# baked stamp still points at the repo the branch actually pulls from.
+# Never let the lookup kill the script under set -e.
+_UPSTREAM_REMOTE="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null | cut -d/ -f1 || true)"
+if [ -n "$_UPSTREAM_REMOTE" ]; then
+  GIT_REMOTE_RAW="$(git remote get-url "$_UPSTREAM_REMOTE" 2>/dev/null || echo unknown)"
+else
+  GIT_REMOTE_RAW="$(git config --get "branch.$BRANCH.remote" 2>/dev/null || echo unknown)"
+fi
+export GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 export GIT_BRANCH="$BRANCH"
 # Strip any user:pass@ userinfo — a remote URL may embed credentials and must
 # never be baked into the image or written to a log.
-GIT_REMOTE_RAW="$(git remote get-url "${_UPSTREAM_REMOTE:-origin}" 2>/dev/null || git remote get-url origin 2>/dev/null || echo unknown)"
+GIT_REMOTE_RAW="${GIT_REMOTE_RAW:-unknown}"
 export GIT_REMOTE="$(printf '%s' "$GIT_REMOTE_RAW" | sed -E 's#(://)[^/@]+@#\1#')"
 log "Building $GIT_SHA ($GIT_BRANCH @ $GIT_REMOTE) …"
 
@@ -94,13 +114,15 @@ if ! docker compose up -d >>"$LOG" 2>&1; then
 fi
 
 # Wait for the container to report running/healthy before declaring success.
+# The compose healthcheck has start_period 40s + interval 30s, so "healthy"
+# can legitimately take ~2 min after the recreate — poll for 3 minutes.
 STATE="unknown"
-for _ in $(seq 1 30); do
+for _ in $(seq 1 36); do
   STATE="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || echo unknown)"
   case "$STATE" in
     running|healthy) break ;;
   esac
-  sleep 2
+  sleep 5
 done
 if [ "$STATE" != "running" ] && [ "$STATE" != "healthy" ]; then
   log "Container not healthy after recreate (state=$STATE)"

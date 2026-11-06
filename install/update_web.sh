@@ -20,13 +20,27 @@
 #   * refuses market hours 09:00–15:30 IST unless WEB_UPDATE_FORCE=1
 #     (the web route sets it only when the user confirmed "force")
 #   * logs to log/update_web.log
-#   * any failed step aborts the update (set -euo pipefail) — the old
-#     behaviour of reporting success after a hidden failure is gone
+#   * any failed step aborts the update (set -euo pipefail), and if the
+#     service was stopped, the exit trap starts it again — a failed update
+#     never leaves OpenAlgo down
 set -euo pipefail
 shopt -s nullglob
 
 LOCK="/tmp/openalgo_update.lock"
-trap 'rm -f "$LOCK"' EXIT
+LOG=""
+SERVICE=""
+SERVICE_STOPPED=0
+
+on_exit() {
+  # Recover the service BEFORE releasing the lock, so the route cannot
+  # launch a second updater while the restart is still in flight.
+  if [ "$SERVICE_STOPPED" -eq 1 ] && [ "$1" -ne 0 ] && [ -n "$SERVICE" ]; then
+    echo "Update failed (exit $1) — restarting service $SERVICE" | tee -a "${LOG:-/dev/null}" || true
+    sudo systemctl start "$SERVICE" || true
+  fi
+  rm -f "$LOCK"
+}
+trap 'on_exit $?' EXIT
 
 # App root: pinned $1 > APP env > the directory above this script.
 APP="${1:-${APP:-}}"
@@ -51,13 +65,19 @@ if [ "$(id -u)" -eq 0 ] && [ "$OWNER" != "root" ]; then
   RUN_AS=(sudo -u "$OWNER")
 fi
 DOCKER=(docker)
-if [ "$(id -u)" -ne 0 ]; then
+# Only fall back to sudo when plain docker is not usable (e.g. the user is
+# not in the docker group) — a docker-group user must not get a sudo prompt.
+if ! docker ps >/dev/null 2>&1; then
   DOCKER=(sudo docker)
 fi
 UV_BIN="$(command -v uv || true)"
 
 "${RUN_AS[@]}" mkdir -p log install/logs
 LOG="$APP/log/update_web.log"
+# Keep the log owned by the checkout owner even when a root run creates it.
+if [ "$(id -u)" -eq 0 ] && [ "$OWNER" != "root" ]; then
+  "${RUN_AS[@]}" touch "$LOG" 2>/dev/null || true
+fi
 log() { echo "$*" | tee -a "$LOG"; }
 
 log "===== web update started $(date -u '+%F %T UTC') as $(id -un) (app root: $APP) ====="
@@ -73,14 +93,16 @@ if [ "$FORCE" != "1" ]; then
 fi
 
 # --- service? (server installs have a systemd unit `openalgo`) -------------
-SERVICE=""
 if [ "$(id -u)" -eq 0 ] && command -v systemctl >/dev/null 2>&1 \
    && systemctl list-unit-files 2>/dev/null | grep -q '^openalgo\.service'; then
   SERVICE="openalgo"
 fi
 if [ -n "$SERVICE" ]; then
   log "Stopping service $SERVICE …"
-  sudo systemctl stop "$SERVICE" || log "WARN: systemctl stop failed (continuing)"
+  # A failed stop must abort: otherwise we would mutate code and databases
+  # while OpenAlgo is still running.
+  sudo systemctl stop "$SERVICE"
+  SERVICE_STOPPED=1
 fi
 
 # --- back up databases FIRST; a failed backup aborts the update ------------
@@ -110,6 +132,14 @@ log "git pull …"
 if [ -n "$UV_BIN" ]; then
   log "uv sync …"
   "${RUN_AS[@]}" "$UV_BIN" sync 2>&1 | tee -a "$LOG"
+  # Server deployments add gunicorn/eventlet on top of the lockfile (they
+  # are deliberately not in pyproject.toml), mirroring install/update.sh
+  # step 5 — plain `uv sync` would prune them from the deployment venv.
+  if [ -n "$SERVICE" ] && [ -f requirements-nginx.txt ] && [ -x "$APP/.venv/bin/python" ]; then
+    log "uv pip install -r requirements-nginx.txt + gunicorn/eventlet (server venv) …"
+    "${RUN_AS[@]}" "$UV_BIN" pip install --python "$APP/.venv/bin/python" -r requirements-nginx.txt 2>&1 | tee -a "$LOG"
+    "${RUN_AS[@]}" "$UV_BIN" pip install --python "$APP/.venv/bin/python" "gunicorn>=25.0,<26" eventlet 2>&1 | tee -a "$LOG"
+  fi
 elif [ -x "$APP/.venv/bin/python" ]; then
   log "uv not found — installing dependencies with the venv's pip …"
   "${RUN_AS[@]}" "$APP/.venv/bin/python" -m pip install . 2>&1 | tee -a "$LOG"
@@ -123,6 +153,9 @@ if [ -f upgrade/migrate_all.py ]; then
   log "upgrade/migrate_all.py …"
   if [ -n "$UV_BIN" ]; then
     "${RUN_AS[@]}" "$UV_BIN" run upgrade/migrate_all.py 2>&1 | tee -a "$LOG"
+  elif [ -x "$APP/.venv/bin/python" ]; then
+    # Prefer the project venv — system python3 may miss project modules.
+    "${RUN_AS[@]}" "$APP/.venv/bin/python" upgrade/migrate_all.py 2>&1 | tee -a "$LOG"
   else
     "${RUN_AS[@]}" python3 upgrade/migrate_all.py 2>&1 | tee -a "$LOG"
   fi
@@ -142,6 +175,7 @@ fi
 if [ -n "$SERVICE" ]; then
   log "Starting service $SERVICE …"
   sudo systemctl start "$SERVICE"
+  SERVICE_STOPPED=0
 fi
 
 log "===== web update finished $(date -u '+%F %T UTC') ====="
