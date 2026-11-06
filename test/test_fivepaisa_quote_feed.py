@@ -152,7 +152,7 @@ def test_zero_price_holds_last_value_but_quantities_follow_the_feed():
     assert data["volume"] == 1300
 
 
-def test_unsubscribe_releases_scrip_snapshot():
+def test_unsubscribe_releases_scrip_snapshot(monkeypatch):
     adapter = _adapter(_sub(2))
     adapter._on_data(None, dict(FEED))
     assert ("N", "C", "1660") in adapter.last_snapshot
@@ -160,14 +160,14 @@ def test_unsubscribe_releases_scrip_snapshot():
     adapter.connected = False
     adapter.ws_client = None
     adapter.subscriptions = {"ITC_NSE_2": _sub(2)}
-    original = adapter_mod.SymbolMapper.get_token_from_symbol
-    adapter_mod.SymbolMapper.get_token_from_symbol = staticmethod(
-        lambda symbol, exchange: {"token": "1660", "brexchange": "NSE"}
+    # monkeypatch restores the original staticmethod descriptor afterwards;
+    # putting back the bare function would leave it unbound for later tests.
+    monkeypatch.setattr(
+        adapter_mod.SymbolMapper,
+        "get_token_from_symbol",
+        staticmethod(lambda symbol, exchange: {"token": "1660", "brexchange": "NSE"}),
     )
-    try:
-        adapter.unsubscribe("ITC", "NSE", 2)
-    finally:
-        adapter_mod.SymbolMapper.get_token_from_symbol = original
+    adapter.unsubscribe("ITC", "NSE", 2)
     assert adapter.last_snapshot == {}
 
 
