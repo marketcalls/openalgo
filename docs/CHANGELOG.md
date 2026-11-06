@@ -6,6 +6,161 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [2.0.3.3] - 2026-11-06
+
+### Broker Keys and Live Data Release
+
+20 commits since 2.0.3.2, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.3-released.md](releases/version-2.0.3.3-released.md).
+This release adds one migration, `migrate_broker_keys.py`, and extends
+`migrate_strategy_module.py`. Run `migrate_all.py` and restart.
+
+### Highlights
+
+- Save broker keys in OpenAlgo, on OpenAlgo Desktop's screens, and log in to
+  one broker at a time (#2337).
+- Broker logins that only OpenAlgo can start, and sign-outs that reach every
+  device.
+- A Live strategy run trades only at the broker it started on.
+- Live data fixes for fifteen broker feeds.
+- Corrected Shoonya day-end candles (#2343) and Historify older history
+  (#2310).
+- The AI agent works again on LiteLLM 1.106.6.
+
+### Broker keys, one broker at a time
+
+- **Select Broker (`/broker`)** shows a card for each broker, with search,
+  status and the buttons Login with, Configure, Edit keys and Open Dashboard.
+  **Broker Configuration (`/broker/config`)** takes each broker's keys, names
+  each field the way that broker does, and masks what is saved. These are the
+  same screens as OpenAlgo Desktop.
+- **`.env` comes first.** The broker named in `.env` always logs in with the
+  `.env` keys, and saving its keys on Broker Configuration writes `.env`. Keys
+  for every other broker are stored encrypted in OpenAlgo. Installs that log
+  in from `.env` need to do nothing.
+- **One broker at a time.** Logging in to another broker asks first, and the
+  old session ends on every device only when the new login is stored. A
+  failed or abandoned login leaves the old broker connected. The switch is
+  refused while the current or last broker still runs Live automation: a Live
+  strategy module run, a Live OpenScript run, or outside analyzer mode a
+  Python strategy or scalping protection.
+- **A Live strategy run trades only at its own broker.** It records the broker
+  and, where the broker names one, the account it started on, and sends every
+  order, cancel and status check there. Before, an exit could go to whichever
+  broker was logged in when it fired.
+- **New installs.** A fresh download runs with `uv run app.py` alone: the
+  first start writes `.env` with fresh security keys and no broker. The
+  installers no longer ask for a broker, keys or redirect URL, and offer
+  fail2ban for SSH (default No). Docker Compose refuses to start without
+  `.env` instead of creating a folder named `.env`.
+
+### Security
+
+- A broker's answer completes a login only if this OpenAlgo started it, once,
+  within ten minutes. Before, any broker request token that reached OpenAlgo
+  while you were signed in completed a login.
+- An answer posted to the CompositEdge or RMoney login page could sign the
+  poster in to OpenAlgo with no password. It now completes nothing unless
+  OpenAlgo started that login.
+- Zerodha, Upstox and Paytm Money now send and require a login check, as
+  Fyers, Pocketful, CompositEdge, RMoney and IIFL Capital already did.
+- The account comes only from the broker's own answer. A Dhan login is refused
+  for another account than the configured client ID, or when Dhan does not
+  report the account. An RMoney or CompositEdge login is refused when the
+  account is not your market data keys' account.
+- Logging out, changing or resetting your password, and switching broker end
+  the sign-in on your other devices too, and a copied login cookie stops
+  working.
+- `follow-redirects` 1.16.2 in the frontend, for advisory
+  GHSA-mrwp-f3q8-3g9p.
+
+### Live data
+
+A field a broker's feed does not carry is now left out instead of being sent
+as 0. A client that computed change against a previous close of 0 showed the
+whole price as the change. **A script that reads every field from every
+WebSocket message should now handle a missing one.**
+
+- **Zerodha** (#2347): index quotes and depth carry OHLC and change.
+- **Groww**: index subscriptions receive ticks; MCX, NCDEX, NCO, CDS and BCD
+  are refused with a plain message.
+- **Dhan**: the previous close is no longer 0 all session.
+- **Angel One**: depth OHLC is no longer 0, and currency prices use the
+  divisor Angel's docs give.
+- **Upstox**: the previous close is the real previous close, not today's
+  candle, and depth carries the full quote.
+- **Fyers**: a quote on a symbol with depth open is no longer blank; 50-level
+  depth carries the quote; LTP and Quote on one symbol no longer replace each
+  other.
+- **Kotak**: quotes and depth carry the full quote with the exchange's trade
+  time; index ticks reach NIFTY and NIFTY50.
+- **Sahi**: fields the stream does not carry are left out.
+- **Definedge**: a Quote subscriber receives ticks when Depth was subscribed
+  first.
+- **mStock**: a token on two exchanges no longer publishes one exchange's
+  prices under both symbols.
+- **Tradejini**: quote totals are no longer 0, the master contract download
+  no longer fails on the new ETF group, and the feed no longer leaks sockets.
+- **Flattrade** (#2324): the feed keeps reconnecting after a long outage
+  instead of giving up for the day.
+- **Samco**: the exchange's trade time, average price and totals.
+- **5paisa**: depth no longer sends volume 0 to quote subscribers.
+- **HDFC Sky**: partial packets no longer publish a price of 0, and one
+  unsubscribe no longer drops every mode.
+
+### Fixed
+
+- **Shoonya intraday history** (#2343): on 3m to 4h requests spanning more
+  than one day, each day's last candle took the next morning's pre-open price
+  as its high and close. It is now rebuilt from 1-minute bars.
+- **Historify older history** (#2310): scrolling back past a session's opening
+  candle on 3m, 5m, 15m and 1h no longer fails with "Could not load older
+  history".
+- **Kotak holdings and margins** (#2365): holdings show the OpenAlgo symbol,
+  margin errors give Kotak's reason, the position average uses Kotak's
+  precision, and carried NSE and BSE cash delivery is valued at its holdings
+  average price.
+- **The AI agent works again.** Since LiteLLM 1.106.6, every agent turn failed
+  with "cannot import name 'CacheableResult' from 'mcp.types'". Opening
+  `/agent/config` also no longer leaves model tests failing until a restart.
+
+### Added
+
+- The download page lists OpenAlgo Desktop 1.0.5, FastScalper Desktop 0.1.0,
+  the Chrome Plugin 1.0 and the Excel Add-in 1.0.7 (Windows only).
+- API references for Portfolio, SIP and Sector Rotation, and documentation
+  updated for recent platform changes.
+- A `python-strategy` skill for building, backtesting and rehearsing `/python`
+  strategies with Claude Code.
+
+### Not yet covered
+
+- The RMoney and CompositEdge account checks, and the new login check for
+  IIFL Capital, Upstox and Paytm Money, had not been tried against real
+  accounts when they were merged. Report a refused login on the issue tracker.
+- The broker switch check does not cover Flow workflows, queued Action Center
+  orders or delayed external alerts. Finish or stop them before logging in to
+  another broker.
+
+### Dependencies
+
+- `joserfc` 1.7.4 to 1.7.7.
+- `follow-redirects` 1.16.1 to 1.16.2 (frontend).
+- `litellm` stays at 1.106.6. The pinned `openalgo` Python SDK remains 2.0.5.
+
+### Contributors
+
+- **@marketcalls** - broker keys, one broker at a time and the server-started
+  broker login (#2337), the agent fix, the download page, `follow-redirects`
+  1.16.2, the `python-strategy` skill, the documentation updates and the
+  release.
+- **@Kalaiviswa** - live data fixes for fifteen broker feeds (#2341, #2359,
+  #2376, #2377, #2383, #2396), Flattrade's among them (#2324), Shoonya
+  day-end candles (#2343, #2360), Zerodha index packets (#2347, #2361),
+  Historify older history (#2310, #2358) and Kotak holdings and margins
+  (#2365, #2367).
+
 ## [2.0.3.2] - 2026-10-31
 
 ### Freeze Limits and Muhurat Session Release
