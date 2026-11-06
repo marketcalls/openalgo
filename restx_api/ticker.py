@@ -136,6 +136,7 @@ class Ticker(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def get(self, symbol):
         """Get aggregate bars for a stock over a given date range with specified interval"""
+        response_format = (request.args.get("format") or "json").lower()
         try:
             # Default to NSE:RELIANCE if no symbol is provided
             if not symbol:
@@ -159,9 +160,6 @@ class Ticker(Resource):
                 "end_date": request.args.get("to"),
             }
 
-            # Get format parameter
-            response_format = request.args.get("format", "json").lower()
-
             # Validate request data using HistorySchema since we're reusing that functionality
             from .data_schemas import HistorySchema
 
@@ -182,7 +180,9 @@ class Ticker(Resource):
                     )
 
             api_key = history_data["apikey"]
-            AUTH_TOKEN, broker = get_auth_token_broker(api_key)
+            AUTH_TOKEN, FEED_TOKEN, broker = get_auth_token_broker(
+                api_key, include_feed_token=True
+            )
             if AUTH_TOKEN is None:
                 if response_format == "txt":
                     response = TextResponse("Invalid openalgo apikey\n")
@@ -206,7 +206,13 @@ class Ticker(Resource):
 
             try:
                 # Initialize broker's data handler
-                data_handler = broker_module.BrokerData(AUTH_TOKEN)
+                if (
+                    hasattr(broker_module.BrokerData.__init__, "__code__")
+                    and broker_module.BrokerData.__init__.__code__.co_argcount > 2
+                ):
+                    data_handler = broker_module.BrokerData(AUTH_TOKEN, FEED_TOKEN)
+                else:
+                    data_handler = broker_module.BrokerData(AUTH_TOKEN)
 
                 # Use chunked API call
                 df = data_handler.get_history(
