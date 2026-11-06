@@ -518,7 +518,9 @@ class BrokerData:
                     logger.debug(f"Making request to endpoint: {endpoint}")
                     response = get_api_response(endpoint, self.auth_token)
 
-                    if response.get("s") != "ok":
+                    # "no_data" is Fyers' answer for a range with no candles
+                    # (holiday, weekend, unlisted contract); retrying it only sleeps.
+                    if response.get("s") not in ("ok", "no_data"):
                         error_msg = response.get("message", "Unknown error")
                         logger.error(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
 
