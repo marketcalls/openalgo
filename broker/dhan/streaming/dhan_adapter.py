@@ -47,6 +47,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Track 20-depth data accumulation
         self.depth_20_accumulator = {}
 
+        # Previous-day close and OI per (exchange segment, security id), from
+        # the Prev Close packet (code 6) Dhan sends once when an instrument is
+        # subscribed. Quote/Full packets carry only today's Day Close, which
+        # Dhan fills only after market close, so OpenAlgo's close comes from here.
+        self.prev_close_data = {}
+
         # Fallback tracking for 20-depth subscriptions
         self.depth_20_fallbacks = {}  # Track which subscriptions have fallen back to 5-depth
         self.depth_20_timeouts = {}  # Track timeout for 20-depth subscriptions
@@ -260,6 +266,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.depth_20_data_received.clear()
                 self.depth_20_fallbacks.clear()
                 self.subscription_queue.clear()
+                # Dhan sends a fresh Prev Close packet on every subscribe, so a
+                # value from this session must not stand in for it after a
+                # reconnect.
+                self.prev_close_data.clear()
 
             self.logger.debug("Dhan adapter state cleared")
 
@@ -402,8 +412,14 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.depth_20_data_received[correlation_id] = time.time()
 
             # Lazy-connect the 20-depth WebSocket on first demand
-            if self.ws_client_20depth and not self.ws_client_20depth.connected and not self.ws_client_20depth.running:
-                self.logger.info("Lazy-connecting Dhan 20-depth WebSocket (first 20-depth subscription)")
+            if (
+                self.ws_client_20depth
+                and not self.ws_client_20depth.connected
+                and not self.ws_client_20depth.running
+            ):
+                self.logger.info(
+                    "Lazy-connecting Dhan 20-depth WebSocket (first 20-depth subscription)"
+                )
                 self.ws_client_20depth.connect()
 
             # Queue for batch flush only when connection is up.
@@ -523,7 +539,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # DhanWebSocket.REQUEST_CODES), so this is an optimisation rather
             # than the only defence it used to be.
             self.subscription_queue = [
-                item for item in self.subscription_queue
+                item
+                for item in self.subscription_queue
                 if not (
                     item["instrument"]["ExchangeSegment"] == dhan_exchange
                     and item["instrument"]["SecurityId"] == token
@@ -555,6 +572,16 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 if correlation_id in self.subscriptions:
                     del self.subscriptions[correlation_id]
+
+            # Dhan unsubscribes the whole instrument, and sends a fresh Prev
+            # Close packet on the next subscribe, so the stored value goes
+            # once no subscription for the instrument is left.
+            if removed and not any(
+                sub["token"] == token and sub["exchange"] == exchange
+                for subs in (self.subscriptions_5depth, self.subscriptions_20depth)
+                for sub in subs.values()
+            ):
+                self.prev_close_data.pop(self._prev_close_key(exchange, token), None)
 
         if removed:
             self.logger.info(f"Unubscribing to {symbol}.{exchange} in mode {mode}")
@@ -600,6 +627,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.depth_20_timeouts.clear()
             self.depth_20_data_received.clear()
             self.depth_20_fallbacks.clear()
+            self.prev_close_data.clear()
             # Drop any queued subscribes that haven't been flushed yet,
             # otherwise the batch timer would resurrect ghost subscriptions.
             self.subscription_queue.clear()
@@ -688,6 +716,18 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             )
                             break
 
+                if subscription:
+                    prev_key = self._prev_close_key(subscription["exchange"], subscription["token"])
+                    if data_type == "prev_close":
+                        # Sent once per subscribe: keep it for the quote and
+                        # full payloads, nothing to publish on its own.
+                        self.prev_close_data[prev_key] = {
+                            "prev_close": data.get("prev_close"),
+                            "prev_oi": data.get("prev_oi"),
+                        }
+                        return
+                    prev = self.prev_close_data.get(prev_key)
+
             if not subscription:
                 # self.logger.warning(f"Received data for unsubscribed token: {security_id}, segment: {exchange_segment}")
                 return
@@ -697,7 +737,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             exchange = subscription["exchange"]
 
             # Normalize and publish data
-            market_data = self._normalize_5depth_data(data, symbol, exchange)
+            market_data = self._normalize_5depth_data(data, symbol, exchange, prev)
             if market_data:
                 # Determine topic based on data type
                 # Only publish modes the server understands (LTP, QUOTE, DEPTH)
@@ -826,61 +866,75 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing 20-depth data: {e}", exc_info=True)
 
+    @staticmethod
+    def _prev_close_key(exchange: str, token) -> tuple:
+        """Key of the stored Prev Close data: (Dhan segment code, security id)."""
+        return (DhanExchangeMapper.get_segment_from_exchange(exchange), str(token))
+
     def _normalize_5depth_data(
-        self, data: dict[str, Any], symbol: str, exchange: str
+        self,
+        data: dict[str, Any],
+        symbol: str,
+        exchange: str,
+        prev: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Normalize 5-depth data to common format"""
+        """Normalize 5-depth data to common format.
+
+        ``prev`` is the stored Prev Close packet for the instrument, if one
+        has arrived. OpenAlgo's ``close`` is the previous day's close, so it
+        comes from there; when none has arrived yet ``close`` is left out
+        rather than sent as 0. The packet's own Day Close (sent by Dhan only
+        after market close) is published as ``day_close`` when nonzero.
+        """
         data_type = data.get("type")
 
         base_data = {"symbol": symbol, "exchange": exchange, "timestamp": int(time.time() * 1000)}
 
         if data_type == "ticker":
-            base_data.update({"mode": 1, "ltp": data.get("ltp", 0), "ltt": data.get("ltt", 0)})
+            ltt = data.get("ltt", 0)
+            base_data.update(
+                {"mode": 1, "ltp": data.get("ltp", 0), "ltt": ltt, "last_trade_time": ltt}
+            )
 
-        elif data_type == "quote":
+        elif data_type in ("quote", "full"):
+            ltt = data.get("ltt", 0)
             base_data.update(
                 {
-                    "mode": 2,
+                    "mode": 2 if data_type == "quote" else 3,
                     "ltp": data.get("ltp", 0),
-                    "ltt": data.get("ltt", 0),
+                    "ltt": ltt,
+                    "last_trade_time": ltt,
                     "volume": data.get("volume", 0),
                     "open": data.get("open", 0),
                     "high": data.get("high", 0),
                     "low": data.get("low", 0),
-                    "close": data.get("close", 0),
                     "last_quantity": data.get("ltq", 0),
                     "average_price": data.get("atp", 0),
                     "total_buy_quantity": data.get("total_buy_quantity", 0),
                     "total_sell_quantity": data.get("total_sell_quantity", 0),
                 }
             )
+            if prev is not None and prev.get("prev_close") is not None:
+                base_data["close"] = prev["prev_close"]
+            day_close = data.get("close")
+            if day_close:
+                base_data["day_close"] = day_close
 
-        elif data_type == "full":
-            base_data.update(
-                {
-                    "mode": 3,
-                    "ltp": data.get("ltp", 0),
-                    "ltt": data.get("ltt", 0),
-                    "volume": data.get("volume", 0),
-                    "open": data.get("open", 0),
-                    "high": data.get("high", 0),
-                    "low": data.get("low", 0),
-                    "close": data.get("close", 0),
-                    "oi": data.get("oi", 0),
-                    "oi_high": data.get("oi_high", 0),
-                    "oi_low": data.get("oi_low", 0),
-                    "depth": data.get("depth", {"buy": [], "sell": []}),
-                    "depth_level": 5,
-                }
-            )
+            if data_type == "full":
+                base_data.update(
+                    {
+                        "oi": data.get("oi", 0),
+                        "oi_high": data.get("oi_high", 0),
+                        "oi_low": data.get("oi_low", 0),
+                        "depth": data.get("depth", {"buy": [], "sell": []}),
+                        "depth_level": 5,
+                    }
+                )
+                if prev is not None and prev.get("prev_oi") is not None:
+                    base_data["prev_oi"] = prev["prev_oi"]
 
         elif data_type == "oi":
             base_data.update({"oi": data.get("oi", 0)})
-
-        elif data_type == "prev_close":
-            base_data.update(
-                {"prev_close": data.get("prev_close", 0), "prev_oi": data.get("prev_oi", 0)}
-            )
 
         return base_data
 
@@ -1061,18 +1115,18 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Destructor to ensure resources are cleaned up"""
         try:
             # During garbage collection, logger may not be available
-            if hasattr(self, 'running') and self.running:
+            if hasattr(self, "running") and self.running:
                 self.running = False
 
             # Try to clean up WebSocket clients
-            if hasattr(self, 'ws_client_5depth') and self.ws_client_5depth:
+            if hasattr(self, "ws_client_5depth") and self.ws_client_5depth:
                 try:
                     self.ws_client_5depth.disconnect()
                 except Exception:
                     pass
                 self.ws_client_5depth = None
 
-            if hasattr(self, 'ws_client_20depth') and self.ws_client_20depth:
+            if hasattr(self, "ws_client_20depth") and self.ws_client_20depth:
                 try:
                     self.ws_client_20depth.disconnect()
                 except Exception:
