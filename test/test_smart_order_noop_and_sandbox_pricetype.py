@@ -95,6 +95,66 @@ def test_sandbox_smart_order_preserves_pricetype():
     assert captured["price_type"] == "LIMIT"
 
 
+def test_sandbox_smart_order_uses_price_type_when_pricetype_is_missing():
+    captured = {}
+
+    class FakePositionManager:
+        def get_open_positions(self):
+            return True, {"data": []}, 200
+
+    class FakeOrderManager:
+        def place_order(self, data):
+            captured.update(data)
+            return True, {"status": "success", "orderid": "SBX1", "mode": "analyze"}, 200
+
+    order = _base_order(action="BUY", price_type="SL", quantity="10", position_size="10")
+    order.pop("pricetype")
+    ok, _resp, status = sandbox_service._place_smart_order_locked(
+        position_manager=FakePositionManager(),
+        order_manager=FakeOrderManager(),
+        order_data=order,
+        symbol="SBIN",
+        exchange="NSE",
+        product="MIS",
+        target_quantity=10,
+        original_quantity=10,
+    )
+
+    assert ok is True
+    assert status == 200
+    assert captured["price_type"] == "SL"
+
+
+def test_sandbox_smart_order_noop_publishes_no_action_event(monkeypatch):
+    published = []
+    monkeypatch.setattr(place_smart_order_service, "get_analyze_mode", lambda: True)
+    monkeypatch.setattr(place_smart_order_service.bus, "publish", published.append)
+    monkeypatch.setattr(
+        sandbox_service,
+        "sandbox_place_smart_order",
+        lambda _data, _key, _orig: (
+            True,
+            {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."},
+            200,
+        ),
+    )
+
+    order = _base_order()
+    ok, body, status = place_smart_order_service.place_smart_order_with_auth(
+        order_data=order.copy(),
+        auth_token="token",
+        broker="angel",
+        original_data=order.copy(),
+    )
+
+    assert ok is True
+    assert status == 200
+    assert body["status"] == "success"
+    assert len(published) == 1
+    assert isinstance(published[0], SmartOrderNoActionEvent)
+    assert not any(isinstance(event, OrderPlacedEvent) for event in published)
+
+
 def test_sandbox_smart_order_failure_publishes_order_failed_event(monkeypatch):
     published = []
     monkeypatch.setattr(place_smart_order_service, "get_analyze_mode", lambda: True)
