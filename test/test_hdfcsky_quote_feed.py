@@ -10,6 +10,7 @@
   not drop the others.
 """
 
+import json
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +35,8 @@ def _adapter():
     adapter.token_info = {}
     adapter.last_snapshot = {}
     adapter._state_lock = threading.Lock()
+    adapter._subscription_seq = 0
+    adapter._feed_epoch = 0
     adapter.ws_client = MagicMock()
     adapter.publish_market_data = MagicMock()
     return adapter
@@ -135,3 +138,160 @@ def test_modes_tracked_and_highest_kept_at_broker():
         adapter.unsubscribe("EQ", "NSE", 1)
     adapter.ws_client.unsubscribe.assert_called_once()
     assert adapter.token_info == {}
+
+
+# --- races and lifecycle (cubic review of PR #2396) -------------------------
+
+
+def _live_ws():
+    """A client that is running and connected, with the transport mocked."""
+    ws = _ws()
+    ws.lock = threading.Lock()
+    ws.desired = {}
+    ws.subscribed = {}
+    ws.pending_subscriptions = ws_mod.deque()
+    ws.running = True
+    ws.connected = True
+    ws._stop_event = threading.Event()
+    ws.SUBSCRIPTION_DELAY = 0
+    ws.ws = MagicMock()
+    return ws
+
+
+def _send_with_competitor(ws, competitor):
+    """Make the transport run `competitor` on its own thread at the first
+    subscribe frame, then record the frame. Returns (frames, competing thread
+    holder). The competitor gets 0.3s to finish before the frame is recorded;
+    if the code holds the lock across the send it is still blocked, which is
+    the point."""
+    frames = []
+    started = []
+
+    def send(payload):
+        frame = json.loads(payload)
+        if "subscribe" in frame and not started:
+            thread = threading.Thread(target=competitor, daemon=True)
+            started.append(thread)
+            thread.start()
+            thread.join(0.3)
+        frames.append(frame)
+
+    ws.ws.send.side_effect = send
+    return frames, started
+
+
+def _last_frame_for(frames, scrip_id):
+    last = None
+    for frame in frames:
+        for key in ("subscribe", "unSubscribe"):
+            if any(entry["scripId"] == scrip_id for entry in frame.get(key, [])):
+                last = key
+    return last
+
+
+def test_unsubscribe_at_the_subscribe_send_is_not_undone():
+    ws = _live_ws()
+    ws.desired["NSE_2885"] = "ALL"
+    frames, started = _send_with_competitor(ws, lambda: ws.unsubscribe(["NSE_2885"]))
+
+    ws._send_subscribe(["NSE_2885"], "ALL")
+    started[0].join(2)
+
+    assert not started[0].is_alive()
+    assert _last_frame_for(frames, "NSE_2885") == "unSubscribe"
+    assert "NSE_2885" not in ws.subscribed
+    assert "NSE_2885" not in ws.desired
+
+
+def test_unsubscribe_at_the_replay_send_is_not_undone():
+    ws = _live_ws()
+    ws.desired["NSE_2885"] = "ALL"
+    frames, started = _send_with_competitor(ws, lambda: ws.unsubscribe(["NSE_2885"]))
+
+    ws._resubscribe_all()
+    started[0].join(2)
+
+    assert not started[0].is_alive()
+    assert _last_frame_for(frames, "NSE_2885") == "unSubscribe"
+    assert "NSE_2885" not in ws.subscribed
+
+
+def test_mode_change_at_the_instrument_limit_is_accepted():
+    ws = _live_ws()
+    ws._subscription_thread = MagicMock()
+    ws._subscription_thread.is_alive.return_value = True
+    held = [f"NSE_{n}" for n in range(1, ws.MAX_INSTRUMENTS_PER_CONNECTION + 1)]
+    for scrip_id in held:
+        ws.desired[scrip_id] = "ALL"
+        ws.subscribed[scrip_id] = "ALL"
+
+    # A held scrip at another type adds no instrument.
+    assert ws.subscribe_scrips([held[0]], "LTP") is not False
+    assert ws.desired[held[0]] == "LTP"
+    assert (held[0], "LTP") in ws.pending_subscriptions
+    # A new scrip is still refused.
+    assert ws.subscribe_scrips(["NSE_999999"], "ALL") is False
+    assert "NSE_999999" not in ws.desired
+
+
+def test_refused_subscription_is_reported_and_rolled_back():
+    adapter = _adapter()
+    adapter.ws_client.subscribe_scrips.return_value = False
+    with patch.object(adapter, "_resolve_token", return_value=2885):
+        result = adapter.subscribe("EQ", "NSE", 2)
+    assert result["status"] == "error"
+    assert adapter.token_info == {}
+
+
+class _StageAtWrite(dict):
+    """last_snapshot whose first write runs `competitor` on its own thread
+    first, giving it 0.3s, then performs the write."""
+
+    def __init__(self, competitor):
+        super().__init__()
+        self.competitor = competitor
+        self.thread = None
+
+    def __setitem__(self, key, value):
+        if self.thread is None:
+            self.thread = threading.Thread(target=self.competitor, daemon=True)
+            self.thread.start()
+            self.thread.join(0.3)
+        super().__setitem__(key, value)
+
+
+def test_unsubscribe_at_the_snapshot_write_leaves_no_stale_baseline():
+    ws = _ws()
+    adapter = _adapter()
+    with patch.object(adapter, "_resolve_token", return_value=2885):
+        adapter.subscribe("NIFTYFUT", "NFO", 2)
+        staged = _StageAtWrite(lambda: adapter.unsubscribe("NIFTYFUT", "NFO", 2))
+        adapter.last_snapshot = staged
+
+        adapter._on_ticks([ws._parse_packet(_packet(pb.NSE_FO_ALL, **FULL))])
+        staged.thread.join(2)
+        assert not staged.thread.is_alive()
+
+        # Subscribed again: an OI packet before the first full quote must not
+        # publish the price from the previous subscription.
+        adapter.subscribe("NIFTYFUT", "NFO", 2)
+        adapter.publish_market_data.reset_mock()
+        adapter._on_ticks([ws._parse_packet(_packet(pb.NSE_FO_OI, oi=777))])
+
+    adapter.publish_market_data.assert_not_called()
+
+
+def test_reconnect_drops_snapshots_before_partial_packets():
+    ws = _ws()
+    adapter = _adapter()
+    with patch.object(adapter, "_resolve_token", return_value=2885):
+        adapter.subscribe("NIFTYFUT", "NFO", 2)
+    adapter._on_ticks([ws._parse_packet(_packet(pb.NSE_FO_ALL, **FULL))])
+
+    # The client's own reconnect: close, then open again.
+    adapter._on_ws_disconnect()
+    adapter._on_ws_connect()
+    adapter.publish_market_data.reset_mock()
+    adapter._on_ticks([ws._parse_packet(_packet(pb.NSE_FO_OI, oi=777))])
+
+    adapter.publish_market_data.assert_not_called()
