@@ -169,3 +169,37 @@ def test_unsubscribe_releases_scrip_snapshot():
     finally:
         adapter_mod.SymbolMapper.get_token_from_symbol = original
     assert adapter.last_snapshot == {}
+
+
+# --- review follow-ups ---------------------------------------------------------
+
+
+def test_same_exchange_other_segment_is_not_routed():
+    """Cash (C) and derivatives (D) on NSE can share a token: the segment
+    decides, so a matching Exch and Token alone must not route the frame."""
+    adapter = _adapter(_sub(2, exch="N", exch_type="D", symbol="ITCFUT", exchange="NFO"))
+    adapter._on_data(None, dict(FEED))  # Exch N, ExchType C, same token
+    assert _published(adapter) == []
+    adapter._on_data(None, {**FEED, "ExchType": "D"})
+    assert [t for t, _ in _published(adapter)] == ["NFO_ITCFUT_QUOTE"]
+
+
+def test_frames_for_an_unsubscribed_scrip_keep_no_snapshot():
+    adapter = _adapter(_sub(2))
+    adapter._on_data(None, {**FEED, "Token": 9999})
+    adapter._on_data(None, {**DEPTH, "Token": 9999})
+    assert list(adapter.last_snapshot) == [] or all(
+        key[-1] != "9999" and key[-1] != 9999 for key in adapter.last_snapshot
+    )
+    assert not any("9999" in str(key) for key in adapter.last_snapshot)
+
+
+def test_a_depth_subscriber_still_keeps_the_feed_snapshot():
+    """A Depth-only subscription is not published from feed frames, but needs
+    their quote fields merged into its depth payloads."""
+    adapter = _adapter(_sub(3))
+    adapter._on_data(None, dict(FEED))
+    adapter._on_data(None, dict(DEPTH))
+    depth = [d for t, d in _published(adapter) if t.endswith("_DEPTH")][-1]
+    assert depth["ltp"] == 440.1
+    assert depth["volume"] == 1200
