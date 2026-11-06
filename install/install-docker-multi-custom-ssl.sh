@@ -507,6 +507,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Version stamps for /system-update, baked into the image (it has no
+        # .git). Escaped so compose resolves them at build time from the env
+        # of whoever builds — host_update_watcher.sh exports them on a
+        # web-triggered rebuild; a plain build gets "unknown".
+        GIT_SHA: \${GIT_SHA:-unknown}
+        GIT_BRANCH: \${GIT_BRANCH:-unknown}
+        GIT_REMOTE: \${GIT_REMOTE:-unknown}
 ${BUILD_EXTRA_HOSTS_YAML}    container_name: ${PROJECT_NAME}-web
     ports:
       - "127.0.0.1:${FLASK_PORT}:5000"

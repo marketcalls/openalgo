@@ -514,6 +514,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Version stamps for /system-update, baked into the image (it has no
+        # .git). Escaped so compose resolves them at build time from the env
+        # of whoever builds — host_update_watcher.sh exports them on a
+        # web-triggered rebuild; a plain build gets "unknown".
+        GIT_SHA: \${GIT_SHA:-unknown}
+        GIT_BRANCH: \${GIT_BRANCH:-unknown}
+        GIT_REMOTE: \${GIT_REMOTE:-unknown}
 
     container_name: openalgo-web
 

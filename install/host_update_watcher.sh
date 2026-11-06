@@ -4,12 +4,13 @@
 #   * * * * * flock -n /tmp/openalgo_host_update.lock /path/to/openalgo/install/host_update_watcher.sh >> /path/to/openalgo/log/host_watcher.log 2>&1
 #
 # Protocol with the container (shared volume /app/tmp):
-#   container POST /api/update/run  -> writes /app/tmp/update_requested.json {force, branch, requested_at}
-#   this script (host)              -> git pull + docker compose build + up -d,
-#                                      writes /app/tmp/update_result.json {state, ...}
-#                                      and deletes the request flag.
+#   container POST /api/update/run  -> writes /app/tmp/update_requested.json
+#   this script (host)              -> validates it, writes a "running" result,
+#                                      deletes the flag, then git pull +
+#                                      docker compose build + up -d, and finally
+#                                      writes /app/tmp/update_result.json
 # Market-hours guard (IST 09:00-15:30) applies unless the request set force:true.
-set -u
+set -euo pipefail
 APP="${APP:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CONTAINER="${CONTAINER:-openalgo-web}"
 LOG="$APP/log/host_watcher.log"
@@ -31,10 +32,18 @@ fi
 
 FLAG_JSON="$(read_flag)"
 log "Update requested: $FLAG_JSON"
-FORCE="$(echo "$FLAG_JSON" | grep -o '"force": *true' || true)"
+
+# Validate the request before acting on it — any existing file used to pass.
+if ! printf '%s' "$FLAG_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d.get("force"), bool) else 1)' 2>/dev/null; then
+  log "Invalid request payload — ignoring"
+  write_result '{"state": "error", "finished_at": "'"$(date -u '+%FT%TZ')"'", "summary": "Malformed update request (not valid JSON with a boolean force field)."}'
+  clear_flag
+  exit 1
+fi
+FORCE="$(printf '%s' "$FLAG_JSON" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("force") else "0")')"
 
 # --- market-hours guard (authoritative) ---
-if [ -z "$FORCE" ]; then
+if [ "$FORCE" != "1" ]; then
   IST_HM="$(TZ=Asia/Kolkata date +%H%M)"
   if [ "$IST_HM" -ge 0900 ] && [ "$IST_HM" -le 1530 ]; then
     log "Refusing: market hours ($IST_HM IST), no force flag."
@@ -44,17 +53,18 @@ if [ -z "$FORCE" ]; then
   fi
 fi
 
-clear_flag
 START="$(date -u '+%FT%TZ')"
+# Publish the in-flight marker BEFORE removing the flag, so the web UI sees
+# state=running (and answers 409) for the whole window, not just the gap
+# between flag removal and the first build output.
 write_result "{\"state\": \"running\", \"started_at\": \"$START\", \"summary\": \"git pull + compose build + up -d in progress\"}"
+clear_flag
 
-cd "$APP" || { write_result '{"state": "error", "summary": "cannot cd to APP"}'; exit 1; }
+cd "$APP"
 
 # Host is authoritative for branch (container has no git; flag only hints).
-# Pull via the branch's configured upstream — this checkout tracks the
-# FORK (fork/<branch>), not origin, so `git pull origin <branch>` would fail.
 BRANCH="$(git branch --show-current 2>/dev/null || echo main)"
-log "Pulling $BRANCH (upstream: $(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo '?')) ..."
+log "Pulling $BRANCH (upstream: $(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo '?')) …"
 if ! git pull >>"$LOG" 2>&1; then
   log "git pull FAILED"
   write_result "{\"state\": \"error\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"git pull failed — see host log/host_watcher.log\"}"
@@ -63,22 +73,40 @@ fi
 _UPSTREAM_REMOTE="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null | cut -d/ -f1)"
 export GIT_SHA="$(git rev-parse --short HEAD)"
 export GIT_BRANCH="$BRANCH"
-export GIT_REMOTE="$(git remote get-url "$_UPSTREAM_REMOTE" 2>/dev/null || git remote get-url origin 2>/dev/null || echo unknown)"
-log "Building $GIT_SHA ($GIT_BRANCH @ $GIT_REMOTE) ..."
+# Strip any user:pass@ userinfo — a remote URL may embed credentials and must
+# never be baked into the image or written to a log.
+GIT_REMOTE_RAW="$(git remote get-url "${_UPSTREAM_REMOTE:-origin}" 2>/dev/null || git remote get-url origin 2>/dev/null || echo unknown)"
+export GIT_REMOTE="$(printf '%s' "$GIT_REMOTE_RAW" | sed -E 's#(://)[^/@]+@#\1#')"
+log "Building $GIT_SHA ($GIT_BRANCH @ $GIT_REMOTE) …"
 
-log "Rebuilding container (plain build; code COPY layer invalidates) ..."
+log "Rebuilding container (code COPY layer invalidates) …"
 if ! docker compose build >>"$LOG" 2>&1; then
   log "docker compose build FAILED"
   write_result "{\"state\": \"error\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"compose build failed at $GIT_SHA\"}"
   exit 1
 fi
 
-log "Restarting container ..."
-docker compose up -d >>"$LOG" 2>&1
-sleep 8
-if docker compose ps --format json 2>/dev/null | grep -q '"Health":"healthy"\|"State":"running"'; then
-  : # container object exists; deeper health follows in OpenAlgo logs
+log "Restarting container …"
+if ! docker compose up -d >>"$LOG" 2>&1; then
+  log "docker compose up -d FAILED"
+  write_result "{\"state\": \"error\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"compose up -d failed at $GIT_SHA — old image may still be running\"}"
+  exit 1
 fi
 
-log "Update finished at $GIT_SHA"
-write_result "{\"state\": \"done\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"Updated to $GIT_SHA ($GIT_BRANCH), container restarted.\"}"
+# Wait for the container to report running/healthy before declaring success.
+STATE="unknown"
+for _ in $(seq 1 30); do
+  STATE="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || echo unknown)"
+  case "$STATE" in
+    running|healthy) break ;;
+  esac
+  sleep 2
+done
+if [ "$STATE" != "running" ] && [ "$STATE" != "healthy" ]; then
+  log "Container not healthy after recreate (state=$STATE)"
+  write_result "{\"state\": \"error\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"updated to $GIT_SHA but container state is $STATE — check docker logs\"}"
+  exit 1
+fi
+
+log "Update finished at $GIT_SHA (container state: $STATE)"
+write_result "{\"state\": \"done\", \"started_at\": \"$START\", \"finished_at\": \"$(date -u '+%FT%TZ')\", \"summary\": \"Updated to $GIT_SHA ($GIT_BRANCH), container restarted ($STATE).\"}"

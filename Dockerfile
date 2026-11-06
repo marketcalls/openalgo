@@ -66,9 +66,11 @@ COPY --chown=appuser:appuser . .
 ARG GIT_SHA=unknown
 ARG GIT_BRANCH=unknown
 ARG GIT_REMOTE=unknown
+# Strip any user:pass@ userinfo before baking the remote into the image —
+# remote URLs may embed credentials and the stamp is world-readable.
 RUN echo -n "$GIT_SHA" > /app/BUILD_SHA && \
     echo -n "$GIT_BRANCH" > /app/BUILD_BRANCH && \
-    echo -n "$GIT_REMOTE" > /app/BUILD_REMOTE && \
+    echo -n "$GIT_REMOTE" | sed -E 's#(://)[^/@]+@#\1#' > /app/BUILD_REMOTE && \
     chown appuser:appuser /app/BUILD_SHA /app/BUILD_BRANCH /app/BUILD_REMOTE
 # 3 - copy built frontend from frontend-builder
 COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
