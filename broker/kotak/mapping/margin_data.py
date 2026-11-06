@@ -79,7 +79,14 @@ def parse_margin_response(response_data):
 
         # Check if the response status is Ok
         if response_data.get("stat") != "Ok":
-            error_message = response_data.get("errMsg", "Failed to calculate margin")
+            # Kotak's error field is "emsg" ({"stat":"Not_Ok","emsg":"Invalid
+            # session","stCode":1003}, as funds.py already reads it). Reading
+            # only "errMsg" replaced every reason with the generic text below.
+            error_message = (
+                response_data.get("emsg")
+                or response_data.get("errMsg")
+                or "Failed to calculate margin"
+            )
             return {"status": "error", "message": error_message}
 
         # Extract margin data
