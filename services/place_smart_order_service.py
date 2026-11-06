@@ -165,11 +165,23 @@ def place_smart_order_with_auth(
         analyzer_request = order_request_data.copy()
         analyzer_request["api_type"] = "placesmartorder"
 
+        if not success:
+            error_message = response_data.get("message", "Failed to place smart order")
+            bus.publish(OrderFailedEvent(
+                mode="analyze", api_type="placesmartorder",
+                request_data=analyzer_request, response_data=response_data,
+                api_key=api_key, error_message=error_message,
+            ))
+            return success, response_data, status_code
+
         # Check if this is a no-action case
+        msg = response_data.get("message", "")
         no_action = (
             response_data.get("status") == "success"
-            and "No action" in response_data.get("message", "")
-            or "Already Matched" in response_data.get("message", "")
+            and (
+                not response_data.get("orderid")
+                or any(phrase in msg for phrase in ("No action", "No Action", "Already Matched", "No OpenPosition Found"))
+            )
         )
 
         if no_action:
@@ -216,21 +228,22 @@ def place_smart_order_with_auth(
                 order_data, auth_token
             )
 
-        # Handle case where position size matches current position
+        # A successful broker response without an order means no action was needed.
         if (
             res is None
+            and isinstance(response_data, dict)
             and response_data.get("status") == "success"
-            and "No action needed" in response_data.get("message", "")
         ):
+            no_action_message = response_data.get("message") or "Positions Already Matched. No Action needed."
             order_response_data = {
                 "status": "success",
-                "message": "Positions Already Matched. No Action needed.",
+                "message": no_action_message,
             }
             bus.publish(SmartOrderNoActionEvent(
                 mode="live", api_type="placesmartorder",
                 symbol=order_data.get("symbol", ""),
                 exchange=order_data.get("exchange", ""),
-                message=" Positions Already Matched. No Action needed.",
+                message=no_action_message,
                 request_data=order_request_data, response_data=order_response_data,
                 api_key=api_key,
             ))
