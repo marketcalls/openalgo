@@ -759,7 +759,17 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 # Normalize the data based on subscription mode
-                source = depth_message if actual_mode == 3 else message
+                if actual_mode == 3:
+                    source = depth_message
+                elif actual_mode == 2 and last_l5:
+                    # Total buy/sell quantity is sent only on the L5 book, so a
+                    # Quote shows it only once a book for the symbol is cached.
+                    source = dict(message)
+                    for key in ("totBuyQty", "totSellQty"):
+                        if key in last_l5:
+                            source[key] = last_l5[key]
+                else:
+                    source = message
                 market_data = self._normalize_market_data(source, actual_mode)
 
                 # Add metadata
@@ -815,12 +825,19 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "close": message.get("close", 0),
                 "last_quantity": message.get("ltq", 0),
                 "average_price": message.get("atp", 0),
-                "total_buy_quantity": message.get("totBuyQty", 0),
-                "total_sell_quantity": message.get("totSellQty", 0),
                 "oi": message.get("OI", 0),
                 "change": message.get("chng", 0),
                 "change_percent": message.get("chngPer", 0),
             }
+            # totBuyQty / totSellQty come only on the L5 book; L1 never sends
+            # them, so they are published only when a book supplied them.
+            for key, name in (
+                ("totBuyQty", "total_buy_quantity"),
+                ("totSellQty", "total_sell_quantity"),
+            ):
+                if message.get(key) is not None:
+                    result[name] = message[key]
+            self._add_reference_keys(result, message)
             return result
         elif mode == 3:  # Depth mode
             result = {
@@ -837,6 +854,17 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "total_buy_quantity": message.get("totBuyQty", 0),
                 "total_sell_quantity": message.get("totSellQty", 0),
             }
+            # Price fields the merged L1 carries, kept so a Quote client fed
+            # from this Depth topic loses nothing.
+            for key, name in (
+                ("atp", "average_price"),
+                ("ltq", "last_quantity"),
+                ("chng", "change"),
+                ("chngPer", "change_percent"),
+            ):
+                if message.get(key) is not None:
+                    result[name] = message[key]
+            self._add_reference_keys(result, message)
 
             # Add depth data if available
             if "bid" in message and "ask" in message:
@@ -848,6 +876,14 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return result
         else:
             return {}
+
+    @staticmethod
+    def _add_reference_keys(result: dict[str, Any], message: dict) -> None:
+        """Add OpenAlgo reference key names for fields the feed sent."""
+        if message.get("chngPer") is not None:
+            result["percent_change"] = message["chngPer"]
+        if message.get("ltt") not in (None, ""):
+            result["last_trade_time"] = message["ltt"]
 
     def _extract_depth_data(self, depth_list) -> list[dict[str, Any]]:
         """
