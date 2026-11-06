@@ -87,8 +87,11 @@ class JainamXTSWebSocketClient:
 
     def _setup_socketio(self):
         """Setup Socket.IO client with event handlers"""
-        # Disable verbose Socket.IO logging (set to True for debugging)
-        self.sio = socketio.Client(logger=False, engineio_logger=False)
+        # Disable verbose Socket.IO logging (set to True for debugging).
+        # Built-in reconnection is off: the adapter reconnects through
+        # _on_close -> _connect_with_retry, and two retry loops racing on a
+        # drop leave orphan sessions and duplicate login attempts.
+        self.sio = socketio.Client(logger=False, engineio_logger=False, reconnection=False)
 
         # Register event handlers
         self.sio.on("connect", self._on_connect)
