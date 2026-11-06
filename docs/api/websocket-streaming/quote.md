@@ -85,8 +85,9 @@ instruments = [
 def on_quote(data):
     print(f"Quote: {data['symbol']}")
     print(f"  LTP: {data['ltp']}")
-    print(f"  High: {data['high']}, Low: {data['low']}")
-    print(f"  Volume: {data['volume']}")
+    # open/high/low/close are absent for brokers whose feed lacks them
+    print(f"  High: {data.get('high')}, Low: {data.get('low')}")
+    print(f"  Volume: {data.get('volume')}")
 
 # Connect and subscribe
 client.connect()
@@ -126,16 +127,17 @@ finally:
 | Field | Type | Description |
 |-------|------|-------------|
 | ltp | number | Last traded price |
-| open | number | Day's open price |
-| high | number | Day's high price |
-| low | number | Day's low price |
-| close | number | Previous close price |
+| open | number | Day's open price (absent when the broker's feed does not carry it) |
+| high | number | Day's high price (absent when the broker's feed does not carry it) |
+| low | number | Day's low price (absent when the broker's feed does not carry it) |
+| close | number | Previous close price (absent when the broker's feed does not carry it) |
 | volume | number | Total traded volume |
 | timestamp | number | Update time (epoch ms) |
 
 ## Notes
 
-- Quote mode provides **OHLCV data** in addition to LTP
+- Quote mode provides **OHLCV data** in addition to LTP, where the broker's feed carries it
+- A field the broker's feed does not send is left out of `data`, never sent as `0`. Sahi's stream carries no open, high, low or previous close, and Groww's usually carries only LTP; OpenAlgo does not fill them from REST calls. Read optional fields with `data.get(...)`
 - Updates are less frequent than LTP (on significant changes)
 - Use for:
   - Market overview displays
