@@ -824,9 +824,10 @@ class ZerodhaWebSocket:
                     if len(packet) >= 184:
                         try:
                             tick["exchange_timestamp"] = struct.unpack(">I", packet[60:64])[0]
-                            oi_offset = 184 - 4
-                            if oi_offset + 4 <= len(packet):
-                                tick["open_interest"] = struct.unpack(">I", packet[oi_offset:oi_offset + 4])[0]
+                            # Full-mode layout: 44-48 last trade time, 48-52 OI.
+                            # The last 4 bytes of the packet belong to the fifth
+                            # offer depth entry, not OI.
+                            tick["open_interest"] = struct.unpack(">I", packet[48:52])[0]
                         except struct.error:
                             pass
 
