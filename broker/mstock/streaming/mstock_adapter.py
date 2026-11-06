@@ -267,9 +267,12 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "exchange_type": exchange_type,
             }
 
+            # One mStock stream per instrument, and an instrument is its
+            # exchange type plus token: the same token on NSE and BSE is two.
+            feed_key = self._feed_key(exchange_type, token)
             max_mode_for_token = mode
             for sub in self.subscriptions.values():
-                if sub["token"] == token:
+                if self._feed_key(sub["exchange_type"], sub["token"]) == feed_key:
                     max_mode_for_token = max(max_mode_for_token, sub["mode"])
 
             # token_modes records what the BROKER has confirmed, so it is written
@@ -277,9 +280,13 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # optimistically made a dropped subscribe permanent: this branch
             # would never fire again for the token, and the reconnect path walks
             # the SDK's dict, which never received the entry either.
-            current_mstock_mode = self.token_modes.get(token, 0)
+            current_mstock_mode = self.token_modes.get(feed_key, 0)
             queued_mode = max(
-                (q["mode"] for q in self.subscription_queue if q["token"] == token),
+                (
+                    q["mode"]
+                    for q in self.subscription_queue
+                    if self._feed_key(q["exchange_type"], q["token"]) == feed_key
+                ),
                 default=0,
             )
             if max_mode_for_token > max(current_mstock_mode, queued_mode):
@@ -310,7 +317,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 # Set when upgrading an existing lower mode, so
                                 # the flush drops the old subscription first.
                                 "old_correlation_id": (
-                                    self.token_correlation_ids.get(token)
+                                    self.token_correlation_ids.get(feed_key)
                                     if current_mstock_mode > 0
                                     else None
                                 ),
@@ -334,12 +341,16 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         try:
             normalized = {"ltp": float(quote_data.get("ltp", 0))}
 
-            # Last traded timestamp is on the wire only in the full (mode 3)
-            # packet; the shorter packets carry the exchange timestamp. The
-            # parser fills absent fields with 0, which is not a time.
-            trade_time = quote_data.get("last_traded_timestamp") or quote_data.get(
-                "exchange_timestamp"
-            )
+            # The full (mode 3) packet carries the last traded timestamp; the
+            # shorter packets carry only the exchange timestamp. A full packet
+            # whose last traded timestamp is 0 (no trade yet) publishes no
+            # trade time rather than passing its feed time off as one. The
+            # packet's own mode decides, since a Quote subscriber receives the
+            # full packet when Depth is also open on the instrument.
+            if quote_data.get("subscription_mode") == 3:
+                trade_time = quote_data.get("last_traded_timestamp")
+            else:
+                trade_time = quote_data.get("exchange_timestamp")
             if trade_time:
                 normalized["last_trade_time"] = trade_time
                 normalized["ltt"] = trade_time
@@ -436,9 +447,9 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             desired: dict[str, dict] = {}
             for sub in self.subscriptions.values():
-                token = str(sub["token"])
-                if token not in desired or sub["mode"] > desired[token]["mode"]:
-                    desired[token] = sub
+                key = self._feed_key(sub["exchange_type"], sub["token"])
+                if key not in desired or sub["mode"] > desired[key]["mode"]:
+                    desired[key] = sub
 
             # The broker retains nothing across a reconnect.
             self.token_modes.clear()
@@ -446,14 +457,14 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.send_retries.clear()
             self.subscription_queue = [
                 {
-                    "token": token,
+                    "token": str(sub["token"]),
                     "mode": sub["mode"],
                     "exchange_type": sub["exchange_type"],
                     "symbol": sub["symbol"],
                     "exchange": sub["exchange"],
                     "old_correlation_id": None,
                 }
-                for token, sub in desired.items()
+                for sub in desired.values()
             ]
             if self.subscription_queue:
                 self._start_batch_timer()
@@ -500,7 +511,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # superseded immediately anyway.
         latest: dict[str, dict] = {}
         for sub in pending:
-            latest[str(sub["token"])] = sub
+            latest[self._feed_key(sub["exchange_type"], sub["token"])] = sub
 
         # Revalidate against current state before sending: a token unsubscribed
         # after being queued must not be subscribed at the broker. unsubscribe()
@@ -509,18 +520,16 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             desired_mode: dict[str, int] = {}
             for sub in self.subscriptions.values():
-                token = str(sub["token"])
-                desired_mode[token] = max(desired_mode.get(token, 0), sub["mode"])
+                key = self._feed_key(sub["exchange_type"], sub["token"])
+                desired_mode[key] = max(desired_mode.get(key, 0), sub["mode"])
 
         # Compare the queued mode against the highest mode still wanted, not
         # merely whether the token survives: unsubscribing a depth stream while
         # an LTP one remains leaves the token live but its queued mode stale,
         # and sending it would resubscribe depth nobody asked for.
-        dropped = [
-            token for token, sub in latest.items() if sub["mode"] > desired_mode.get(token, 0)
-        ]
-        for token in dropped:
-            del latest[token]
+        dropped = [key for key, sub in latest.items() if sub["mode"] > desired_mode.get(key, 0)]
+        for key in dropped:
+            del latest[key]
         if dropped:
             self.logger.info(
                 f"Skipping {len(dropped)} queued subscription(s) no longer wanted at that mode"
@@ -540,13 +549,15 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 time.sleep(0.2)
 
             by_mode: dict[int, list] = {}
-            for token, sub in latest.items():
-                correlation_id = "mstock_" + token + "_" + str(sub["mode"])
+            for key, sub in latest.items():
                 by_mode.setdefault(sub["mode"], []).append(
                     {
-                        "correlation_id": correlation_id,
-                        "token": token,
+                        "correlation_id": self._correlation_id(
+                            sub["exchange_type"], sub["token"], sub["mode"]
+                        ),
+                        "token": str(sub["token"]),
                         "exchange_type": sub["exchange_type"],
+                        "key": key,
                     }
                 )
 
@@ -557,37 +568,40 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # (or a later subscribe) retries the token.
                     with self.lock:
                         for entry in subs:
-                            self.token_correlation_ids[entry["token"]] = entry["correlation_id"]
-                            self.token_modes[entry["token"]] = mode
-                            self.send_retries.pop(entry["token"], None)
+                            self.token_correlation_ids[entry["key"]] = entry["correlation_id"]
+                            self.token_modes[entry["key"]] = mode
+                            self.send_retries.pop(entry["key"], None)
                     self.logger.info(f"Batch subscribed {len(subs)} token(s) in mode {mode}")
                 else:
                     # Requeue rather than wait for a resync: the client is still
                     # connected, so no login is coming and nothing else would
                     # ever send these. token_modes stays unset either way.
                     with self.lock:
-                        queued_tokens = {q["token"] for q in self.subscription_queue}
+                        queued_keys = {
+                            self._feed_key(q["exchange_type"], q["token"])
+                            for q in self.subscription_queue
+                        }
                         requeued, exhausted = [], []
                         for entry in subs:
-                            token = entry["token"]
-                            if token in queued_tokens:
+                            key = entry["key"]
+                            if key in queued_keys:
                                 continue
-                            sub = latest.get(token)
+                            sub = latest.get(key)
                             if sub is None:
                                 continue
 
-                            attempts = self.send_retries.get(token, 0) + 1
+                            attempts = self.send_retries.get(key, 0) + 1
                             if attempts > self.max_send_retries:
                                 # Spent: leave it unconfirmed for the resync
                                 # rather than re-arming the timer forever.
-                                exhausted.append(token)
+                                exhausted.append(key)
                                 continue
 
-                            self.send_retries[token] = attempts
-                            requeued.append(token)
+                            self.send_retries[key] = attempts
+                            requeued.append(key)
                             self.subscription_queue.append(
                                 {
-                                    "token": token,
+                                    "token": entry["token"],
                                     "mode": mode,
                                     "exchange_type": entry["exchange_type"],
                                     "symbol": sub["symbol"],
@@ -634,9 +648,10 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             del self.subscriptions[correlation_id]
 
+            feed_key = self._feed_key(exchange_type, token)
             max_mode_for_token = 0
             for sub in self.subscriptions.values():
-                if sub["token"] == token:
+                if self._feed_key(sub["exchange_type"], sub["token"]) == feed_key:
                     max_mode_for_token = max(max_mode_for_token, sub["mode"])
 
             # Drop any entry still waiting in the coalescing window. Without
@@ -646,28 +661,29 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # would arrive for a token this adapter no longer tracks.
             if max_mode_for_token == 0:
                 self.subscription_queue = [
-                    queued for queued in self.subscription_queue if queued["token"] != token
+                    queued
+                    for queued in self.subscription_queue
+                    if self._feed_key(queued["exchange_type"], queued["token"]) != feed_key
                 ]
                 # Drop the retry budget with the subscription. Kept, a token
                 # that had exhausted it would come back already spent, so a
                 # later subscribe got its one send and no retry at all - and
                 # the dict would grow a permanent entry per token ever seen.
-                self.send_retries.pop(token, None)
+                self.send_retries.pop(feed_key, None)
 
-            current_mstock_mode = self.token_modes.get(token, 0)
+            current_mstock_mode = self.token_modes.get(feed_key, 0)
+            current_correlation_id = self.token_correlation_ids.get(feed_key)
             if max_mode_for_token < current_mstock_mode:
                 needs_ws_update = True
                 new_mode = max_mode_for_token
                 if new_mode > 0:
-                    self.token_modes[token] = new_mode
+                    self.token_modes[feed_key] = new_mode
                 else:
-                    self.token_modes.pop(token, None)
-                    self.token_correlation_ids.pop(token, None)
+                    self.token_modes.pop(feed_key, None)
+                    self.token_correlation_ids.pop(feed_key, None)
 
         if needs_ws_update and self.ws_client and self.running:
             try:
-                current_correlation_id = self.token_correlation_ids.get(token)
-
                 if new_mode == 0:
                     if current_correlation_id:
                         self.ws_client.unsubscribe_stream(current_correlation_id)
@@ -680,11 +696,11 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self.ws_client.unsubscribe_stream(current_correlation_id)
                         time.sleep(0.2)
 
-                    new_correlation_id = f"mstock_{token}_{new_mode}"
+                    new_correlation_id = self._correlation_id(exchange_type, token, new_mode)
                     self.ws_client.subscribe_stream(
                         new_correlation_id, token, exchange_type, new_mode
                     )
-                    self.token_correlation_ids[token] = new_correlation_id
+                    self.token_correlation_ids[feed_key] = new_correlation_id
                     self.logger.debug(
                         f"Downgraded subscription for token {token} to mode {new_mode}"
                     )
@@ -696,6 +712,22 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "status": "success",
             "message": f"Unsubscribed from {symbol} on {exchange} mode {mode}",
         }
+
+    @staticmethod
+    def _feed_key(exchange_type, token) -> str:
+        """One mStock instrument: its exchange type and token.
+
+        Tokens repeat across exchanges (an NSE and a BSE listing can share
+        one), so a token alone named two instruments: the second subscribe
+        looked already live and was never sent, and the two shared one mode
+        record and one stream id.
+        """
+        return f"{exchange_type}|{token}"
+
+    @staticmethod
+    def _correlation_id(exchange_type, token, mode) -> str:
+        """The client's stream id for an instrument in a mode, unique across exchanges."""
+        return f"mstock_{exchange_type}_{token}_{mode}"
 
     def _create_error_response(self, error_code: str, message: str) -> dict[str, Any]:
         return {"status": "error", "error_code": error_code, "message": message}
