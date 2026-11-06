@@ -139,3 +139,85 @@ def test_other_exchange_token_is_not_published(adapter):
     adapter.subscriptions = {"q": _sub(2)}
     adapter._on_data(None, {"t": "tf", "e": "BSE", "tk": "2885", "lp": "10"})
     assert adapter.published == []
+
+
+# --- Quote takes the depth feed too, and never publishes unreceived fields -----
+
+
+def _subscribe(adapter, mode, monkeypatch):
+    import broker.definedge.streaming.definedge_adapter as mod
+
+    monkeypatch.setattr(
+        mod.SymbolMapper,
+        "get_token_from_symbol",
+        lambda s, e: {"token": "2885", "brexchange": "NSE"},
+    )
+    adapter.connected = True
+    adapter.ws_client = object()
+    adapter._start_batch_timer = lambda: None
+    return adapter.subscribe("RELIANCE", "NSE", mode)
+
+
+def test_quote_subscribes_the_touchline_and_the_depth_feed(adapter, monkeypatch):
+    assert _subscribe(adapter, 2, monkeypatch)["status"] == "success"
+    assert {q["type"] for q in adapter.subscription_queue} == {"tick", "depth"}
+
+
+def test_ltp_subscribes_only_the_touchline(adapter, monkeypatch):
+    assert _subscribe(adapter, 1, monkeypatch)["status"] == "success"
+    assert {q["type"] for q in adapter.subscription_queue} == {"tick"}
+
+
+def test_depth_ack_fills_a_quote_only_subscriber_without_a_depth_topic(adapter):
+    adapter.subscriptions = {"q": _sub(2)}
+    # A touchline ack without OHLC, then the depth ack with the full snapshot
+    adapter._on_data(None, {"t": "tk", "e": "NSE", "tk": "2885", "lp": "1395.40"})
+    adapter._on_depth_data(None, {**DEPTH, "t": "dk", "o": "1382.60", "c": "1391.00"})
+
+    assert _topics(adapter, "_DEPTH") == []
+    quote = _topics(adapter, "_QUOTE")[-1]
+    assert quote["open"] == 1382.60
+    assert quote["close"] == 1391.00
+    assert quote["last_quantity"] == 7
+    assert quote["last_trade_time"] == "14:25:31"
+    assert quote["total_buy_quantity"] == 120952
+
+
+def test_quote_never_publishes_fields_not_received_as_zero(adapter):
+    adapter.subscriptions = {"q": _sub(2)}
+    adapter._on_data(None, {"t": "tf", "e": "NSE", "tk": "2885", "lp": "1800.10"})
+
+    quote = _topics(adapter, "_QUOTE")[-1]
+    assert quote["ltp"] == 1800.10
+    for key in ("open", "high", "low", "close", "volume", "average_price", "oi", "bid"):
+        assert key not in quote, key
+
+
+def test_unsubscribing_quote_releases_both_feeds(adapter, monkeypatch):
+    _subscribe(adapter, 2, monkeypatch)
+    calls = []
+
+    class _Ws:
+        def unsubscribe(self, sub_type, tokens):
+            calls.append(sub_type)
+            return True
+
+    adapter.ws_client = _Ws()
+    adapter.unsubscribe("RELIANCE", "NSE", 2)
+    assert sorted(calls) == ["depth", "tick"]
+    assert "NSE|2885" not in adapter.ws_subscription_refs
+
+
+def test_unsubscribing_quote_keeps_the_depth_feed_a_depth_subscriber_needs(adapter, monkeypatch):
+    _subscribe(adapter, 3, monkeypatch)
+    _subscribe(adapter, 2, monkeypatch)
+    calls = []
+
+    class _Ws:
+        def unsubscribe(self, sub_type, tokens):
+            calls.append(sub_type)
+            return True
+
+    adapter.ws_client = _Ws()
+    adapter.unsubscribe("RELIANCE", "NSE", 2)
+    assert calls == ["tick"]

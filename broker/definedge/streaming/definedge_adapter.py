@@ -483,29 +483,23 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Subscribe via WebSocket (reference counting will handle duplicates)
         if self.connected and self.ws_client:
             try:
-                # Map mode to DefinEdge subscription type
-                if mode == 1:  # LTP only - use touchline
-                    subscription_type = "tick"
-                elif mode == 2:  # Quote - use touchline for OHLC
-                    subscription_type = "tick"
-                    self.logger.info(
-                        f"Using touchline subscription for {symbol} Quote mode to get OHLC data"
-                    )
-                else:  # mode == 3, Depth
-                    subscription_type = "depth"
-
                 # First reference queues the scrip for a batched subscribe;
                 # later references only bump the counter, so bursts of
                 # subscriptions go out as one message instead of one per symbol
                 scrip = f"{definedge_exchange}|{token}"
                 with self.lock:
-                    if self._should_ws_subscribe(scrip, subscription_type):
-                        self._queue_ws_subscription(definedge_exchange, token, subscription_type)
-                        self.logger.info(f"[SUBSCRIBE] Queued WebSocket subscription for {scrip}")
-                    else:
-                        self.logger.info(
-                            f"[SUBSCRIBE] WebSocket already has active subscription for {scrip}"
-                        )
+                    for subscription_type in self._feed_types(mode):
+                        if self._should_ws_subscribe(scrip, subscription_type):
+                            self._queue_ws_subscription(
+                                definedge_exchange, token, subscription_type
+                            )
+                            self.logger.info(
+                                f"[SUBSCRIBE] Queued {subscription_type} subscription for {scrip}"
+                            )
+                        else:
+                            self.logger.info(
+                                f"[SUBSCRIBE] {subscription_type} already active for {scrip}"
+                            )
 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
@@ -594,28 +588,19 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Only unsubscribe from WebSocket if this was the last subscription
             if is_last:
-                if self._should_ws_unsubscribe(scrip, subscription["mode"]):
-                    # Unsubscribe if connected
-                    if self.connected and self.ws_client:
-                        try:
-                            # Map mode to DefinEdge subscription type
-                            if subscription["mode"] == 1:  # LTP only - use touchline
-                                subscription_type = "tick"
-                            elif (
-                                subscription["mode"] == 2
-                            ):  # Quote - we subscribed to touchline for OHLC
-                                subscription_type = "tick"
-                            else:  # mode == 3, Depth
-                                subscription_type = "depth"
-
-                            success = self.ws_client.unsubscribe(subscription_type, tokens)
-                            if not success:
-                                self.logger.warning(
-                                    f"Failed to unsubscribe WebSocket for {symbol}.{exchange}"
-                                )
-
-                        except Exception as e:
-                            self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+                for subscription_type in self._feed_types(subscription["mode"]):
+                    if not self._release_ws_ref(scrip, subscription_type):
+                        continue
+                    if not (self.connected and self.ws_client):
+                        continue
+                    try:
+                        success = self.ws_client.unsubscribe(subscription_type, tokens)
+                        if not success:
+                            self.logger.warning(
+                                f"Failed to unsubscribe {subscription_type} for {symbol}.{exchange}"
+                            )
+                    except Exception as e:
+                        self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -721,14 +706,13 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if scrip not in self.ws_subscription_refs:
                     self.ws_subscription_refs[scrip] = {"tick_count": 0, "depth_count": 0}
 
-                if mode in [1, 2]:  # LTP or Quote
-                    if scrip not in tick_scrips:
+                for subscription_type in self._feed_types(mode):
+                    if subscription_type == "tick":
                         tick_scrips.add((definedge_exchange, token))
-                    self.ws_subscription_refs[scrip]["tick_count"] += 1
-                elif mode == 3:  # Depth
-                    if scrip not in depth_scrips:
+                        self.ws_subscription_refs[scrip]["tick_count"] += 1
+                    else:
                         depth_scrips.add((definedge_exchange, token))
-                    self.ws_subscription_refs[scrip]["depth_count"] += 1
+                        self.ws_subscription_refs[scrip]["depth_count"] += 1
 
             # Resubscribe in batches
             try:
@@ -979,24 +963,13 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Nothing to publish until the snapshot holds a price or OHLC
             if not any(key in message for key in ("lp", "o", "h", "l", "c", "v")):
                 return result
-            # Similar to Shoonya, include all fields with safe conversion
-            result["ltp"] = self._safe_float(message.get("lp"))
-            result["ltt"] = self._last_trade_time(message)
-            result["volume"] = self._safe_int(message.get("v"))
-            result["open"] = self._safe_float(message.get("o"))
-            result["high"] = self._safe_float(message.get("h"))
-            result["low"] = self._safe_float(message.get("l"))
-            result["close"] = self._safe_float(message.get("c"))
-            result["change_percent"] = self._safe_float(message.get("pc"))
-            result["average_price"] = self._safe_float(message.get("ap"))
-            result["oi"] = self._safe_int(message.get("oi"))
-            result["prev_oi"] = self._safe_int(message.get("poi"))
-            result["total_oi"] = self._safe_int(message.get("toi"))
-            result["bid"] = self._safe_float(message.get("bp1"))
-            result["bid_qty"] = self._safe_int(message.get("bq1"))
-            result["ask"] = self._safe_float(message.get("sp1"))
-            result["ask_qty"] = self._safe_int(message.get("sq1"))
-            self._add_reference_keys(result, message, depth=False)
+            # Only fields Definedge has sent: a field not received yet is left
+            # out, never published as 0 (a 0 open or close reads as real data).
+            result.update(self._present_fields(message, self._QUOTE_FIELDS))
+            ltt = self._last_trade_time(message)
+            if ltt not in (None, ""):
+                result["ltt"] = ltt
+            self._add_reference_keys(result, message, depth=True)
 
             # Debug logging for OHLC
             if any(message.get(f) for f in ["o", "h", "l", "c"]):
@@ -1005,6 +978,44 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
 
         return result
+
+    # OpenAlgo key, Definedge raw key, numeric type
+    _QUOTE_FIELDS = (
+        ("ltp", "lp", float),
+        ("volume", "v", int),
+        ("open", "o", float),
+        ("high", "h", float),
+        ("low", "l", float),
+        ("close", "c", float),
+        ("change_percent", "pc", float),
+        ("average_price", "ap", float),
+        ("oi", "oi", int),
+        ("prev_oi", "poi", int),
+        ("total_oi", "toi", int),
+        ("bid", "bp1", float),
+        ("bid_qty", "bq1", int),
+        ("ask", "sp1", float),
+        ("ask_qty", "sq1", int),
+    )
+    _DEPTH_EXTRA_FIELDS = (
+        ("ltq", "ltq", int),
+        ("total_buy_qty", "tbq", int),
+        ("total_sell_qty", "tsq", int),
+        ("lower_circuit", "lc", float),
+        ("upper_circuit", "uc", float),
+        ("52w_high", "52h", float),
+        ("52w_low", "52l", float),
+    )
+
+    def _present_fields(self, message: dict, fields) -> dict[str, Any]:
+        """The listed fields Definedge has sent, converted; absent ones omitted."""
+        out = {}
+        for name, raw_key, kind in fields:
+            value = message.get(raw_key)
+            if value in (None, "", "-"):
+                continue
+            out[name] = self._safe_int(value) if kind is int else self._safe_float(value)
+        return out
 
     def _safe_float(self, value, default=0.0):
         """Safely convert value to float (similar to Shoonya)"""
@@ -1061,6 +1072,40 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         return True
 
+    @staticmethod
+    def _feed_types(mode: int) -> tuple[str, ...]:
+        """Definedge feeds an OpenAlgo mode subscribes.
+
+        Quote takes the depth feed as well as the touchline. Touchline updates
+        carry only the fields that changed, so a touchline acknowledgement
+        without OHLC (which Definedge sends; the adapter logs it) left Quote
+        with no open, high, low or close for the rest of the day, and the
+        touchline never carries last trade time, last quantity or the book
+        totals. The depth acknowledgement carries all of them (10-websocket.md,
+        Subscribe Depth). Depth messages reach Quote subscribers through the
+        merged per-scrip snapshot; no DEPTH topic is published unless Depth
+        itself is subscribed.
+        """
+        if mode == 1:
+            return ("tick",)
+        if mode == 2:
+            return ("tick", "depth")
+        return ("depth",)
+
+    def _release_ws_ref(self, scrip: str, subscription_type: str) -> bool:
+        """Drop one reference to a feed; True when the feed is no longer needed.
+
+        Caller holds self.lock.
+        """
+        refs = self.ws_subscription_refs.get(scrip)
+        if refs is None:
+            return True
+        key = "tick_count" if subscription_type == "tick" else "depth_count"
+        refs[key] = max(refs[key] - 1, 0)
+        if refs["tick_count"] == 0 and refs["depth_count"] == 0:
+            del self.ws_subscription_refs[scrip]
+        return refs[key] == 0
+
     def _should_ws_unsubscribe(self, scrip: str, mode: int) -> bool:
         """
         Check if we should send WebSocket unsubscription using reference counting
@@ -1106,29 +1151,14 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized depth data with safe defaults
         """
-        # Use safe conversion for all fields like Shoonya does
-        result = {
-            "ltp": self._safe_float(message.get("lp")),
-            "ltt": self._last_trade_time(message),
-            "volume": self._safe_int(message.get("v")),
-            "open": self._safe_float(message.get("o")),
-            "high": self._safe_float(message.get("h")),
-            "low": self._safe_float(message.get("l")),
-            "close": self._safe_float(message.get("c")),
-            "change_percent": self._safe_float(message.get("pc")),
-            "average_price": self._safe_float(message.get("ap")),
-            "ltq": self._safe_int(message.get("ltq")),
-            "ltt_time": message.get("ltt"),
-            "total_buy_qty": self._safe_int(message.get("tbq")),
-            "total_sell_qty": self._safe_int(message.get("tsq")),
-            "lower_circuit": self._safe_float(message.get("lc")),
-            "upper_circuit": self._safe_float(message.get("uc")),
-            "52w_high": self._safe_float(message.get("52h")),
-            "52w_low": self._safe_float(message.get("52l")),
-            "oi": self._safe_int(message.get("oi")),
-            "prev_oi": self._safe_int(message.get("poi")),
-            "total_oi": self._safe_int(message.get("toi")),
-        }
+        # Quote fields only once Definedge has sent them; the proxy hands this
+        # payload to Quote subscribers too, so a 0 here would blank them.
+        result = self._present_fields(message, self._QUOTE_FIELDS + self._DEPTH_EXTRA_FIELDS)
+        ltt = self._last_trade_time(message)
+        if ltt not in (None, ""):
+            result["ltt"] = ltt
+        if message.get("ltt") not in (None, ""):
+            result["ltt_time"] = message.get("ltt")
         self._add_reference_keys(result, message, depth=True)
 
         # Handle depth data separately (similar to Shoonya)
