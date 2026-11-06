@@ -77,6 +77,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/quotes \
 | bid | number | Best bid price |
 | prev_close | number | Previous day's close price |
 | volume | number | Total traded volume |
+| last_trade_time | string \| null | Actual broker last-trade timestamp, currently forwarded by Zerodha single/batch quotes. Missing values remain `null`; no current-time fallback. Offset-free Zerodha timestamps are Asia/Kolkata. Other adapters may omit this field. |
 
 ## Notes
 

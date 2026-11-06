@@ -257,6 +257,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
 | prev_close | number | Previous close |
 | volume | number | Trading volume |
 | oi | number | Open interest |
+| last_trade_time | string \| null | Broker's actual last-trade timestamp, preserved from normalized quotes; `null` when unavailable. Zerodha supplies ISO-style timestamps without an offset in Asia/Kolkata, or with an explicit offset. This is not `server_ts` or quote-retrieval time. |
 | lotsize | number | Lot size |
 | tick_size | number | Tick size |
 

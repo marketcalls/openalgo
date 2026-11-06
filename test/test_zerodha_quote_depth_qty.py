@@ -62,6 +62,8 @@ KITE_QUOTE = {
     "last_price": 154.8,
     "volume": 36097555,
     "oi": 9376575,
+    "timestamp": "2026-11-06 10:30:00",
+    "last_trade_time": "2026-11-06 09:45:00",
     "ohlc": {"open": 151.9, "high": 164.95, "low": 115.5, "close": 173.0},
     "depth": {
         "buy": [
@@ -158,6 +160,66 @@ class TestQuoteMappingCarriesSize:
         assert data["ask_qty"] == 2275
         assert data["bid"] == 154.45
         assert data["ask"] == 154.70
+
+    @pytest.mark.parametrize("trade_time", ["2026-11-06 09:45:00", None])
+    def test_trade_time_is_not_replaced_by_quote_update_time(self, broker, monkeypatch, trade_time):
+        from services import option_chain_service as chain_service
+
+        call, put = "NIFTY22SEP2623200CE", "NIFTY22SEP2623200PE"
+        call_trade_time = "2026-11-06 10:15:00"
+        call_quote = {**KITE_QUOTE, "last_trade_time": call_trade_time}
+        put_quote = {**KITE_QUOTE}
+        if trade_time is None:
+            put_quote.pop("last_trade_time")
+        else:
+            put_quote["last_trade_time"] = trade_time
+        # The feed is updating at 10:30, but that does not make the 09:45 trade fresh.
+        monkeypatch.setattr("broker.zerodha.api.data.get_br_symbol", lambda symbol, _: symbol)
+        monkeypatch.setattr(
+            "broker.zerodha.api.data.get_api_response",
+            lambda *a, **kw: {"data": {f"NFO:{call}": call_quote, f"NFO:{put}": put_quote}},
+        )
+        expected = {call: call_trade_time, put: trade_time}
+        symbols = [{"symbol": symbol, "exchange": "NFO"} for symbol in (call, put)]
+        for symbol in (call, put):
+            assert broker.get_quotes(symbol, "NFO").get("last_trade_time") == expected[symbol]
+
+        batch = broker.get_multiquotes(symbols)
+        assert {
+            item["symbol"]: item["data"].get("last_trade_time") for item in batch
+        } == expected
+
+        # Only broker I/O, auth and instrument lookup are replaced; assembly runs unchanged.
+        monkeypatch.setattr(
+            chain_service, "get_quotes",
+            lambda **_: (True, {"data": {"ltp": 23200, "prev_close": 23200}}, 200),
+        )
+        monkeypatch.setattr(chain_service, "get_available_strikes", lambda *_: [23200])
+        monkeypatch.setattr(
+            chain_service, "get_option_symbols_for_chain",
+            lambda *_: [{
+                "strike": 23200,
+                "ce": {"symbol": call, "exists": True, "label": "ATM", "lotsize": 50,
+                       "tick_size": .05},
+                "pe": {"symbol": put, "exists": True, "label": "ATM", "lotsize": 50,
+                       "tick_size": .05},
+            }],
+        )
+        monkeypatch.setattr(
+            chain_service, "get_auth_token_broker", lambda *_, **__: ("test-token", None, "zerodha"),
+        )
+        monkeypatch.setattr(
+            chain_service, "get_multiquotes",
+            lambda symbols, api_key: (
+                True, {"status": "success", "results": broker.get_multiquotes(symbols)}, 200,
+            ),
+        )
+        success, response, status = chain_service.get_option_chain(
+            "NIFTY", "NSE_INDEX", "22SEP26", None, "test-token",
+        )
+        assert success and status == 200, response
+        assert response["chain"][0]["ce"]["last_trade_time"] == call_trade_time
+        assert response["chain"][0]["pe"]["last_trade_time"] == trade_time
 
 
 class TestOptionChainNoLongerDefaults:
