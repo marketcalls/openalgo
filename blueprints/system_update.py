@@ -118,14 +118,23 @@ def _claim_exclusive(path, content=""):
 
     Returns True when this caller won the race. Any OSError (including
     FileExistsError) returns False, so a second concurrent run can never
-    slip past a check-then-create pair.
+    slip past a check-then-create pair. A failed write (e.g. ENOSPC) removes
+    the half-written claim again instead of blocking all future updates.
     """
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except OSError:
         return False
-    with os.fdopen(fd, "w") as fh:
-        fh.write(content)
+    try:
+        os.write(fd, content.encode())
+    except OSError:
+        os.close(fd)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return False
+    os.close(fd)
     return True
 
 
@@ -199,8 +208,10 @@ def _behind_cached(slug, sha, branch):
     hit = _BEHIND_CACHE.get(key)
     if hit and now - hit[1] < _BEHIND_TTL_SECONDS:
         return hit[0]
-    # stamp the key BEFORE the call so concurrent refreshes don't stampede
-    # the API; a failure caches -1 and retries after the TTL.
+    # Reserve the key BEFORE the call so concurrent status polls don't all
+    # miss and stampede the API; readers see -1 ("unknown") while in flight
+    # and the real value replaces the reservation when it returns.
+    _BEHIND_CACHE[key] = (-1, now)
     val = _github_behind(slug, sha, branch)
     _BEHIND_CACHE[key] = (val, now)
     # bound memory: drop entries for other SHAs (deploys move SHA forward)
@@ -223,22 +234,29 @@ def _docker_status():
 
 def _update_status():
     itype, app_path, service = _detect_install()
+    running = False
+    lock = None
     if itype == "docker":
         current, branch, behind_n = _docker_status()
     else:
         current, _ = _git(["git", "rev-parse", "--short", "HEAD"], app_path)
         branch, _ = _git(["git", "branch", "--show-current"], app_path)
         branch = branch or "main"
-        # Refresh the comparison ref quietly (best effort, 15s cap).
-        try:
-            subprocess.run(
-                ["git", "fetch", "--quiet"],
-                cwd=app_path,
-                capture_output=True,
-                timeout=15,
-            )
-        except Exception:
-            pass
+        lock = Path("/tmp/openalgo_update.lock")
+        running = lock.exists()
+        if not running:
+            # Refresh the comparison ref quietly (best effort, 15s cap).
+            # Skipped while an update runs: a fetch racing the updater's own
+            # `git pull` can make the update fail.
+            try:
+                subprocess.run(
+                    ["git", "fetch", "--quiet"],
+                    cwd=app_path,
+                    capture_output=True,
+                    timeout=15,
+                )
+            except Exception:
+                pass
         upstream, _ = _git(
             ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
             app_path,
@@ -251,8 +269,8 @@ def _update_status():
             behind_n = int(behind)
         except (TypeError, ValueError):
             behind_n = -1  # unknown (offline?)
-    lock = Path("/tmp/openalgo_update.lock")
-    running = lock.exists()
+    if lock is not None:
+        running = running or lock.exists()
     update_result = None
     if itype == "docker":
         # In docker mode the "running" signal is the request flag in the

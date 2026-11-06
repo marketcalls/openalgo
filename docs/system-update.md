@@ -18,7 +18,7 @@ Every route requires a logged-in session. `POST` also needs the Flask-WTF
 
 | Layout | Detected by | What a click does |
 |---|---|---|
-| Server | `/var/python/openalgo` is a git checkout with a systemd unit `openalgo` | Detached updater: stop service, back up `db/*`, pull, sync deps, migrate, start service |
+| Server | git checkout at `/var/python/openalgo` (the `openalgo` systemd unit is stopped/started when present) | Detached updater: stop service, back up `db/*`, pull, sync deps (plus `requirements-nginx.txt` + gunicorn/eventlet when the unit and `.venv` are present), migrate, start service |
 | Docker | `/.dockerenv` exists | Writes `/app/tmp/update_requested.json`; the host watcher pulls, rebuilds and recreates the container |
 | Local | any other checkout | Same sequence with **no sudo and no service restart** (and no compose side effect unless this checkout's own compose services are actually running) |
 
@@ -48,7 +48,8 @@ The script is quiet when nothing is requested. Otherwise it:
    (userinfo is stripped from the remote URL first),
 6. `docker compose up -d`, checking the exit code,
 7. polls `docker inspect` until the container reports `running`/`healthy`
-   (60 s cap),
+   (3-minute cap — compose's healthcheck has a 40 s start period plus a
+   30 s interval, so "healthy" can legitimately take ~2 min),
 8. writes `/app/tmp/update_result.json` with `done` or `error`.
 
 Both `install/install-docker.sh` and `install-docker-multi-custom-ssl.sh`
@@ -130,3 +131,5 @@ working.
 | `Updater script missing` | `install/update_web.sh` is not next to `app.py` |
 | Server layout, `sudo` denied | Install the root-owned wrapper and use the scoped sudoers rule above |
 | Update reported `error` | `log/update_web.log` (server/local) or `log/host_watcher.log` + `/app/tmp/update_result.json` (Docker) |
+| `git pull failed` in the watcher log | The branch tracks an `ssh://` remote but cron has no ssh key. The watcher now pulls public repos over `https` automatically; for a **private** fork, configure a key (`~/.ssh/config` with `IdentityFile`) or a credential helper for the cron user |
+| `docker compose build` fails with `open …/.env: permission denied` | The app rewrites `.env` as its own user and the read ACL/mask for the cron user is gone. Restore it with `sudo setfacl -m u:ubuntu:r,m::r <app>/.env` (adjust the user), or make the cron user the file's group |
