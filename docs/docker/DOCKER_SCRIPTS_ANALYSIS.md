@@ -1,5 +1,7 @@
 # Docker Installation Scripts - Compatibility Analysis
 
+This is a historical January 2026 implementation/troubleshooting record. For current setup, writable `.env` mounts, resource defaults and worker selection, use [Docker Deployment](docker.md) and [Docker Build Guide](DOCKER_BUILD_GUIDE.md).
+
 ## Summary
 
 All three Docker installation scripts need updates to support the numba/llvmlite/scipy fixes:

@@ -25,7 +25,7 @@ Never put broker credentials or broker access tokens in these requests. The Open
 
 ## Registered REST Inventory
 
-The current v1 surface contains **66 method/path pairs**. A resource with both GET and POST counts as two endpoints.
+The current v1 surface contains **74 method/path pairs**. A resource with both GET and POST counts as two endpoints.
 
 ### Order Management
 
@@ -83,6 +83,23 @@ The current v1 surface contains **66 method/path pairs**. A resource with both G
 | POST | `/syntheticfuture` | [Synthetic future](./options-services/syntheticfuture.md) |
 | POST | `/optiongreeks` | [Option Greeks](./options-services/optiongreeks.md) |
 | POST | `/multioptiongreeks` | [Batch option Greeks](./options-services/multioptiongreeks.md) |
+
+### Portfolio, SIP, And Sector Analysis
+
+These endpoints analyze historical prices and current holdings; they do not place orders.
+
+| Method | Path | Documentation |
+|---|---|---|
+| GET | `/portfolio/benchmarks` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| POST | `/portfolio/backtest` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| POST | `/portfolio/tearsheet` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| POST | `/portfolio/holdings` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| GET | `/sip/frequencies` | [SIP backtester](./analytics-services/sip.md) |
+| POST | `/sip/backtest` | [SIP backtester](./analytics-services/sip.md) |
+| GET | `/sectorrotation/options` | [Sector rotation](./analytics-services/sectorrotation.md) |
+| POST | `/sectorrotation` | [Sector rotation](./analytics-services/sectorrotation.md) |
+
+The SIP frequency and sector-rotation option lists need no API key. All analysis requests verify the key even when reading local Historify data; `source="api"` additionally needs a broker session. Portfolio holdings analysis always requires a broker session.
 
 ### Calendar, Analyzer, And Preferences
 
@@ -178,8 +195,17 @@ Common status codes are:
 | 401 | Missing or invalid authentication on endpoints that use 401 |
 | 403 | Invalid API key or operation blocked by mode/policy |
 | 404 | Broker module, symbol, order, or linked messaging user not found |
-| 429 | Flask-Limiter rejected the request |
+| 422 | Historical data or analysis inputs cannot support the requested calculation |
+| 429 | Request rate limit, or a broker-queue/guard refusal before sending |
 | 500 | Unhandled internal or broker error |
+| 502 | Place/smart order may have been sent but its broker response was lost; reconcile before retrying |
+| 501 | Active broker does not support the operation (for example live GTT) |
+
+### Order outcomes and retries
+
+A successful placement acknowledgement is not proof of a fill. Check the order book/status and trade book or order-update stream for execution. A transport failure after a write may mean the broker accepted the order: `/placeorder` and `/placesmartorder` return `502` with a message asking you to check the order book when the shared transport detects a lost response. Do not automatically resend that order. Basket and split calls report that message on the affected child result; inspect every child even when the batch request itself returns `200`.
+
+A gthread broker queue refusal is different: the request was refused before sending and returns `429`. The same status can also originate from a rate limiter or broker, so use the response message and endpoint context. No blanket retry guarantee or universal idempotency key is provided by this API.
 
 ## Rate Limits
 

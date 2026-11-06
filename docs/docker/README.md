@@ -1,6 +1,6 @@
 # Docker Documentation
 
-Complete Docker deployment and troubleshooting documentation for OpenAlgo.
+Current Docker setup starts with [Docker Deployment](docker.md), [environment settings](docker_env_changes.md), and the [build guide](DOCKER_BUILD_GUIDE.md). Dated scripts-analysis and numba-fix reports below preserve their original implementation history.
 
 ---
 
@@ -133,9 +133,9 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env  # Existing file, writable by container UID 1000
 
-    shm_size: '2gb'  # For scipy/numba operations
+    shm_size: ${SHM_SIZE:-512m}  # Repository Compose default; size for available RAM
 
     restart: unless-stopped
 ```
@@ -147,9 +147,8 @@ The Docker image includes:
 - **libopenblas0** - BLAS/LAPACK for linear algebra
 - **libgomp1** - OpenMP for parallel operations
 - **libgfortran5** - Fortran runtime for scipy
-- **numba 0.63.1** - JIT compilation
-- **llvmlite 0.46.0b1** - LLVM bindings
-- **scipy 1.17.0** - Scientific computing
+- **Chromium + fonts-liberation** - Kaleido/Telegram chart rendering
+- **numba, llvmlite, scipy** - Versions resolved from the current Python dependency files
 
 ---
 
@@ -161,7 +160,7 @@ The Docker image includes:
 docker ps --filter "name=openalgo"
 
 # Test numba/scipy
-docker exec openalgo python -c "import numba, scipy; print('OK')"
+docker exec openalgo-web python -c "import numba, scipy; print('OK')"
 
 # View logs
 docker-compose logs -f
@@ -169,13 +168,13 @@ docker-compose logs -f
 
 ### Verify Shared Memory
 ```bash
-docker inspect openalgo --format='{{.HostConfig.ShmSize}}'
-# Should show: 2147483648 (2GB)
+docker inspect openalgo-web --format='{{.HostConfig.ShmSize}}'
+# Repository Compose default: 536870912 (512 MiB); helpers size it from RAM
 ```
 
 ### Verify Volumes
 ```bash
-docker inspect openalgo --format='{{range .Mounts}}{{.Destination}} {{end}}'
+docker inspect openalgo-web --format='{{range .Mounts}}{{.Destination}} {{end}}'
 # Should include: /app/tmp /app/keys
 ```
 
@@ -183,14 +182,14 @@ docker inspect openalgo --format='{{range .Mounts}}{{.Destination}} {{end}}'
 
 ## Recent Updates
 
-### 2026-01-28 - numba/scipy Support
+### Historical: 2026-01-28 - numba/scipy Support
 - Added runtime dependencies (libopenblas0, libgomp1, libgfortran5)
 - Configured TMPDIR and NUMBA_CACHE_DIR environment variables
 - Added 2GB shared memory allocation
 - Fixed /app/tmp permissions using named volume
 - Updated all installation scripts
 
-**Result:** All numba/scipy/llvmlite errors resolved!
+This records the changes made at that time; current troubleshooting still depends on the error, image and resource limits.
 
 ---
 
@@ -227,7 +226,6 @@ If you encounter issues:
 
 ---
 
-**Last Updated:** 2026-01-28
+**Current configuration sources:** `Dockerfile`, `docker-compose.yaml`, `start.sh`
 **Docker Image:** marketcalls/openalgo:latest
 **Python Version:** 3.12+
-**OpenAlgo Version:** 2.0.0.0

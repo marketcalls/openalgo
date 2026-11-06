@@ -4,6 +4,12 @@
 
 This guide walks you through installing OpenAlgo on your system. We'll cover Windows, Ubuntu, and macOS installations.
 
+## Desktop and Companion Apps
+
+The public `/download` page on an OpenAlgo instance lists current downloads and installation explainers for **OpenAlgo Desktop**, **FastScalper Desktop**, the **Chrome Plugin** and the **Excel Add-in**. OpenAlgo Desktop runs the platform locally. The other three connect to an OpenAlgo instance you already run, using its host URL and OpenAlgo API key; follow the page's connection and setup requirements.
+
+Use that page for current platform builds, checksums where offered, and app-specific installation steps. An Excel order formula can send an order when recalculated, so follow the add-in's calculation instructions before enabling live orders.
+
 ## Quick Install (All Platforms)
 
 If you're comfortable with command line, here's the fastest way:
@@ -23,7 +29,7 @@ uv run app.py
 On the first start OpenAlgo creates `.env` from `.sample.env` with new security
 keys (`APP_KEY`, `API_KEY_PEPPER`, `FERNET_SALT`) and no broker, and the file is
 readable only by your user. Sign in, then add your broker keys on the **Broker
-Keys** page. Copying `.sample.env` to `.env` yourself works the same way: its
+Configuration** page. Copying `.sample.env` to `.env` yourself works the same way: its
 placeholder keys are replaced with fresh ones on the first start, and its
 `<broker>` placeholder means no broker is set in `.env`. To keep the broker in
 `.env`, fill in the broker lines before the first start. Back up `.env`: its keys
@@ -332,22 +338,21 @@ openalgo/
 ├── frontend/           # React frontend
 ├── database/           # Database models
 ├── db/                 # Database files (created on first run)
-├── logs/               # Log files
+├── log/                # Log files
 └── ...
 ```
 
 ## Configuration Overview
 
-The `.env` file contains all your settings. Key sections:
+The `.env` file contains application configuration. Broker keys can also be saved in Broker Configuration. Selected settings:
 
 ```ini
 # Application Settings
-FLASK_HOST=127.0.0.1
+FLASK_HOST_IP=127.0.0.1
 FLASK_PORT=5000
 
-# Security (CHANGE THESE!)
-APP_KEY=your-secret-key-here
-API_KEY_PEPPER=your-pepper-here
+# Security: generated uniquely by the installer or first startup.
+# Keep your existing APP_KEY, API_KEY_PEPPER and FERNET_SALT private and backed up.
 
 # Broker: leave these empty and add your broker in Broker Configuration after
 # signing in. A broker set here is used first.
@@ -356,12 +361,7 @@ BROKER_API_SECRET=''
 REDIRECT_URL=''
 ```
 
-**Important**: Generate new APP_KEY and API_KEY_PEPPER:
-```bash
-uv run python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Run this twice - once for APP_KEY, once for API_KEY_PEPPER.
+The installers and first startup generate unique keys. Do not replace `API_KEY_PEPPER` or `FERNET_SALT` on a populated installation without the dedicated migration: stored credentials depend on them. Follow any startup migration warning. See [First-Time Setup](../05-first-time-setup/README.md).
 
 ## Running OpenAlgo
 

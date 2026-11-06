@@ -3,7 +3,7 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. The terminal uses published `openalgo-charts` 2.6.0: a from-scratch canvas
+it. The terminal uses the pinned `openalgo-charts` package: a from-scratch canvas
 charting engine with 19 chart types, 112 built-in indicators plus any you write
 yourself, and 87 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
@@ -21,31 +21,30 @@ says so and links to `/apikey`.
 
 ## The Layout
 
+The terminal occupies the full viewport with no application navbar. **Dashboard**, the mode switch, theme toggle and profile menu stay accessible in its toolbar; the other controls can scroll or collapse to icons as the screen narrows. The broker badge appears where space permits. **Live/Analyze** has the same instance-wide effect as it does elsewhere in OpenAlgo.
+
 | Region | What it holds |
 |---|---|
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, comparisons, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera and CSV export |
 | Left rail | Drawing tools in eleven groups, magnet, keep-tool-selected lock, undo, redo, delete |
 | Centre | Chart grid with up to eight panes in presets, or sixteen in an imported workspace |
-| Right panel | Watchlist, option chain, Objects, or the chart assistant |
-| Right rail | The four controls that open those panels |
+| Right panel | Watchlist, option chain, Objects, Alerts, Data window, Scripts, Backtest, Strategies or Assistant |
+| Right rail | Controls that open or close those panels |
+| Bottom bar | Range presets, Go to, market status, clock/timezone and price-scale controls |
 | Bottom dock | Orders, positions, trades and GTT across every symbol |
 
-The chart grid takes whatever the rails and panels leave. Only the right panel
-and the dock can be resized; the panes follow the layout preset you pick.
+The chart grid takes whatever the rails and panels leave. Resize the right panel or dock by its divider. Drag the gaps between chart panes to change their proportions; double-click a gap to reset the split. Workspaces retain the split, and the unnamed grid remembers it per layout in this browser.
 
 One toolbar serves the whole grid. Click a chart, move keyboard focus to its
-chart region, or use the **Chart 1 / Chart 2** selector to choose the chart that
+chart region, or use **Layout > Selected chart** to choose the chart that
 the toolbar controls. The selected chart has a highlighted border. Its symbol,
 interval, chart type, studies, alerts, comparisons and quantity remain
 independent when you select another chart. Enabled sync options still apply.
 Replay keeps the chart that started it as its owner until the session ends.
 
 Adding panes does not repeat the toolbar. Removing the selected pane selects a
-surviving chart, and a saved workspace restores its selected chart. In full
-screen, the selected chart's controls move inside that chart; grid controls
-return when you leave full screen. On narrow screens, scroll the toolbar
-horizontally to reach its remaining controls. The selected-chart selector stays
-visible as the controls scroll.
+surviving chart, and a saved workspace restores its selected chart. The shared toolbar continues to act on the selected chart in full screen. On narrow screens, scroll the toolbar
+horizontally to reach its remaining controls. Dashboard and the account controls remain accessible as the chart controls scroll.
 
 ## Comparing Symbols
 
@@ -55,14 +54,20 @@ You can add several independent symbols. The menu lists each one with its
 colour and shows loading or unavailable-history messages beside that symbol.
 **Remove** affects only the comparison on that row.
 
-Choose **Price** to compare quoted prices or **Percentage** to compare relative
-moves. Comparisons use the selected chart's interval. Missing observations stay
+Choose **Price** for real prices on the chart's price axis, **Percentage** for change since the first shared bar, **Indexed to 100** for the same rebasing starting at 100, or **Own scale** to fit each line to its own range. Comparisons use the selected chart's interval. Missing observations stay
 as gaps. Comparison search accepts instruments; arithmetic expressions remain
 available through the chart's main symbol search.
 
-Each chart retains its comparison list and scale mode. Named workspaces save
-these settings with the rest of that chart. Comparison controls are unavailable
+Each chart remembers its comparison list and scale choice in this browser. Named workspace comparison modes currently retain the older two-mode representation: Price reopens as Own scale, and Indexed to 100 reopens as Percentage. Hide/show keeps a comparison configured; Remove deletes it. Use Retry if its history load failed. Comparison controls are unavailable
 during replay selection, loading and playback.
+
+## Quick Entry, Data Window and Bottom Bar
+
+With focus on the chart and no text field or dialog taking input, type a letter to open symbol search or a digit from 1 to 9 to open quick interval entry. A bare number means minutes (`15`); unit forms include `1h`, `D` and `M`. Lowercase `m` means minutes and uppercase `M` means months. Enter applies a supported interval and Esc cancels. `0` retains the chart's reset-view shortcut.
+
+Open **Data window** on the right rail for the bar and study values under the crosshair. It follows the selected chart and makes missing values visible instead of substituting zero. Chart loading/error overlays and replay readouts explain the current chart state.
+
+The strip above the order dock controls the selected chart: choose a preset history range or **Go to** a date/time. It loads older broker history when needed and reports when the requested history is unavailable. The bar also provides market/session status, clock/timezone and scale toggles. Changing the display timezone relabels the chart; Indian exchange sessions remain aligned to IST.
 
 ## Saving Images and Data
 
@@ -698,6 +703,21 @@ updated live chart.
 including sibling charts, the dock and the GTT tab, refuses during selection,
 history loading and playback. Replay is
 a simulation, and the prices on screen are not the market's.
+
+## OpenScript, Backtests and Server Strategies
+
+**Scripts** on the right rail edits [OpenScript](../../openscript.md) studies and strategies. Choose New script, select Study or Strategy, save and read compiler diagnostics. **Add to chart** plots a study. For a strategy, **Run on chart** opens Backtest and displays its plots and historical fills.
+
+**Backtest** uses the selected chart's instrument and interval. Choose a saved Strategy, dates and inputs, then Run backtest after changing dates or inputs. Inspect summary, equity, drawdown and trade results; Show trades on chart and Clear marks control the fill markers. The browser backtest sends no broker orders and its input overrides do not change deployed runs.
+
+**Strategies** manages deployments on the server. Deploy a saved strategy on an instrument, exchange and interval, optionally choose product and inputs, then explicitly Start live or Start in sandbox after checking the platform mode. One script can have independent deployments on different instruments or intervals.
+
+- **Pause** ends the process and leaves its position for you to manage.
+- **Stop** asks to close its position and end the process, and requires confirmation. Read any refusal and verify actual orders and positions.
+- **Activity** opens the deployment's orders, trades and positions.
+- Closing the browser stops no server strategy. Logging out is not a position close.
+
+Read [OpenScript](../../openscript.md#running-one-as-a-strategy) for lifecycle routes, schedules, logs, mode changes and the compatibility `/stop` route, which means pause. JavaScript [custom chart indicators](../../custom-indicators.md) and Python `openalgo.ta` indicators are separate systems.
 
 ## The Chart Assistant
 

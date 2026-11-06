@@ -2,7 +2,7 @@
 
 ## Registration
 
-`restx_api/__init__.py` creates `api_v1_bp` with prefix `/api/v1` and registers 57 current method/path pairs across order, account, market-data, option, calendar, analyzer, preference, messaging, and utility namespaces.
+`restx_api/__init__.py` creates `api_v1_bp` with prefix `/api/v1` and registers 74 current method/path pairs across order, account, market-data, option, calendar, analyzer, preference, messaging, and utility namespaces.
 
 The Flask-RESTX `Api` is configured with `doc=False`. Swagger/OpenAPI UI is intentionally disabled and there is no supported `/api/docs` route. The maintained external contract is [`docs/api/README.md`](../../api/README.md).
 
@@ -64,7 +64,7 @@ All are environment/configuration values; compound limits are supported.
 
 ## Response Boundaries
 
-OpenAlgo normalizes wrapper status and core fields, but broker-specific payload data is not exhaustively identical for all 36 plugins. Some endpoints intentionally return CSV, plain text, or empty webhook acknowledgements. Clients must use the endpoint contract rather than assuming every response is `{status,data}`.
+OpenAlgo normalizes wrapper status and core fields, but broker-specific payload data is not exhaustively identical for all 38 plugins. Some endpoints intentionally return CSV, plain text, or empty webhook acknowledgements. Clients must use the endpoint contract rather than assuming every response is `{status,data}`.
 
 ## Adding A Resource
 

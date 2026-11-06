@@ -54,3 +54,18 @@ Feature: Orders and Action Center
     When the user approves all pending orders
     Then each eligible pending order is marked approved
     And each approved order is submitted for execution
+
+  # Source: database/action_center_db.py:claim_pending_order_for_execution, services/pending_order_execution_service.py:execute_approved_order
+  Scenario: Concurrent approvals cannot send the same pending order twice
+    Given a pending order has been approved
+    When two execution attempts race to claim it
+    Then only one can mark it submitting and contact the broker
+    And a submitting row left by a restart is not automatically resent
+
+  # Source: utils/httpx_client.py:watch_for_unanswered_writes, services/place_order_service.py
+  Scenario: A lost reply does not prove an order was rejected
+    Given a live place order write may have reached the broker
+    When its reply is lost through the shared transport
+    Then the service reports that the order may have been placed
+    And the caller is told to check the order book before placing it again
+    And the transport does not automatically retry the write

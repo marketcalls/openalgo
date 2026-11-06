@@ -6,20 +6,17 @@ The current-state PRD for this codebase is:
 - [PRD_TRACEABILITY.md](./PRD_TRACEABILITY.md)
 - [CONFLICTS.md](./CONFLICTS.md)
 
-Use `PRD.md` as the source for current behavior. It is grounded in `DISCOVERY_MAP.md` and the BDD suite in `docs/bdd`.
+Use `PRD.md` and the linked module contracts for current behavior. Requirements cite code ownership and the BDD documentation specifications. The root phase-1 discovery map is historical provenance; registered routes and current implementation take precedence.
 
-## Current Snapshot
+## Inventory Verified On 2026-11-06
 
-- Documented HTTP endpoints: 500
-- RESTX `/api/v1` endpoints: 57
-- Flask blueprint routes: 442
-- App-level routes: 1
-- Broker plugins: 36
+- RESTX `/api/v1` method/path pairs: 74 (static registration parity with the API and BDD inventories)
+- Broker plugins: 38 (metadata inventory, including Rupeezy and Sahi)
+- Tools: 20 (from `frontend/src/lib/tools.ts`)
 - RESTX Swagger UI: deliberately disabled (`doc=False`)
-- BDD feature files: 18
-- BDD scenario definitions: 119
-- BDD expanded cases: 219
-- Application / SDK: `2.0.1.4` / `2.0.2`
+- BDD files / scenario definitions / expanded cases: 18 / 138 / 266
+
+The older 500-endpoint/442-blueprint-route totals and dependency versions came from phase-1 discovery and are not maintained runtime counts. Session and feature routes include conditional surfaces such as Remote MCP. Read current application/SDK dependencies from `pyproject.toml`, frontend dependencies from `frontend/package.json`, and acceptance inventory totals from [BDD Coverage](../bdd/README.md).
 
 ## Existing Module PRDs
 

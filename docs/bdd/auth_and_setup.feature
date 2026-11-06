@@ -49,3 +49,24 @@ Feature: Setup and authenticated user session
     When a non-static request reaches the application
     Then request handling waits for database readiness for up to 30 seconds
     And every registered SQLAlchemy scoped session is removed during application-context teardown
+
+  # Source: utils/env_check.py:create_env_from_sample, utils/env_check.py:_generate_keys_on_first_run
+  Scenario: A fresh direct checkout starts without hand-written installation secrets
+    Given no environment file or existing main database is present
+    When environment validation runs
+    Then an owner-only environment file is created with fresh installation secrets
+    And no broker is configured until the user saves its keys
+    And a missing environment file with an existing main database requires restoring the original keys
+
+  # Source: install/openalgo-gunicorn.sh, utils/runtime.py, extensions.py
+  Scenario Outline: Server modes preserve the single-worker production contract
+    Given OpenAlgo starts through "<entry>"
+    When its server mode is resolved
+    Then it uses "<runtime>"
+    And its request capacity is "<capacity>"
+
+    Examples:
+      | entry | runtime | capacity |
+      | default production launcher | eventlet | one Gunicorn worker process |
+      | production launcher with OPENALGO_WORKER_CLASS=gthread | gthread | one Gunicorn worker process with 64 request threads |
+      | uv run app.py with OPENALGO_WORKER_CLASS=gthread | standard threading | development server without Gunicorn |
