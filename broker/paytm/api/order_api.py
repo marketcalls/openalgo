@@ -579,29 +579,34 @@ def close_all_positions(current_api_key, auth):
 
 def cancel_order(orderid, auth):
     orders_list = get_order_book(auth)
+    if not orders_list or "data" not in orders_list or orders_list["data"] is None:
+        return {"status": "error", "message": "Failed to fetch order book"}, 500
+
+    cancellable_statuses = {"OPEN", "TRIGGER PENDING", "MODIFIED", "PENDING"}
     for order in orders_list["data"]:
         if order["order_no"] == orderid:
-            if order["status"] == "Pending":
+            if str(order.get("status", "")).upper() in cancellable_statuses:
                 logger.debug(f"Cancelling order: {orderid}")
-                payload = json.dumps(
-                    {
-                        "order_no": orderid,
-                        "source": "N",
-                        "txn_type": order["txn_type"],
-                        "exchange": order["exchange"],
-                        "segment": order["segment"],
-                        "product": order["product"],
-                        "security_id": order["security_id"],
-                        "quantity": order["quantity"],
-                        "validity": order["validity"],
-                        "order_type": order["order_type"],
-                        "price": order["price"],
-                        "off_mkt_flag": order["off_mkt_flag"],
-                        "mkt_type": order["mkt_type"],
-                        "serial_no": order["serial_no"],
-                        "group_id": order["group_id"],
-                    }
-                )
+                cancel_payload = {
+                    "order_no": orderid,
+                    "source": "N",
+                    "txn_type": order["txn_type"],
+                    "exchange": order["exchange"],
+                    "segment": order["segment"],
+                    "product": order["product"],
+                    "security_id": order["security_id"],
+                    "quantity": order["quantity"],
+                    "validity": order["validity"],
+                    "order_type": order["order_type"],
+                    "price": order["price"],
+                    "off_mkt_flag": order["off_mkt_flag"],
+                    "mkt_type": order["mkt_type"],
+                    "serial_no": order["serial_no"],
+                    "group_id": order["group_id"],
+                }
+                if "ext_info" in order:
+                    cancel_payload["ext_info"] = order["ext_info"]
+                payload = json.dumps(cancel_payload)
 
                 response = get_api_response(
                     endpoint="/orders/v1/cancel/regular", auth=auth, method="POST", payload=payload
@@ -616,6 +621,13 @@ def cancel_order(orderid, auth):
                         "status": "error",
                         "message": response.get("message", "Failed to cancel order"),
                     }, 500
+
+            return {
+                "status": "error",
+                "message": f"Order {orderid} cannot be cancelled. Current status: {order.get('status')}",
+            }, 400
+
+    return {"status": "error", "message": f"Order {orderid} not found"}, 404
 
 
 # As long as an order is pending in the system, certain attributes of it can be modified.
