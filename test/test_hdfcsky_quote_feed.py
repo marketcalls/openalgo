@@ -295,3 +295,50 @@ def test_reconnect_drops_snapshots_before_partial_packets():
     adapter._on_ticks([ws._parse_packet(_packet(pb.NSE_FO_OI, oi=777))])
 
     adapter.publish_market_data.assert_not_called()
+
+
+# --- PR 2397 review follow-ups -------------------------------------------------
+
+
+def test_unsubscribe_during_the_handshake_is_not_replayed_on_open():
+    """No socket yet: the unsubscribe must still retract `desired`, or the
+    replay on open subscribes the instrument again."""
+    ws = _live_ws()
+    ws.ws = None
+    ws.connected = False
+    ws.desired["NSE_2885"] = "ALL"
+    ws.pending_subscriptions.append(("NSE_2885", "ALL"))
+
+    ws.unsubscribe(["NSE_2885"])
+    assert "NSE_2885" not in ws.desired
+    assert list(ws.pending_subscriptions) == []
+
+    ws.ws = MagicMock()
+    ws.connected = True
+    ws._resubscribe_all()
+    ws.ws.send.assert_not_called()
+
+
+def test_reconnect_replay_does_not_leave_its_frames_queued():
+    ws = _live_ws()
+    ws.desired = {"NSE_2885": "ALL", "NSE_1594": "LTP"}
+    ws.pending_subscriptions.extend([("NSE_2885", "ALL"), ("NSE_1594", "LTP")])
+
+    ws._resubscribe_all()
+
+    assert list(ws.pending_subscriptions) == [], "the drain would send them a second time"
+    sent = [
+        entry["scripId"]
+        for call in ws.ws.send.call_args_list
+        for entry in json.loads(call.args[0]).get("subscribe", [])
+    ]
+    assert sorted(sent) == ["NSE_1594", "NSE_2885"]
+
+
+def test_a_frame_queued_for_a_scrip_not_in_the_replay_stays_queued():
+    ws = _live_ws()
+    ws.desired = {"NSE_2885": "ALL"}
+    # Queued at a type the replay does not cover (a mode change in flight)
+    ws.pending_subscriptions.append(("NSE_2885", "LTP"))
+    ws._resubscribe_all()
+    assert list(ws.pending_subscriptions) == [("NSE_2885", "LTP")]

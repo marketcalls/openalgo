@@ -417,8 +417,9 @@ class HDFCSkyWebSocket:
 
     def unsubscribe(self, scrip_ids):
         try:
-            if not self.ws:
-                return False
+            # No early return without a socket: an unsubscribe during the
+            # handshake must still retract `desired`, or the open replay would
+            # subscribe the instrument again. Only the wire frame needs one.
             wanted = {scrip_id for scrip_id in scrip_ids if scrip_id}
             with self.lock:
                 # Retract ALL local state before sending, in one step. The
@@ -444,7 +445,7 @@ class HDFCSkyWebSocket:
                 # Sent under the lock that retracted the state, so a subscribe
                 # frame for these scrips goes out wholly before this one or
                 # after a later re-subscribe (see _send_subscribe_locked).
-                if payload and self.connected:
+                if payload and self.connected and self.ws:
                     # Capital S: the documented key is "unSubscribe".
                     self.ws.send(json.dumps({"heart_beat": False, "unSubscribe": payload}))
             return True
@@ -482,6 +483,12 @@ class HDFCSkyWebSocket:
             by_type: dict[str, list[str]] = {}
             for scrip_id, sub_type in self.desired.items():
                 by_type.setdefault(sub_type, []).append(scrip_id)
+            # The replay covers every queued frame for these scrips at their
+            # wanted type; left queued, the drain would send each a second
+            # time. A frame queued after this copy (a new subscribe) stays.
+            self.pending_subscriptions = deque(
+                item for item in self.pending_subscriptions if self.desired.get(item[0]) != item[1]
+            )
         for sub_type, scrip_ids in by_type.items():
             for start in range(0, len(scrip_ids), self.MAX_SCRIPS_PER_SUBSCRIBE):
                 batch = scrip_ids[start : start + self.MAX_SCRIPS_PER_SUBSCRIBE]
