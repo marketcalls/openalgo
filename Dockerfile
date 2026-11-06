@@ -59,6 +59,17 @@ WORKDIR /app
 # 2 – copy the ready-made venv and source with correct ownership
 COPY --from=python-builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
+# 2b – bake version stamps for /system-update. The runtime image has neither
+# .git nor a git binary, so the app cannot ask git what it is running. Values
+# arrive as build args (docker-compose passes GIT_SHA/GIT_BRANCH/GIT_REMOTE,
+# set by install/host_update_watcher.sh before a web-triggered rebuild).
+ARG GIT_SHA=unknown
+ARG GIT_BRANCH=unknown
+ARG GIT_REMOTE=unknown
+RUN echo -n "$GIT_SHA" > /app/BUILD_SHA && \
+    echo -n "$GIT_BRANCH" > /app/BUILD_BRANCH && \
+    echo -n "$GIT_REMOTE" > /app/BUILD_REMOTE && \
+    chown appuser:appuser /app/BUILD_SHA /app/BUILD_BRANCH /app/BUILD_REMOTE
 # 3 - copy built frontend from frontend-builder
 COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
 # 4 – create required directories with proper ownership and permissions
