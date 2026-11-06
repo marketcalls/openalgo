@@ -157,3 +157,45 @@ def test_mcx_tick_routed_by_streaming_segment():
     adapter = _adapter({"m": _sub("464925", "MFO", "MCX", 1, symbol="CRUDE")})
     adapter._on_data(None, {"symbol": "464925_MFO", "subscription_mode": 2})
     assert adapter.publish_market_data.call_count == 1
+
+
+# --- review follow-ups ---------------------------------------------------------
+
+
+def test_a_zero_depth_total_is_kept_not_replaced_by_the_quote_total():
+    """quote2 reports tbq/taq of 0 (numeric: the string "0" was already kept);
+    the merged state also holds the quote stream's tBQ/tSQ. 0 is a real total
+    and must not fall back to them."""
+    ws = _ws()
+    ws._normalize_market_data(dict(DOC_QUOTE), "quote")  # tBQ 973, tSQ 610
+    normalized = ws._normalize_market_data(
+        {"symbol": "2885_NSE", "tbq": 0, "taq": 0, "bidValues": [], "askValues": []},
+        "quote2",
+    )
+    data = _adapter({})._normalize_market_data(normalized, 3)
+    assert data["total_buy_quantity"] == 0
+    assert data["total_sell_quantity"] == 0
+
+
+def test_a_bare_scrip_code_shared_by_two_segments_is_not_routed():
+    adapter = _adapter(
+        {
+            "nfo": _sub("11536", "NFO", "NFO", 2, symbol="FUT"),
+            "nse": _sub("11536", "NSE", "NSE", 2, symbol="EQ"),
+        }
+    )
+    adapter._on_data(None, {"symbol": "11536", "subscription_mode": 2})
+    adapter.publish_market_data.assert_not_called()
+
+
+def test_a_bare_scrip_code_in_one_segment_and_an_index_id_are_routed():
+    adapter = _adapter(
+        {
+            "nse": _sub("11536", "NSE", "NSE", 2, symbol="EQ"),
+            "idx": _sub("-23", "NSE", "NSE_INDEX", 1, symbol="NIFTY"),
+        }
+    )
+    adapter._on_data(None, {"symbol": "11536", "subscription_mode": 2})
+    adapter._on_data(None, {"symbol": "-23", "subscription_mode": 2})
+    topics = [c.args[0] for c in adapter.publish_market_data.call_args_list]
+    assert topics == ["NSE_EQ_QUOTE", "NSE_INDEX_NIFTY_LTP"]

@@ -496,6 +496,12 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Find ALL subscriptions that match this symbol and have compatible modes
             matching_subscriptions = []
+            # Samco names a stock as scripCode_segment ("2885_NSE"); only index
+            # ids ("-23") come bare. A bare stock scrip code does not say which
+            # segment it belongs to, so it is accepted only when it resolves to
+            # subscriptions in a single segment.
+            bare_stock_code = "_" not in symbol_key and not symbol_key.startswith("-")
+            bare_matches = []
             with self.lock:
                 for sub in self.subscriptions.values():
                     # Check if mode is compatible
@@ -504,7 +510,10 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                     # Match by token (may be "11536_NSE" or "11536")
                     if sub["token"] == symbol_key or sub["symbol"] == symbol_key:
-                        matching_subscriptions.append(sub)
+                        if bare_stock_code:
+                            bare_matches.append(sub)
+                        else:
+                            matching_subscriptions.append(sub)
                         continue
 
                     # Try matching with exchange suffix (if token doesn't have it).
@@ -517,6 +526,16 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if symbol_key in (token_with_exchange, token_with_segment):
                         matching_subscriptions.append(sub)
                         continue
+
+            if bare_matches:
+                segments = {sub["brexchange"] for sub in bare_matches}
+                if len(segments) == 1:
+                    matching_subscriptions.extend(bare_matches)
+                else:
+                    self.logger.debug(
+                        f"Dropping tick for bare scrip code {symbol_key}: it matches "
+                        f"subscriptions in {sorted(segments)}"
+                    )
 
             if not matching_subscriptions:
                 self.logger.debug(
