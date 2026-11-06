@@ -23,9 +23,13 @@ Security
   - @check_session_validity on every route (must be logged in)
   - Rate-limited (status: API_RATE_LIMIT, run: 3/minute)
   - POST needs {"confirm": true} and the Flask-WTF X-CSRFToken header
-  - Lock file /tmp/openalgo_update.lock prevents concurrent runs
+  - One run at a time: O_EXCL lock claim (/tmp/openalgo_update.lock, or the
+    docker request flag + a "running" result) — concurrent POSTs get 409
   - Market hours (09:00–15:30 IST) are refused unless force is set, here and
     again in the updater script / host watcher
+  - Server installs run the root-owned wrapper /usr/local/sbin/openalgo-update
+    (sudoers pins that path + the app path), which drops to the checkout owner
+    for all repo work — a web-writable script is never executed as root
   - Secrets are never logged; only git SHAs and the updater log tail are returned
 """
 
@@ -51,6 +55,11 @@ system_update_bp = Blueprint("system_update_bp", __name__)
 # the container writes the request and the host watcher cron fulfils it.
 REQUEST_FILE = Path("/app/tmp/update_requested.json")
 RESULT_FILE = Path("/app/tmp/update_result.json")
+
+# Root-owned updater wrapper (docs/system-update.md). sudoers grants NOPASSWD
+# only on this path with the app path pinned as its argument, so a script the
+# web user can edit inside the checkout is never executed as root.
+WRAPPER = Path("/usr/local/sbin/openalgo-update")
 
 # --------------------------------------------------------------------------
 # Helpers
@@ -102,6 +111,22 @@ def _read_stamp(path):
         return Path(path).read_text().strip() or "unknown"
     except OSError:
         return "unknown"
+
+
+def _claim_exclusive(path, content=""):
+    """Create `path` with O_CREAT|O_EXCL — the atomic form of exists().
+
+    Returns True when this caller won the race. Any OSError (including
+    FileExistsError) returns False, so a second concurrent run can never
+    slip past a check-then-create pair.
+    """
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        return False
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
+    return True
 
 
 def _github_behind(slug, sha, branch, timeout=8):
@@ -265,17 +290,34 @@ def _update_status():
     }
 
 
-def _launch_update_detached(app_path):
-    """Launch update_web.sh detached (survives the gunicorn restart)."""
+def _launch_update_detached(app_path, itype, force=False):
+    """Launch the updater detached (survives the gunicorn restart).
+
+    Server installs go through the root-owned wrapper when installed;
+    local checkouts run the in-tree script directly — no sudo, since there
+    is no systemd unit to restart and the user owns the checkout.
+    """
     script = str(Path(app_path) / "install" / "update_web.sh")
+    if WRAPPER.exists():
+        argv = ["sudo", "/bin/bash", str(WRAPPER), str(app_path)]
+    elif itype == "server":
+        argv = ["sudo", "/bin/bash", script]
+    else:
+        argv = ["/bin/bash", script]
     logf = str(Path(app_path) / "log" / "update_web.log")
     Path(app_path, "log").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    if force:
+        # The route already vetted force; pass it down so update_web.sh's own
+        # market-hours guard does not refuse a confirmed forced run.
+        env["WEB_UPDATE_FORCE"] = "1"
     # start_new_session=True detaches the child into its own session, so
     # `systemctl restart openalgo` cannot kill the updater mid-flight.
     with open(logf, "a") as log_fh:
         subprocess.Popen(
-            ["sudo", "/bin/bash", script],
+            argv,
             cwd=app_path,
+            env=env,
             stdout=log_fh,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -313,12 +355,6 @@ def api_update_run():
                 {"status": "error", "message": 'Send {"confirm": true} to start the update.'}
             ), 400
 
-        lock = Path("/tmp/openalgo_update.lock")
-        if lock.exists():
-            return jsonify(
-                {"status": "error", "message": "An update is already running. Check status / log."}
-            ), 409
-
         itype, app_path, service = _detect_install()
         if itype == "unknown":
             return jsonify({"status": "error", "message": "OpenAlgo checkout not found."}), 500
@@ -345,23 +381,33 @@ def api_update_run():
             # it up within a minute: git pull + compose build + up -d.
             import json
 
-            if REQUEST_FILE.exists():
+            result = _read_json(RESULT_FILE)
+            already = REQUEST_FILE.exists() or (
+                isinstance(result, dict) and result.get("state") == "running"
+            )
+            if already:
                 return jsonify(
                     {
                         "status": "error",
                         "message": "An update is already requested/running. Check status.",
                     }
                 ), 409
-            REQUEST_FILE.write_text(
-                json.dumps(
-                    {
-                        "requested_at": datetime.now().isoformat(timespec="seconds"),
-                        "force": force,
-                        "branch": _read_stamp("/app/BUILD_BRANCH"),
-                        "sha": _read_stamp("/app/BUILD_SHA"),
-                    }
-                )
+            payload = json.dumps(
+                {
+                    "requested_at": datetime.now().isoformat(timespec="seconds"),
+                    "force": force,
+                    "branch": _read_stamp("/app/BUILD_BRANCH"),
+                    "sha": _read_stamp("/app/BUILD_SHA"),
+                }
             )
+            # O_EXCL claim: two clicks in the same second cannot both pass.
+            if not _claim_exclusive(REQUEST_FILE, payload):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "An update is already requested/running. Check status.",
+                    }
+                ), 409
             logger.info(f"Web update requested (docker flag: {REQUEST_FILE})")
             return jsonify(
                 {
@@ -389,8 +435,19 @@ def api_update_run():
                 }
             ), 500
 
-        lock.write_text(f"started {datetime.now().isoformat()} by web\n")
-        logf = _launch_update_detached(app_path)
+        lock = Path("/tmp/openalgo_update.lock")
+        # Atomic claim — a second concurrent POST gets 409 even if both pass
+        # the market-hours check in the same instant.
+        if not _claim_exclusive(lock, f"started {datetime.now().isoformat()} by web\n"):
+            return jsonify(
+                {"status": "error", "message": "An update is already running. Check status / log."}
+            ), 409
+        try:
+            logf = _launch_update_detached(app_path, itype, force=force)
+        except Exception:
+            # Never leave the lock behind when the child never started.
+            lock.unlink(missing_ok=True)
+            raise
         logger.info(f"Web update launched for {app_path} (log: {logf})")
         return jsonify(
             {

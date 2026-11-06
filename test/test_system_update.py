@@ -145,3 +145,60 @@ class TestGithubBehind:
 
         monkeypatch.setattr("urllib.request.urlopen", offline)
         assert su._github_behind("owner/repo", "abc1234", "main") == -1
+
+
+class TestClaimExclusive:
+    def test_first_caller_wins_and_content_is_kept(self, tmp_path):
+        lock = tmp_path / "lock"
+        assert su._claim_exclusive(lock, "first") is True
+        assert su._claim_exclusive(lock, "second") is False
+        assert lock.read_text() == "first"
+
+    def test_any_oserror_counts_as_taken(self, tmp_path):
+        # A directory at the path makes os.open fail — must not crash or claim.
+        blocker = tmp_path / "blocked"
+        blocker.mkdir()
+        assert su._claim_exclusive(blocker, "x") is False
+
+
+class TestLaunchDetached:
+    def _capture(self, monkeypatch, tmp_path):
+        calls = {}
+
+        class FakePopen:
+            def __init__(self, argv, **kwargs):
+                calls["argv"] = argv
+                calls["env"] = kwargs.get("env")
+                calls["cwd"] = kwargs.get("cwd")
+
+        monkeypatch.setattr(su.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(su, "WRAPPER", tmp_path / "no-wrapper-here")
+        return calls
+
+    def test_force_is_passed_to_the_child(self, monkeypatch, tmp_path):
+        calls = self._capture(monkeypatch, tmp_path)
+        su._launch_update_detached(str(tmp_path), "local", force=True)
+        assert calls["env"]["WEB_UPDATE_FORCE"] == "1"
+
+    def test_no_force_no_env_override(self, monkeypatch, tmp_path):
+        calls = self._capture(monkeypatch, tmp_path)
+        su._launch_update_detached(str(tmp_path), "local", force=False)
+        assert "WEB_UPDATE_FORCE" not in calls["env"]
+
+    def test_local_runs_without_sudo(self, monkeypatch, tmp_path):
+        calls = self._capture(monkeypatch, tmp_path)
+        su._launch_update_detached(str(tmp_path), "local")
+        assert calls["argv"][:2] == ["/bin/bash", str(tmp_path / "install" / "update_web.sh")]
+
+    def test_server_without_wrapper_uses_sudo(self, monkeypatch, tmp_path):
+        calls = self._capture(monkeypatch, tmp_path)
+        su._launch_update_detached(str(tmp_path), "server")
+        assert calls["argv"][0] == "sudo"
+
+    def test_root_owned_wrapper_is_preferred(self, monkeypatch, tmp_path):
+        calls = self._capture(monkeypatch, tmp_path)
+        wrapper = tmp_path / "openalgo-update"
+        wrapper.write_text("#!/bin/bash\n")
+        monkeypatch.setattr(su, "WRAPPER", wrapper)
+        su._launch_update_detached(str(tmp_path), "server")
+        assert calls["argv"] == ["sudo", "/bin/bash", str(wrapper), str(tmp_path)]
