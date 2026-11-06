@@ -104,10 +104,10 @@ uv run app.py --port 5001
 **Symptom**: `Session expired` or `Token invalid`
 
 **Solution**:
-1. Go to OpenAlgo dashboard
-2. Click on broker status
-3. Re-authenticate with broker
-4. Complete OAuth flow again
+1. Open **Select Broker** at `/broker`
+2. Start the broker login from its card
+3. Complete the broker's required login flow
+4. Verify funds and current orders/positions before restarting automation
 
 ### Broker API Error
 
@@ -118,7 +118,7 @@ uv run app.py --port 5001
 |-------|-------|----------|
 | Rate limited | Too many requests | Reduce request frequency |
 | Invalid token | Session expired | Re-login |
-| Service unavailable | Broker down | Wait and retry |
+| Service unavailable | Broker/network unavailable | For an order request, reconcile broker orders, trades and positions before retrying; a lost response is not proof of rejection |
 | Permission denied | API scope | Check API permissions |
 
 ## Order Placement Issues
@@ -146,7 +146,7 @@ uv run app.py --port 5001
 2. Check if contract is expired
 3. Update master contract:
    ```
-   Go to Settings → Update Master Contract
+   Open Master Contract from the profile menu (`/master-contract`)
    ```
 4. Use Search to find correct symbol
 
@@ -179,7 +179,7 @@ Options: NIFTY30JAN2521500CE (with date, strike, type)
 
 **Solution**:
 - Implement duplicate detection
-- Use smart orders for position management
+- Reconcile broker orders, trades and positions before sending a replacement; smart orders do not deduplicate separate submissions, and a zero target can open an order when flat
 - Check webhook configuration
 
 ## Webhook Issues
@@ -343,9 +343,9 @@ systemctl restart openalgo
 ### Session Expiring Too Fast
 
 **Solution**:
-1. Go to Settings → Security
-2. Increase session timeout
-3. Enable "Remember Me" option
+1. Check `SESSION_EXPIRY_TIME` in the installation configuration (03:00 IST by default)
+2. Distinguish application sign-in expiry from broker-token expiry
+3. Read [Broker Connection](../06-broker-connection/README.md) for reconnect, logout and multi-device rules; the UI has no general Settings > Security timeout or Remember Me control
 
 ## API Issues
 
@@ -353,7 +353,7 @@ systemctl restart openalgo
 
 **Common API Errors**:
 
-```json
+```text
 {"status": "error", "message": "Invalid API key"}
 → Check API key is correct
 

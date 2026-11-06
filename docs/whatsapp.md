@@ -176,7 +176,7 @@ Time: 14:23:45
 #### Requirements for Receiving Alerts
 
 1. WhatsApp device must be paired in OpenAlgo (`/whatsapp` page in the web UI).
-2. The OpenAlgo server must have rebooted at least once since pairing OR the bot must be currently connected (auto-reconnects on every boot from the encrypted session blob).
+2. The bot must be **Connected**. Pairing starts it; if it was stopped, start it from `/whatsapp`. A server restart also attempts to reconnect from the saved session.
 3. Orders must be placed through the OpenAlgo API (REST `/api/v1/*`, the Python SDK, or any tool that ultimately hits the API).
 
 ### Sending Messages via API
@@ -404,7 +404,8 @@ Per-user notification toggles (`order_notifications`, `trade_notifications`, `pn
 9. **Session kept current**: `WhatsAppBotService._save_session`
 
    * The running client keeps changing its session (keys and device state) after pairing, in a private file of its own. A restart restores what the database holds, and a restart that restored the snapshot taken at pairing was logged out by WhatsApp.
-   * So the bot thread exports the live session and writes it back (`whatsapp_db.refresh_session_blob`) 60 seconds after each login, every 5 minutes after that, and once more when the bot stops, including on a normal server stop. Only changed bytes are written, only while the device is logged in, and never over a session that was unlinked or replaced by a new pairing in the meantime.
+   * So the bot thread snapshots the live session and writes it back (`whatsapp_db.refresh_session_blob`) 60 seconds after each login, every 5 minutes after that, and once more when the bot stops, including on a normal server stop. Only changed bytes are written, only while the device is logged in, and never over a session that was unlinked or replaced by a new pairing in the meantime.
+   * With wars 0.1.4, `_export_live_session` copies a file-backed live session in a short-lived subprocess. Calling `export_session()` in the running client's process mixes two SQLite libraries and can remove the live client's write-ahead-log files, causing later sends and saves to fail. Keep the subprocess snapshot path when maintaining this code. Clients without a session file use their own export method.
 
 10. **Logged out by WhatsApp**: wars reports whatsapp-rust's `LoggedOut` event through `on_disconnect`
 

@@ -17,7 +17,7 @@ need → drill into the specific file. Don't load everything at once.
 | The Python SDK — install, client, data/order/account calls | [<prompt/openalgo python sdk.md>](<prompt/openalgo python sdk.md>) |
 | Symbol format across exchanges (equity/futures/options) | [prompt/symbol-format.md](prompt/symbol-format.md) |
 | Order constants (exchange / product / price-type / action codes) | [prompt/order-constants.md](prompt/order-constants.md) |
-| Contract lot sizes | [prompt/LotSize.md](prompt/LotSize.md) |
+| Historical lot-size snapshot; read current `lotsize` / `freeze_qty` from symbol metadata | [prompt/LotSize.md](prompt/LotSize.md) |
 | WebSocket subscription & message format | [prompt/websockets-format.md](prompt/websockets-format.md) · [prompt/websockets-verbose-control.md](prompt/websockets-verbose-control.md) |
 | Service-layer functions & Flow JSON import | [prompt/services_documentation.md](prompt/services_documentation.md) · [prompt/flow-import-format.md](prompt/flow-import-format.md) |
 | Strategy module & risk engine (multi-leg options, signal mode, RMS) | [prompt/strategy_rms_documentation.md](prompt/strategy_rms_documentation.md) · [api/strategy-services/](api/strategy-services/) · [prd/strategy-module-rms.md](prd/strategy-module-rms.md) · [bdd/strategy_module_rms.feature](bdd/strategy_module_rms.feature) |
@@ -27,6 +27,8 @@ need → drill into the specific file. Don't load everything at once.
 | Writing studies in OpenScript for `/trading` | [openscript.md](openscript.md) |
 | Step-by-step user guide (setup → first order → integrations) | [userguide/README.md](userguide/README.md) |
 | MCP tool reference (Claude Desktop / Cursor / Windsurf) | [mcp-tool-reference.md](mcp-tool-reference.md) |
+| Connecting hosted AI clients through Remote MCP | [userguide/remote-mcp.md](userguide/remote-mcp.md) |
+| Saving broker keys and connecting a broker | [userguide/06-broker-connection/README.md](userguide/06-broker-connection/README.md) |
 
 ## Install, deploy & operate
 
@@ -35,17 +37,21 @@ need → drill into the specific file. Don't load everything at once.
 | Ubuntu server install | [installation-guidelines/getting-started/ubuntu-server-installation.md](installation-guidelines/getting-started/ubuntu-server-installation.md) |
 | Docker | [docker/README.md](docker/README.md) |
 | Optional gthread web server: fresh installs, switching on Ubuntu and Docker, verification and rollback | [gthread/README.md](gthread/README.md) |
-| Upgrade / SMTP / TOTP / forgot-password | https://docs.openalgo.in/installation-guidelines/getting-started/ |
-| Broker integration (36 plugins) | [broker-integration-guide.md](broker-integration-guide.md) |
+| Upgrade / SMTP / TOTP / forgot-password | [Upgrade](design/30-upgrade-procedure/README.md) · [SMTP](design/47-smtp-config/README.md) · [TOTP](design/50-totp-configuration/README.md) · [Password reset](design/48-password-reset/README.md) |
+| Desktop and companion apps on the public `/download` page | [Installation guide](userguide/04-installation/README.md) |
+| Broker integration (38 plugins, including Dhan Sandbox) | [broker-integration-guide.md](broker-integration-guide.md) |
 | Release notes & changelog | [releases/](releases/) · [CHANGELOG.md](CHANGELOG.md) |
 
 ## Feature surfaces
 
 | Feature | Entry point |
 |---|---|
-| Agent (`/agent`) | [design/55-agent/README.md](design/55-agent/README.md) |
+| Agent (`/agent`) and voice | [design/55-agent/README.md](design/55-agent/README.md) · [design/56-voice-agent/README.md](design/56-voice-agent/README.md) |
+| The 20 options and portfolio tools, including Strike Profile and Sector Rotation | [userguide/31-tools/README.md](userguide/31-tools/README.md) |
+| Portfolio, SIP and sector-rotation REST APIs | [api/README.md](api/README.md#portfolio-sip-and-sector-analysis) |
+| Python strategy hosting and Flow workflows | [Python](userguide/20-python-strategies/README.md) · [Flow](userguide/21-flow-visual-builder/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
-| Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
+| Scanner design proposal (external service, not shipped) | [scanner-architecture.md](scanner-architecture.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |
 | Health monitoring | [HEALTH_MONITORING_IMPLEMENTATION.md](HEALTH_MONITORING_IMPLEMENTATION.md) · [HEALTH_MONITOR_REACT_FRONTEND.md](HEALTH_MONITOR_REACT_FRONTEND.md) |
@@ -59,7 +65,8 @@ need → drill into the specific file. Don't load everything at once.
 | Product requirements — Flow, Python strategies, Strategy module & RMS, Sandbox, Historify, MCP, event bus, websocket proxy | [prd/README.md](prd/README.md) · [prd/PRD.md](prd/PRD.md) |
 | BDD feature specs (Gherkin `.feature`) | [bdd/README.md](bdd/README.md) |
 | WebSocket architecture & quote feed | [websocket-architecture.md](websocket-architecture.md) · [websocket-quote-feed.md](websocket-quote-feed.md) |
-| Security audits | [audit/README.md](audit/README.md) |
+| Documentation gap audit and verification limits (2026-11-06) | [audit/2026-11-06-documentation-gap-audit.md](audit/2026-11-06-documentation-gap-audit.md) |
+| Security audits (historical findings) | [audit/README.md](audit/README.md) |
 | CI/CD | [prd/ci-cd.md](prd/ci-cd.md) |
 | Benchmarks | [benchmarks/](benchmarks/) |
 | Migration plans | [migration/](migration/) |
@@ -68,6 +75,15 @@ need → drill into the specific file. Don't load everything at once.
 | XTS API | [xtsapi.md](xtsapi.md) |
 
 ---
+
+## Current guidance and historical records
+
+User guides, API references and current architecture documents describe the
+installed code. Dated release notes, audits, benchmarks, plans, validation
+reports and trackers record a particular revision or proposed work; they are
+not fresh verification of today's implementation. Generated indicator and
+OpenUI references should be refreshed with their source generators, not edited
+by hand.
 
 ## Governance
 

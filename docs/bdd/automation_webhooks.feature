@@ -26,3 +26,11 @@ Feature: Automation webhooks and Python strategies
     When the user starts or schedules the strategy
     Then the strategy lifecycle route updates runtime state
     And scheduling is stored through the strategy scheduler path
+
+  # Source: blueprints/python_strategy.py:api_get_exchanges, blueprints/python_strategy.py:schedule_strategy
+  Scenario: Crypto strategies may schedule continuous operation
+    Given the logged-in broker is a crypto broker
+    When a CRYPTO strategy schedule has no stop time
+    Then no stop job is created
+    And the scheduled start can bring back a script that exited
+    And equal nonempty start and stop times are rejected

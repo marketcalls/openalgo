@@ -7,8 +7,7 @@ Feature: Strategy module and risk management
   Scenario: Every admitted webhook outcome is validated and audited
     Given a strategy has a webhook token
     When an alert is admitted past route preflight on that token
-    Then token, kill switch, IP allowlist, payload, action, mode, live opt-in,
-      duplicate window and cooling-off are checked in order
+    Then token, kill switch, IP allowlist, payload, action, mode, live opt-in, duplicate window and cooling-off are checked in order
     And every accepted or rejected outcome has its own audit result label
     But Route preflight refusals are not durable webhook audit rows
 

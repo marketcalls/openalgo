@@ -20,7 +20,11 @@ When login TOTP is required, the password step stores a short-lived `pending_tot
 
 `utils/plugin_loader.py` reads `broker/*/plugin.json` and lazy-loads `broker.<key>.api.auth_api`. Generic callbacks are handled by `blueprints/brlogin.py`; specialized routes support brokers that need extra OTP, TOTP, or credential steps.
 
-The current plugin inventory is 36. Authentication shape varies by broker, and capability metadata is the correct way for UI code to discover supported exchanges and features.
+The current plugin inventory is 38. Authentication shape varies by broker. `GET /api/broker/list` supplies enabled brokers, their required fields, setup hints, sign-in method, masked saved values, and active/configured status. The list comes from `VALID_BROKERS`; the pages do not maintain a separate broker list.
+
+`/broker` and `/broker/config` are available after app sign-in, before any broker login. A CSRF-protected `POST /auth/broker/login` starts the chosen broker's flow on the server and records pending login state; callbacks must match that started login. `POST /auth/broker/resume` lets another device join the active broker session after token validation. See [Broker And System Configuration](../51-broker-system-config/) for key storage and precedence.
+
+Only one broker is active for the installation. A switch ends the old broker session when the new login commits, rather than when selection begins. Running Live strategy-module runs, Live OpenScript runs, and (outside analyzer mode) running Python strategies or positions under scalping protection block switching until stopped. The checks also apply when replacing the active broker's keys or forgetting it.
 
 ## Token Storage
 
@@ -29,6 +33,7 @@ The current plugin inventory is 36. Authentication shape varies by broker, and c
 | Password | Argon2 hash in the user database |
 | OpenAlgo API key | Argon2+pepper verification hash and encrypted retrievable value |
 | Broker auth/feed tokens | Fernet ciphertext derived from installation secrets |
+| Saved broker application keys | Fernet ciphertext in `broker_keys`, bound to broker and field |
 | TOTP secret | Encrypted at rest |
 | Browser session | Signed Flask session cookie with host-dependent secure flags |
 
@@ -70,7 +75,10 @@ See [40 Logout And Session Lifecycle](../40-logout-session/) for the expiry and 
 |---|---|
 | `blueprints/auth.py` | App login, TOTP, session APIs, logout |
 | `blueprints/brlogin.py` | Broker callbacks and special login helpers |
-| `blueprints/broker_credentials.py` | Credential and capability APIs |
+| `blueprints/broker_config.py` | Broker list, saved keys, forget operation |
+| `blueprints/broker_credentials.py` | Server settings and active-broker capability APIs |
+| `utils/broker_keys.py`, `utils/auth_utils.py` | Key resolution, request staging, login slot and commit fence |
+| `utils/broker_login.py`, `utils/broker_switch.py` | Server-started login and switch safety |
 | `database/auth_db.py` | Broker tokens, API keys, active sessions, login audit |
 | `utils/plugin_loader.py` | Plugin discovery and lazy auth loading |
 | `utils/session.py` | Protected-route session validity |

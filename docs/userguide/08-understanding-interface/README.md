@@ -1,345 +1,58 @@
 # 08 - Understanding the Interface
 
-## Introduction
+## Navigation
 
-OpenAlgo's interface is designed to be intuitive while providing powerful functionality. This guide helps you navigate and understand each section.
+The desktop interface uses a top navigation bar. **Dashboard**, **Orderbook** and **Positions** remain on the bar; **Tradebook** and **Trading** move into **More** on smaller desktops. **Platforms**, **Strategies**, **Logs** and **Tools** also move into **More** when space is limited.
 
-## Main Navigation
+On mobile, the bottom bar opens Dashboard, Orderbook, Tradebook and Positions. **Toggle menu** opens the remaining navigation and quick-access links.
 
-### Top Bar
+The charting terminal at `/trading` fills the viewport and has its own toolbar with **Dashboard**, mode control, theme toggle and profile menu. See [Charting Terminal](../32-charting-terminal/README.md).
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ OpenAlgo          [Search...] Notifications Admin  ▾    │
-└─────────────────────────────────────────────────────────────────────────────┘
-     │                       │                    │                │
-     Logo                  Search            Alerts          Profile Menu
-```
+## Main Destinations
 
-| Element | Function |
-|---------|----------|
-| Logo | Click to go to Dashboard |
-| Search | Quick symbol/page search |
-| Notifications | Order alerts, system messages |
-| Profile Menu | Settings, logout, theme |
+| Destination | Route | Purpose |
+|---|---|---|
+| Dashboard | `/dashboard` | Funds and master-contract status |
+| Orderbook | `/orderbook` | Orders and GTT triggers/history |
+| Tradebook | `/tradebook` | Executed trades |
+| Positions | `/positions` | Current positions and exits |
+| Trading | `/trading` | Charting terminal, chart orders, scripts, backtests and deployments |
+| Platforms | `/platforms` | TradingView, GoCharting and other integration entry points |
+| Strategies | `/strategy` | Batch and signal strategies with RMS; see the [strategy guide](../../prompt/strategy_rms_documentation.md) |
+| Logs | `/logs` | Live/sandbox logs, security, traffic and latency views |
+| Tools | `/tools` | [Options and portfolio analytics](../31-tools/README.md) |
 
-### Sidebar Navigation
+## Profile Menu and Quick Access
 
-```
-┌─────────────────────────┐
-│  TRADING                │
-│  ├── Dashboard          │
-│  ├── Positions          │
-│  ├── Order Book         │
-│  ├── Trade Book         │
-│  ├── Holdings           │
-│  └── Funds              │
-│                         │
-│  API & INTEGRATION      │
-│  ├── API Key            │
-│  ├── Playground         │
-│  └── Search             │
-│                         │
-│  PLATFORMS              │
-│  ├── TradingView        │
-│  ├── Amibroker          │
-│  ├── ChartInk           │
-│  └── GoCharting         │
-│                         │
-│  STRATEGIES             │
-│  ├── Flow Builder       │
-│  └── Python Strategy    │
-│                         │
-│  MONITORING             │
-│  ├── PnL Tracker        │
-│  ├── Latency Monitor    │
-│  └── Traffic Logs       │
-│                         │
-│  SETTINGS               │
-│  ├── Profile            │
-│  ├── Security           │
-│  ├── Telegram           │
-│  └── Admin              │
-└─────────────────────────┘
-```
+The profile menu opens **Profile**, **API Key**, **Action Center**, **Agent**, **Master Contract**, **Telegram Bot**, **WhatsApp Bot**, **Holdings**, **Flow Editor**, **Scalping**, **Python Strategies**, **PnL Tracker**, **Historify**, **Search**, **Sandbox**, **Leverage** and **Admin**.
 
-## Trading Section
+Entries follow broker capabilities: Holdings is hidden for a crypto broker, and Leverage appears only when the broker supports leverage configuration.
 
-### Positions Page
+| Workflow | Route | Guide |
+|---|---|---|
+| Save or edit broker keys | `/broker/config` | [Broker Connection](../06-broker-connection/README.md); also available from Profile's Broker tab |
+| API key and Auto/Semi-Auto order mode | `/apikey` | [API Key Management](../09-api-key-management/README.md) |
+| Approve queued orders | `/action-center` | [Action Center](../22-action-center/README.md) |
+| Host Python scripts | `/python` | [Python Strategies](../20-python-strategies/README.md) |
+| Build no-code workflows | `/flow` | [Flow Visual Builder](../21-flow-visual-builder/README.md) |
+| Security events and IP bans | `/logs/security` | [Security Settings](../27-security-settings/README.md) |
+| API request metadata | `/logs/traffic` | [Traffic Logs](../26-traffic-logs/README.md) |
+| Order latency | `/logs/latency` | [Latency Monitor](../25-latency-monitor/README.md) |
+| Agent settings and Remote MCP administration | `/admin` | Agent Configuration card and [Remote MCP](../remote-mcp.md) |
 
-Shows your current open positions:
+Historify (`/historify`) downloads local market history and opens its chart view at `/historify/charts`. Scalping (`/scalping`) is a separate terminal for index options using NRML or MIS; see the [Scalping guide](../../scalping/PRD.md). WhatsApp setup is described in [WhatsApp alerts](../../whatsapp.md).
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Positions                                          [Refresh] [Square All] │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Symbol    │ Exchange │ Qty  │ Avg Price │  LTP   │  P&L    │ Actions     │
-│────────────│──────────│──────│───────────│────────│─────────│─────────────│
-│  SBIN      │ NSE      │ 100  │ ₹625.00   │ ₹630.50│ +₹550   │ [Exit]      │
-│  RELIANCE  │ NSE      │ -50  │ ₹2450.00  │ ₹2440  │ +₹500   │ [Exit]      │
-│  NIFTY..CE │ NFO      │ 50   │ ₹150.00   │ ₹165.00│ +₹750   │ [Exit]      │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+## Mode and Theme Controls
 
-**Key Elements**:
-- **Qty**: Positive = Long, Negative = Short
-- **P&L**: Color-coded (green/red)
-- **Exit**: One-click position exit
+**Live** sends supported orders to your broker; **Analyze** uses the sandbox. This setting applies across the instance, including external API clients. The theme toggle switches light/dark appearance in Live and is disabled in Analyze, which uses the analyzer theme.
 
-### Order Book Page
+Auto/Semi-Auto order mode is a separate control on **API Key**. Semi-Auto queues supported placements for approval; it does not turn live orders into sandbox orders. Read [Action Center](../22-action-center/README.md) before using it for automated entries or exits.
 
-Shows all orders for today:
+## Orders and Charts
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Order Book                    [All] [Pending] [Complete] [Rejected]       │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Time     │ Symbol  │ Type   │ Qty │ Price  │ Status   │ Actions          │
-│───────────│─────────│────────│─────│────────│──────────│──────────────────│
-│  10:30:15 │ SBIN    │ BUY    │ 100 │ MARKET │ Complete │ -                │
-│  10:45:22 │ INFY    │ BUY LMT│ 50  │ ₹1500  │ Pending  │ [Modify][Cancel] │
-│  11:00:05 │ TCS     │ SELL   │ 25  │ MARKET │ Rejected │ [Details]        │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+Orderbook, Tradebook and Positions offer a chart action for an instrument. It opens `/trading` with that symbol and exchange. Placement success means acceptance, not a completed fill: check the order's status and trades before treating it as a position.
 
-**Order Status**:
-| Status | Meaning | Color |
-|--------|---------|-------|
-| Pending | Waiting to execute | Yellow |
-| Complete | Fully executed | Green |
-| Rejected | Broker rejected | Red |
-| Cancelled | You cancelled | Gray |
-
-### Trade Book Page
-
-Shows executed trades:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Trade Book                                                   [Download]    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Time     │ Symbol  │ Type │ Qty │ Price   │ Exchange │ Order ID          │
-│───────────│─────────│──────│─────│─────────│──────────│───────────────────│
-│  10:30:16 │ SBIN    │ BUY  │ 100 │ ₹625.50 │ NSE      │ 230125000012345   │
-│  11:15:42 │ RELIANCE│ SELL │ 50  │ ₹2448.25│ NSE      │ 230125000012346   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Holdings Page
-
-Your delivery holdings (CNC):
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Holdings                                              Total: ₹5,25,000    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Symbol  │ Qty  │ Avg Price │  LTP    │ Current │ P&L    │ P&L %          │
-│──────────│──────│───────────│─────────│─────────│────────│────────────────│
-│  HDFC    │ 100  │ ₹1500     │ ₹1650   │ ₹1,65,000│+₹15,000│ +10.0%        │
-│  ICICI   │ 200  │ ₹950      │ ₹1020   │ ₹2,04,000│+₹14,000│ +7.4%         │
-│  SBIN    │ 500  │ ₹400      │ ₹625    │ ₹3,12,500│+₹1,12,500│ +56.3%      │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Funds Page
-
-Account balance details:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Funds                                                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌─────────────────────┐  ┌─────────────────────┐                          │
-│  │  Available Margin   │  │  Used Margin        │                          │
-│  │  ₹4,50,000          │  │  ₹50,000            │                          │
-│  └─────────────────────┘  └─────────────────────┘                          │
-│                                                                              │
-│  ┌─────────────────────┐  ┌─────────────────────┐                          │
-│  │  Total Balance      │  │  Collateral         │                          │
-│  │  ₹5,00,000          │  │  ₹2,00,000          │                          │
-│  └─────────────────────┘  └─────────────────────┘                          │
-│                                                                              │
-│  Segment-wise Breakdown:                                                    │
-│  Equity     : ₹3,00,000 available                                          │
-│  F&O        : ₹1,50,000 available                                          │
-│  Commodity  : ₹0                                                            │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## API & Integration Section
-
-### API Key Page
-
-Manage your API keys for external integrations:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  API Key Management                                                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Your API Key:                                                              │
-│  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │  abc123def456ghi789jkl012mno345pqr678                  [Copy] [ ]  │    │
-│  └────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  Order Mode:  ◉ Auto    ○ Semi-Auto                                        │
-│                                                                              │
-│  [Regenerate Key]   [Revoke Key]                                           │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Playground Page
-
-Test API calls interactively:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  API Playground                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Endpoint: [Place Order        ▾]                                          │
-│                                                                              │
-│  Parameters:                                                                │
-│  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │  Symbol:    [SBIN          ]                                       │    │
-│  │  Exchange:  [NSE           ]                                       │    │
-│  │  Action:    [BUY           ]                                       │    │
-│  │  Quantity:  [100           ]                                       │    │
-│  │  Price:     [MARKET        ]                                       │    │
-│  │  Product:   [MIS           ]                                       │    │
-│  └────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  [Execute]                                                                  │
-│                                                                              │
-│  Response:                                                                  │
-│  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │  {                                                                  │    │
-│  │    "status": "success",                                            │    │
-│  │    "orderid": "230125000012345"                                    │    │
-│  │  }                                                                  │    │
-│  └────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Search Page
-
-Find symbols across exchanges:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Symbol Search                                                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  [Search symbol...                          ] [NSE ▾] [Search]             │
-│                                                                              │
-│  Results:                                                                   │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Symbol      │ Exchange │ Type    │ Lot Size │ [Select]             │   │
-│  │──────────────│──────────│─────────│──────────│──────────────────────│   │
-│  │  SBIN        │ NSE      │ Equity  │ 1        │ [Copy Symbol]        │   │
-│  │  SBIN        │ BSE      │ Equity  │ 1        │ [Copy Symbol]        │   │
-│  │  SBIN25JAN600CE│ NFO    │ Option  │ 1500     │ [Copy Symbol]        │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Platform Integration Section
-
-### TradingView Page
-
-Configure TradingView webhook:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  TradingView Integration                                                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Webhook URL:                                                               │
-│  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │  http://your-server:5000/api/v1/placeorder            [Copy]        │    │
-│  └────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  JSON Template:                                                             │
-│  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │  {                                                                  │    │
-│  │    "apikey": "your-api-key",                                       │    │
-│  │    "strategy": "TradingView",                                      │    │
-│  │    "symbol": "{{ticker}}",                                         │    │
-│  │    "action": "{{strategy.order.action}}",                          │    │
-│  │    "quantity": "100"                                               │    │
-│  │  }                                                                  │    │
-│  └────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  [Copy Template]                                                            │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Monitoring Section
-
-### PnL Tracker
-
-Visual profit/loss tracking:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  PnL Tracker                                                   [Today ▾]   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐              │
-│  │ Realized   │ │ Unrealized │ │   Total    │ │    ROI     │              │
-│  │  +₹2,500   │ │  +₹1,250   │ │  +₹3,750   │ │   +0.75%   │              │
-│  └────────────┘ └────────────┘ └────────────┘ └────────────┘              │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ P&L Chart                                                        │   │
-│  │       ₹                                                              │   │
-│  │    4000│        ╭──────╮                                            │   │
-│  │    3000│    ╭───╯      ╰──╮                                         │   │
-│  │    2000│╭───╯              ╰──────                                  │   │
-│  │    1000│                                                            │   │
-│  │       0├────────────────────────────► Time                          │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Common UI Elements
-
-### Buttons
-
-| Button Style | Usage |
-|-------------|-------|
-| Primary (Blue) | Main actions (Submit, Save) |
-| Secondary (Gray) | Secondary actions (Cancel, Back) |
-| Danger (Red) | Destructive actions (Delete, Exit) |
-| Success (Green) | Positive actions (Approve, Enable) |
-
-### Status Badges
-
-| Badge | Meaning |
-|-------|---------|
-| | Active/Success/Connected |
-| | Pending/Warning |
-| | Error/Failed/Disconnected |
-| | Inactive/Neutral |
-
-### Tooltips
-
-Hover over any (?) icon to see helpful explanations.
-
-### Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `/` | Focus search |
-| `Esc` | Close modals |
-| `Ctrl+K` | Command palette |
+Use the shortcuts documented for each surface. The charting terminal and Flow editor have their own shortcut sets; there is no application-wide command palette documented by the current interface.
 
 ---
 

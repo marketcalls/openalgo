@@ -18,8 +18,9 @@ day cost you the morning.
 ## 1. What OpenAlgo is (3 minute read)
 
 OpenAlgo is a self-hosted algorithmic trading platform for Indian markets. It puts
-one common API in front of 36 different broker APIs, so a strategy written once
-runs against any supported broker without change.
+one common API in front of 38 broker plugins, including Dhan Sandbox, Rupeezy
+and Sahi. Strategies use shared order and symbol formats; exchange, order and
+market-data capabilities still depend on the broker.
 
 - Backend: Python 3.12+, Flask, SQLAlchemy, Flask-SocketIO
 - Frontend: React 19, TypeScript, Vite, Tailwind, shadcn/ui
@@ -42,8 +43,10 @@ code you are about to read:
 
 1. **Single user per deployment.** There is no multi-tenancy and no SaaS. One
    person, one broker session, running on their own machine or VPS.
-2. **Production runs one Gunicorn worker under eventlet.** No `asyncio`, and
-   anything that leaks a file descriptor accumulates until the process dies.
+2. **Production runs one Gunicorn worker.** Eventlet is the default; gthread
+   with 64 threads is opt-in. Code must work under both and the threaded dev
+   server. Eventlet request code cannot use `asyncio`; file descriptor leaks
+   accumulate in either production worker. See the [worker guide](../gthread/README.md).
 
 Links:
 
@@ -81,7 +84,7 @@ Links:
 | Git | any recent | https://git-scm.com/downloads |
 | Python | 3.12 or newer | `uv` can install it for you, so this is optional |
 | uv | latest | `pip install uv`, or the standalone installer from https://docs.astral.sh/uv/ |
-| Node.js | 20.20+, 22.22+, or 24.13+ | **Only needed if you work on the React frontend.** See section 5. |
+| Node.js | 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ | **Only needed if you work on the React frontend.** See section 5. |
 | Disk space | about 3 GB local, about 10 GB for the Docker route | `.git` is roughly 250 MB, `.venv` roughly 650 MB, `node_modules` roughly 700 MB |
 | RAM | 4 GB minimum, 8 GB comfortable | |
 | OS | Windows 10/11, macOS 11+, or Ubuntu 20.04+ | All three are supported and used by maintainers |
@@ -126,8 +129,8 @@ have to risk any money. Log in with your broker, then switch OpenAlgo into
 never touched for execution. Market prices still come from the broker feed, which
 is exactly why the broker login is needed.
 
-**API access is free with every supported broker except Zerodha, Groww and Dhan,
-which charge for it.** Any of the other brokers works. Shoonya (Finvasia) and
+**Check your broker's current API and market-data plan before the event.**
+Availability, exchange entitlements and charges are broker-specific. Shoonya (Finvasia) and
 Flattrade are common choices for developers because account opening and API access
 are both free.
 
@@ -194,8 +197,10 @@ That is genuinely all. The shipped `.env` contains placeholder secrets, and on
 first startup OpenAlgo detects them, generates real random values with
 `secrets.token_hex(32)`, and writes them back. You will see a one-time
 `[OpenAlgo first-run setup]` message in the console. You only need to edit `.env`
-by hand if you are configuring a broker (Track B), in which case set
-`BROKER_API_KEY`, `BROKER_API_SECRET` and `REDIRECT_URL` for your broker.
+by hand for an existing environment-based setup. For a new setup (Track B),
+sign in and use **Select Broker → Configure** to save your broker keys. Leave
+the broker placeholders unset; keep `VALID_BROKERS`. A configured `.env`
+broker continues to use its `.env` keys before any saved keys for that broker.
 
 Never commit your `.env`. It is gitignored, and after first run it holds real
 secrets.
@@ -267,12 +272,13 @@ FLASK_PORT='5000'
 WEBSOCKET_HOST='0.0.0.0'
 WEBSOCKET_PORT='8765'
 WEBSOCKET_URL='ws://localhost:8765'
-ZMQ_HOST='0.0.0.0'
+ZMQ_HOST='127.0.0.1'
 ZMQ_PORT='5555'
 ```
 
-`127.0.0.1` only accepts connections from inside the container. `0.0.0.0` lets the
-port mapping reach your host.
+Web and client WebSocket listeners use `0.0.0.0` so mapped ports can reach
+them. The ZeroMQ bus stays on `127.0.0.1`: its publishers and proxy run inside
+the same container and it must not be exposed to external clients.
 
 ```bash
 docker compose up --build     # first build takes a while, do it the night before
@@ -288,10 +294,11 @@ docker compose logs -f
 | Shell into the container | `docker compose exec openalgo bash` |
 | Status | `docker compose ps` |
 
-Caveat: the Docker image is built for production (Gunicorn plus eventlet). It is
+Caveat: the Docker image is built for production (Gunicorn with eventlet by default,
+or the optional gthread worker). It is
 excellent for "does my change work end to end" and poor for fast iteration. Most
 contributors will be happier on option A. Ports exposed: 5000 (web), 8765
-(WebSocket), 5555 (ZeroMQ).
+(WebSocket). ZeroMQ on 5555 is an internal bus; do not publish it to the network.
 
 Full details: https://docs.openalgo.in/installation-guidelines/getting-started/docker-development
 
@@ -393,7 +400,7 @@ git push --force-with-lease
 These are not style preferences. They are the things maintainers actually send PRs
 back for.
 
-**One feature or one fix per pull request.** OpenAlgo supports 36 broker plugins, and
+**One feature or one fix per pull request.** OpenAlgo supports 38 broker plugins, and
 every change has to be validated across that surface. Large combined PRs are not
 reviewable and will be asked to be split. The one exception is a brand new broker
 integration, which is self-contained inside its own `broker/` directory.

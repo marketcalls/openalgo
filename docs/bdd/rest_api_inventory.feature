@@ -1,7 +1,7 @@
 Feature: Registered REST API v1 inventory
   Every Flask-RESTX method and path registered in restx_api has a documentation contract.
 
-  # Source: restx_api/__init__.py:4, restx_api/__init__.py:60
+  # Source: restx_api/__init__.py namespace registrations and each registered resource class
   Scenario Outline: Registered REST resource is represented in the API contract
     Given the REST API blueprint is mounted at /api/v1
     When the "<method>" resource at "<path>" is registered from "<module>"
@@ -37,9 +37,9 @@ Feature: Registered REST API v1 inventory
       | POST | /openposition | openposition.py |
       | POST | /optionchain | option_chain.py |
       | POST | /optiongreeks | option_greeks.py |
-      | POST | /optionsymbol | option_symbol.py |
       | POST | /optionsmultiorder | options_multiorder.py |
       | POST | /optionsorder | options_order.py |
+      | POST | /optionsymbol | option_symbol.py |
       | POST | /orderbook | orderbook.py |
       | POST | /orderstatus | orderstatus.py |
       | POST | /ping | ping.py |
@@ -47,23 +47,40 @@ Feature: Registered REST API v1 inventory
       | POST | /placeorder | place_order.py |
       | POST | /placesmartorder | place_smart_order.py |
       | POST | /pnl/symbols | pnl_symbols.py |
+      | POST | /portfolio/backtest | portfolio.py |
+      | GET | /portfolio/benchmarks | portfolio.py |
+      | POST | /portfolio/holdings | portfolio.py |
+      | POST | /portfolio/tearsheet | portfolio.py |
       | POST | /positionbook | positionbook.py |
       | POST | /quotes | quotes.py |
       | POST | /search | search.py |
+      | POST | /sectorrotation | sector_rotation.py |
+      | GET | /sectorrotation/options | sector_rotation.py |
+      | POST | /sip/backtest | sip.py |
+      | GET | /sip/frequencies | sip.py |
       | POST | /splitorder | split_order.py |
+      | POST | /strategy/close_all | strategy.py |
+      | POST | /strategy/close_leg | strategy.py |
+      | POST | /strategy/events | strategy.py |
+      | POST | /strategy/list | strategy.py |
+      | POST | /strategy/orders | strategy.py |
+      | POST | /strategy/runs | strategy.py |
+      | POST | /strategy/start | strategy.py |
+      | POST | /strategy/status | strategy.py |
+      | POST | /strategy/stop | strategy.py |
       | POST | /symbol | symbol.py |
       | POST | /syntheticfuture | synthetic_future.py |
+      | POST | /telegram/broadcast | telegram_bot.py |
       | GET | /telegram/config | telegram_bot.py |
       | POST | /telegram/config | telegram_bot.py |
-      | POST | /telegram/start | telegram_bot.py |
-      | POST | /telegram/stop | telegram_bot.py |
-      | POST | /telegram/webhook | telegram_bot.py |
-      | GET | /telegram/users | telegram_bot.py |
-      | POST | /telegram/broadcast | telegram_bot.py |
       | POST | /telegram/notify | telegram_bot.py |
-      | GET | /telegram/stats | telegram_bot.py |
       | GET | /telegram/preferences | telegram_bot.py |
       | POST | /telegram/preferences | telegram_bot.py |
+      | POST | /telegram/start | telegram_bot.py |
+      | GET | /telegram/stats | telegram_bot.py |
+      | POST | /telegram/stop | telegram_bot.py |
+      | GET | /telegram/users | telegram_bot.py |
+      | POST | /telegram/webhook | telegram_bot.py |
       | GET | /ticker/<string:symbol> | ticker.py |
       | POST | /tradebook | tradebook.py |
       | POST | /whatsapp/notify | whatsapp_bot.py |

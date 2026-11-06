@@ -34,6 +34,11 @@ uv run app.py
 - [ ] Dashboard shows funds
 
 ### Basic Trading Flow
+
+Rehearse these steps in Analyzer mode first. An order that loses its response
+may still have reached the broker: reconcile the order book, trades and
+positions before resubmitting.
+
 - [ ] Symbol search works
 - [ ] Place market order
 - [ ] Order appears in orderbook
@@ -208,7 +213,12 @@ Currency: USDINR27JAN26FUT, USDINR27JAN2684CE
 MCX:      CRUDEOIL17JAN26FUT, GOLD05FEB26FUT
 ```
 
-### Lot Sizes
+### Illustrative lot sizes
+
+Read the current contract's `lotsize` and `freeze_qty` from the symbol/search
+API before sizing an order. The examples below are not a current exchange
+reference.
+
 | Symbol | Lot Size |
 |--------|----------|
 | NIFTY | 65 |

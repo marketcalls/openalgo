@@ -26,7 +26,7 @@ scalping terminals, Telegram and WhatsApp alerts work the same way on either.
 
 ## Current status
 
-- **Automated checks pass on every change**: tests on several Python
+- **CI is configured to check changes**: tests on several Python
   versions, the web server starting on both eventlet and gthread, container
   builds for AMD64 and ARM64, and the frontend tests. They catch regressions;
   they do not certify every broker or promise days of uptime.
@@ -51,6 +51,7 @@ OpenAlgo; an older image cannot gain gthread just by setting the variable.
 | Fresh multi-instance install with `install/install-multi.sh` | Finish installation, then switch the instance you want with `--service openalgo1 --to gthread`, or every instance with `--all`. |
 | Existing Ubuntu install made by either installer | Update OpenAlgo, then run `install/switch-worker.sh --to gthread`. |
 | Docker Compose, including `install/install-docker.sh` | Set `OPENALGO_WORKER_CLASS = 'gthread'` in the mounted `.env`, set `stop_grace_period: 45s`, then rebuild and recreate the container. |
+| Multi-instance Docker with custom SSL (`install/install-docker-multi-custom-ssl.sh`) | Choose `gthread` at its per-instance web-server prompt (eventlet is the default/current value). It also offers `auto` or `unrestricted` memory profiles and writes a 45-second stop grace. |
 | Docker runners `install/docker-run.sh` and `install/docker-run.bat` | Use an image that includes this version, set the same `.env` line, then restart with the runner. The runners already allow 45 seconds to stop. |
 | `uv run app.py` | This is the development server. It ignores the setting; use Ubuntu or Docker to run gthread. |
 

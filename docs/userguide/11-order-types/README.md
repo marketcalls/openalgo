@@ -4,6 +4,10 @@
 
 Understanding order types is essential for effective trading. Each order type has specific use cases, advantages, and limitations.
 
+## GTT Triggers
+
+GTT is a persistent trigger workflow, separate from the MARKET/LIMIT/SL/SL-M price types below. Place single or OCO triggers, then inspect active triggers and triggered/cancelled history in the Orderbook's **GTT** tab. Analyzer supports simulated GTT triggers against live prices; live availability depends on the broker plugin. See [PlaceGTTOrder](../../api/order-management/placegttorder.md), [GTTOrderBook](../../api/order-management/gttorderbook.md), [ModifyGTTOrder](../../api/order-management/modifygttorder.md) and [CancelGTTOrder](../../api/order-management/cancelgttorder.md).
+
 ## Order Types Overview
 
 ```
@@ -37,7 +41,7 @@ Understanding order types is essential for effective trading. Each order type ha
 
 ### What It Does
 
-Executes immediately at the current best available price.
+Requests execution at the available market price. Liquidity, broker/exchange acceptance and price protection can still prevent or delay a fill.
 
 ### Example
 
@@ -63,7 +67,7 @@ Result: You get 100 shares at approximately ₹625.50
 
 | Pros | Cons |
 |------|------|
-| Guaranteed execution | No price control |
+| Requests execution at available market prices | No price control or guaranteed fill |
 | Simple to use | May get worse price |
 | Fast | Slippage in volatile markets |
 
@@ -72,6 +76,7 @@ Result: You get 100 shares at approximately ₹625.50
 ```json
 {
   "apikey": "your-key",
+  "strategy": "OrderTypeExample",
   "symbol": "SBIN",
   "exchange": "NSE",
   "action": "BUY",
@@ -128,6 +133,7 @@ Result: Order executes at ₹620 (or better at ₹615)
 ```json
 {
   "apikey": "your-key",
+  "strategy": "OrderTypeExample",
   "symbol": "SBIN",
   "exchange": "NSE",
   "action": "BUY",
@@ -186,6 +192,7 @@ SELL Stop-Loss (for long positions):
 ```json
 {
   "apikey": "your-key",
+  "strategy": "OrderTypeExample",
   "symbol": "SBIN",
   "exchange": "NSE",
   "action": "SELL",
@@ -203,7 +210,7 @@ SELL Stop-Loss (for long positions):
 
 Triggers a market order when trigger price is reached:
 1. Order stays dormant until trigger price hit
-2. Once triggered, becomes a market order (guaranteed execution)
+2. Once triggered, becomes a market order (subject to liquidity, price protection and broker/exchange acceptance)
 
 ### Example
 
@@ -233,9 +240,9 @@ Price Movement:
 
 | Aspect | SL | SL-M |
 |--------|----|----|
-| Execution | Limit (may not fill) | Market (always fills) |
+| Execution | Limit (may not fill) | Market (liquidity/acceptance dependent) |
 | Price control | Yes | No |
-| Gap protection | Poor (may not fill) | Better (will fill) |
+| Gap protection | Poor (may not fill) | No limit-price control; a fill is not guaranteed |
 | Complexity | Two prices needed | One trigger price |
 | Best for | Normal markets | Gap protection |
 
@@ -244,6 +251,7 @@ Price Movement:
 ```json
 {
   "apikey": "your-key",
+  "strategy": "OrderTypeExample",
   "symbol": "SBIN",
   "exchange": "NSE",
   "action": "SELL",
@@ -285,24 +293,16 @@ Price Movement:
 - No auto square-off (within expiry)
 - Standard margin applies
 
-## Validity Types
+## Validity and Broker Support
 
-Most brokers support:
-
-| Validity | Meaning |
-|----------|---------|
-| DAY | Valid for today only |
-| IOC | Immediate or Cancel (execute now or cancel) |
-| GTC | Good Till Cancelled (until manually cancelled) |
-
-**Note**: OpenAlgo typically uses DAY validity.
+The unified PlaceOrder request does not offer a general validity selector. Do not add `IOC` or `GTC` fields assuming every adapter supports them. Broker plugins map supported price/product types to their own request formats; check the broker's current instrument and order-type restrictions. GTT is the separate trigger workflow linked above.
 
 ## Common Order Mistakes
 
 ### Mistake 1: SL Order Triggered Immediately
 
-**Problem**: SL buy at trigger ₹625 when price is ₹620
-**Why**: Trigger price is below current price (already triggered!)
+**Problem**: SL buy at trigger ₹615 when price is already ₹620
+**Why**: The market is already above the buy trigger
 **Fix**: For SL BUY, trigger must be ABOVE current price
 
 ### Mistake 2: Limit Order Not Executing
@@ -325,7 +325,7 @@ Need immediate execution?
 └── NO → Want specific price?
          ├── YES → LIMIT
          └── NO → Setting stop-loss?
-                  ├── YES → Need guaranteed execution?
+                  ├── YES → Prefer a market order after trigger?
                   │         ├── YES → SL-M
                   │         └── NO → SL
                   └── NO → Reconsider requirements

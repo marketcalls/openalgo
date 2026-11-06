@@ -42,6 +42,10 @@ User clicks "Connect Broker"
   → User is redirected to dashboard
 ```
 
+Broker setup now starts from `/broker` and `/broker/config`. `GET /api/broker/list` derives available choices from `VALID_BROKERS` and `utils/broker_setup_guide.py`; the frontend does not maintain a separate broker list. Users can save encrypted keys for several brokers, while one broker session is active at a time. A `.env` broker with `BROKER_API_KEY` takes precedence over saved keys for that broker.
+
+A new plugin must add its key fields, hints and login behavior to `utils/broker_setup_guide.py` and its display name to `utils/broker_keys.py`. Reuse the server-started login and callback flow rather than constructing broker login URLs in the browser. `begin_broker_login()` stages keys for the current request; `end_broker_login()` always releases the stage/slot. `handle_auth_success()` validates and commits the token before publishing those keys process-wide. Never write global broker keys directly from a callback or read them into module constants: order, funds and streaming calls must resolve them when called. A thread spawned during login does not inherit the request's staged keys.
+
 Broker directories are discovered at startup by `utils/plugin_loader.py`. Capability metadata is cached from `broker/*/plugin.json`, while authentication modules are imported lazily from `broker.<name>.api.auth_api` when their `{broker_name}_auth` entry is first requested.
 
 ---
@@ -119,7 +123,7 @@ Different authentication patterns return different tuples. The callback handler 
 | **OAuth2 (simple)** | `(auth_token, error_message)` | zerodha, fyers, flattrade, upstox, kotak, groww, indmoney, dhan_sandbox |
 | **TOTP/Credential** | `(auth_token, error_message)` | aliceblue, firstock, shoonya, zebu, samco |
 | **TOTP + feed token** | `(auth_token, feed_token, error_message)` | angel, mstock, nubra, paytm, motilal |
-| **XTS (dual-auth)** | `(auth_token, feed_token, user_id, error_message)` | iifl, ibulls, fivepaisaxts, compositedge, jainamxts, wisdom, pocketful, definedge |
+| **Auth + feed + user ID** | `(auth_token, feed_token, user_id, error_message)` | iifl, ibulls, fivepaisaxts, compositedge, jainamxts, wisdom, pocketful, definedge |
 | **OAuth + user_id** | `(auth_token, user_id, error_message)` | dhan |
 
 ### Example: OAuth2 Pattern (Simplest)
@@ -129,6 +133,9 @@ Different authentication patterns return different tuples. The callback handler 
 
 import os
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 def authenticate_broker(request_token):
     """
@@ -156,6 +163,7 @@ def authenticate_broker(request_token):
                 "request_token": request_token,
                 "api_secret": BROKER_API_SECRET,
             },
+            timeout=30.0,
         )
         response.raise_for_status()
         data = response.json()
@@ -166,8 +174,9 @@ def authenticate_broker(request_token):
         else:
             return None, "Authentication succeeded but no access token returned."
 
-    except Exception as e:
-        return None, f"An exception occurred: {str(e)}"
+    except Exception:
+        logger.exception("Broker authentication failed")
+        return None, "The broker login could not be completed. Try again."
 ```
 
 ### Example: TOTP/Credential Pattern
@@ -195,6 +204,7 @@ def authenticate_broker(clientcode, broker_pin, totp_code):
         "https://api.yourbroker.com/auth/login",
         json=payload,
         headers={"X-PrivateKey": api_key},
+        timeout=30.0,
     )
 
     data = response.json()
@@ -233,6 +243,7 @@ def authenticate_broker(request_token):
     response = client.post(
         f"{INTERACTIVE_URL}/user/session",
         json={"appKey": BROKER_API_KEY, "secretKey": BROKER_API_SECRET, "source": "WebAPI"},
+        timeout=30.0,
     )
     result = response.json()
     auth_token = result["result"]["token"]
@@ -241,6 +252,7 @@ def authenticate_broker(request_token):
     feed_response = client.post(
         f"{MARKET_DATA_URL}/auth/login",
         json={"appKey": BROKER_API_KEY_MARKET, "secretKey": BROKER_API_SECRET_MARKET, "source": "WebAPI"},
+        timeout=30.0,
     )
     feed_result = feed_response.json()
     feed_token = feed_result["result"]["token"]
@@ -416,15 +428,10 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
     headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
     url = f"{base_url}{endpoint}"
 
-    if method.upper() == "GET":
-        response = client.get(url, headers=headers)
-    elif method.upper() == "POST":
-        response = client.post(url, headers=headers, json=payload)
-    elif method.upper() == "PUT":
-        response = client.put(url, headers=headers, json=payload)
-    elif method.upper() == "DELETE":
-        response = client.delete(url, headers=headers)
-
+    response = client.request(
+        method.upper(), url, headers=headers, json=payload, timeout=30.0
+    )
+    response.raise_for_status()
     return response.json()
 ```
 
@@ -567,99 +574,20 @@ Create `broker/your_broker/database/master_contract_db.py`.
 
 This module downloads the broker's instrument/symbol master file and populates the `symtoken` table, which maps OpenAlgo symbols to broker-specific symbols.
 
-```python
-import os
-import pandas as pd
-from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from database.auth_db import get_auth_token
-from extensions import socketio
-from utils.httpx_client import get_httpx_client
-from utils.logging import get_logger
+Use an existing maintained implementation, such as `broker/fyers/database/master_contract_db.py`, as the starting point. The refresh must download, parse and validate replacement rows **before** deleting the currently usable master. A failed download, malformed payload or empty replacement must preserve the existing symbols; recent Fyers, Kotak and Shoonya fixes depend on this behavior.
 
-logger = get_logger(__name__)
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
-db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
-Base = declarative_base()
-Base.query = db_session.query_property()
-
-class SymToken(Base):
-    __tablename__ = "symtoken"
-    id = Column(Integer, Sequence("symtoken_id_seq"), primary_key=True)
-    symbol = Column(String, nullable=False, index=True)
-    brsymbol = Column(String, nullable=False, index=True)
-    name = Column(String)
-    exchange = Column(String, index=True)
-    brexchange = Column(String, index=True)
-    token = Column(String, index=True)
-    expiry = Column(String)
-    strike = Column(Float)
-    lotsize = Column(Integer)
-    instrumenttype = Column(String)
-    tick_size = Column(Float)
-
-    __table_args__ = (Index("idx_symbol_exchange", "symbol", "exchange"),)
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-
-def delete_symtoken_table():
-    SymToken.query.delete()
-    db_session.commit()
-
-def copy_from_dataframe(df):
-    """Bulk insert from pandas DataFrame."""
-    records = df.to_dict("records")
-    db_session.bulk_insert_mappings(SymToken, records)
-    db_session.commit()
-
-def master_contract_download():
-    """
-    Download and process the broker's instrument master file.
-
-    This function:
-    1. Downloads the instrument list from the broker API
-    2. Transforms it to match the SymToken schema
-    3. Maps broker-specific symbols to OpenAlgo's standardized format
-    4. Bulk inserts into the database
-    5. Emits a SocketIO event when complete
-
-    Returns:
-        SocketIO emit result
-    """
-    try:
-        init_db()
-        delete_symtoken_table()
-
-        # Download instruments from broker
-        auth_token = get_auth_token()
-        client = get_httpx_client()
-        response = client.get(
-            "https://api.yourbroker.com/instruments",
-            headers={"Authorization": f"Bearer {auth_token}"},
-        )
-
-        # Parse and transform to DataFrame
-        # ... broker-specific parsing logic ...
-        # Map to standardized columns: symbol, brsymbol, name, exchange,
-        # brexchange, token, expiry, strike, lotsize, instrumenttype, tick_size
-
-        copy_from_dataframe(df)
-        return socketio.emit("master_contract_download", {"status": "success"})
-
-    except Exception as e:
-        logger.error(f"Master contract download failed: {e}")
-        return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
-```
+- Create engines through `database.engine_factory.create_db_engine()` and register/clean up scoped sessions; background jobs also need explicit cleanup.
+- Use the shared HTTP client with an explicit timeout. Complete parsing before the replacement transaction; roll back failures.
+- Normalize cash and index rows as `instrumenttype="EQ"`; index exchange names remain `NSE_INDEX`, `BSE_INDEX`, etc. Equity/index expiry is empty.
+- Normalize prices and `tick_size` to rupees using the broker's segment precision; CDS is not always a fixed `/100` conversion.
+- Enforce a single `(symbol, exchange)` mapping and publish the completion notification only after a successful write. Use the thread-safe emitter `extensions.emit_from_any_thread` when emitting from a worker.
+- A schema change also needs an upgrade migration; a startup `create_all()` cannot migrate existing installations.
 
 ### Key Column Mappings
 
 | SymToken Column | Description | Example |
 |----------------|-------------|---------|
-| `symbol` | OpenAlgo standardized symbol | `SBIN-EQ`, `NIFTY24JAN24000CE` |
+| `symbol` | OpenAlgo standardized symbol | `SBIN`, `NIFTY28JAN2724000CE` |
 | `brsymbol` | Broker's native symbol | `SBIN`, `NIFTY24JAN24000CE` |
 | `name` | Human-readable name | `State Bank of India` |
 | `exchange` | OpenAlgo exchange | `NSE`, `NFO`, `BSE`, `BFO`, `CDS`, `MCX` |
@@ -788,175 +716,31 @@ class Your_brokerWebSocketAdapter(BaseBrokerWebSocketAdapter):
 The adapter must publish data using `self.publish_market_data(topic, data)`. The topic format is:
 
 ```
-{BROKER_NAME}_{EXCHANGE}_{SYMBOL}_{MODE}
+{EXCHANGE}_{SYMBOL}_{MODE}
 ```
 
 Where MODE is `LTP`, `QUOTE`, or `DEPTH`. Examples:
-- `angel_NSE_RELIANCE_LTP`
-- `zerodha_NFO_NIFTY24JAN24000CE_QUOTE`
+- `NSE_RELIANCE_LTP`
+- `NFO_NIFTY28JAN2724000CE_QUOTE`
+- `NSE_INDEX_NIFTY_QUOTE`
 
 The proxy server (`websocket_proxy/server.py`) parses these topics in its `zmq_listener()` method and routes data to subscribed WebSocket clients.
 
-### Full Adapter Example
+### Adapter, transport and mapping implementation
 
-```python
-# broker/your_broker/streaming/your_broker_adapter.py
+Start from a maintained adapter with the same broker protocol rather than copying a partial skeleton: `broker/rupeezy/streaming/` implements Vortex binary modes, while `broker/sahi/streaming/` implements a Protobuf delta feed. The adapter must:
 
-from database.auth_db import get_auth_token_broker
-from database.token_db import get_token, get_brexchange
-from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
-from broker.your_broker.streaming.your_broker_websocket import YourBrokerWebSocket
-from broker.your_broker.streaming.your_broker_mapping import map_feed_data
-from utils.logging import get_logger
+1. Resolve the active user's credentials and broker keys when connecting; initialize the base adapter/ZMQ publisher.
+2. Reject unsupported exchanges, indices without depth, and unsupported depth levels before reporting subscription success. Keep exchange plus token in mappings when tokens can overlap between exchanges.
+3. Track all requested modes and publish every subscribed mode. One Depth subscription does not replace downstream LTP/Quote publications.
+4. Merge delta messages into an instrument cache before emitting a complete available snapshot. Preserve a measured previous close separately from today's close or LTP. Do not invent OHLC, previous close, total buy/sell quantities, OI or order counts the broker does not supply.
+5. Keep subscription ownership/cache until the broker acknowledges an unsubscribe. A failed unsubscribe must remain retryable; do not pop local state before the transport succeeds. Only the final owner may remove a shared instrument.
+6. Close the previous socket, stop heartbeat/watchdog threads and cancel reconnect work on disconnect before opening a replacement. Resubscribe from a snapshot, with broker-appropriate batching and pacing.
+7. Log exceptions through `logger.exception()` and never expose tokens or broker keys in logs.
 
-logger = get_logger(__name__)
+Publisher payloads contain the normalized market fields themselves. The proxy wraps them under `data` and adds `symbol`, `exchange`, numeric `mode`, and `broker` in the public [wire format](prompt/websockets-format.md). Topics do not contain a broker prefix; preserve multi-part exchange names and symbols with underscores. The listener may fan a higher-mode publication out to lower-mode owners, tagging the recipient's subscribed mode. Timestamps and optional quote/depth fields must match the adapter's actual feed, not a static list of every possible field.
 
-class Your_brokerWebSocketAdapter(BaseBrokerWebSocketAdapter):
-
-    def __init__(self):
-        super().__init__()
-        self.broker_ws = None
-        self.broker_name = "your_broker"
-
-    def initialize(self, broker_name, user_id, auth_data=None):
-        try:
-            # Fetch auth credentials from database
-            auth_token = self.get_auth_token_for_user(user_id)
-            if not auth_token:
-                return {"status": "error", "message": "No auth token found"}
-
-            self.auth_token = auth_token
-            self.user_id = user_id
-            return {"status": "success"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    def connect(self):
-        try:
-            self.broker_ws = YourBrokerWebSocket(
-                auth_token=self.auth_token,
-                on_message_callback=self._on_tick_data,
-            )
-            self.broker_ws.connect()
-            self.connected = True
-            return {"status": "success"}
-        except Exception as e:
-            return {"status": "error", "code": "CONNECTION_FAILED", "message": str(e)}
-
-    def disconnect(self):
-        if self.broker_ws:
-            self.broker_ws.disconnect()
-        self.connected = False
-        self.cleanup_zmq()  # IMPORTANT: release ZeroMQ resources
-
-    def subscribe(self, symbol, exchange, mode=2, depth_level=5):
-        try:
-            token = get_token(symbol, exchange)
-            if not token:
-                return {"status": "error", "message": f"Token not found for {symbol}:{exchange}"}
-
-            self.broker_ws.subscribe([token])
-            self.subscriptions[f"{symbol}:{exchange}:{mode}"] = {
-                "symbol": symbol, "exchange": exchange, "token": token, "mode": mode,
-            }
-            return {"status": "success", "actual_depth": depth_level}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-    def unsubscribe(self, symbol, exchange, mode=2):
-        key = f"{symbol}:{exchange}:{mode}"
-        sub = self.subscriptions.pop(key, None)
-        if sub:
-            self.broker_ws.unsubscribe([sub["token"]])
-        return {"status": "success"}
-
-    def _on_tick_data(self, raw_data):
-        """Callback from broker WebSocket — normalize and publish."""
-        try:
-            normalized = map_feed_data(raw_data)
-            if normalized:
-                symbol = normalized.get("symbol")
-                exchange = normalized.get("exchange")
-                mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}.get(normalized.get("mode", 2), "QUOTE")
-
-                topic = f"{self.broker_name}_{exchange}_{symbol}_{mode_str}"
-                self.publish_market_data(topic, normalized)
-        except Exception as e:
-            logger.error(f"Error processing tick: {e}")
-```
-
-### your_broker_websocket.py — Low-Level WebSocket Client
-
-```python
-# broker/your_broker/streaming/your_broker_websocket.py
-
-import ssl
-import json
-import threading
-import websocket
-
-class YourBrokerWebSocket:
-    def __init__(self, auth_token, on_message_callback):
-        self.auth_token = auth_token
-        self.on_message = on_message_callback
-        self.ws = None
-
-    def connect(self):
-        self.ws = websocket.WebSocketApp(
-            "wss://stream.yourbroker.com/ws",
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
-            on_open=self._on_open,
-            header={"Authorization": f"Bearer {self.auth_token}"},
-        )
-        thread = threading.Thread(
-            target=self.ws.run_forever,
-            kwargs={"sslopt": {"cert_reqs": ssl.CERT_NONE}},
-        )
-        thread.daemon = True
-        thread.start()
-
-    def subscribe(self, tokens):
-        """Subscribe to market data for given instrument tokens."""
-        if self.ws:
-            self.ws.send(json.dumps({"action": "subscribe", "tokens": tokens}))
-
-    def unsubscribe(self, tokens):
-        """Unsubscribe from market data."""
-        if self.ws:
-            self.ws.send(json.dumps({"action": "unsubscribe", "tokens": tokens}))
-
-    def disconnect(self):
-        if self.ws:
-            self.ws.close()
-```
-
-### your_broker_mapping.py — Data Normalization
-
-```python
-# broker/your_broker/streaming/your_broker_mapping.py
-
-def map_feed_data(raw_data):
-    """
-    Normalize broker-specific tick data to OpenAlgo's unified format.
-
-    Returns:
-        dict: {
-            "symbol": "RELIANCE",
-            "exchange": "NSE",
-            "mode": 2,
-            "ltp": 100.50,
-            "open": 99.00,
-            "high": 101.00,
-            "low": 98.50,
-            "close": 99.75,
-            "volume": 1234567,
-            "bid": 100.45,
-            "ask": 100.55,
-        }
-    """
-```
+Rupeezy and Sahi are now part of the 38-plugin inventory. Both adapters expose LTP/Quote/Depth modes with five-level depth; the exchange and instrument rules still apply. Sahi's stream omits OHLC and previous close. Groww's quote payload comes from its merged cache and is commonly LTP-only. Fyers, Upstox, Kotak and other adapters include available quote fields in Depth frames. Read their capability registries and mapping functions when adding support, rather than assuming that all brokers supply identical fields.
 
 ### Connection Pooling Support
 
@@ -969,21 +753,13 @@ MAX_WEBSOCKET_CONNECTIONS = '3'        # Max connections per broker
 ENABLE_CONNECTION_POOLING = 'true'     # Enable/disable pooling
 ```
 
-Your adapter doesn't need special code for pooling — the `_PooledAdapterWrapper` in `broker_factory.py` handles it automatically by wrapping your adapter class.
+The `_PooledAdapterWrapper` in `broker_factory.py` handles pool selection, capacity and shared ownership. Your adapter still must honor mode subscriptions and lifecycle/cleanup correctly. These settings are OpenAlgo ceilings; configure them within the broker's actual limits. The pool does not discover every broker's connection entitlement automatically.
 
 ### Special Broker Behaviors in WebSocket Proxy
 
-Some brokers have special handling in `websocket_proxy/server.py` (in `cleanup_client()`):
+When the last client disconnects, Flattrade and Shoonya may retain a connected adapter only after `unsubscribe_all()` acknowledges success. A failed or malformed release must lead to adapter teardown so a released client cannot leave an orphaned feed. Other brokers disconnect on last-client cleanup. Do not add a broker to a keepalive exception without verifying this ownership and failure behavior in `websocket_proxy/server.py`.
 
-```python
-# Flattrade and Shoonya keep connections alive when last client disconnects
-if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
-    adapter.unsubscribe_all()  # Just unsubscribe, don't disconnect
-else:
-    adapter.disconnect()       # Full disconnect for all other brokers
-```
-
-If your broker has expensive reconnection overhead, consider implementing `unsubscribe_all()` and adding your broker to this list.
+The proxy runs in a supervised subprocess under Gunicorn (eventlet and gthread), externally under Docker, and on a real thread on the dev server. The proxy SUB alone binds the fixed ZMQ bus; every publisher connects. See [WebSocket architecture](websocket-architecture.md).
 
 ### WebSocket Proxy File Reference
 
@@ -1008,7 +784,7 @@ A new broker must be registered in **all** of the following locations:
 Add your broker to the "Supported Brokers" section (alphabetical order):
 
 ```markdown
-## Supported Brokers (36 plugins)
+## Supported Brokers (38 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>
@@ -1129,6 +905,10 @@ If your broker requires TOTP/credential input (not OAuth redirect), you need a R
 
 The route `/broker/your_broker/totp` must be handled by the React router.
 
+### 12.12. Broker setup metadata and key routing
+
+Add `utils/broker_setup_guide.py` fields, hints and sign-in description, plus `utils/broker_keys.py:BROKER_NAMES`. Check the broker selector, configuration page and Profile broker summary using the shared server inventory. Keep the existing login-slot, staged-key and commit guards intact. Update any SDK/order-update registry required by the new broker's capabilities; market-data adapter discovery alone does not add an order feed.
+
 ### Summary Checklist: All Registration Points
 
 | File | What to Update |
@@ -1153,7 +933,9 @@ The route `/broker/your_broker/totp` must be handled by the React router.
 | `install/docker-run.sh` | Append broker name |
 | `install/docker-run.bat` | Append broker name |
 | `websocket_proxy/broker_factory.py` | Auto-discovered if naming convention followed |
-| `blueprints/brlogin.py` | Add callback handler |
+| `blueprints/brlogin.py` | Add callback handler through existing guarded login flow |
+| `utils/broker_setup_guide.py` | Key fields, setup hints and sign-in description |
+| `utils/broker_keys.py` | Broker display name; use the shared key resolver |
 | `frontend/` (if TOTP broker) | Add React TOTP page |
 
 ---
@@ -1170,7 +952,7 @@ User → Broker Login Page → Redirect back with code/request_token
      → auth_api.authenticate_broker(code) → (token, error)
 ```
 
-**Brokers:** Zerodha, Fyers, Flattrade, Upstox, Paytm, Pocketful
+**Brokers:** Zerodha, Fyers, Flattrade, Upstox, Paytm, Pocketful; Rupeezy uses an SSO `auth` callback parameter plus a checksum exchange rather than the generic `code`/`request_token` path.
 
 **Login URL construction:** The `REDIRECT_URL` in `.env` is set to `https://domain/<broker>/callback`. The broker's developer portal is configured with this URL.
 
@@ -1225,7 +1007,7 @@ credential form is shown. The connect page exists to surface setup state — for
 Samco it also calls `GET /samco/ip-status` after connecting, which proxies the
 broker's IP diagnostic so a static-IP mismatch is caught before it rejects orders.
 
-**Brokers:** Samco
+**Brokers:** Samco and Sahi. Sahi requires the API key to be approved in its broker API Dashboard each trading day; its issued token expires at the broker's 06:00 IST boundary. OpenAlgo's own session-expiry setting is separate. Read `broker/sahi/api/auth_api.py` and `utils/broker_setup_guide.py` for the exact field and login flow.
 
 ---
 
@@ -1254,9 +1036,9 @@ limiter = Limiter(
 | Login (per hour) | 25/hour | `LOGIN_RATE_LIMIT_HOUR` | `brlogin.py` — `/<broker>/callback` |
 | API | 50/second | `API_RATE_LIMIT` | All `restx_api/` endpoints |
 | Orders | 10/second | `ORDER_RATE_LIMIT` | Order placement/cancellation |
-| Smart Orders | 10/second | `SMART_ORDER_RATE_LIMIT` | Multi-leg strategies |
+| Smart Orders | 10/second | `SMART_ORDER_RATE_LIMIT` | `/api/v1/placesmartorder` |
 | Webhooks | 100/minute | `WEBHOOK_RATE_LIMIT` | TradingView/Chartink webhooks |
-| Strategy | 200/minute | `STRATEGY_RATE_LIMIT` | Strategy execution |
+| Strategy | 200/minute | `STRATEGY_RATE_LIMIT` | ChartInk strategy management |
 
 ### Applying Rate Limits to New Endpoints
 
@@ -1282,6 +1064,10 @@ def your_broker_custom_route():
 
 ---
 
+For broker pacing, use the existing `utils/broker_backpressure.py` helpers. Under gthread only, a broker queue wait that exceeds its ceiling is refused before sending and becomes a `429` service response; preserve the exception through plugin wrappers rather than returning a fake success or empty book. Eventlet and development keep their existing pacing behavior.
+
+Order writes must not be retried automatically after an ambiguous transport failure. The shared HTTP transport records unanswered writes; place/smart order services report a possible placement (`502`), while basket/split services include that warning per child. See [order outcome handling](api/README.md#order-outcomes-and-retries).
+
 ## 15. Token Storage and Session Management
 
 After successful authentication, `handle_auth_success()` in `utils/auth_utils.py` handles:
@@ -1297,7 +1083,8 @@ After successful authentication, `handle_auth_success()` in `utils/auth_utils.py
 
 2. **Database storage** via `database/auth_db.py::upsert_auth()`:
    - Stores `auth_token`, `broker`, `feed_token`, `user_id` per user
-   - Uses encryption (pepper-based) for secure storage
+   - Uses the shared auth database encryption for secure storage
+   - Re-persisting unchanged decrypted token/feed/broker values preserves the shared feed; only a material change/revocation invalidates adapters and pools
 
 3. **Master contract download** (async, in background thread):
    - Calls `broker/{broker}/database/master_contract_db.py::master_contract_download()`
@@ -1336,13 +1123,15 @@ MARKET_DATA_URL = "https://xts.yourbroker.com/apimarketdata"
 
 ## 17. Environment Variable Reference
 
-### Required for All Brokers
+### Legacy .env key source
 
 ```env
 BROKER_API_KEY = 'your_api_key'
 BROKER_API_SECRET = 'your_api_secret'
 REDIRECT_URL = 'http://127.0.0.1:5000/your_broker/callback'
 ```
+
+The broker configuration UI is the other supported key source. Do not require users who saved keys there to duplicate them in `.env`; an existing `.env` broker/key continues to take precedence. The resolver is `utils/broker_keys.py`.
 
 ### Additional for XTS Brokers
 
@@ -1455,7 +1244,7 @@ Study these implementations for the pattern closest to your broker:
 
 ---
 
-## Appendix: Complete Plugin Inventory (36)
+## Appendix: Complete Plugin Inventory (38)
 
 This inventory is derived from `broker/*/plugin.json`. Authentication requirements must be read from the adapter and the broker's current developer instructions rather than copied from a static cross-broker table.
 
@@ -1504,11 +1293,13 @@ This inventory is derived from `broker/*/plugin.json`. Authentication requiremen
 | 26 | `paytm` | Securities |
 | 27 | `pocketful` | Securities |
 | 28 | `rmoney` | Securities |
-| 29 | `samco` | Securities |
-| 30 | `shoonya` | Securities |
-| 31 | `tradejini` | Securities |
-| 32 | `tradesmart` | Securities |
-| 33 | `upstox` | Securities |
-| 34 | `wisdom` | Securities |
-| 35 | `zebu` | Securities |
-| 36 | `zerodha` | Securities |
+| 29 | `rupeezy` | Securities |
+| 30 | `sahi` | Securities |
+| 31 | `samco` | Securities |
+| 32 | `shoonya` | Securities |
+| 33 | `tradejini` | Securities |
+| 34 | `tradesmart` | Securities |
+| 35 | `upstox` | Securities |
+| 36 | `wisdom` | Securities |
+| 37 | `zebu` | Securities |
+| 38 | `zerodha` | Securities |

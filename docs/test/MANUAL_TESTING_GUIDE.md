@@ -33,7 +33,7 @@ open http://127.0.0.1:5000
 2. [Broker Integration](#2-broker-integration)
 3. [Market Data](#3-market-data)
 4. [Trading Operations](#4-trading-operations)
-5. [P&L Calculations](#5-pnl-calculations)
+5. [P&L Calculations](#5-pl-calculations)
 6. [Sandbox Mode](#6-sandbox-mode)
 7. [WebSocket & Real-time](#7-websocket--real-time)
 8. [Strategies & Webhooks](#8-strategies--webhooks)

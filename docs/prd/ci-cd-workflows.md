@@ -19,7 +19,13 @@ This document details all GitHub Actions workflows in the OpenAlgo CI/CD pipelin
 | Job | Purpose |
 |-----|---------|
 | backend-lint | Python Ruff checks (currently informational through `continue-on-error`) |
-| backend-test | CI-safe pytest subset |
+| backend-test | Explicit credential-free pytest subset, including broker-key, transport, sandbox and regression tests |
+| gunicorn-boot | Real launcher/server startup, polling/WebSocket/SSE, proxy topology and shutdown matrix |
+| eventlet-fallback | Eventlet compatibility tests with eventlet installed; verifies tests did not skip |
+| gthread-gates | Check-then-act and sleep source gates |
+| gthread-migration | Every `test/test_gthread_*.py` migration test under Linux |
+| gthread-platforms | Portable runtime/concurrency cases on Windows, macOS and Linux ARM64 |
+| chart-indicator-skill | Pinned chart API export/reference and example coverage |
 | frontend-lint | TypeScript/React linting |
 | frontend-build | Production build and `frontend-dist` artifact |
 | frontend-test | Vitest and coverage artifact |
@@ -58,27 +64,21 @@ uv run ruff format .
 
 ### backend-test
 
-Runs a minimal CI-safe subset of Python tests that don't require broker credentials.
+Runs the explicit credential-free list in `.github/workflows/ci.yml`. The list includes auth/broker-key, transport, sandbox, calendar, logging, lifecycle and broker regression tests; it is larger than the original five-test subset. Read the workflow for the current file selection rather than copying that old list. The job uses a 60-second timeout.
 
-```yaml
-steps:
-  - uv sync
-  - uv run pytest test/test_log_location.py test/test_navigation_update.py \
-      test/test_python_editor.py test/test_rate_limits_simple.py \
-      test/test_logout_csrf.py -v --timeout=60
+### Production Worker Verification
+
+The workflow separately tests the production runtimes: `gunicorn-boot` starts the real launcher with eventlet and gthread, checks Socket.IO polling/WebSocket, SSE, proxy placement, diagnostics and termination. `eventlet-fallback` installs eventlet explicitly so fallback tests run instead of skipping. `gthread-gates` runs the concurrency source gates; `gthread-migration` runs every migration test file with fake brokers and isolated databases. `gthread-platforms` runs the portable subset on Windows, macOS and native Linux ARM64.
+
+The Linux migration job's local equivalent is:
+
+```bash
+uv sync
+uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2"
+.venv/bin/python -m pytest test/test_gthread_*.py -o addopts="" --timeout=120 -rs
 ```
 
-**CI-Safe Tests:**
-- `test_log_location.py` - Log file path validation
-- `test_navigation_update.py` - Navigation structure tests
-- `test_python_editor.py` - Editor functionality tests
-- `test_rate_limits_simple.py` - Rate limiter configuration tests
-- `test_logout_csrf.py` - CSRF protection tests
-
-**Notes:**
-- Only runs tests that don't need broker credentials or running app
-- Full test suite available locally: `uv run pytest test/ -v`
-- 60-second timeout per test
+Run it on Linux or WSL with the checkout on the Linux filesystem. A green Windows checkout can skip Linux production-worker tests; it is not evidence that this job passed. See the repository runtime constraints and [worker guide](../gthread/README.md).
 
 ### frontend-lint
 

@@ -116,9 +116,16 @@ curl -X POST http://127.0.0.1:5000/api/v1/placeorder \
 | Field | Type | Description |
 |-------|------|-------------|
 | status | string | "success" or "error" |
-| orderid | string | Unique order ID from broker (on success) |
-| message | string | Error message (on error) |
-| mode | string | "live" or "analyze" (when analyzer mode is enabled) |
+| orderid | string | Broker/sandbox order ID on a direct successful placement; absent when queued |
+| pending_order_id | integer | Approval record ID when queued in Semi-Auto; not a broker order ID |
+| message | string | Queue acknowledgement or error explanation |
+| mode | string | `analyze` for sandbox or `semi_auto` for an approval queue; direct live responses may omit it |
+
+## Ambiguous outcomes
+
+A directly executed placement returns `orderid` on success; execution still needs order-status/trade-book confirmation. Semi-Auto also returns `200`, with `mode: "semi_auto"` and `pending_order_id` instead of a broker order ID: it acknowledges an approval record before any broker submission. If the shared transport detects that a write may have reached the broker but its reply was lost, this endpoint returns `502` with `status: "error"` and a message explaining that the order may have been placed. Check the broker order book before sending it again. The endpoint does not provide a universal idempotency key.
+
+A gthread broker-queue refusal returns `429` before sending. See [response and retry conventions](../README.md#order-outcomes-and-retries).
 
 ## Notes
 

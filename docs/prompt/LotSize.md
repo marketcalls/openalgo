@@ -1,3 +1,12 @@
+# Contract Lot Sizes
+
+The CSV below is a **historical April–June 2026 snapshot**. It is not a current contract master and does not establish lot sizes for later expiries. A dash represents the value recorded in this snapshot, not a live tradability check.
+
+Before sizing an order, resolve the exact contract and exchange with [Symbol](../api/symbol-services/symbol.md) or [Search](../api/symbol-services/search.md). Read the returned `lotsize`, `tick_size`, and applicable `freeze_qty` from the installed instance's refreshed symbol master and freeze-limit data. The lot size and maximum order quantity are different constraints: use whole lots and split orders within the applicable freeze limit. Verify the exact expiry rather than inferring quantity from an underlying's older contract.
+
+The figures in SDK/order examples are illustrative; fetch contract metadata for the instrument you actually trade.
+
+```csv
 Symbol,Lot Size (Apr 2026),Lot Size (May 2026),Lot Size (Jun 2026)
 BANKNIFTY,30,30,30
 FINNIFTY,60,60,60
@@ -217,3 +226,4 @@ WAAREEENER,175,175,175
 WIPRO,3000,3000,3000
 YESBANK,31100,31100,31100
 ZYDUSLIFE,900,900,900
+```

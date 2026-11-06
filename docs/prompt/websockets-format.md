@@ -11,7 +11,7 @@ The protocol ensures efficient, scalable, and secure communication between clien
 ### Version
 
 * Protocol Version: 1.0
-* Last Updated: May 28, 2025
+* Reference verified against this repository: November 6, 2026
 * Platform: OpenAlgo Trading Framework
 
 ### WebSocket URL
@@ -20,7 +20,7 @@ The protocol ensures efficient, scalable, and secure communication between clien
 ws://<host>:8765
 ```
 
-Replace `<host>` with the IP/domain of your OpenAlgo instance. For local development setups, use thee hostname as`127.0.0.1`
+Replace `<host>` with the IP/domain of your OpenAlgo instance. For local development setups, use the hostname `127.0.0.1`
 
 ```
 ws://127.0.0.1:8765
@@ -175,6 +175,12 @@ result per symbol. If a broker refuses the requested depth, the wire shape is:
 every requested symbol succeeded. Adapter messages are broker-specific; there
 is no standardized top-level error code for this case.
 
+### Field availability and SDK normalization
+
+The examples below illustrate raw server frames, not a universal field set. Quote/Depth values depend on the broker, instrument and data already received. Sahi omits OHLC/previous close because they are absent from its feed. Groww publishes available values from its merged stream cache and commonly has only LTP. Indices can lack tradable depth and volume. Read optional fields without inventing zero-valued prices or quantities. REST snapshots may expose different fields and use `prev_close` where the stream uses `close`.
+
+The pinned Python SDK 2.0.5 transforms raw frames: its Quote callback/cache fills a fixed field set with zero defaults; its Depth callback/cache keeps only `ltp`, `timestamp` and `depth`. Those SDK zeroes do not prove that the broker supplied a value. For full raw quote fields in Depth frames, consume this protocol directly. See [SDK contracts](<openalgo python sdk.md#websocket-connection-cache-and-field-behavior>).
+
 ### Market Data Format
 
 #### LTP (Mode 1)
@@ -311,8 +317,7 @@ configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
 * A compliant WebSocket library automatically answers control pings with pong
   frames. The JSON `{"action":"ping"}` / `{"type":"pong"}` exchange is an
   optional application-level latency probe, not the control-frame obligation.
-* After a disconnect, clients must re-authenticate and re-subscribe. A client
-  library may remember its own desired subscriptions and issue them again.
+* After a disconnect, clients must re-authenticate and re-subscribe. Python SDK 2.0.5 does this automatically by default (`auto_reconnect=True`) and replays its desired subscriptions; `disconnect()` stops it.
 * The server does not restore subscriptions for a disconnected client session;
   it removes that session's registry entries during cleanup.
 
@@ -323,7 +328,7 @@ configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
 * Rate limits may apply to prevent abuse.
 * TLS encryption recommended for production deployments.
 
-The OpenAlgo WebSocket feed provides a reliable and structured method for receiving real-time trading data. Proper mode selection and parsing allow efficient integration into trading algorithms and monitoring systems.
+The feed does not replay missed ticks or guarantee every exchange tick. The current proxy listener does not apply an LTP time throttle; broker cadence, mode fan-out and network delays affect freshness. Subscription success means the request was accepted, not that a fresh value has already arrived.
 
 
 ---

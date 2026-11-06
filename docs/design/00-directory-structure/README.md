@@ -8,7 +8,7 @@ openalgo/
 |-- restx_api/                 External `/api/v1` resources and schemas
 |-- blueprints/                Session UI APIs, webhooks, React route serving
 |-- services/                  Business logic and mode routing
-|-- broker/                    36 metadata-driven broker plugins
+|-- broker/                    38 metadata-driven broker plugins
 |-- websocket_proxy/           Standalone asyncio WebSocket server and adapters
 |-- database/                  SQLAlchemy/DuckDB models and persistence helpers
 |-- sandbox/                   Analyzer execution, positions, funds, settlement
@@ -38,7 +38,7 @@ openalgo/
 
 ## Backend Inventory
 
-`restx_api/__init__.py` registers 57 v1 method/path pairs. `blueprints/` contains the larger session and feature surface for auth, admin, Flow, Historify, strategies, tools, messaging, monitoring, and the React application. Static route counts are maintained in `DISCOVERY_MAP.md`; public REST documentation is maintained in `docs/api`.
+`restx_api/__init__.py` registers 74 v1 method/path pairs. `blueprints/` contains the larger session and feature surface for auth, admin, Flow, Historify, strategies, tools, messaging, monitoring, and the React application. The root `DISCOVERY_MAP.md` preserves phase-1 discovery rather than a live route count; current public REST documentation and inventory are maintained in `docs/api` and `docs/bdd/rest_api_inventory.feature`.
 
 The service directory currently includes order, account, market-data, option, calendar, Flow, Historify, messaging, charting, analytics, arbitrage, custom straddle, and scalping risk services. Use `rg --files services` for the live inventory instead of copying a long file list into architecture documents.
 
@@ -59,7 +59,7 @@ broker/<key>/
 `-- streaming/
 ```
 
-The loader imports modules lazily; not every broker implements every optional file. Live GTT modules currently exist for Dhan and Zerodha only.
+The loader imports modules lazily; not every broker implements every optional file. Live GTT modules currently exist for Angel One, Dhan, Fyers, Rupeezy, Upstox and Zerodha.
 
 ## Frontend Shape
 

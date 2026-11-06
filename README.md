@@ -12,7 +12,7 @@
 
 ## What is OpenAlgo?
 
-OpenAlgo is a free, open source, self-hosted **trading platform**, not just a broker bridge. Built on Python Flask + React 19, it gives traders a full-stack environment to **design, host, and execute strategies** through **36 broker plugins**: 35 securities integrations and Delta Exchange for crypto derivatives. Whether you write Python, prefer drag-and-drop, or trade options, OpenAlgo provides a common interface without tying strategy code to one adapter.
+OpenAlgo is a free, open source, self-hosted **trading platform**, not just a broker bridge. Built on Python Flask + React 19, it gives traders a full-stack environment to **design, host, and execute strategies** through **38 broker plugins**, including Dhan Sandbox and Delta Exchange for crypto derivatives. Whether you write Python, prefer drag-and-drop, or trade options, OpenAlgo provides a common interface without tying strategy code to one adapter.
 
 OpenAlgo is no longer just "an API layer in front of your broker." Today it combines four trading surfaces in one self-hosted instance, sharing the active broker session, market-data infrastructure, and six operational data stores across the journey from idea to testing and live execution.
 
@@ -20,7 +20,7 @@ OpenAlgo is no longer just "an API layer in front of your broker." Today it comb
 
 | Surface | Route | Who it's for |
 | --- | --- | --- |
-| **Unified Broker API** | `/api/v1/` | External platforms: TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One contract across 36 plugins, with optional operations varying by adapter. |
+| **Unified Broker API** | `/api/v1/` | External platforms: TradingView, Amibroker, ChartInk, Excel, Google Sheets, Python, Java, Go, .NET, Node.js, MetaTrader, GoCharting, N8N. One contract across 38 plugins, with optional operations varying by adapter. |
 | **Python Strategy Host** | `/python` | Traders who code: paste any Python script into the in-browser CodeMirror editor, schedule it on IST start/stop times, run multiple strategies in parallel with process isolation, watch real-time logs. No external server, no Docker, no cron. |
 | **Flow: No-Code Strategy Builder** | `/flow` | Traders who don't code: drag-and-drop nodes for market data, indicators, conditions, order execution, and notifications. Webhook triggers for TradingView and external signals built in. JSON import/export for sharing strategies. |
 | **AI Agent** | `/agent` | Traders who would rather ask: a chat that reads your own market data through OpenAlgo's services, draws charts and payoff diagrams, computes indicators, marks up the `/trading` chart from a right-side panel, and can place orders only with your explicit approval on every single one. Bring your own model from any LiteLLM provider, or a ChatGPT Plus or Pro subscription, or run it locally against Ollama. |
@@ -44,7 +44,7 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 
 **Requires Python 3.12 or newer.**
 
-## Supported Brokers (36 plugins)
+## Supported Brokers (38 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>
@@ -93,7 +93,7 @@ Plugins share OpenAlgo's normalized API shapes. Exchange coverage, authenticatio
 ## Core Features
 
 ### Unified REST API Layer (`/api/v1/`)
-A maintained contract with 57 REST method/path pairs under `/api/v1`:
+A maintained contract with 74 REST method/path pairs under `/api/v1`:
 - **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
 - **Portfolio**: Get positions, holdings, order book, trade book, funds
 - **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
@@ -258,7 +258,7 @@ Connect your algo strategies and run from any platform:
 - **Node.js** - JavaScript/TypeScript library
 - **ChartInk** - Scanner webhook integration
 - **MetaTrader** - Compatible with MT4/MT5
-- **Excel** - REST API + upcoming Add-in
+- **Excel** - REST API and downloadable Add-in (`/download`)
 - **Google Sheets** - REST API integration
 
 Receive your strategy alerts directly to **Telegram** for all platforms.
@@ -266,7 +266,7 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 ## Technology Stack
 
 ### Backend
-- **Flask 3.0** - Python web framework
+- **Flask 3** - Python web framework
 - **SQLAlchemy 2.0** - Database ORM
 - **Flask-SocketIO** - Real-time WebSocket communication
 - **ZeroMQ** - High-performance message bus
@@ -334,7 +334,7 @@ OpenAlgo is part of a larger open-source trading ecosystem:
 - **Disk**: 1GB
 - **CPU**: 1 vCPU
 - **Python**: 3.12 or newer
-- **Node.js**: 20.20+, 22.22+, or 24.13+ (for frontend development)
+- **Node.js**: 22.23.4+ (22.x), 24.22.1+ (24.x), or 26.12.1+ (for frontend development; see `frontend/package.json`)
 
 ### Quick Start with UV
 
@@ -361,6 +361,11 @@ The application will be available at `http://127.0.0.1:5000`
 For detailed installation instructions, deployment options (Docker, AWS, etc.), and configuration guides, visit [docs.openalgo.in/installation-guidelines/getting-started](https://docs.openalgo.in/installation-guidelines/getting-started)
 
 ## API Documentation
+
+Start with the [local documentation map](docs/INDEX.md) and
+[registered API reference](docs/api/README.md). The
+[2026-11-06 documentation audit](docs/audit/2026-11-06-documentation-gap-audit.md)
+records current coverage and known implementation discrepancies.
 
 Complete API reference and examples:
 - **API Documentation**: [docs.openalgo.in/api-documentation/v1](https://docs.openalgo.in/api-documentation/v1)
