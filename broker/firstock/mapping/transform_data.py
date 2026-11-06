@@ -5,7 +5,11 @@ import os
 
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import (
+    calculate_protected_price,
+    calculate_slm_protected_price,
+    get_instrument_type_from_symbol,
+)
 
 logger = get_logger(__name__)
 
@@ -15,8 +19,9 @@ def transform_data(data, token, auth_token=None):
     Transforms the OpenAlgo API request to Firstock's V1 /placeOrder structure.
 
     For MARKET and SL-M orders, applies client-side Market Price Protection
-    (MPP): fetch LTP, compute a protected price via the OpenAlgo MPP slab,
-    convert the order type to LMT / SL-LMT. Also sets mkt_protection="0" so
+    (MPP): compute a protected price via the OpenAlgo MPP slab (off the LTP
+    for MARKET, off the trigger for SL-M), convert the order type to
+    LMT / SL-LMT. Also sets mkt_protection="0" so
     Firstock's server-side MPP (V1.7+) is a no-op on the already-protected
     price. Mirrors the pattern in broker/shoonya and broker/flattrade.
 
@@ -47,6 +52,8 @@ def transform_data(data, token, auth_token=None):
     # Apply MPP for MARKET and SL-M orders (V1.7 supports SL-MKT->SL-LMT too).
     if data["pricetype"] in ("MARKET", "SL-M"):
         original_type = data["pricetype"]
+        if original_type == "SL-M" and float(data.get("trigger_price") or 0) <= 0:
+            raise ValueError("An SL-M order needs a trigger price above zero")
         logger.info(
             f"MPP: {original_type} order detected for Symbol={data['symbol']}, "
             f"Exchange={data['exchange']}, Action={action}"
@@ -80,13 +87,23 @@ def transform_data(data, token, auth_token=None):
                 ltp = float(quote_data.get("ltp", 0))
 
                 if ltp > 0:
-                    protected_price = calculate_protected_price(
-                        price=ltp,
-                        action=action,
-                        symbol=data["symbol"],
-                        instrument_type=instrument_type,
-                        tick_size=tick_size,
-                    )
+                    if original_type == "MARKET":
+                        protected_price = calculate_protected_price(
+                            price=ltp,
+                            action=action,
+                            symbol=data["symbol"],
+                            instrument_type=instrument_type,
+                            tick_size=tick_size,
+                        )
+                    else:
+                        # A stop-limit is priced off its trigger, never the LTP (#2390)
+                        protected_price = calculate_slm_protected_price(
+                            trigger_price=data["trigger_price"],
+                            action=action,
+                            symbol=data["symbol"],
+                            instrument_type=instrument_type,
+                            tick_size=tick_size,
+                        )
                     price = str(protected_price)
                     order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
                     logger.info(
@@ -169,6 +186,8 @@ def transform_modify_order_data(data, token, auth_token=None):
 
     if data["pricetype"] in ("MARKET", "SL-M"):
         original_type = data["pricetype"]
+        if original_type == "SL-M" and float(data.get("trigger_price") or 0) <= 0:
+            raise ValueError("An SL-M order needs a trigger price above zero")
         logger.info(
             f"Modify MPP: {original_type} detected for Symbol={oa_symbol}, "
             f"Exchange={exchange}, Action={action_raw!r}"
@@ -202,13 +221,23 @@ def transform_modify_order_data(data, token, auth_token=None):
                     ltp = float(quote_data.get("ltp", 0))
 
                     if ltp > 0:
-                        protected_price = calculate_protected_price(
-                            price=ltp,
-                            action=action,
-                            symbol=oa_symbol,
-                            instrument_type=instrument_type,
-                            tick_size=tick_size,
-                        )
+                        if original_type == "MARKET":
+                            protected_price = calculate_protected_price(
+                                price=ltp,
+                                action=action,
+                                symbol=oa_symbol,
+                                instrument_type=instrument_type,
+                                tick_size=tick_size,
+                            )
+                        else:
+                            # A stop-limit is priced off its trigger, never the LTP (#2390)
+                            protected_price = calculate_slm_protected_price(
+                                trigger_price=data["trigger_price"],
+                                action=action,
+                                symbol=oa_symbol,
+                                instrument_type=instrument_type,
+                                tick_size=tick_size,
+                            )
                         price = str(protected_price)
                         order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
                         logger.info(

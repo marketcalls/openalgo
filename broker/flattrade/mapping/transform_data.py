@@ -4,7 +4,11 @@
 from broker.flattrade.api.data import BrokerData
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import (
+    calculate_protected_price,
+    calculate_slm_protected_price,
+    get_instrument_type_from_symbol,
+)
 
 logger = get_logger(__name__)
 
@@ -35,9 +39,11 @@ def transform_data(data, token, auth_token=None):
     # Apply Market Price Protection for MARKET and SL-M orders.
     # Flattrade runs the same Noren OMS as Shoonya, which blocks both MKT and
     # SL-MKT price types for API orders, so SL-M has to go out as a protective
-    # SL-LMT priced off the LTP (keeping the caller's trigger price).
+    # SL-LMT priced off the caller's trigger price.
     if data["pricetype"] in ("MARKET", "SL-M"):
         original_type = data["pricetype"]
+        if original_type == "SL-M" and float(data.get("trigger_price") or 0) <= 0:
+            raise ValueError("An SL-M order needs a trigger price above zero")
         logger.info(
             f"MPP: {original_type} order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={action}"
         )
@@ -68,13 +74,23 @@ def transform_data(data, token, auth_token=None):
 
                 if ltp > 0:
                     # Calculate protected price using centralized MPP slab with tick size rounding
-                    protected_price = calculate_protected_price(
-                        price=ltp,
-                        action=action,
-                        symbol=data["symbol"],
-                        instrument_type=instrument_type,
-                        tick_size=tick_size,
-                    )
+                    if original_type == "MARKET":
+                        protected_price = calculate_protected_price(
+                            price=ltp,
+                            action=action,
+                            symbol=data["symbol"],
+                            instrument_type=instrument_type,
+                            tick_size=tick_size,
+                        )
+                    else:
+                        # A stop-limit is priced off its trigger, never the LTP (#2390)
+                        protected_price = calculate_slm_protected_price(
+                            trigger_price=data["trigger_price"],
+                            action=action,
+                            symbol=data["symbol"],
+                            instrument_type=instrument_type,
+                            tick_size=tick_size,
+                        )
                     price = str(protected_price)
 
                     if original_type == "MARKET":
@@ -128,8 +144,8 @@ def transform_data(data, token, auth_token=None):
                     tick_size = getattr(info, "tick_size", None)
                     if tick_size:
                         price = str(
-                            calculate_protected_price(
-                                price=trigger,
+                            calculate_slm_protected_price(
+                                trigger_price=trigger,
                                 action=action,
                                 symbol=data["symbol"],
                                 instrument_type=get_instrument_type_from_symbol(data["symbol"]),
