@@ -182,11 +182,11 @@ class TestQuoteMappingCarriesSize:
         expected = {call: call_trade_time, put: trade_time}
         symbols = [{"symbol": symbol, "exchange": "NFO"} for symbol in (call, put)]
         for symbol in (call, put):
-            assert broker.get_quotes(symbol, "NFO").get("last_trade_time") == expected[symbol]
+            assert broker.get_quotes(symbol, "NFO")["last_trade_time"] == expected[symbol]
 
         batch = broker.get_multiquotes(symbols)
         assert {
-            item["symbol"]: item["data"].get("last_trade_time") for item in batch
+            item["symbol"]: item["data"]["last_trade_time"] for item in batch
         } == expected
 
         # Only broker I/O, auth and instrument lookup are replaced; assembly runs unchanged.
