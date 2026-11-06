@@ -221,3 +221,51 @@ def test_unsubscribing_quote_keeps_the_depth_feed_a_depth_subscriber_needs(adapt
     adapter.ws_client = _Ws()
     adapter.unsubscribe("RELIANCE", "NSE", 2)
     assert calls == ["tick"]
+    assert adapter.ws_subscription_refs["NSE|2885"]["depth_count"] == 1, (
+        "Quote gave back its depth reference; the Depth subscriber holds the other"
+    )
+
+
+# --- review follow-ups ---------------------------------------------------------
+
+
+class _RecordingWs:
+    def __init__(self):
+        self.calls = []
+
+    def unsubscribe(self, sub_type, tokens):
+        self.calls.append(sub_type)
+        return True
+
+
+def test_two_clients_on_one_symbol_release_the_feed_when_both_leave(adapter, monkeypatch):
+    _subscribe(adapter, 1, monkeypatch)
+    _subscribe(adapter, 1, monkeypatch)
+    ws = _RecordingWs()
+    adapter.ws_client = ws
+
+    adapter.unsubscribe("RELIANCE", "NSE", 1)
+    assert ws.calls == [], "the other client still needs the touchline"
+    adapter.unsubscribe("RELIANCE", "NSE", 1)
+    assert ws.calls == ["tick"]
+    assert "NSE|2885" not in adapter.ws_subscription_refs
+
+
+def test_a_dash_ltp_does_not_stop_the_other_modes(adapter):
+    adapter.subscriptions = {"l": _sub(1), "q": _sub(2)}
+    adapter._on_data(None, {**TOUCHLINE, "lp": "-"})
+
+    assert _topics(adapter, "_LTP") == [], "no price, nothing to send on LTP"
+    quote = _topics(adapter, "_QUOTE")[-1]
+    assert quote["open"] == 1382.60
+
+
+def test_a_level_one_only_depth_message_publishes_depth(adapter):
+    adapter.subscriptions = {"d": _sub(3)}
+    adapter._on_depth_data(
+        None,
+        {"t": "df", "e": "NSE", "tk": "2885", "lp": "1395.50", "bp1": "1395.40", "sp1": "1395.60"},
+    )
+    depth = _topics(adapter, "_DEPTH")[-1]
+    assert depth["depth"]["buy"][0]["price"] == 1395.40
+    assert depth["depth"]["sell"][0]["price"] == 1395.60

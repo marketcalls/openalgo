@@ -572,9 +572,6 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Remove the first matching subscription
             correlation_id, subscription = matching_subscriptions[0]
 
-            # Check if this is the last subscription for this symbol/exchange/mode
-            is_last = len(matching_subscriptions) == 1
-
             # Remove the subscription
             del self.subscriptions[correlation_id]
 
@@ -586,21 +583,25 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.scrip_to_symbol.pop(scrip, None)
                 self.market_cache.clear(scrip)
 
-            # Only unsubscribe from WebSocket if this was the last subscription
-            if is_last:
-                for subscription_type in self._feed_types(subscription["mode"]):
-                    if not self._release_ws_ref(scrip, subscription_type):
-                        continue
-                    if not (self.connected and self.ws_client):
-                        continue
-                    try:
-                        success = self.ws_client.unsubscribe(subscription_type, tokens)
-                        if not success:
-                            self.logger.warning(
-                                f"Failed to unsubscribe {subscription_type} for {symbol}.{exchange}"
-                            )
-                    except Exception as e:
-                        self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+            # Every client subscription took one reference per feed when it
+            # subscribed, so each one gives its references back here. The feed
+            # itself is unsubscribed only when its count reaches zero. Releasing
+            # only for the last subscription of a symbol and mode left one
+            # reference behind per extra client, and the feed then stayed
+            # subscribed for good.
+            for subscription_type in self._feed_types(subscription["mode"]):
+                if not self._release_ws_ref(scrip, subscription_type):
+                    continue
+                if not (self.connected and self.ws_client):
+                    continue
+                try:
+                    success = self.ws_client.unsubscribe(subscription_type, tokens)
+                    if not success:
+                        self.logger.warning(
+                            f"Failed to unsubscribe {subscription_type} for {symbol}.{exchange}"
+                        )
+                except Exception as e:
+                    self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -886,7 +887,10 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # the full scrip so a token shared across exchanges never merges two
         # different instruments into one slot (#1732)
         cached_data = self.market_cache.update(scrip, message)
-        has_depth = any(key in cached_data for key in self._DEPTH_ONLY_KEYS)
+        # A message from the depth feed is depth data even when it carries only
+        # level-1 fields; a touchline refresh publishes DEPTH only once the
+        # cache holds something only the depth feed sends.
+        has_depth = is_depth or any(key in cached_data for key in self._DEPTH_ONLY_KEYS)
 
         published_topics = set()
         for symbol, orig_exchange, mode in subs:
@@ -953,8 +957,8 @@ class DefinedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         if mode == 1:  # LTP mode
             # Only include fields that are actually present in the message
-            if "lp" in message:
-                result["ltp"] = float(message["lp"])
+            if message.get("lp") not in (None, "", "-"):
+                result["ltp"] = self._safe_float(message["lp"])
                 ltt = self._last_trade_time(message)
                 if ltt not in (None, ""):
                     result["ltt"] = ltt
