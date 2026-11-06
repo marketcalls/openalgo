@@ -283,25 +283,38 @@ class HDFCSkyWebSocket:
     # --- subscription ---------------------------------------------------
 
     def subscribe_scrips(self, scrip_ids, subscription_type="ALL"):
+        """Queue scrips for subscription. Returns False when refused.
+
+        The per-connection limit counts instruments, so only scrips not already
+        wanted count against it: re-queueing a held scrip at another type (a
+        mode upgrade or downgrade) adds no instrument and is never refused.
+        `desired` is the count that matters, not `subscribed`, because a burst
+        still sitting in the queue already holds its slots.
+        """
         if not self.running:
             self.logger.error("WebSocket client not running. Call start() first.")
-            return
+            return False
         scrip_ids = [s for s in scrip_ids if s]
         if not scrip_ids:
-            return
-
-        if len(self.subscribed) + len(scrip_ids) > self.MAX_INSTRUMENTS_PER_CONNECTION:
-            self.logger.error(
-                f"Subscription would exceed HDFC Sky's per-connection limit of "
-                f"{self.MAX_INSTRUMENTS_PER_CONNECTION} instruments."
-            )
-            return
+            return True
 
         with self.lock:
+            new_ids = {s for s in scrip_ids if s not in self.desired}
+            if len(self.desired) + len(new_ids) > self.MAX_INSTRUMENTS_PER_CONNECTION:
+                self.logger.error(
+                    f"Subscription would exceed HDFC Sky's per-connection limit of "
+                    f"{self.MAX_INSTRUMENTS_PER_CONNECTION} instruments."
+                )
+                return False
             for scrip_id in scrip_ids:
                 self.desired[scrip_id] = subscription_type
                 self.pending_subscriptions.append((scrip_id, subscription_type))
 
+        self._ensure_drain_thread()
+        return True
+
+    def _ensure_drain_thread(self):
+        """Start the pending-subscription drain unless it is already running."""
         if not self._subscription_thread or not self._subscription_thread.is_alive():
             self._subscription_thread = _real_threading.Thread(
                 target=self._process_pending_subscriptions, daemon=True
@@ -360,38 +373,57 @@ class HDFCSkyWebSocket:
         try:
             if not self.connected or not self.ws:
                 return False
+            # The check, the frame and the bookkeeping are one step under the
+            # lock. Released between check and send, an unsubscribe could
+            # retract the scrip and send its unSubscribe first, and this frame
+            # would then put it back at the broker.
             with self.lock:
                 # Drop anything unsubscribed, or re-queued at another tier,
                 # since this frame was built. Without this a mode downgrade
                 # followed immediately by a full unsubscribe would leave the
                 # instrument live at the broker after OpenAlgo dropped it.
-                scrip_ids = [
-                    scrip_id
-                    for scrip_id in scrip_ids
-                    if self.desired.get(scrip_id) == subscription_type
-                ]
-            if not scrip_ids:
-                return True
-            message = {
-                "heart_beat": False,
-                "subscribe": [
-                    {"scripId": scrip_id, "type": subscription_type} for scrip_id in scrip_ids
-                ],
-            }
-            self.ws.send(json.dumps(message))
-            with self.lock:
-                for scrip_id in scrip_ids:
-                    self.subscribed[scrip_id] = subscription_type
-            self.logger.debug(f"Subscribed {len(scrip_ids)} scrips as {subscription_type}")
+                sent = self._send_subscribe_locked(scrip_ids, subscription_type)
+            if sent:
+                self.logger.debug(f"Subscribed {len(sent)} scrips as {subscription_type}")
             return True
         except Exception as e:
             self.logger.error(f"Subscribe failed: {e}")
             return False
 
+    def _send_subscribe_locked(self, scrip_ids, subscription_type):
+        """Send one subscribe frame for the scrips still wanted at this type
+        and record them as sent. The caller holds `self.lock`; returns the
+        scrips sent.
+
+        Holding the lock across `ws.send` is what orders a subscribe frame and
+        an unSubscribe frame for the same scrip the way the state changed. It
+        cannot deadlock: this lock is otherwise taken only for in-memory
+        bookkeeping or for one of these sends, `WebSocketApp.send` takes only
+        websocket-client's own frame lock and calls nothing back here, and no
+        thread holding that frame lock or the adapter's state lock ever waits
+        for this one. A send stuck on a dead socket ends when the stall
+        watchdog closes the socket.
+        """
+        scrip_ids = [s for s in scrip_ids if self.desired.get(s) == subscription_type]
+        if not scrip_ids:
+            return scrip_ids
+        self.ws.send(
+            json.dumps(
+                {
+                    "heart_beat": False,
+                    "subscribe": [{"scripId": s, "type": subscription_type} for s in scrip_ids],
+                }
+            )
+        )
+        for scrip_id in scrip_ids:
+            self.subscribed[scrip_id] = subscription_type
+        return scrip_ids
+
     def unsubscribe(self, scrip_ids):
         try:
-            if not self.ws:
-                return False
+            # No early return without a socket: an unsubscribe during the
+            # handshake must still retract `desired`, or the open replay would
+            # subscribe the instrument again. Only the wire frame needs one.
             wanted = {scrip_id for scrip_id in scrip_ids if scrip_id}
             with self.lock:
                 # Retract ALL local state before sending, in one step. The
@@ -414,11 +446,12 @@ class HDFCSkyWebSocket:
                     self.pending_subscriptions = deque(
                         item for item in self.pending_subscriptions if item[0] not in wanted
                     )
-            if not payload:
-                return True
-            if self.connected:
-                # Capital S: the documented key is "unSubscribe".
-                self.ws.send(json.dumps({"heart_beat": False, "unSubscribe": payload}))
+                # Sent under the lock that retracted the state, so a subscribe
+                # frame for these scrips goes out wholly before this one or
+                # after a later re-subscribe (see _send_subscribe_locked).
+                if payload and self.connected and self.ws:
+                    # Capital S: the documented key is "unSubscribe".
+                    self.ws.send(json.dumps({"heart_beat": False, "unSubscribe": payload}))
             return True
         except Exception as e:
             # State is already retracted, so a failed frame cannot resurrect
@@ -454,27 +487,33 @@ class HDFCSkyWebSocket:
             by_type: dict[str, list[str]] = {}
             for scrip_id, sub_type in self.desired.items():
                 by_type.setdefault(sub_type, []).append(scrip_id)
+            # The replay covers every queued frame for these scrips at their
+            # wanted type; left queued, the drain would send each a second
+            # time. A frame queued after this copy (a new subscribe) stays.
+            self.pending_subscriptions = deque(
+                item for item in self.pending_subscriptions if self.desired.get(item[0]) != item[1]
+            )
         for sub_type, scrip_ids in by_type.items():
             for start in range(0, len(scrip_ids), self.MAX_SCRIPS_PER_SUBSCRIBE):
                 batch = scrip_ids[start : start + self.MAX_SCRIPS_PER_SUBSCRIBE]
                 try:
-                    self.ws.send(
-                        json.dumps(
-                            {
-                                "heart_beat": False,
-                                "subscribe": [{"scripId": s, "type": sub_type} for s in batch],
-                            }
-                        )
-                    )
                     with self.lock:
-                        # Keep `subscribed` (what was sent) in step with
-                        # `desired` (what is wanted) after a replay.
-                        for scrip_id in batch:
-                            self.subscribed[scrip_id] = sub_type
+                        # Re-checked against `desired` and sent in one step, so
+                        # an unsubscribe since the copy above is not undone by
+                        # the replay. Records what was sent, keeping
+                        # `subscribed` in step with `desired`.
+                        self._send_subscribe_locked(batch, sub_type)
                     if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
                         return
                 except Exception as e:
+                    # The replay took these frames off the queue, so a failed
+                    # send must put them back or nothing retries them before
+                    # the next reconnect. The drain re-checks each against
+                    # `desired` at send time, so an unsubscribe meanwhile is
+                    # still honoured.
                     self.logger.error(f"Error re-subscribing batch: {e}")
+                    self._requeue([(sub_type, batch)])
+                    self._ensure_drain_thread()
 
     # --- callbacks ------------------------------------------------------
 

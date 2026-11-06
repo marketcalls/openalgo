@@ -710,10 +710,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             matching_subscriptions = []
             with self.lock:
+                # Only an instrument something still subscribes keeps a
+                # snapshot: a late frame after unsubscribe, or a frame for a
+                # scrip never subscribed, must not recreate one (the dict would
+                # grow without bound). Any mode counts, not only this frame's,
+                # since a Depth subscription needs the feed frames merged in.
+                subscribed = [
+                    sub for sub in self.subscriptions.values() if self._sub_scrip_key(sub) == key
+                ]
+                if not subscribed:
+                    self.logger.debug(f"No subscription for frame {key}")
+                    return
                 snapshot = self._update_snapshot(key, message)
-                for sub in self.subscriptions.values():
-                    if sub["mode"] in target_modes and self._sub_scrip_key(sub) == key:
-                        matching_subscriptions.append(sub)
+                matching_subscriptions = [sub for sub in subscribed if sub["mode"] in target_modes]
 
             if not matching_subscriptions:
                 self.logger.debug(f"No subscription for frame {key} (modes {target_modes})")

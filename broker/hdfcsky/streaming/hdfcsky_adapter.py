@@ -72,9 +72,17 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # (exchange, token) -> last full snapshot, so a partial circuit/OI
         # packet can be merged instead of replacing the quote.
         self.last_snapshot: dict[tuple[str, int], dict] = {}
-        # Serializes subscribe/unsubscribe against each other. The tick thread
-        # never takes it: it only reads immutable entries.
+        # Serializes subscribe/unsubscribe against each other, and the tick
+        # thread's snapshot merge against the removal and clearing of
+        # snapshots. Held only for in-memory bookkeeping.
         self._state_lock = _real_threading.Lock()
+        # A new number for every instrument that goes from unsubscribed to
+        # subscribed, kept in its token_info entry across mode changes. A tick
+        # resolved against one subscription is never merged into the next.
+        self._subscription_seq = 0
+        # Bumped whenever the snapshots are dropped for a connection change, so
+        # a tick taken off the old connection cannot rebuild one afterwards.
+        self._feed_epoch = 0
 
     # --- lifecycle ------------------------------------------------------
 
@@ -112,9 +120,23 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_ws_connect(self):
         self.connected = True
+        # Also dropped here: a socket can end without a close callback (an
+        # exception out of run_forever), and the new connection must start
+        # from its own first full quote either way.
+        self._drop_snapshots()
 
     def _on_ws_disconnect(self):
         self.connected = False
+        # The client reconnects by itself, and nothing on the new connection
+        # vouches for a price from the old one: a circuit or OI packet that
+        # arrives before the first full quote must not republish it.
+        self._drop_snapshots()
+
+    def _drop_snapshots(self):
+        """Forget every merge baseline; they rebuild from the next full tick."""
+        with self._state_lock:
+            self._feed_epoch += 1
+            self.last_snapshot.clear()
 
     def connect(self):
         try:
@@ -143,13 +165,13 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # after a reconnect, and a pre-disconnect price must never be
             # republished as current. token_info deliberately survives -- the
             # client resubscribes its scrips and the ticks still need mapping.
-            self.last_snapshot.clear()
+            self._drop_snapshots()
             # Always release ZMQ resources (FD hygiene).
             self.cleanup_zmq()
 
     # --- subscription ---------------------------------------------------
 
-    def _store_info(self, key, symbol, exchange, scrip_id, modes):
+    def _store_info(self, key, symbol, exchange, scrip_id, modes, generation):
         """Publish a NEW immutable state entry for an instrument.
 
         The tick thread reads this map without locking, so an entry is never
@@ -158,18 +180,21 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         one but never a half-updated one. `topic_modes` is precomputed here as
         an immutable tuple so the tick path never iterates a live set --
         calling max() over a set that subscribe/unsubscribe was mutating is
-        what dropped ticks.
+        what dropped ticks. Returns the entry stored.
         """
-        self.token_info[key] = {
+        entry = {
             "symbol": symbol,
             "exchange": exchange,
             "scrip_id": scrip_id,
             "modes": modes,
+            "generation": generation,
             "topic_modes": tuple(
                 _MODE_TO_TOPIC[m] for m in sorted(modes, reverse=True) if m in _MODE_TO_TOPIC
             )
             or ("QUOTE",),
         }
+        self.token_info[key] = entry
+        return entry
 
     def _resolve_token(self, symbol, exchange):
         token = get_token(symbol, exchange)
@@ -200,13 +225,33 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # subscription tier) always follows the highest one.
             with self._state_lock:
                 existing = self.token_info.get(key)
+                if existing:
+                    generation = existing["generation"]
+                else:
+                    self._subscription_seq += 1
+                    generation = self._subscription_seq
                 modes = (existing["modes"] if existing else frozenset()) | {mode}
-                self._store_info(key, symbol, exchange, scrip_id, modes)
+                stored = self._store_info(key, symbol, exchange, scrip_id, modes, generation)
 
             subscription_type = HDFCSkyCapabilityRegistry.get_subscription_type_for_numeric(
                 max(modes)
             )
-            self.ws_client.subscribe_scrips([scrip_id], subscription_type)
+            if not self.ws_client.subscribe_scrips([scrip_id], subscription_type):
+                # Refused (the feed's instrument limit, or the client has
+                # stopped): undo the mode just added, unless another subscribe
+                # or unsubscribe has replaced the entry since, and tell the
+                # caller rather than reporting a subscription that never runs.
+                with self._state_lock:
+                    if self.token_info.get(key) is stored:
+                        if existing:
+                            self.token_info[key] = existing
+                        else:
+                            self.token_info.pop(key, None)
+                            self.last_snapshot.pop(key, None)
+                return self._create_error_response(
+                    "SUBSCRIPTION_REFUSED",
+                    f"HDFC Sky feed did not accept {exchange}:{symbol}",
+                )
 
             # HDFC Sky publishes 5-level depth only; advertise the actual
             # depth so the proxy reports it back to the client.
@@ -242,7 +287,7 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # broker subscription only when no mode is left.
                 modes = (info["modes"] - {mode}) if info else frozenset()
                 if modes:
-                    self._store_info(key, symbol, exchange, scrip_id, modes)
+                    self._store_info(key, symbol, exchange, scrip_id, modes, info["generation"])
                 else:
                     self.token_info.pop(key, None)
                     self.last_snapshot.pop(key, None)
@@ -290,6 +335,9 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return None
 
     def _on_ticks(self, ticks):
+        # Read before any tick is resolved: a snapshot drop after this point
+        # makes every tick of this batch stale for merging.
+        epoch = self._feed_epoch
         for tick in ticks:
             try:
                 key = self._subscription_key(tick)
@@ -310,7 +358,7 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # mid-iteration.
                 topic_modes = info["topic_modes"]
 
-                tick = self._merge_partial(key, tick)
+                tick = self._merge_partial(key, tick, info["generation"], epoch)
                 if tick is None:
                     continue
 
@@ -320,35 +368,45 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Error handling HDFC Sky tick: {e}")
 
-    def _merge_partial(self, key, tick):
+    def _merge_partial(self, key, tick, generation, epoch):
         """Resolve a partial circuit/OI packet against the last full snapshot.
 
         Circuit and OI packets share MBPData with the full quote but populate
         only their own fields, so every price on them reads as the proto3
         default of 0. Publishing one as-is would replace a live quote with
         zeros. Returns the tick to publish, or None when there is no snapshot
-        to merge into yet.
+        to merge into yet, or when the subscription (`generation`) or the
+        connection (`epoch`) the tick was resolved against has gone.
+
+        The check and the snapshot write share `_state_lock` with unsubscribe
+        and the snapshot drops, so a tick in flight cannot rebuild a snapshot
+        they have just removed for a later subscription to merge into.
         """
         kind = tick.get("kind")
         fields = _PARTIAL_TICK_FIELDS.get(kind)
-        if fields is None:
-            # A full quote or index packet: this is the new baseline.
-            self.last_snapshot[key] = tick
-            return tick
+        with self._state_lock:
+            current = self.token_info.get(key)
+            if current is None or current["generation"] != generation or epoch != self._feed_epoch:
+                return None
 
-        snapshot = self.last_snapshot.get(key)
-        if snapshot is None:
-            # Nothing to attach the update to; a standalone band or OI value is
-            # not a publishable tick.
-            return None
+            if fields is None:
+                # A full quote or index packet: this is the new baseline.
+                self.last_snapshot[key] = tick
+                return tick
 
-        merged = dict(snapshot)
-        for field in fields:
-            if field in tick:
-                merged[field] = tick[field]
-        merged["timestamp"] = tick.get("timestamp", merged.get("timestamp"))
-        self.last_snapshot[key] = merged
-        return merged
+            snapshot = self.last_snapshot.get(key)
+            if snapshot is None:
+                # Nothing to attach the update to; a standalone band or OI
+                # value is not a publishable tick.
+                return None
+
+            merged = dict(snapshot)
+            for field in fields:
+                if field in tick:
+                    merged[field] = tick[field]
+            merged["timestamp"] = tick.get("timestamp", merged.get("timestamp"))
+            self.last_snapshot[key] = merged
+            return merged
 
     def _normalize(self, tick, symbol, exchange, topic_mode):
         """Build the OpenAlgo normalized tick (same key set as the Zerodha

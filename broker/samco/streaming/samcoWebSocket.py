@@ -650,8 +650,8 @@ class SamcoWebSocket:
             "best_ask_price": best_ask_price,
             "best_ask_quantity": best_ask_qty,
             # quote2/marketDepth report totals as tbq/taq, the quote stream as tBQ/tSQ
-            "total_bid_quantity": self._safe_int(data.get("tbq") or data.get("tBQ", 0)),
-            "total_ask_quantity": self._safe_int(data.get("taq") or data.get("tSQ", 0)),
+            "total_bid_quantity": self._safe_int(self._first_present(data, "tbq", "tBQ") or 0),
+            "total_ask_quantity": self._safe_int(self._first_present(data, "taq", "tSQ") or 0),
             "open_interest": self._safe_int(data.get("oI", 0)),
             "last_traded_time": data.get("lTrdT", "") or data.get("ltt", ""),
             "exchange_timestamp": int(time.time() * 1000),
@@ -661,11 +661,13 @@ class SamcoWebSocket:
         # a stream that never reports one does not publish an invented 0.
         if data.get("avgPr") not in (None, ""):
             result["average_price"] = self._safe_float(data.get("avgPr"))
-        total_buy = data.get("tbq") or data.get("tBQ")
-        if total_buy not in (None, ""):
+        # A total of 0 is a real value: the other stream's name is used only
+        # when this one is absent, never because this one is 0.
+        total_buy = self._first_present(data, "tbq", "tBQ")
+        if total_buy is not None:
             result["total_buy_quantity"] = self._safe_int(total_buy)
-        total_sell = data.get("taq") or data.get("tSQ")
-        if total_sell not in (None, ""):
+        total_sell = self._first_present(data, "taq", "tSQ")
+        if total_sell is not None:
             result["total_sell_quantity"] = self._safe_int(total_sell)
         trade_time_ms = self._parse_trade_time(data)
         if trade_time_ms:
@@ -676,6 +678,15 @@ class SamcoWebSocket:
             result["depth"] = {"buy": depth_buy, "sell": depth_sell}
 
         return result
+
+    @staticmethod
+    def _first_present(data: dict, *keys):
+        """The first of keys whose value is present (0 counts), else None."""
+        for key in keys:
+            value = data.get(key)
+            if value not in (None, ""):
+                return value
+        return None
 
     # lTrdT / ltt are IST wall-clock strings ("01 Oct 2019, 06:47:03 PM"),
     # lttUTC the same instant in UTC (docs 13-streaming-data.md).
