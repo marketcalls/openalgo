@@ -2299,6 +2299,21 @@ export function ConfigPanel() {
                     ))}
                   </div>
                 </div>
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="option-symbol-include-quotes" className="text-xs">
+                      Include Quotes
+                    </Label>
+                    <p className="text-[10px] text-muted-foreground">
+                      Return the selected option quote with the resolved symbol.
+                    </p>
+                  </div>
+                  <Switch
+                    id="option-symbol-include-quotes"
+                    checked={Boolean(nodeData.includeQuotes)}
+                    onCheckedChange={(v) => handleDataChange('includeQuotes', v)}
+                  />
+                </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
