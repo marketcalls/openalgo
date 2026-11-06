@@ -200,6 +200,54 @@ def calculate_protected_price(
     return protected_price
 
 
+def calculate_slm_protected_price(
+    trigger_price: float,
+    action: str,
+    symbol: str = None,
+    instrument_type: str = None,
+    tick_size: float = None,
+) -> float:
+    """
+    Calculate the limit price for an SL-M order sent as a stop-limit.
+
+    The limit is priced off the trigger, not the LTP: SELL below the trigger and
+    BUY above it by the MPP slab, at least one tick past the trigger, and rounded
+    away from it so it can never land on or through the trigger.
+
+    Raises:
+        ValueError: if the trigger is missing, or a SELL limit would not be positive.
+    """
+    trigger_price = float(trigger_price or 0)
+    if trigger_price <= 0:
+        raise ValueError("An SL-M order needs a trigger price above zero")
+
+    if instrument_type is None:
+        instrument_type = get_instrument_type_from_symbol(symbol) if symbol else "EQ"
+
+    tick = float(tick_size) if tick_size and float(tick_size) > 0 else 0.01
+    pct = get_mpp_percentage(trigger_price, instrument_type) / 100
+
+    if action.upper() == "BUY":
+        raw = max(trigger_price * (1 + pct), trigger_price + tick)
+        steps = math.ceil(round(raw / tick, 6))
+    else:
+        raw = min(trigger_price * (1 - pct), trigger_price - tick)
+        steps = math.floor(round(raw / tick, 6))
+    limit = round(steps * tick, 6)
+
+    if limit <= 0:
+        raise ValueError(
+            f"SL-M trigger {trigger_price} for {symbol or 'N/A'} is too low for a "
+            f"positive protective limit at tick {tick}"
+        )
+
+    logger.info(
+        f"MPP SL-M Calculation: Symbol={symbol or 'N/A'}, Action={action.upper()}, "
+        f"Trigger={trigger_price}, Protection={pct * 100}%, TickSize={tick}, Limit={limit}"
+    )
+    return limit
+
+
 def get_mpp_info(
     price: float, symbol: str = None, instrument_type: str = None, tick_size: float = None
 ) -> dict:
