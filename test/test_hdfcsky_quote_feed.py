@@ -327,12 +327,12 @@ def test_reconnect_replay_does_not_leave_its_frames_queued():
     ws._resubscribe_all()
 
     assert list(ws.pending_subscriptions) == [], "the drain would send them a second time"
-    sent = [
-        entry["scripId"]
+    sent = sorted(
+        (entry["scripId"], entry["type"])
         for call in ws.ws.send.call_args_list
         for entry in json.loads(call.args[0]).get("subscribe", [])
-    ]
-    assert sorted(sent) == ["NSE_1594", "NSE_2885"]
+    )
+    assert sent == [("NSE_1594", "LTP"), ("NSE_2885", "ALL")], "each at its wanted mode"
 
 
 def test_a_frame_queued_for_a_scrip_not_in_the_replay_stays_queued():
@@ -342,3 +342,21 @@ def test_a_frame_queued_for_a_scrip_not_in_the_replay_stays_queued():
     ws.pending_subscriptions.append(("NSE_2885", "LTP"))
     ws._resubscribe_all()
     assert list(ws.pending_subscriptions) == [("NSE_2885", "LTP")]
+
+
+def test_a_failed_replay_send_is_queued_again(monkeypatch):
+    """The replay took the frame off the queue; if its send raises, the frame
+    must go back, or nothing retries it before the next reconnect."""
+    ws = _live_ws()
+    ws._subscription_thread = None
+    ws.desired = {"NSE_2885": "ALL"}
+    ws.pending_subscriptions.append(("NSE_2885", "ALL"))
+    ws.ws.send.side_effect = OSError("socket closed")
+    started = []
+    monkeypatch.setattr(ws, "_ensure_drain_thread", lambda: started.append(True))
+
+    ws._resubscribe_all()
+
+    assert list(ws.pending_subscriptions) == [("NSE_2885", "ALL")]
+    assert started, "the drain must run to retry it"
+    assert "NSE_2885" not in ws.subscribed

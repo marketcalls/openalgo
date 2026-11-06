@@ -310,12 +310,16 @@ class HDFCSkyWebSocket:
                 self.desired[scrip_id] = subscription_type
                 self.pending_subscriptions.append((scrip_id, subscription_type))
 
+        self._ensure_drain_thread()
+        return True
+
+    def _ensure_drain_thread(self):
+        """Start the pending-subscription drain unless it is already running."""
         if not self._subscription_thread or not self._subscription_thread.is_alive():
             self._subscription_thread = _real_threading.Thread(
                 target=self._process_pending_subscriptions, daemon=True
             )
             self._subscription_thread.start()
-        return True
 
     def _requeue(self, frames):
         """Put unsent (type, scrip_ids) frames back on the pending queue so a
@@ -502,7 +506,14 @@ class HDFCSkyWebSocket:
                     if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
                         return
                 except Exception as e:
+                    # The replay took these frames off the queue, so a failed
+                    # send must put them back or nothing retries them before
+                    # the next reconnect. The drain re-checks each against
+                    # `desired` at send time, so an unsubscribe meanwhile is
+                    # still honoured.
                     self.logger.error(f"Error re-subscribing batch: {e}")
+                    self._requeue([(sub_type, batch)])
+                    self._ensure_drain_thread()
 
     # --- callbacks ------------------------------------------------------
 
