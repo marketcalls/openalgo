@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Watchlist } from '@/api/watchlist'
-import { render, screen, userEvent, waitFor } from '@/test/test-utils'
-import { WatchlistPanel } from './WatchlistPanel'
+import { fireEvent, render, screen, userEvent, waitFor } from '@/test/test-utils'
+import { bulkAddSummary, WatchlistPanel } from './WatchlistPanel'
 
 /**
  * The API and the price hook are both mocked. What is under test here is the
@@ -16,6 +16,7 @@ const api = {
   remove: vi.fn(),
   clear: vi.fn(),
   addItem: vi.fn(),
+  addMany: vi.fn(),
   removeItem: vi.fn(),
   reorderItems: vi.fn(),
 }
@@ -28,11 +29,20 @@ vi.mock('@/api/watchlist', () => ({
     remove: (...a: unknown[]) => api.remove(...a),
     clear: (...a: unknown[]) => api.clear(...a),
     addItem: (...a: unknown[]) => api.addItem(...a),
+    addMany: (...a: unknown[]) => api.addMany(...a),
     removeItem: (...a: unknown[]) => api.removeItem(...a),
     reorderItems: (...a: unknown[]) => api.reorderItems(...a),
   },
   watchlistError: (_e: unknown, fallback: string) => fallback,
 }))
+
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  warning: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}))
+vi.mock('@/utils/toast', () => ({ showToast: toast }))
 
 /** Whatever a test wants useLivePrice to be returning this render. */
 let liveData: {
@@ -89,6 +99,7 @@ describe('WatchlistPanel', () => {
     liveData = { items: [], quotes: new Map() }
     previousClose.mockReset()
     previousClose.mockResolvedValue(null)
+    for (const fn of Object.values(toast)) fn.mockReset()
   })
 
   it('renders a four-figure price without throwing', async () => {
@@ -302,5 +313,107 @@ describe('WatchlistPanel', () => {
 
     const grids = container.querySelectorAll('[style*="grid-template-columns"]')
     expect((grids[0] as HTMLElement).style.gridTemplateColumns).toBe('1fr 64px 16px')
+  })
+
+  it('previews a pasted list and adds it only when Enter is pressed', async () => {
+    api.addMany.mockResolvedValue({
+      added: [
+        { symbol: 'TCS', exchange: 'NSE' },
+        { symbol: 'INFY', exchange: 'NSE' },
+      ],
+      existing: [{ symbol: 'RELIANCE', exchange: 'NSE' }],
+      over_limit: [],
+      not_found: [],
+    })
+    const search = vi.fn(async () => [])
+    renderPanel({ search })
+
+    await userEvent.click(await screen.findByLabelText('Add instrument'))
+    const box = await screen.findByLabelText('Search symbol')
+    await userEvent.click(box)
+    await userEvent.paste('TCS, INFY,RELIANCE')
+
+    // Shown, not added: the user confirms what they pasted.
+    expect(await screen.findByRole('button', { name: 'Add 3 symbols' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Symbols to add')).toHaveTextContent('TCSINFYRELIANCE')
+    expect(api.addMany).not.toHaveBeenCalled()
+
+    await userEvent.keyboard('{Enter}')
+
+    await waitFor(() => expect(api.addMany).toHaveBeenCalledWith(1, 'TCS, INFY,RELIANCE'))
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        'Added 2 symbols to Heavy Weights. 1 was already in the list.'
+      )
+    )
+    await waitFor(() => expect(screen.queryByLabelText('Search symbol')).not.toBeInTheDocument())
+    // A list is confirmed, never searched as one string.
+    expect(search).not.toHaveBeenCalled()
+  })
+
+  it('writes a pasted column back as a comma-separated list', async () => {
+    renderPanel()
+
+    await userEvent.click(await screen.findByLabelText('Add instrument'))
+    const box = await screen.findByLabelText('Search symbol')
+    fireEvent.paste(box, { clipboardData: { getData: () => 'TCS\r\nINFY\r\nSBIN\r\n' } })
+
+    // A one-line box would otherwise run the names together.
+    await waitFor(() => expect(box).toHaveValue('TCS, INFY, SBIN'))
+    expect(screen.getByRole('button', { name: 'Add 3 symbols' })).toBeInTheDocument()
+    expect(api.addMany).not.toHaveBeenCalled()
+  })
+
+  it('searches a name with a space in it rather than reading it as a list', async () => {
+    const search = vi.fn(async () => [])
+    renderPanel({ search })
+
+    await userEvent.click(await screen.findByLabelText('Add instrument'))
+    await userEvent.type(await screen.findByLabelText('Search symbol'), 'TATA MOTORS')
+
+    await waitFor(() => expect(search).toHaveBeenCalledWith('TATA MOTORS', undefined, 500))
+    expect(screen.queryByLabelText('Symbols to add')).not.toBeInTheDocument()
+  })
+})
+
+describe('bulkAddSummary', () => {
+  const empty = { added: [], existing: [], over_limit: [], not_found: [] }
+  const row = (symbol: string) => ({ symbol, exchange: 'NSE' })
+
+  it('names every symbol the broker did not recognise, up to a limit', () => {
+    const names = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10']
+    const { tone, text } = bulkAddSummary(
+      { ...empty, added: [row('TCS')], not_found: names },
+      'Main'
+    )
+
+    expect(tone).toBe('warning')
+    expect(text).toBe(
+      'Added 1 symbol to Main. Not found with your broker: A1, A2, A3, A4, A5, A6, A7, A8 and 2 more.'
+    )
+  })
+
+  it('is an error when nothing could be added', () => {
+    const { tone, text } = bulkAddSummary({ ...empty, not_found: ['XYZ'] }, 'Main')
+
+    expect(tone).toBe('error')
+    expect(text).toBe('Not found with your broker: XYZ.')
+  })
+
+  it('says when the list is full', () => {
+    const { tone, text } = bulkAddSummary(
+      { ...empty, added: [row('TCS')], over_limit: [row('INFY'), row('SBIN')] },
+      'Main'
+    )
+
+    expect(tone).toBe('warning')
+    expect(text).toBe('Added 1 symbol to Main. The list is full, so 2 could not be added.')
+  })
+
+  it('is quiet success when every name was already there', () => {
+    const { tone, text } = bulkAddSummary({ ...empty, existing: [row('TCS')] }, 'Main')
+
+    expect(tone).toBe('success')
+    expect(text).toBe('1 was already in the list.')
   })
 })
