@@ -172,3 +172,54 @@ describe('broker custom timeframes', () => {
     service.destroy()
   })
 })
+
+describe('derived weekly and monthly history from a daily-only broker (#2384)', () => {
+  const DAY = 86400
+  const end = Date.parse('2026-11-06T00:00:00Z') / 1000
+  const derived = (interval: string, years: number) => ({
+    symbol: 'NIFTY',
+    exchange: 'NSE_INDEX',
+    interval,
+    from: end - years * 365 * DAY,
+    to: end,
+  })
+  const dailyOnly = (latencyMs = 0) => {
+    const getBars = vi.fn(async (_req: BarsRequest) => {
+      if (latencyMs) await new Promise((resolve) => setTimeout(resolve, latencyMs))
+      return []
+    })
+    const service = createTradingTimeframes({ getBars }, { ...options(['D']), now: () => end })
+    return { getBars, service }
+  }
+
+  it.each([
+    ['W', 5, 1],
+    ['M', 10, 2],
+    ['2W', 10, 2],
+    ['3M', 30, 6],
+  ])('loads %s over %i years in at most %i daily requests', async (interval, years, maxCalls) => {
+    const { getBars, service } = dailyOnly()
+    await service.feed.getBars(derived(interval, years))
+    expect(getBars).toHaveBeenCalled()
+    expect(getBars.mock.calls.length).toBeLessThanOrEqual(maxCalls)
+    for (const [req] of getBars.mock.calls) expect(req.interval).toBe('D')
+    service.destroy()
+  })
+
+  it('finishes a 5-year W load within the history deadline at the server pacing', async () => {
+    const { getBars, service } = dailyOnly(350)
+    await expect(service.feed.getBars(derived('W', 5))).resolves.toEqual([])
+    expect(getBars.mock.calls.length).toBeLessThanOrEqual(2)
+    service.destroy()
+  }, 20_000)
+
+  it('still splits intraday sources into 30-day windows', async () => {
+    const getBars = vi.fn(async (_req: BarsRequest) => [])
+    const service = createTradingTimeframes({ getBars }, { ...options(['1m']), now: () => end })
+    await service.feed.getBars({ ...derived('2h', 0), from: end - 90 * DAY })
+    expect(getBars.mock.calls.length).toBeGreaterThanOrEqual(3)
+    for (const [req] of getBars.mock.calls)
+      expect(req.to! - req.from!).toBeLessThanOrEqual(30 * DAY)
+    service.destroy()
+  })
+})

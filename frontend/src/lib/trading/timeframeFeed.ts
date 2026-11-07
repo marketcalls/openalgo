@@ -58,6 +58,19 @@ function sourceBounds(
   return timeframeBucketAt({ interval, native: false, market: { calendar } } as TimeframePlan, time)
 }
 
+/**
+ * Longest window one derived-history request asks of a native source. Broker
+ * plugins split daily history into their own chunks, so a daily or longer
+ * source can take years per call; the windows are fetched one after another
+ * inside the chart's history deadline, so 30-day daily windows made a 5-year W
+ * or 10-year M time out.
+ */
+function maxSourceSpanSeconds(interval: string): number {
+  const rule = resolveInterval(interval).bucketing
+  const daily = rule.mode === 'calendar' || (rule.mode === 'interval' && rule.seconds >= DAY)
+  return (daily ? 2000 : 30) * DAY
+}
+
 export function createTradingTimeframes(source: DataFeed, options: TradingTimeframeOptions) {
   const now = options.now ?? (() => Date.now() / 1000)
   const market = (request: BarsRequest): TimeframeMarket => {
@@ -81,7 +94,7 @@ export function createTradingTimeframes(source: DataFeed, options: TradingTimefr
             ),
           // The API uses finite date windows. Split large derived requests without
           // inventing a retention date or promising that a broker has older bars.
-          maxSpanSeconds: 30 * DAY,
+          maxSpanSeconds: maxSourceSpanSeconds(interval),
         })),
     }
   }
