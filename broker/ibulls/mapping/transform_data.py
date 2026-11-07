@@ -15,12 +15,12 @@ logger = get_logger(__name__)
 def _feed_token_username():
     """The OpenAlgo user whose Ibulls feed token prices a MARKET order.
 
-    A browser order has it in the session. An API, strategy or webhook order has
-    no browser session, so it is the user of the stored Ibulls broker session
-    (one user per deployment).
+    A browser order has it in the session (``session["user"]``, set at login).
+    An API, strategy or webhook order has no browser session, so it is the user
+    of the stored Ibulls broker session (one user per deployment).
     """
-    if has_request_context() and session.get("username"):
-        return session["username"]
+    if has_request_context() and session.get("user"):
+        return session["user"]
     row = Auth.query.filter_by(broker="ibulls", is_revoked=False).first()
     return row.name if row else None
 

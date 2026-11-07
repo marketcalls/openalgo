@@ -51,10 +51,25 @@ def test_browser_order_uses_the_session_user(broker):
     with app.test_request_context():
         from flask import session
 
-        session["username"] = "browser-user"
+        session["user"] = "browser-user"
         td.transform_data({**ORDER, "action": "BUY"}, "3045")
 
     broker.feed_token.assert_called_once_with("browser-user")
+    broker.stored.query.filter_by.assert_not_called()
+
+
+def test_setup_only_username_key_is_not_the_logged_in_user(broker):
+    # session["username"] is set only on the first-run setup page; the login
+    # stores the user under session["user"], so it must not be read instead.
+    app = Flask(__name__)
+    app.secret_key = "test"
+    with app.test_request_context():
+        from flask import session
+
+        session["username"] = "setup-page"
+        td.transform_data({**ORDER, "action": "BUY"}, "3045")
+
+    broker.feed_token.assert_called_once_with("trader")
 
 
 def test_no_fixed_username_is_ever_used(broker):
