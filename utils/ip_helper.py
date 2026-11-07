@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import os
 
@@ -30,6 +31,28 @@ def _trust_proxy_headers() -> bool:
     the login-attempt audit log.
     """
     return os.getenv("TRUST_PROXY_HEADERS", "false").lower() in ("true", "1", "yes", "t")
+
+
+def is_unroutable_ip(ip_address: str) -> bool:
+    """Whether ``ip_address`` sits outside the public internet.
+
+    Loopback, RFC1918 private, link-local, multicast and reserved addresses
+    only reach OpenAlgo through infrastructure the operator controls -- most
+    often a Docker bridge gateway or a reverse proxy. With
+    TRUST_PROXY_HEADERS off (the default) every client arrives from that one
+    address, so banning it bans everybody at once rather than one attacker.
+
+    Args:
+        ip_address: The address to classify. Hostnames and malformed values
+            are treated as unroutable, since a ban cannot be reasoned about.
+
+    Returns:
+        True when banning the address risks cutting off a shared path.
+    """
+    try:
+        return not ipaddress.ip_address(ip_address).is_global
+    except ValueError:
+        return True
 
 
 def get_real_ip():
