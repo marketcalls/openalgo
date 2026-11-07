@@ -67,6 +67,31 @@ class TestPlaceOrderOutcome:
     def test_missing_message_falls_back(self):
         assert place_order_outcome(None, None, None) == (False, "Failed to place order", 500)
 
+    @pytest.mark.parametrize(
+        "response_data",
+        [
+            {"s": "error", "message": "RMS: margin"},
+            {"stat": "Not_Ok", "message": "RMS: margin"},
+            {"status": "failed", "message": "RMS: margin"},
+        ],
+        ids=["fyers", "noren", "failed"],
+    )
+    def test_other_refusal_envelopes_carry_the_broker_message(self, response_data):
+        assert place_order_outcome(OK, response_data, None) == (False, "RMS: margin", 500)
+
+    def test_error_envelope_with_an_order_id_is_refused(self):
+        # Fyers returns the id of an order its risk checks rejected.
+        outcome = place_order_outcome(
+            OK, {"s": "error", "message": "RMS: margin", "id": "26110700001"}, "26110700001"
+        )
+        assert outcome == (False, "RMS: margin", 500)
+
+    def test_emsg_is_read_when_there_is_no_message(self):
+        outcome = place_order_outcome(
+            OK, {"stat": "Not_Ok", "emsg": "Invalid Trading Symbol"}, None
+        )
+        assert outcome == (False, "Invalid Trading Symbol", 500)
+
     def test_accepted_without_order_id_says_check_order_book(self):
         outcome = place_order_outcome(OK, {"status": "success"}, None)
         assert outcome == (False, NO_ORDER_ID_MESSAGE, 502)
