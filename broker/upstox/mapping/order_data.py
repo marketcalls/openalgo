@@ -168,6 +168,11 @@ def transform_order_data(orders):
             "timestamp": order.get("order_timestamp", ""),
         }
 
+        # Omit unknown totals: some consumers interpret a present null as zero.
+        for field in ("filled_quantity", "pending_quantity"):
+            if order.get(field) is not None:
+                transformed_order[field] = order[field]
+
         transformed_orders.append(transformed_order)
 
     return transformed_orders
