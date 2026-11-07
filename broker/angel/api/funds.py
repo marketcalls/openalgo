@@ -80,13 +80,22 @@ def get_margin_data(auth_token):
         # (empirically matches the real Pledge Margin), so back out the true
         # free cash the same way Kite's net = cash + collateral - debits is
         # inverted: cash = net + debits - collateral.
+        #
+        # On a day the account is in credit (booked profit, so utiliseddebits
+        # is negative) Angel holds raw availablecash and utilisedpayout at the
+        # opening cash and only "net" moves (e.g. net 102500.00,
+        # availablecash 100000.00, utiliseddebits -2500.00). On every other
+        # day net equals availablecash. So net is the net-margin figure (as
+        # Zerodha's adapter reads Kite's equity "net"), and collateral still
+        # comes from availablecash - utilisedpayout.
         raw_net = 0.0
         calculated_collateral = 0.0
         utiliseddebits = 0.0
         try:
-            raw_net = float(data.get("availablecash", 0) or 0)
+            raw_available = float(data.get("availablecash", 0) or 0)
+            raw_net = float(data.get("net") or raw_available)
             utilisedpayout = float(data.get("utilisedpayout", 0) or 0)
-            calculated_collateral = raw_net - utilisedpayout
+            calculated_collateral = raw_available - utilisedpayout
             utiliseddebits = float(data.get("utiliseddebits", 0) or 0)
         except (ValueError, TypeError):
             pass
