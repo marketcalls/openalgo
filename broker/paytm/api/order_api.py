@@ -7,9 +7,11 @@ import urllib.parse
 import httpx
 
 from broker.paytm.mapping.transform_data import (
+    STOP_ORDER_TYPES,
     OrderRejected,
     map_exchange,
     map_product_type,
+    require_trigger_price,
     reverse_map_order_type,
     reverse_map_product_type,
     transform_data,
@@ -650,12 +652,15 @@ def modify_order(data, auth):
 
             logger.debug(f"Modifying order: {orderid}")
 
+            trigger_price = data.get("trigger_price", order.get("trigger_price", "0"))
             try:
                 order_type = (
                     reverse_map_order_type(data["pricetype"])
                     if data.get("pricetype")
                     else order["order_type"]
                 )
+                if order_type in STOP_ORDER_TYPES:
+                    require_trigger_price(data.get("pricetype") or order_type, trigger_price)
             except OrderRejected as e:
                 return {"status": "error", "message": str(e)}, 400
 
@@ -667,7 +672,7 @@ def modify_order(data, auth):
                 "security_id": order["security_id"],
                 "quantity": data.get("quantity", order["quantity"]),
                 "price": "0" if order_type in ("MKT", "SLM") else data.get("price", order["price"]),
-                "trigger_price": data.get("trigger_price", order.get("trigger_price", "0")),
+                "trigger_price": trigger_price,
                 "validity": "DAY",
                 "product": reverse_map_product_type(data.get("product", order["product"])),
                 "order_type": order_type,

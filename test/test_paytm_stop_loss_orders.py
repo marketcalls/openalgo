@@ -54,7 +54,7 @@ class TestTransformData:
         assert out["trigger_price"] == "600"
 
     @pytest.mark.parametrize("pricetype", ["SL", "SL-M"])
-    @pytest.mark.parametrize("trigger", [None, "0", 0, "", "abc"])
+    @pytest.mark.parametrize("trigger", [None, "0", 0, "", "abc", "inf", "nan", "-5"])
     def test_stop_without_trigger_is_refused(self, pricetype, trigger):
         data = order(pricetype=pricetype, price="599")
         if trigger is not None:
@@ -142,6 +142,21 @@ class TestModifyOrder:
         assert status == 200, body
         assert payload["order_type"] == "SLM"
         assert payload["price"] == "0"
+        assert payload["trigger_price"] == "600"
+
+    @pytest.mark.parametrize("trigger", ["0", "abc", "inf"])
+    def test_stop_modify_without_a_valid_trigger_is_refused(self, trigger):
+        (body, status), payload = self.modify(pricetype="SL", trigger_price=trigger, price="599")
+        assert status == 400
+        assert "trigger price is required" in body["message"]
+        assert payload is None
+
+    def test_stop_modify_keeps_the_existing_trigger(self):
+        book = {**self.BOOK["data"][0], "order_type": "SL", "trigger_price": "600"}
+        self.BOOK = {"status": "success", "data": [book]}
+        (body, status), payload = self.modify(price="599")
+        assert status == 200, body
+        assert payload["order_type"] == "SL"
         assert payload["trigger_price"] == "600"
 
     def test_unknown_price_type_is_refused(self):

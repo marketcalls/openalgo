@@ -1,6 +1,8 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Paytm Broking Parameters https://developer.paytmmoney.com/docs/api/login
 
+import math
+
 from database.token_db import get_token
 
 # OpenAlgo price type -> Paytm order_type (MKT, LMT, SL, SLM in Paytm's pyPMClient)
@@ -16,6 +18,19 @@ STOP_ORDER_TYPES = ("SL", "SLM")
 
 class OrderRejected(ValueError):
     """An order OpenAlgo refuses before sending it to Paytm."""
+
+
+def require_trigger_price(pricetype, trigger_price):
+    """Raise OrderRejected unless an SL or SL-M trigger price is a finite number above 0."""
+    try:
+        trigger = float(trigger_price)
+    except (TypeError, ValueError):
+        trigger = 0.0
+    if not (math.isfinite(trigger) and trigger > 0):
+        raise OrderRejected(
+            f"A trigger price is required for an {pricetype} order. "
+            "Set the trigger price and place the order again."
+        )
 
 
 def transform_data(data):
@@ -51,15 +66,7 @@ def transform_data(data):
 
     if transformed["order_type"] in STOP_ORDER_TYPES:
         trigger_price = data.get("trigger_price")
-        try:
-            has_trigger = float(trigger_price) > 0
-        except (TypeError, ValueError):
-            has_trigger = False
-        if not has_trigger:
-            raise OrderRejected(
-                f"A trigger price is required for an {data['pricetype']} order. "
-                "Set the trigger price and place the order again."
-            )
+        require_trigger_price(data["pricetype"], trigger_price)
         transformed["trigger_price"] = trigger_price
         if transformed["order_type"] == "SLM":
             # A stop-loss market order executes at market once triggered.
