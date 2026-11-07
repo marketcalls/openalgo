@@ -98,12 +98,12 @@ class IndWebSocket:
 
     def _on_message(self, wsapp, message):
         """Handle incoming WebSocket messages"""
-        # Log ALL messages including pings
-        logger.info(f"<< WEBSOCKET MESSAGE RECEIVED: Type={type(message)}")
+        # Per-message logs are debug: at INFO they wrote ~10 lines per tick.
+        logger.debug(f"<< WEBSOCKET MESSAGE RECEIVED: Type={type(message)}")
 
         # Only log full content for non-ping messages (avoid spam)
         if message != "pong":
-            logger.info(f"   Content: {message}")
+            logger.debug(f"   Content: {message}")
 
         # Handle heartbeat responses
         if message == "pong":
@@ -114,10 +114,10 @@ class IndWebSocket:
 
         try:
             # Parse JSON message
-            logger.info("[PARSING] Attempting to parse as JSON")
+            logger.debug("[PARSING] Attempting to parse as JSON")
             parsed_message = json.loads(message)
-            logger.info(f"[OK] JSON parsed: {parsed_message}")
-            logger.info("[CALLBACK] Calling on_data with parsed message")
+            logger.debug(f"[OK] JSON parsed: {parsed_message}")
+            logger.debug("[CALLBACK] Calling on_data with parsed message")
             self.on_data(wsapp, parsed_message)
         except json.JSONDecodeError as e:
             logger.error(f"[ERROR] Failed to parse JSON: {e}")
@@ -151,14 +151,14 @@ class IndWebSocket:
         if data == "pong":
             timestamp = time.time()
             formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
-            logger.info(f"Heartbeat pong received, Timestamp: {formatted_timestamp}")
+            logger.debug(f"Heartbeat pong received, Timestamp: {formatted_timestamp}")
             self.last_pong_timestamp = timestamp
 
     def _on_ping(self, wsapp, data):
         """Handle ping from server"""
         timestamp = time.time()
         formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
-        logger.info(f"Ping received from server, Timestamp: {formatted_timestamp}")
+        logger.debug(f"Ping received from server, Timestamp: {formatted_timestamp}")
 
     def subscribe(self, instruments, mode="ltp"):
         """

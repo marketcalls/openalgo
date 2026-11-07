@@ -446,7 +446,8 @@ def process_indmoney_csv(path):
         df["expiry"] = df["EXPIRY_DATE"].str.upper()
         df["strike"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce").fillna(0.0)
         df["lotsize"] = pd.to_numeric(df["LOT_UNITS"], errors="coerce").fillna(1).astype(int)
-        df["tick_size"] = pd.to_numeric(df["TICK_SIZE"], errors="coerce").fillna(0.05)
+        # INDmoney's TICK_SIZE is in paise (options 5 = Rs 0.05, NSE equity 1 = Rs 0.01), as Angel's is.
+        df["tick_size"] = (pd.to_numeric(df["TICK_SIZE"], errors="coerce") / 100).fillna(0.05)
         # Set brsymbol - use SEGMENT for index records, TRADING_SYMBOL for others
         if segment == "index":
             df["brsymbol"] = df["SEGMENT"].fillna("")
