@@ -311,3 +311,59 @@ def test_load_configs_backfills_exchange(ps_module, tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# A calendar read that fails is not a holiday
+# ---------------------------------------------------------------------------
+# 29-Oct-2026 11:04 IST (a Thursday): one failed lookup made get_market_status
+# say "NFO closed - Holiday" and the enforcer stopped a running strategy.
+
+
+def _lookup_fails(calendar_db):
+    """Make every database read of the session window raise, as a locked or broken DB does."""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("database is locked")
+
+    return patch.object(calendar_db, "get_special_session", side_effect=boom)
+
+
+def test_failed_lookup_keeps_the_session_already_known(calendar_db):
+    calendar_db.clear_market_calendar_cache()
+    day = date(2026, 10, 29)
+    known = calendar_db.get_effective_session_window(day, "NFO")
+    assert known is not None
+
+    with _lookup_fails(calendar_db):
+        assert calendar_db.get_effective_session_window(day, "NFO") == known
+
+
+def test_failed_lookup_with_no_earlier_answer_is_closed(calendar_db):
+    calendar_db.clear_market_calendar_cache()
+    with _lookup_fails(calendar_db):
+        assert calendar_db.get_effective_session_window(date(2026, 10, 29), "NFO") is None
+
+
+def test_failed_lookup_on_a_real_holiday_stays_closed(calendar_db):
+    calendar_db.clear_market_calendar_cache()
+    holiday = date(2026, 4, 14)
+    assert calendar_db.get_effective_session_window(holiday, "NSE") is None
+
+    with _lookup_fails(calendar_db):
+        assert calendar_db.get_effective_session_window(holiday, "NSE") is None
+
+
+def test_market_status_is_not_holiday_when_a_read_fails_mid_session(ps_module, calendar_db):
+    patcher = _patch_now(ps_module, date(2026, 10, 29), 11, 4)
+    try:
+        before = ps_module.get_market_status("NFO")
+        assert before["is_open"] is True
+
+        with _lookup_fails(calendar_db):
+            during = ps_module.get_market_status("NFO")
+        assert during["is_open"] is True
+        assert during["reason"] is None
+        assert "Holiday" not in during["message"]
+    finally:
+        patcher.stop()
