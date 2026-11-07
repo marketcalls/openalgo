@@ -81,7 +81,9 @@ def transform_data(data, token, auth_token=None):
                 ltp = float(quote_data.get("ltp", 0)) if quote_data else 0
 
                 if ltp > 0:
-                    instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                    instrument_type = get_instrument_type_from_symbol(
+                        data["symbol"], openalgo_exchange
+                    )
                     tick_size = None
                     symbol_info = get_symbol_info(data["symbol"], openalgo_exchange)
                     if symbol_info and symbol_info.tick_size:
@@ -121,7 +123,7 @@ def transform_data(data, token, auth_token=None):
             tp = 0.0
         if tp > 0:
             try:
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                instrument_type = get_instrument_type_from_symbol(data["symbol"], openalgo_exchange)
                 tick_size = None
                 symbol_info = get_symbol_info(data["symbol"], openalgo_exchange)
                 if symbol_info and symbol_info.tick_size:

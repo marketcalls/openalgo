@@ -54,7 +54,7 @@ def _apply_mpp(position, auth_token):
         quote = broker_data.get_quotes(position["symbol"], position["exchange"])
         ltp = float(quote.get("ltp", 0))
         tick_size = quote.get("tick_size")
-        instrument_type = get_instrument_type_from_symbol(position["symbol"])
+        instrument_type = get_instrument_type_from_symbol(position["symbol"], position["exchange"])
 
         logger.info(
             f"Margin MPP Quote: Symbol={position['symbol']}, LTP={ltp}, "

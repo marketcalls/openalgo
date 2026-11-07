@@ -214,7 +214,7 @@ def _market_protection(data, base_price):
     sym_info = get_symbol_info(symbol, exchange) if symbol and exchange else None
     instrument_type = (
         getattr(sym_info, "instrumenttype", None) if sym_info else None
-    ) or get_instrument_type_from_symbol(symbol)
+    ) or get_instrument_type_from_symbol(symbol, exchange)
 
     pct = get_mpp_percentage(float(base_price or 0), instrument_type) or 1.0
     protection = max(1, min(25, int(round(pct))))
