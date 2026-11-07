@@ -6,6 +6,7 @@ Based on Dhan V2 API documentation with proper binary packet parsing.
 import asyncio
 import json
 import os
+import random
 import struct
 import threading
 import time
