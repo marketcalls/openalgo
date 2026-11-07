@@ -64,7 +64,7 @@ def _apply_mpp(position, auth_token):
             if symbol_info and symbol_info.tick_size:
                 tick_size = symbol_info.tick_size
 
-        instrument_type = get_instrument_type_from_symbol(position["symbol"])
+        instrument_type = get_instrument_type_from_symbol(position["symbol"], position["exchange"])
 
         logger.info(
             f"Margin MPP Quote: Symbol={position['symbol']}, LTP={ltp}, "

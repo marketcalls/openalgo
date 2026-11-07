@@ -61,7 +61,7 @@ def _apply_mpp(position, auth_token):
 
     reference = trigger if original_type == "SL-M" else 0.0
     tick_size = None
-    instrument_type = get_instrument_type_from_symbol(position["symbol"])
+    instrument_type = get_instrument_type_from_symbol(position["symbol"], position["exchange"])
     try:
         if auth_token:
             from broker.flattrade.api.data import BrokerData

@@ -201,7 +201,7 @@ def _apply_mpp_if_market(data, last_price):
     tick_size = getattr(sym_info, "tick_size", None) if sym_info else None
     instrument_type = (
         getattr(sym_info, "instrumenttype", None) if sym_info else None
-    ) or get_instrument_type_from_symbol(symbol or "")
+    ) or get_instrument_type_from_symbol(symbol or "", exchange)
 
     trigger_type = (data.get("trigger_type") or "").upper()
 
