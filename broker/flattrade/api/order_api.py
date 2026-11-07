@@ -59,7 +59,19 @@ def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
 
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.request(method, url, content=payload, headers=headers)
-    parsed = json.loads(response.text)
+    try:
+        parsed = json.loads(response.text)
+    except ValueError:
+        # Seen from the daily session cutover until the next login: the
+        # expired token gets an empty or HTML body instead of a Not_Ok.
+        logger.debug(
+            f"Flattrade {endpoint} answered HTTP {response.status_code} with a body "
+            f"that is not JSON: {response.text[:200]!r}"
+        )
+        return {
+            "stat": "Not_Ok",
+            "emsg": "Flattrade did not return data. If this continues, log in to the broker again.",
+        }
 
     # Pacing alone is not enough: an account provisioned below the configured
     # cap only reveals its real ceiling in the rejection text, so learn from it
