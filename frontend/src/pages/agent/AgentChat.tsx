@@ -63,6 +63,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
 import { useModelChoice } from '@/lib/agent/useModelChoice'
+import { useRestoredConversation } from '@/lib/agent/useRestoredConversation'
 import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
 import type { VoiceController, VoiceTranscriptLine } from '@/lib/agent/voice'
 import { cn } from '@/lib/utils'
@@ -219,6 +220,14 @@ export default function AgentChat() {
 
   const conversationIdRef = useRef<number | null>(null)
   conversationIdRef.current = conversationId ?? null
+
+  // A refresh reopens the thread the operator was in.
+  useRestoredConversation({
+    storageKey: 'oa-agent-active-conversation',
+    conversationId,
+    messages,
+    setConversation,
+  })
 
   /**
    * Run one spoken question as an ordinary turn and return what to say.
