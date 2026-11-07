@@ -57,7 +57,7 @@ def transform_data(data, client_id=None, auth_token=None):
                 )
 
                 # Get instrument type from symbol
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                instrument_type = get_instrument_type_from_symbol(data["symbol"], data["exchange"])
 
                 # Get tick_size from database
                 tick_size = None

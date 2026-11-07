@@ -78,7 +78,7 @@ def _slm_protected_price(symbol, exchange, action, trigger_price):
     onto the trigger. Fails closed when the tick size is unresolvable rather
     than guessing 2 decimals, which Kotak would reject.
     """
-    instrument_type = get_instrument_type_from_symbol(symbol)
+    instrument_type = get_instrument_type_from_symbol(symbol, exchange)
 
     symbol_info = get_symbol_info(symbol, exchange)
     try:

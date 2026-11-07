@@ -6,7 +6,6 @@
 # with a price buffer based on configurable protection percentages.
 
 import math
-from typing import Optional
 
 from utils.logging import get_logger
 
@@ -33,17 +32,42 @@ OPT_MPP_SLABS = [
 # Instrument types that use Options slabs
 OPTIONS_INSTRUMENT_TYPES = ["CE", "PE"]
 
+# Cash-market exchanges. Everything traded here is equity, whatever the symbol
+# ends with (RELIANCE, BAJFINANCE and PRINCEPIPE all end in CE or PE).
+CASH_EXCHANGES = {"NSE", "BSE"}
 
-def get_instrument_type_from_symbol(symbol: str) -> str:
+
+def is_option_instrument_type(instrument_type: str | None) -> bool:
     """
-    Determine instrument type from symbol name.
+    Whether an instrument type uses the options slabs.
+
+    Accepts the OpenAlgo types ('CE', 'PE') as well as the master contract
+    types some brokers store ('OPTIDX', 'OPTSTK', 'OPTFUT', 'OPTCUR', ...).
+    """
+    if not instrument_type:
+        return False
+    instrument_type = instrument_type.upper()
+    return instrument_type in OPTIONS_INSTRUMENT_TYPES or instrument_type.startswith("OPT")
+
+
+def get_instrument_type_from_symbol(symbol: str, exchange: str | None = None) -> str:
+    """
+    Determine instrument type from symbol name and exchange.
 
     Args:
         symbol: Trading symbol (e.g., 'RELIANCE', 'NIFTY24DEC25000CE', 'NIFTY24DECFUT')
+        exchange: OpenAlgo exchange (e.g., 'NSE', 'NFO'). Symbols on a cash
+            exchange are always 'EQ'; the suffix is only used for derivatives.
 
     Returns:
         str: 'CE', 'PE', 'FUT', or 'EQ'
+
+    Example:
+        >>> get_instrument_type_from_symbol('RELIANCE', 'NSE')           # 'EQ'
+        >>> get_instrument_type_from_symbol('NIFTY24DEC25000CE', 'NFO')  # 'CE'
     """
+    if exchange and exchange.upper() in CASH_EXCHANGES:
+        return "EQ"
     symbol_upper = symbol.upper()
     if symbol_upper.endswith("CE"):
         return "CE"
@@ -65,7 +89,7 @@ def get_mpp_slabs(instrument_type: str) -> list:
     Returns:
         list: The MPP slabs to use
     """
-    if instrument_type in OPTIONS_INSTRUMENT_TYPES:
+    if is_option_instrument_type(instrument_type):
         return OPT_MPP_SLABS
     else:
         return EQ_FUT_MPP_SLABS
@@ -96,7 +120,7 @@ def get_mpp_percentage(price: float, instrument_type: str = "EQ") -> float:
     if not math.isfinite(price):
         raise ValueError(f"MPP price must be finite, got {price!r}")
     slabs = get_mpp_slabs(instrument_type)
-    slab_type = "OPT" if instrument_type in OPTIONS_INSTRUMENT_TYPES else "EQ/FUT"
+    slab_type = "OPT" if is_option_instrument_type(instrument_type) else "EQ/FUT"
 
     # Find the appropriate slab for the price
     for max_price, percentage in slabs:
@@ -143,6 +167,7 @@ def calculate_protected_price(
     instrument_type: str = None,
     tick_size: float = None,
     custom_percentage: float = None,
+    exchange: str = None,
 ) -> float:
     """
     Calculate the protected limit price for a market order with tick size rounding.
@@ -152,8 +177,11 @@ def calculate_protected_price(
         action: Order action - 'BUY' or 'SELL'
         symbol: Trading symbol (used to determine instrument type if not provided)
         instrument_type: 'EQ', 'FUT', 'CE', or 'PE' (if None, derived from symbol)
-        tick_size: Tick size for price rounding (from database)
+        tick_size: Tick size for price rounding (from database). With a tick size the
+            price is rounded away from the base price (up for BUY, down for SELL)
+            and kept at least one tick from it.
         custom_percentage: Optional custom percentage to override slab-based calculation
+        exchange: OpenAlgo exchange, used with symbol to derive the instrument type
 
     Returns:
         float: The adjusted limit price with protection, rounded to tick size
@@ -164,7 +192,7 @@ def calculate_protected_price(
     """
     # Determine instrument type from symbol if not provided
     if instrument_type is None and symbol:
-        instrument_type = get_instrument_type_from_symbol(symbol)
+        instrument_type = get_instrument_type_from_symbol(symbol, exchange)
     elif instrument_type is None:
         instrument_type = "EQ"  # Default to EQ
 
@@ -187,8 +215,22 @@ def calculate_protected_price(
         protected_price = price * (1 - multiplier)
         adjustment_type = "-"
 
-    # Round to tick size
-    protected_price = round_to_tick_size(protected_price, tick_size)
+    if tick_size is not None and tick_size > 0 and multiplier > 0:
+        # Round away from the base price and keep at least one tick of buffer.
+        # Nearest-tick rounding put a cheap option's buffer back on its LTP:
+        # 5% of 0.30 is 0.315, which rounds to 0.30 on a 0.05 tick.
+        if action.upper() == "BUY":
+            protected_price = _snap_to_tick(
+                max(protected_price, price + tick_size), tick_size, "ceil"
+            )
+        else:
+            protected_price = _snap_to_tick(
+                min(protected_price, price - tick_size), tick_size, "floor"
+            )
+            # A price one tick above zero has no room below it; sell at that tick.
+            protected_price = max(protected_price, tick_size)
+    else:
+        protected_price = round_to_tick_size(protected_price, tick_size)
 
     logger.info(
         f"MPP Calculation: Symbol={symbol or 'N/A'}, InstrumentType={instrument_type}, "
@@ -200,8 +242,57 @@ def calculate_protected_price(
     return protected_price
 
 
+def _snap_to_tick(value: float, tick_size: float, direction: str) -> float:
+    """Snap ``value`` to a multiple of ``tick_size``, down for "floor" and up for "ceil"."""
+    ratio = round(value / tick_size, 6)  # tame float noise before the floor/ceil
+    steps = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    decimals = max(0, -math.floor(math.log10(tick_size))) if tick_size < 1 else 0
+    return round(steps * tick_size, decimals + 2)
+
+
+def calculate_stop_limit_price(
+    trigger_price: float,
+    action: str,
+    instrument_type: str = "EQ",
+    tick_size: float | None = None,
+) -> float:
+    """
+    Limit price for an SL-M order sent as a stop-limit (SL-LMT).
+
+    The limit is the slab percentage beyond the trigger in the fill direction
+    (SELL below it, BUY above it), snapped to the tick away from the trigger and
+    at least one tick past it, so the order stays marketable once triggered.
+    It is priced off the trigger, never the LTP: a stop fires at the trigger.
+
+    Raises:
+        ValueError: If the trigger or tick size is not positive, or a SELL
+            limit would not be positive.
+    """
+    if not trigger_price or trigger_price <= 0:
+        raise ValueError("An SL-M order needs a trigger price above 0.")
+    if not tick_size or tick_size <= 0:
+        raise ValueError("The tick size is needed to price an SL-M order as a stop-limit.")
+
+    multiplier = get_mpp_percentage(trigger_price, instrument_type) / 100
+    if action.upper() == "BUY":
+        raw = max(trigger_price * (1 + multiplier), trigger_price + tick_size)
+        return _snap_to_tick(raw, tick_size, "ceil")
+
+    raw = min(trigger_price * (1 - multiplier), trigger_price - tick_size)
+    limit = _snap_to_tick(raw, tick_size, "floor")
+    if limit <= 0:
+        raise ValueError(
+            f"The trigger price {trigger_price} is too low to place an SL-M sell as a stop-limit."
+        )
+    return limit
+
+
 def get_mpp_info(
-    price: float, symbol: str = None, instrument_type: str = None, tick_size: float = None
+    price: float,
+    symbol: str = None,
+    instrument_type: str = None,
+    tick_size: float = None,
+    exchange: str = None,
 ) -> dict:
     """
     Get detailed MPP information for a given price.
@@ -211,17 +302,18 @@ def get_mpp_info(
         symbol: Trading symbol
         instrument_type: 'EQ', 'FUT', 'CE', or 'PE'
         tick_size: Tick size for rounding (from database)
+        exchange: OpenAlgo exchange, used with symbol to derive the instrument type
 
     Returns:
         dict: Dictionary with MPP details
     """
     if instrument_type is None and symbol:
-        instrument_type = get_instrument_type_from_symbol(symbol)
+        instrument_type = get_instrument_type_from_symbol(symbol, exchange)
     elif instrument_type is None:
         instrument_type = "EQ"
 
     percentage = get_mpp_percentage(price, instrument_type)
-    slab_type = "OPT" if instrument_type in OPTIONS_INSTRUMENT_TYPES else "EQ/FUT"
+    slab_type = "OPT" if is_option_instrument_type(instrument_type) else "EQ/FUT"
 
     return {
         "base_price": price,
