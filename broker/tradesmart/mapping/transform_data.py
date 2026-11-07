@@ -131,7 +131,7 @@ def _apply_mpp(data, action, pricetype, supplied_price, auth_token):
         quote = BrokerData(auth_token).get_quotes(data["symbol"], data["exchange"])
         ltp = float(quote.get("ltp", 0))
         tick_size = quote.get("tick_size")
-        instrument_type = get_instrument_type_from_symbol(data["symbol"])
+        instrument_type = get_instrument_type_from_symbol(data["symbol"], data["exchange"])
 
         # MARKET prices off LTP; SL-M prices off the trigger (fall back to LTP)
         if pricetype == "MARKET":

@@ -50,7 +50,7 @@ def _slm_protected_price(symbol, exchange, action, trigger_price):
     re-trip DH-906) or collapse to zero on low-priced options. Fails closed if the
     tick size can't be resolved — a 2-decimal guess risks a tick-size rejection.
     """
-    instrument_type = get_instrument_type_from_symbol(symbol)
+    instrument_type = get_instrument_type_from_symbol(symbol, exchange)
 
     # Tick size is fetched from the SymToken DB (populated by Dhan's master
     # contract, SEM_TICK_SIZE/100) via the cache-then-DB get_symbol_info helper —

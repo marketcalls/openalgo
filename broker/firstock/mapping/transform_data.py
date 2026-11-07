@@ -64,7 +64,7 @@ def transform_data(data, token, auth_token=None):
                     f"TickSize={quote_data.get('tick_size')}"
                 )
 
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                instrument_type = get_instrument_type_from_symbol(data["symbol"], data["exchange"])
 
                 # Firstock's /getQuote response omits tick size, so fetch it
                 # from the local master contract DB (same pattern as kotak).
@@ -189,7 +189,7 @@ def transform_modify_order_data(data, token, auth_token=None):
 
                     broker_data = BrokerData(auth_token)
                     quote_data = broker_data.get_quotes(oa_symbol, exchange)
-                    instrument_type = get_instrument_type_from_symbol(oa_symbol)
+                    instrument_type = get_instrument_type_from_symbol(oa_symbol, exchange)
 
                     # Firstock's /getQuote response omits tick size, so fetch
                     # it from the local master contract DB (kotak pattern).

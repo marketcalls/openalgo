@@ -19,7 +19,7 @@ def _protected_price(price, action, symbol, exchange):
     Returns:
         tuple: (protected_price, mpp_percentage)
     """
-    instrument_type = get_instrument_type_from_symbol(symbol)
+    instrument_type = get_instrument_type_from_symbol(symbol, exchange)
     tick_size = None
     symbol_info = get_symbol_info(symbol, exchange)
     if symbol_info and symbol_info.tick_size:

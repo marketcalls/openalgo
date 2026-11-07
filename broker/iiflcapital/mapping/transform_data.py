@@ -53,7 +53,7 @@ def _slm_protected_price(symbol: str, exchange: str, action: str, trigger_price:
     tick size can't be resolved -- a 2-decimal guess risks a tick-size
     rejection.
     """
-    instrument_type = get_instrument_type_from_symbol(symbol)
+    instrument_type = get_instrument_type_from_symbol(symbol, exchange)
 
     symbol_info = get_symbol_info(symbol, exchange)
     try:

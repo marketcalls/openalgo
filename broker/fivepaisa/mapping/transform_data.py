@@ -60,7 +60,7 @@ def _slm_protected_price(symbol, exchange, action, trigger_price):
     scrip. Fails closed when the tick size cannot be resolved rather than
     guessing 2 decimals, which 5Paisa would reject on a tick-size check.
     """
-    instrument_type = get_instrument_type_from_symbol(symbol)
+    instrument_type = get_instrument_type_from_symbol(symbol, exchange)
 
     symbol_info = get_symbol_info(symbol, exchange)
     try:
@@ -128,7 +128,7 @@ def transform_data(data, token, auth_token=None):
                 if sym_info is not None:
                     tick_size = getattr(sym_info, "tick_size", None)
 
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                instrument_type = get_instrument_type_from_symbol(data["symbol"], data["exchange"])
                 logger.info(
                     f"MPP Quote: Symbol={data['symbol']}, LTP={ltp}, "
                     f"InstrumentType={instrument_type}, TickSize={tick_size}"

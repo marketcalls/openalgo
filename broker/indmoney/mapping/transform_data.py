@@ -33,7 +33,7 @@ def _protective_limit(trigger, action, symbol, exchange):
                     price=trigger,
                     action=action,
                     symbol=symbol,
-                    instrument_type=get_instrument_type_from_symbol(symbol),
+                    instrument_type=get_instrument_type_from_symbol(symbol, exchange),
                     tick_size=tick_size,
                 )
             )
