@@ -21,7 +21,7 @@ import { showToast } from '@/utils/toast'
 
 export default function Login() {
   const navigate = useNavigate()
-  const { login: setLogin } = useAuthStore()
+  const { login: setLogin, syncApiKey } = useAuthStore()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [totpCode, setTotpCode] = useState('')
@@ -138,6 +138,8 @@ export default function Login() {
       } else {
         // Set login state (broker from response if session was resumed, empty otherwise)
         setLogin(username, data.broker || '')
+        // A resumed broker session goes straight to the dashboard, no reload.
+        if (data.broker) await syncApiKey()
         showToast.success('Login successful', 'system')
         // Use redirect from response if provided, otherwise go to broker
         navigate(data.redirect || '/broker')
@@ -190,6 +192,7 @@ export default function Login() {
       }
 
       setLogin(username, data.broker || '')
+      if (data.broker) await syncApiKey()
       showToast.success('Login successful', 'system')
       navigate(data.redirect || '/broker')
     } catch (_err) {

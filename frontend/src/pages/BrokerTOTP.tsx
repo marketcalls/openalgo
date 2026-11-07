@@ -331,7 +331,7 @@ const brokerNames: Record<string, string> = {
 export default function BrokerTOTP() {
   const { broker } = useParams<{ broker: string }>()
   const navigate = useNavigate()
-  const { login } = useAuthStore()
+  const { login, syncApiKey } = useAuthStore()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<Record<string, string>>({})
@@ -404,6 +404,7 @@ export default function BrokerTOTP() {
 
       if (data.status === 'success' || response.ok) {
         login(formData.userid || formData.mobile || '', broker || '')
+        await syncApiKey()
         showToast.success('Authentication successful')
         navigate('/dashboard')
       } else {
