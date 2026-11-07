@@ -269,7 +269,7 @@ def get_trading_session_date():
     return now_ist.date().isoformat()
 
 
-def _has_fresher_session(username, current_session_id=None):
+def _has_fresher_session(username, current_session_id=None, boundary=None):
     """Return True if an active session for ``username`` (other than
     ``current_session_id``) authenticated at or after today's rollover boundary.
 
@@ -281,7 +281,8 @@ def _has_fresher_session(username, current_session_id=None):
     try:
         from database.auth_db import get_active_sessions
 
-        boundary = _todays_rollover_boundary()
+        if boundary is None:
+            boundary = _todays_rollover_boundary()
         ist = pytz.timezone("Asia/Kolkata")
         for sess in get_active_sessions(username):
             if current_session_id and sess.get("session_id") == current_session_id:
@@ -306,7 +307,9 @@ def _has_fresher_session(username, current_session_id=None):
 
 def has_login_this_trading_session(username) -> bool:
     """Return True if ``username`` has an active session that authenticated at
-    or after today's rollover boundary (default 03:00 IST).
+    or after the most recent rollover boundary (default 03:00 IST). Between
+    midnight and 03:00 that is yesterday's boundary: the session still running
+    began then.
 
     Unlike ``is_session_valid()``, this reads only the database and never
     touches the Flask request-scoped ``session``, so background threads can ask
@@ -314,7 +317,7 @@ def has_login_this_trading_session(username) -> bool:
     current trading session: Indian broker tokens die at the daily rollover, and
     only a login after that boundary re-establishes one.
     """
-    return _has_fresher_session(username)
+    return _has_fresher_session(username, boundary=last_rollover_boundary())
 
 
 def revoke_user_tokens(revoke_db_tokens=True):
