@@ -14,10 +14,15 @@ from utils.mpp_slab import (
 logger = get_logger(__name__)
 
 
-
 def _slm_limit_price(data, action):
     """Protective limit for an SL-M sent as SL-LMT, priced off its trigger price."""
-    info = get_symbol_info(data["symbol"], data["exchange"])
+    try:
+        info = get_symbol_info(data["symbol"], data["exchange"])
+    except Exception:
+        logger.exception(
+            f"MPP: symbol info lookup failed for {data['symbol']}; SL-M limit = trigger"
+        )
+        info = None
     return calculate_stop_limit_price(
         trigger_price=float(data.get("trigger_price") or 0),
         action=action,
@@ -25,22 +30,27 @@ def _slm_limit_price(data, action):
         tick_size=getattr(info, "tick_size", None) if info else None,
     )
 
+
 def transform_data(data, token, auth_token=None):
     """
     Transforms the OpenAlgo API request to Firstock's V1 /placeOrder structure.
 
-    For MARKET and SL-M orders, applies client-side Market Price Protection
-    (MPP): fetch LTP, compute a protected price via the OpenAlgo MPP slab,
-    convert the order type to LMT / SL-LMT. Also sets mkt_protection="0" so
-    Firstock's server-side MPP (V1.7+) is a no-op on the already-protected
-    price. Mirrors the pattern in broker/shoonya and broker/flattrade.
+    Applies client-side Market Price Protection (MPP) and sets
+    mkt_protection="0" so Firstock's server-side MPP (V1.7+) is a no-op on the
+    already-protected price. Mirrors broker/shoonya and broker/flattrade:
+
+    - MARKET: fetch the LTP, add the MPP slab buffer and send LMT.
+    - SL-M: send SL-LMT with the limit the slab buffer beyond the trigger
+      price, using the tick size from the local master contract (the trigger
+      itself when there is none). No quote is fetched, so no auth token is
+      needed. An SL-M without a trigger price raises ValueError.
 
     Args:
         data: Order data dictionary (OpenAlgo format).
         token: Instrument token (accepted for signature parity).
-        auth_token: Firstock jKey. Required for MPP — if absent, MARKET/SL-M
-                    flows through unchanged and Firstock's server-side MPP
-                    handles it.
+        auth_token: Firstock jKey, used for the MARKET quote. If absent, a
+                    MARKET order flows through unchanged and Firstock's
+                    server-side MPP handles it.
     """
     # Derive userId: prefer the apikey supplied in the request, fall back to
     # the BROKER_API_KEY env var (same source place_order_api uses to

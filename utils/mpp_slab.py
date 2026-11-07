@@ -257,14 +257,23 @@ def calculate_stop_limit_price(
     at least one tick past it, so the order stays marketable once triggered.
     It is priced off the trigger, never the LTP: a stop fires at the trigger.
 
+    Without a tick size (no master contract row, or one without a tick) the
+    buffer cannot be snapped to a valid price, so the trigger itself is the
+    limit: the caller's trigger is already tick-valid, and the order is still
+    sent rather than refused.
+
     Raises:
-        ValueError: If the trigger or tick size is not positive, or a SELL
-            limit would not be positive.
+        ValueError: If the trigger is not positive, or a SELL limit would not
+            be positive.
     """
     if not trigger_price or trigger_price <= 0:
         raise ValueError("An SL-M order needs a trigger price above 0.")
     if not tick_size or tick_size <= 0:
-        raise ValueError("The tick size is needed to price an SL-M order as a stop-limit.")
+        logger.warning(
+            f"MPP: no tick size to price SL-M off trigger {trigger_price}; "
+            "using the trigger price as the stop-limit"
+        )
+        return float(trigger_price)
 
     multiplier = get_mpp_percentage(trigger_price, instrument_type) / 100
     if action.upper() == "BUY":

@@ -13,16 +13,22 @@ from utils.mpp_slab import (
 logger = get_logger(__name__)
 
 
-
 def _slm_limit_price(data, action):
     """Protective limit for an SL-M sent as SL-LMT, priced off its trigger price."""
-    info = get_symbol_info(data["symbol"], data["exchange"])
+    try:
+        info = get_symbol_info(data["symbol"], data["exchange"])
+    except Exception:
+        logger.exception(
+            f"MPP: symbol info lookup failed for {data['symbol']}; SL-M limit = trigger"
+        )
+        info = None
     return calculate_stop_limit_price(
         trigger_price=float(data.get("trigger_price") or 0),
         action=action,
         instrument_type=get_instrument_type_from_symbol(data["symbol"], data["exchange"]),
         tick_size=getattr(info, "tick_size", None) if info else None,
     )
+
 
 def transform_data(data, token, auth_token=None):
     """

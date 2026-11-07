@@ -40,9 +40,9 @@ class TestCalculateStopLimitPrice:
             calculate_stop_limit_price(trigger, "SELL", "EQ", 0.05)
 
     @pytest.mark.parametrize("tick", [None, 0])
-    def test_refuses_without_a_tick_size(self, tick):
-        with pytest.raises(ValueError, match="tick size"):
-            calculate_stop_limit_price(980, "SELL", "EQ", tick)
+    def test_without_a_tick_size_the_trigger_is_the_limit(self, tick):
+        assert calculate_stop_limit_price(980, "SELL", "EQ", tick) == 980
+        assert calculate_stop_limit_price(1020, "BUY", "EQ", tick) == 1020
 
     def test_refuses_a_sell_limit_that_would_not_be_positive(self):
         with pytest.raises(ValueError, match="too low"):
@@ -113,6 +113,33 @@ def test_buy_stop_limit_is_above_its_trigger(module, broker_data_path, keys):
 
 
 @pytest.mark.parametrize("module, broker_data_path, keys", BROKERS)
+@pytest.mark.parametrize(
+    "symbol_info",
+    [
+        {"return_value": None},
+        {"return_value": SimpleNamespace(tick_size=None)},
+        {"side_effect": RuntimeError("cache not loaded")},
+    ],
+    ids=["no-row", "no-tick", "lookup-error"],
+)
+def test_sl_m_without_symbol_metadata_uses_the_trigger_as_limit(
+    module, broker_data_path, keys, symbol_info
+):
+    order_type, price, trigger = keys
+    with (
+        mock.patch.object(module, "get_br_symbol", return_value="RELIANCE-EQ"),
+        mock.patch.object(module, "get_symbol_info", **symbol_info),
+    ):
+        out = module.transform_data(
+            {**ORDER, "action": "SELL", "trigger_price": "980"}, "2885", auth_token="token"
+        )
+
+    assert out[order_type] == "SL-LMT"
+    assert out[trigger] == "980"
+    assert float(out[price]) == 980
+
+
+@pytest.mark.parametrize("module, broker_data_path, keys", BROKERS)
 def test_sl_m_without_a_trigger_is_refused(module, broker_data_path, keys):
     with pytest.raises(ValueError, match="trigger price"):
         transform(module, broker_data_path, action="SELL", trigger_price="0")
@@ -139,5 +166,6 @@ def test_firstock_modify_prices_sl_m_off_the_trigger():
         )
 
     assert out["priceType"] == "SL-LMT"
+    assert out["triggerPrice"] == "980"
     assert float(out["price"]) == 975.1
     assert out["mkt_protection"] == "0"
