@@ -19,6 +19,7 @@ import {
   type LucideIcon,
   MessageCircle,
   MessageSquare,
+  RefreshCw,
   Search,
   Settings,
   TrendingUp,
@@ -52,6 +53,15 @@ export const navItems: NavItem[] = [
   { href: '/strategy', label: 'Strategies', icon: Boxes, collapseBelow: 'xl' },
   { href: '/logs', label: 'Logs', icon: FileBarChart, collapseBelow: 'xl' },
   { href: '/tools', label: 'Tools', icon: Wrench, collapseBelow: 'xl' },
+  // Flask-served (/system-update returns its own HTML), so this is a full-page
+  // link rather than a client-side route.
+  {
+    href: '/system-update',
+    label: 'System Update',
+    icon: RefreshCw,
+    external: true,
+    collapseBelow: 'xl',
+  },
 ]
 
 // Items shown in mobile bottom navigation
