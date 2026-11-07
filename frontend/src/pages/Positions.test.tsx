@@ -197,9 +197,16 @@ describe('Positions P&L % (#2261)', () => {
     const cell = await pnlPercentCell(CLOSED_POSITION)
 
     expect(cell).not.toHaveTextContent('0.00%')
-    expect(cell).toHaveTextContent('-')
+    expect(cell).toHaveTextContent(/^-$/)
     expect(cell.className).toContain('text-red-600')
     expect(cell.className).not.toContain('text-green-600')
+  })
+
+  it('shows "-" for a closed row reported with average price 0, as Zerodha sends it', async () => {
+    const cell = await pnlPercentCell({ ...CLOSED_POSITION, average_price: 0 } as Position)
+
+    expect(cell).toHaveTextContent(/^-$/)
+    expect(cell.className).toContain('text-red-600')
   })
 
   it('colours a closed profit without a base green', async () => {

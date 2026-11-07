@@ -113,17 +113,16 @@ function calculatePnlPercent(position: Position): number | null {
     return Number(position.pnlpercent) || 0
   }
 
+  // A closed position (qty=0) has no base unless the broker sent pnlpercent
+  // (handled above); brokers report its average price as 0. Showing 0% would
+  // read as break-even whatever the P&L.
+  if (qty === 0) return null
+
   if (avgPrice === 0) return 0
 
   // For open positions with quantity, calculate based on investment
-  if (qty !== 0) {
-    const investment = Math.abs(avgPrice * qty)
-    return investment > 0 ? (pnl / investment) * 100 : 0
-  }
-
-  // A closed position (qty=0) has no base unless the broker sent pnlpercent
-  // (handled above). Showing 0% would read as break-even whatever the P&L.
-  return null
+  const investment = Math.abs(avgPrice * qty)
+  return investment > 0 ? (pnl / investment) * 100 : 0
 }
 
 function formatPnlPercent(percent: number | null): string {
@@ -357,10 +356,17 @@ export default function Positions() {
           aVal = a.pnl || 0
           bVal = b.pnl || 0
           break
-        case 7:
-          aVal = calculatePnlPercent(a) ?? 0
-          bVal = calculatePnlPercent(b) ?? 0
+        case 7: {
+          const aPct = calculatePnlPercent(a)
+          const bPct = calculatePnlPercent(b)
+          // Rows with no percentage sort last in either direction.
+          if (aPct === null || bPct === null) {
+            return aPct === bPct ? 0 : aPct === null ? 1 : -1
+          }
+          aVal = aPct
+          bVal = bPct
           break
+        }
         default:
           return 0
       }
