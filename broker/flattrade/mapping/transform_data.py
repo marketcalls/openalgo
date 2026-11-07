@@ -55,7 +55,7 @@ def transform_data(data, token, auth_token=None):
                 )
 
                 # Get instrument type from symbol
-                instrument_type = get_instrument_type_from_symbol(data["symbol"])
+                instrument_type = get_instrument_type_from_symbol(data["symbol"], data["exchange"])
 
                 # Get tick_size from quote response
                 tick_size = quote_data.get("tick_size")
@@ -132,7 +132,9 @@ def transform_data(data, token, auth_token=None):
                                 price=trigger,
                                 action=action,
                                 symbol=data["symbol"],
-                                instrument_type=get_instrument_type_from_symbol(data["symbol"]),
+                                instrument_type=get_instrument_type_from_symbol(
+                                    data["symbol"], data["exchange"]
+                                ),
                                 tick_size=tick_size,
                             )
                         )
