@@ -183,6 +183,17 @@ class TestFlattradeBulkActionsOnNotOk:
                 200,
             )
 
+    @pytest.mark.parametrize("book", [{"stat": "Ok"}, {"unexpected": "shape"}])
+    def test_square_off_on_an_unrecognised_dict_is_an_error(self, order_api, book):
+        with (
+            mock.patch.object(order_api, "get_positions", return_value=book),
+            mock.patch.object(order_api, "place_order_api") as place,
+        ):
+            body, status = order_api.close_all_positions("key", "token")
+        assert status == 502
+        assert body["status"] == "error"
+        place.assert_not_called()
+
     def test_cancel_all_on_a_not_ok_book_cancels_nothing(self, order_api):
         with (
             mock.patch.object(

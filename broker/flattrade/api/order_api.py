@@ -339,12 +339,12 @@ def close_all_positions(current_api_key, auth):
     # any other Not_Ok (an expired session, say) is a failed read, not a flat book.
     if isinstance(positions_response, dict):
         emsg = str(positions_response.get("emsg", "")).strip()
-        if positions_response.get("stat") == "Not_Ok" and "no data" not in emsg.lower():
-            return {
-                "status": "error",
-                "message": f"Flattrade did not return your positions: {emsg}",
-            }, 502
-        return {"message": "No Open Positions Found"}, 200
+        if positions_response.get("stat") == "Not_Ok" and "no data" in emsg.lower():
+            return {"message": "No Open Positions Found"}, 200
+        return {
+            "status": "error",
+            "message": f"Flattrade did not return your positions: {emsg or 'unexpected response'}",
+        }, 502
 
     # Check if the positions data is null or empty
     if not positions_response or positions_response[0].get("stat") == "Not_Ok":
