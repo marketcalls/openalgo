@@ -7,11 +7,21 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+class SymbolNotFoundError(ValueError):
+    """The order's symbol has no Tradejini symbol in the master contract."""
+
+
 def transform_data(data, token):
     """
     Transforms OpenAlgo order format to Tradejini API format.
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
+    if not symbol:
+        # Sending symId="None" lets Tradejini refuse it with a message that
+        # does not say what is wrong. Refuse before sending instead.
+        raise SymbolNotFoundError(
+            "This symbol is not in the Tradejini symbol list. Download the master contract again."
+        )
 
     # Basic mapping
     order_type = map_order_type(data["pricetype"])

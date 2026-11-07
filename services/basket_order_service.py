@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, BasketCompletedEvent, OrderFailedEvent
+from services.order_outcome import place_order_outcome
 from utils.broker_backpressure import BrokerBusyError
 from utils.constants import (
     REQUIRED_ORDER_FIELDS,
@@ -141,7 +142,8 @@ def place_single_order(
         with watch_for_unanswered_writes() as unanswered:
             res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
-        if res.status == 200:
+        placed, message, _ = place_order_outcome(res, response_data, order_id, bool(unanswered))
+        if placed:
             # No per-order event emission - a summary event is emitted at the end of all orders.
             # exchange/product identify the leg: a basket spans several contracts, so the
             # summary event cannot supply them and subscribers have only this dict to key on.
@@ -153,13 +155,6 @@ def place_single_order(
                 "orderid": order_id,
             }
         else:
-            message = (
-                response_data.get("message", "Failed to place order")
-                if isinstance(response_data, dict)
-                else "Failed to place order"
-            )
-            if unanswered:
-                message = UNANSWERED_ORDER_MESSAGE
             return {"symbol": order_data["symbol"], "status": "error", "message": message}
 
     except BrokerBusyError as e:

@@ -27,6 +27,7 @@ from ..mapping.order_data import (
     transform_tradebook_data,
 )
 from ..mapping.transform_data import (
+    SymbolNotFoundError,
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -939,6 +940,9 @@ def place_order_api(data, auth):
             token = get_token(data["symbol"], data["exchange"])
             transformed_data = transform_data(data, token)
             logger.debug(f"place_order_api - Transformed data: {transformed_data}")
+        except SymbolNotFoundError as e:
+            logger.warning(f"place_order_api - {e} Symbol={data.get('symbol')}")
+            return None, {"status": "error", "message": str(e)}, None
         except Exception as e:
             error_msg = f"Error transforming order data: {str(e)}"
             logger.exception(error_msg)
