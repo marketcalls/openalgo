@@ -4,6 +4,7 @@ import {
   Briefcase,
   Layers,
   LineChart,
+  RefreshCw,
   Sparkles,
   TrendingUp,
 } from 'lucide-react'
@@ -28,7 +29,6 @@ import { PayoffChart } from '@/components/strategy-builder/PayoffChart'
 import { PnLTab } from '@/components/strategy-builder/PnLTab'
 import { PositionsPanel } from '@/components/strategy-builder/PositionsPanel'
 import { SaveStrategyDialog } from '@/components/strategy-builder/SaveStrategyDialog'
-import { Simulators } from '@/components/strategy-builder/Simulators'
 import StrategyChartTab from '@/components/strategy-builder/StrategyChartTab'
 import { SymbolHeader } from '@/components/strategy-builder/SymbolHeader'
 import {
@@ -36,6 +36,7 @@ import {
   TemplateDialog,
 } from '@/components/strategy-builder/TemplateDialog'
 import { TemplateGrid } from '@/components/strategy-builder/TemplateGrid'
+import { WhatIfGreeksPanel } from '@/components/strategy-builder/WhatIfGreeksPanel'
 import { ExecuteBasketDialog } from '@/components/trading/ExecuteBasketDialog'
 import {
   AlertDialog,
@@ -84,7 +85,7 @@ import {
 } from '@/lib/strategyMath'
 import type { Direction, StrategyTemplate } from '@/lib/strategyTemplates'
 import { normalizeExpiryCode } from '@/lib/templateResolution'
-import { makeFormatCurrency } from '@/lib/utils'
+import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
@@ -178,6 +179,7 @@ export default function StrategyBuilder() {
 
   const [activeTemplate, setActiveTemplate] = useState<StrategyTemplate | null>(null)
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false)
 
   const [spotShiftPct, setSpotShiftPct] = useState(0)
   const [ivShiftPct, setIvShiftPct] = useState(0)
@@ -288,9 +290,10 @@ export default function StrategyBuilder() {
   const requiredSupplementalChainKeys = useMemo(() => {
     const derivativeExchange = optionExchangeFor(selectedExchange)
     return new Set(
-      supplementalExpiryKey.split('|').filter(Boolean).map((expiry) =>
-        chainIdentity(derivativeExchange, selectedUnderlying, expiry)
-      )
+      supplementalExpiryKey
+        .split('|')
+        .filter(Boolean)
+        .map((expiry) => chainIdentity(derivativeExchange, selectedUnderlying, expiry))
     )
   }, [selectedExchange, selectedUnderlying, supplementalExpiryKey])
 
@@ -362,13 +365,7 @@ export default function StrategyBuilder() {
         })
       )
     },
-    [
-      apiKey,
-      rememberSupplementalChain,
-      selectedExchange,
-      selectedUnderlying,
-      supplementalExpiryKey,
-    ]
+    [apiKey, rememberSupplementalChain, selectedExchange, selectedUnderlying, supplementalExpiryKey]
   )
 
   useEffect(() => {
@@ -376,9 +373,7 @@ export default function StrategyBuilder() {
     const requiredKeys = new Set(requiredSupplementalChainKeys)
     supplementalChainKeysRef.current = requiredKeys
     setSupplementalChains((previous) => {
-      const retained = new Map(
-        Array.from(previous).filter(([key]) => requiredKeys.has(key))
-      )
+      const retained = new Map(Array.from(previous).filter(([key]) => requiredKeys.has(key)))
       return retained.size === previous.size ? previous : retained
     })
     for (const key of supplementalClockOffsetsRef.current.keys()) {
@@ -398,10 +393,7 @@ export default function StrategyBuilder() {
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [
-    refreshSupplementalChains,
-    requiredSupplementalChainKeys,
-  ])
+  }, [refreshSupplementalChains, requiredSupplementalChainKeys])
 
   const supplementalWsSymbols = useMemo(() => {
     const symbols = new Map<string, { symbol: string; exchange: string }>()
@@ -470,11 +462,7 @@ export default function StrategyBuilder() {
         isSupplementalWsAuthenticated,
         supplementalWsConnectionEpoch
       ),
-    [
-      supplementalMarketData,
-      isSupplementalWsAuthenticated,
-      supplementalWsConnectionEpoch,
-    ]
+    [supplementalMarketData, isSupplementalWsAuthenticated, supplementalWsConnectionEpoch]
   )
 
   const liveSupplementalChains = useMemo(() => {
@@ -929,10 +917,7 @@ export default function StrategyBuilder() {
     const generation = rehydrationGenerationRef.current
     const candidates = legs.filter((leg) => {
       if (!leg.active || isLegClosed(leg) || leg.contractValid) return false
-      if (
-        leg.segment === 'FUTURE' &&
-        !futureExpiries.includes(normalizeExpiryCode(leg.expiry))
-      ) {
+      if (leg.segment === 'FUTURE' && !futureExpiries.includes(normalizeExpiryCode(leg.expiry))) {
         return false
       }
       const selectionKey = `${leg.id}|${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`
@@ -1157,17 +1142,15 @@ export default function StrategyBuilder() {
   const marginRequestKey = useMemo(() => {
     const exchange = optionExchangeFor(selectedExchange)
     return JSON.stringify(
-      legs
-        .filter(isLegExecutable)
-        .map((leg) => ({
-          exchange: leg.exchange ?? exchange,
-          symbol: leg.symbol,
-          action: leg.side,
-          quantity: String(leg.lots * leg.lotSize),
-          product: 'NRML',
-          pricetype: leg.price > 0 ? 'LIMIT' : 'MARKET',
-          price: leg.price > 0 ? String(leg.price) : '0',
-        }))
+      legs.filter(isLegExecutable).map((leg) => ({
+        exchange: leg.exchange ?? exchange,
+        symbol: leg.symbol,
+        action: leg.side,
+        quantity: String(leg.lots * leg.lotSize),
+        product: 'NRML',
+        pricetype: leg.price > 0 ? 'LIMIT' : 'MARKET',
+        price: leg.price > 0 ? String(leg.price) : '0',
+      }))
     )
   }, [legs, selectedExchange])
 
@@ -1723,34 +1706,161 @@ export default function StrategyBuilder() {
     [legs, selectedExchange, selectedUnderlying, selectedExpiry, loadedEntry]
   )
 
+  const riskReward = useMemo(() => {
+    if (
+      Number.isFinite(payoff.maxProfit) &&
+      Number.isFinite(payoff.maxLoss) &&
+      payoff.maxProfit > 0 &&
+      payoff.maxLoss < 0
+    ) {
+      return `1 : ${(Math.abs(payoff.maxProfit) / Math.abs(payoff.maxLoss)).toFixed(2)}`
+    }
+    return '—'
+  }, [payoff.maxProfit, payoff.maxLoss])
+
+  const activeLegsCount = useMemo(() => legs.filter((l) => l.active).length, [legs])
+
   return (
     <div
       data-testid="strategy-builder-page"
-      className="w-full min-w-0 max-w-full space-y-5 overflow-x-clip py-6"
+      className="w-full min-w-0 max-w-full space-y-2.5 overflow-x-clip py-2"
     >
-      {/* Page header — Save/Portfolio actions moved down next to the Payoff
-          tabs where the user is actually working, so no scrolling back to
-          the top is needed. */}
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          <Sparkles className="h-3 w-3" />
-          Tools / Strategy Builder
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight">Strategy Builder</h1>
+      {/* Page header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            <h1 className="text-xl font-bold tracking-tight">Strategy Builder</h1>
+          </div>
           {loadedEntry && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-violet-700 dark:text-violet-400">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-semibold text-violet-700 dark:text-violet-400">
               <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
               {loadedEntry.name}
             </span>
           )}
+
+          {/* Ticker metrics bar moved beside Strategy Builder logo */}
+          <div
+            data-testid="page-ticker-metrics"
+            className="flex flex-wrap items-center rounded-lg border bg-card/70 text-xs shadow-xs divide-x divide-border overflow-hidden"
+          >
+            {/* Spot */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Spot
+              </span>
+              <span className="font-bold tabular-nums text-foreground">
+                {spotPrice !== null ? spotPrice.toFixed(2) : '—'}
+              </span>
+            </div>
+
+            {/* Futures */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Futures
+              </span>
+              <span className="font-bold tabular-nums text-foreground">
+                {futuresPrice !== null ? futuresPrice.toFixed(2) : '—'}
+              </span>
+              {spotPrice !== null && futuresPrice !== null && (
+                <span
+                  className={cn(
+                    'text-[10px] font-semibold tabular-nums',
+                    futuresPrice >= spotPrice
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-rose-600 dark:text-rose-400'
+                  )}
+                >
+                  {futuresPrice > spotPrice ? '+' : ''}
+                  {(futuresPrice - spotPrice).toFixed(2)}
+                </span>
+              )}
+            </div>
+
+            {/* ATM IV */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                ATM IV
+              </span>
+              <span className="font-bold tabular-nums text-amber-600 dark:text-amber-400">
+                {atmIv !== null ? `${atmIv.toFixed(2)}%` : '—'}
+              </span>
+            </div>
+
+            {/* DTE */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                DTE
+              </span>
+              <span className="font-bold tabular-nums text-foreground">
+                {rawDays !== null ? `${rawDays.toFixed(0)}d` : '—'}
+              </span>
+              {rawDays !== null && (
+                <span className="hidden text-[10px] text-muted-foreground sm:inline">
+                  days to expiry
+                </span>
+              )}
+            </div>
+
+            {/* Lot Size */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Lot Size
+              </span>
+              <span className="font-bold tabular-nums text-foreground">
+                {lotSize !== null ? String(lotSize) : '—'}
+              </span>
+            </div>
+          </div>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Design and analyse multi-leg options strategies with live Greeks and payoff.
-        </p>
+
+        {/* Live status & Refresh button moved up to top corner alongside title */}
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <span className="relative flex h-2 w-2">
+              <span
+                className={cn(
+                  'absolute inline-flex h-full w-full rounded-full opacity-75',
+                  connectionStatus === 'live'
+                    ? 'animate-ping bg-emerald-400'
+                    : 'bg-muted-foreground/40'
+                )}
+              />
+              <span
+                className={cn(
+                  'relative inline-flex h-2 w-2 rounded-full',
+                  connectionStatus === 'live' ? 'bg-emerald-500' : 'bg-muted-foreground/60'
+                )}
+              />
+            </span>
+            <span
+              aria-live="polite"
+              className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+            >
+              {connectionStatus === 'live'
+                ? 'Live'
+                : connectionStatus === 'refreshing'
+                  ? 'Refreshing'
+                  : connectionStatus === 'stale'
+                    ? 'Stale'
+                    : 'Idle'}
+            </span>
+          </div>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refreshContracts}
+            disabled={isLiveLoading}
+            className="h-8 gap-1.5 text-xs font-semibold"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', isLiveLoading && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
-      {/* Symbol header */}
+      {/* Symbol header with merged strategy payoff metrics & template toggle */}
       <SymbolHeader
         exchanges={fnoExchanges}
         selectedExchange={selectedExchange}
@@ -1771,11 +1881,49 @@ export default function StrategyBuilder() {
         onRefresh={refreshContracts}
         isRefreshing={isLiveLoading}
         connectionStatus={connectionStatus}
+        onToggleLibrary={() => setIsLibraryOpen((prev) => !prev)}
+        isLibraryOpen={isLibraryOpen}
+        maxProfit={payoff.maxProfit}
+        maxLoss={payoff.maxLoss}
+        probOfProfit={pop}
+        riskReward={riskReward}
+        netCredit={credit}
+        totalPnl={totalPnlNow}
+        marginRequired={marginRequired}
+        isMarginLoading={isMarginLoading}
+        marginSupported={marginSupported}
+        breakevens={payoff.breakevens}
+        formatCurrency={formatCurrency}
+        legsCount={legs.length}
+        activeLegsCount={activeLegsCount}
+        hideRefresh={true}
+        hideMetrics={true}
       />
 
       {/* Template grid */}
       <h2 className="sr-only">Build a strategy</h2>
-      <div className="overflow-hidden rounded-xl border bg-card p-5 shadow-sm">
+      <div
+        className={cn(
+          'overflow-hidden rounded-xl border bg-card p-5 shadow-sm transition-all',
+          !isLibraryOpen && 'hidden'
+        )}
+      >
+        <div className="mb-3 flex items-center justify-between border-b pb-3">
+          <div>
+            <h3 className="text-sm font-semibold tracking-tight">Strategy Templates</h3>
+            <p className="text-xs text-muted-foreground">
+              Select a pre-configured template to populate strategy legs
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsLibraryOpen(false)}
+            className="h-7 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Hide Templates
+          </Button>
+        </div>
         <TemplateGrid
           direction={direction}
           onDirectionChange={setDirection}
@@ -1783,7 +1931,7 @@ export default function StrategyBuilder() {
         />
       </div>
 
-      {/* Manual leg adder */}
+      {/* Manual leg adder — always mounted stably at page level to preserve resolver state */}
       <ManualLegBuilder
         expiries={activeChain ? expiries : []}
         futureExpiries={activeChain ? futureExpiries : []}
@@ -1797,9 +1945,7 @@ export default function StrategyBuilder() {
         onAdd={handleAddManualLeg}
       />
 
-      {/* Main working area — only revealed once the user has at least one leg.
-          This avoids an empty-looking Strategy Positions panel and a flat
-          payoff chart on first load, which looked like a broken state. */}
+      {/* Main working area */}
       {legs.length === 0 ? (
         <div className="relative overflow-hidden rounded-xl border border-dashed bg-gradient-to-br from-muted/30 via-background to-muted/20 px-6 py-14 shadow-sm">
           {/* Decorative floating icons */}
@@ -1839,8 +1985,8 @@ export default function StrategyBuilder() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
-          {/* Left column: positions */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[380px_minmax(0,1fr)_340px]">
+          {/* Left Column: Strategy Positions */}
           <div className="min-w-0">
             <PositionsPanel
               legs={legs}
@@ -1870,53 +2016,50 @@ export default function StrategyBuilder() {
             />
           </div>
 
-          {/* Right column: tabs + simulators */}
+          {/* Center Column: Analytics & Payoff Tabs */}
           <div className="min-w-0 space-y-5">
             <Tabs defaultValue="payoff" className="w-full min-w-0 max-w-full">
-              {/* Tabs on the left, Save/Portfolio actions aligned to the right
-                  so they're always visible directly above the Payoff graph —
-                  no scrolling back to the page header. */}
               <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-3">
                 <div
                   data-testid="strategy-tabs-scroller"
                   className="min-w-0 max-w-full flex-1 overflow-x-auto pb-1"
                 >
                   <TabsList className="inline-flex h-10 w-max min-w-max gap-1 rounded-xl border bg-card p-1 shadow-sm">
-                  <TabsTrigger
-                    value="payoff"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <LineChart className="mr-1.5 h-3.5 w-3.5" />
-                    Payoff
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="greeks"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                    Greeks
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="pnl"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
-                    P&amp;L
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="strategychart"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <Activity className="mr-1.5 h-3.5 w-3.5" />
-                    Strategy Chart
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="multistrikeoi"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <Layers className="mr-1.5 h-3.5 w-3.5" />
-                    Multi Strike OI
-                  </TabsTrigger>
+                    <TabsTrigger
+                      value="payoff"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <LineChart className="mr-1.5 h-3.5 w-3.5" />
+                      Payoff
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="greeks"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                      Greeks
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="pnl"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
+                      P&amp;L
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="strategychart"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <Activity className="mr-1.5 h-3.5 w-3.5" />
+                      Strategy Chart
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="multistrikeoi"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <Layers className="mr-1.5 h-3.5 w-3.5" />
+                      Multi Strike OI
+                    </TabsTrigger>
                   </TabsList>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
@@ -1931,6 +2074,7 @@ export default function StrategyBuilder() {
                   </Button>
                 </div>
               </div>
+
               <TabsContent value="payoff" className="pt-4">
                 <div className="overflow-hidden rounded-xl border bg-card p-2 shadow-sm">
                   {spotPrice ? (
@@ -1998,8 +2142,11 @@ export default function StrategyBuilder() {
                 )}
               </TabsContent>
             </Tabs>
+          </div>
 
-            <Simulators
+          {/* Right Column: What-If Simulator & Positional Greeks */}
+          <div className="min-w-0 space-y-4">
+            <WhatIfGreeksPanel
               spotShiftPct={spotShiftPct}
               ivShiftPct={ivShiftPct}
               daysElapsed={scenario.daysElapsed}
@@ -2008,6 +2155,10 @@ export default function StrategyBuilder() {
               onIvShiftChange={setIvShiftPct}
               onDaysElapsedChange={setDaysElapsed}
               onReset={resetSimulators}
+              legs={legs}
+              greeksByLeg={greeksByLeg}
+              atmIv={atmIv}
+              formatCurrency={formatCurrency}
             />
           </div>
         </div>
