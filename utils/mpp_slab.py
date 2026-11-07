@@ -177,7 +177,9 @@ def calculate_protected_price(
         action: Order action - 'BUY' or 'SELL'
         symbol: Trading symbol (used to determine instrument type if not provided)
         instrument_type: 'EQ', 'FUT', 'CE', or 'PE' (if None, derived from symbol)
-        tick_size: Tick size for price rounding (from database)
+        tick_size: Tick size for price rounding (from database). With a tick size the
+            price is rounded away from the base price (up for BUY, down for SELL)
+            and kept at least one tick from it.
         custom_percentage: Optional custom percentage to override slab-based calculation
         exchange: OpenAlgo exchange, used with symbol to derive the instrument type
 
@@ -213,8 +215,22 @@ def calculate_protected_price(
         protected_price = price * (1 - multiplier)
         adjustment_type = "-"
 
-    # Round to tick size
-    protected_price = round_to_tick_size(protected_price, tick_size)
+    if tick_size is not None and tick_size > 0 and multiplier > 0:
+        # Round away from the base price and keep at least one tick of buffer.
+        # Nearest-tick rounding put a cheap option's buffer back on its LTP:
+        # 5% of 0.30 is 0.315, which rounds to 0.30 on a 0.05 tick.
+        if action.upper() == "BUY":
+            protected_price = _snap_to_tick(
+                max(protected_price, price + tick_size), tick_size, "ceil"
+            )
+        else:
+            protected_price = _snap_to_tick(
+                min(protected_price, price - tick_size), tick_size, "floor"
+            )
+            # A price one tick above zero has no room below it; sell at that tick.
+            protected_price = max(protected_price, tick_size)
+    else:
+        protected_price = round_to_tick_size(protected_price, tick_size)
 
     logger.info(
         f"MPP Calculation: Symbol={symbol or 'N/A'}, InstrumentType={instrument_type}, "
