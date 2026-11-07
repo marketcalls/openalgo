@@ -102,7 +102,8 @@ function parseSymbol(symbol: string, exchange: string) {
   return { underlying: symbol, expiry: null, strike: null, optionType: null }
 }
 
-function calculatePnlPercent(position: Position): number {
+/** P&L % of a position, or null when there is no base to measure it against. */
+function calculatePnlPercent(position: Position): number | null {
   const avgPrice = Number(position.average_price) || 0
   const qty = Number(position.quantity) || 0
   const pnl = Number(position.pnl) || 0
@@ -120,10 +121,14 @@ function calculatePnlPercent(position: Position): number {
     return investment > 0 ? (pnl / investment) * 100 : 0
   }
 
-  // For closed positions (qty=0), return 0% like Zerodha
-  // We cannot reliably calculate P&L% without knowing the original quantity
-  // The P&L amount is still shown correctly from the API
-  return 0
+  // A closed position (qty=0) has no base unless the broker sent pnlpercent
+  // (handled above). Showing 0% would read as break-even whatever the P&L.
+  return null
+}
+
+function formatPnlPercent(percent: number | null): string {
+  if (percent === null) return '-'
+  return `${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`
 }
 
 const EXCHANGE_COLORS: Record<string, string> = {
@@ -353,8 +358,8 @@ export default function Positions() {
           bVal = b.pnl || 0
           break
         case 7:
-          aVal = calculatePnlPercent(a)
-          bVal = calculatePnlPercent(b)
+          aVal = calculatePnlPercent(a) ?? 0
+          bVal = calculatePnlPercent(b) ?? 0
           break
         default:
           return 0
@@ -1030,13 +1035,10 @@ export default function Positions() {
                                 <TableCell
                                   className={cn(
                                     'w-[100px] text-right',
-                                    isProfit(calculatePnlPercent(position))
-                                      ? 'text-green-600'
-                                      : 'text-red-600'
+                                    isProfit(position.pnl) ? 'text-green-600' : 'text-red-600'
                                   )}
                                 >
-                                  {calculatePnlPercent(position) >= 0 ? '+' : ''}
-                                  {calculatePnlPercent(position).toFixed(2)}%
+                                  {formatPnlPercent(calculatePnlPercent(position))}
                                 </TableCell>
                                 <TableCell className="w-[60px] text-right">
                                   {isOpen && (

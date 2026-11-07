@@ -332,6 +332,14 @@ def transform_positions_data(positions_data):
             "average_price": average_price_formatted,
             "ltp": round(position.get("last_price", 0.0), 2),
         }
+        # A position closed today arrives with quantity and average_price 0, so the
+        # page has no base for a percentage. The money spent buying is that base.
+        if _to_float(position.get("quantity")) == 0:
+            buy_value = _to_float(position.get("buy_value"))
+            if buy_value > 0:
+                transformed_position["pnlpercent"] = round(
+                    _to_float(position.get("pnl")) / buy_value * 100, 2
+                )
         transformed_data.append(transformed_position)
     return transformed_data
 
