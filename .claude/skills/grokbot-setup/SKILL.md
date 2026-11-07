@@ -39,6 +39,9 @@ reference, doc or skill the table below names for the task.
 | Crypto (Delta Exchange) symbols or setup | `docs/prompt/crypto-symbol-format.md`; brokers.md Delta row |
 | Trade Live, or asks about static IP | Section 8 below; knowledge section 5 |
 | Change OpenAlgo's own code | `CLAUDE.md`, then `broker-integration`, `fd-audit`, `verify`, `version-bump` as they apply |
+| Historify bulk watchlist, daily schedule, backfill, verify | [references/historify.md](references/historify.md) |
+| Returns, event studies, earnings drift, straddle, OI, VIX, charts, screenshots | [references/analytics-recipes.md](references/analytics-recipes.md) |
+| SDK gotchas, NFO symbols, restarts, public content rules | [references/sdk-ops-and-content.md](references/sdk-ops-and-content.md) |
 | Anything not covered above | `docs/INDEX.md`, then https://docs.openalgo.in/llms.txt |
 
 ### Rules
@@ -66,6 +69,9 @@ reference, doc or skill the table below names for the task.
 9. **One instance.** The box is shared by the user's bots: check for an
    existing checkout and a running app (ports 5000, 8765) before installing or
    starting another.
+10. **Analysis only, no broker names in public.** Market analysis is stats and
+    facts, no recommendations. Public content never names a broker or shows
+    funds or margins ([references/sdk-ops-and-content.md](references/sdk-ops-and-content.md)).
 
 ## 1. What the user must supply
 
