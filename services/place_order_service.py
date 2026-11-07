@@ -6,6 +6,7 @@ from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, OrderFailedEvent, OrderPlacedEvent
 from restx_api.schemas import OrderSchema
+from services.order_outcome import place_order_outcome
 from utils.broker_backpressure import BrokerBusyError
 from utils.constants import (
     REQUIRED_ORDER_FIELDS,
@@ -263,7 +264,8 @@ def place_order_with_auth(
         )
         return False, error_response, 502 if unanswered else 500
 
-    if res.status == 200:
+    placed, message, status_code = place_order_outcome(res, response_data, order_id, bool(unanswered))
+    if placed:
         order_response_data = {"status": "success", "orderid": order_id}
 
         if emit_event:
@@ -287,14 +289,6 @@ def place_order_with_auth(
 
         return True, order_response_data, 200
     else:
-        message = (
-            response_data.get("message", "Failed to place order")
-            if isinstance(response_data, dict)
-            else "Failed to place order"
-        )
-        if unanswered:
-            # The broker caught the lost response itself and reported a failure.
-            message = UNANSWERED_ORDER_MESSAGE
         error_response = {"status": "error", "message": message}
         bus.publish(
             OrderFailedEvent(
@@ -308,9 +302,7 @@ def place_order_with_auth(
                 error_message=message,
             )
         )
-        if unanswered:
-            return False, error_response, 502
-        return False, error_response, res.status if res.status != 200 else 500
+        return False, error_response, status_code
 
 
 def place_order(
