@@ -54,7 +54,7 @@ class TestTransformData:
         assert out["trigger_price"] == "600"
 
     @pytest.mark.parametrize("pricetype", ["SL", "SL-M"])
-    @pytest.mark.parametrize("trigger", [None, "0", 0, "", "abc", "inf", "nan", "-5"])
+    @pytest.mark.parametrize("trigger", [None, "0", 0, "", "abc", "inf", "nan", "-5", 10**400])
     def test_stop_without_trigger_is_refused(self, pricetype, trigger):
         data = order(pricetype=pricetype, price="599")
         if trigger is not None:

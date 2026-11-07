@@ -24,7 +24,7 @@ def require_trigger_price(pricetype, trigger_price):
     """Raise OrderRejected unless an SL or SL-M trigger price is a finite number above 0."""
     try:
         trigger = float(trigger_price)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         trigger = 0.0
     if not (math.isfinite(trigger) and trigger > 0):
         raise OrderRejected(
