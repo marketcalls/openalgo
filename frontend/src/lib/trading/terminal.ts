@@ -1003,6 +1003,14 @@ const LEGEND_Y = 8
 const LEGEND_SUB_Y = 25
 /** Space between two legend runs, in CSS px (the DOM renderer joins with ' '). */
 const LEGEND_GAP = 6
+/**
+ * Where canvas legend rows start in the price pane. The corner already holds
+ * this terminal's OHLC readout and, below it, the SELL/qty/BUY panel
+ * (44 + 42*0.72 ~= 75), so rows start under both or they land on top of them.
+ * The chart applies it to indicator rows; comparison rows are this terminal's
+ * own, so they are handed the same offset.
+ */
+const CANVAS_LEGEND_OFFSET = { top: 80 }
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 
@@ -2534,14 +2542,9 @@ export class TradingTerminal {
           ...priceAxisShortcuts((command) => void this.priceAxisCommand(command)),
         ],
       },
-      // The pane's top-left already holds this terminal's own OHLC readout (and
-      // the lot line under it). Start the canvas indicator legends below both,
-      // or they land underneath and their settings / close buttons cannot be
-      // seen or clicked.
-      // The corner already holds this terminal's OHLC readout and, below it,
-      // the SELL/qty/BUY panel (44 + 42*0.72 ~= 75). Indicator legend rows have
-      // to start under both or they land on top of the buttons.
-      legendOffset: { top: 80 },
+      // Indicator legend rows start below this terminal's own OHLC readout and
+      // trade panel, or their settings / close buttons cannot be seen or clicked.
+      legendOffset: CANVAS_LEGEND_OFFSET,
       // Zoom and autoscale snap instead of easing when the system asks for
       // less motion.
       ...chartMotionOptions(),
@@ -5219,6 +5222,7 @@ export class TradingTerminal {
             }
           : {}),
         ws: { url: this.wsUrl, apiKey: this.apiKey },
+        legendOffset: CANVAS_LEGEND_OFFSET,
         now: () => this.gridNow(),
         onChange: () => {
           if (this.destroyed || this.comparisons !== comparisons) return
