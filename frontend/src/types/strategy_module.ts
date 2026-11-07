@@ -29,7 +29,9 @@ export type PriceType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
 export type Segment = 'options' | 'futures' | 'cash'
 export type LegPosition = 'B' | 'S'
 export type OptionType = 'CE' | 'PE'
-export type StrikeMode = 'atm' | 'strike'
+export type StrikeMode = 'atm' | 'strike' | 'premium'
+export type PremiumComparison = 'closest' | 'higher' | 'lower'
+export type PremiumStrikeFilter = 'none' | 'liquid'
 
 /**
  * Which signals a leg accepts, on a signal-mode strategy.
@@ -129,6 +131,9 @@ export interface Leg {
   strike_mode?: StrikeMode | null
   atm_offset?: string | null
   strike?: number | null
+  premium?: number | null
+  premium_comparison?: PremiumComparison | null
+  premium_strike_filter?: PremiumStrikeFilter | null
 
   // --- Signal-mode fields. A signal leg names its own instrument and its own
   // absolute quantity; it is a different shape, not a superset. ---
@@ -1005,7 +1010,12 @@ export function legToPayload(leg: Leg, kind: StrategyKind = 'batch'): Leg {
       clean.option_type = leg.option_type ?? 'CE'
       clean.strike_mode = leg.strike_mode ?? 'atm'
       if (clean.strike_mode === 'atm') clean.atm_offset = leg.atm_offset ?? 'ATM'
-      else clean.strike = leg.strike ?? null
+      else if (clean.strike_mode === 'strike') clean.strike = leg.strike ?? null
+      else {
+        clean.premium = leg.premium ?? null
+        clean.premium_comparison = leg.premium_comparison ?? 'closest'
+        clean.premium_strike_filter = leg.premium_strike_filter ?? 'none'
+      }
     }
   }
 
