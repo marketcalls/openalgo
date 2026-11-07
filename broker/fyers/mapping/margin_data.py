@@ -1,7 +1,13 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Fyers Margin API
 
-from broker.fyers.mapping.transform_data import map_action, map_order_type, map_product_type
+from broker.fyers.mapping.transform_data import (
+    LotQuantityError,
+    map_action,
+    map_order_type,
+    map_product_type,
+    to_fyers_qty,
+)
 from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
@@ -42,6 +48,9 @@ def transform_margin_positions(positions):
 
     Returns:
         List of positions in Fyers format
+
+    Raises:
+        LotQuantityError: an MCX or CDS quantity that is not a whole number of lots.
     """
     transformed_positions = []
     skipped_positions = []
@@ -72,7 +81,8 @@ def transform_margin_positions(positions):
             # Transform the position
             transformed_position = {
                 "symbol": br_symbol_str,
-                "qty": int(position["quantity"]),
+                # Fyers counts MCX and CDS in lots (see to_fyers_qty).
+                "qty": to_fyers_qty(int(position["quantity"]), symbol, exchange),
                 "side": map_action(position["action"].upper()),
                 "type": map_order_type(position["pricetype"]),
                 "productType": map_product_type(position["product"]),
@@ -87,6 +97,11 @@ def transform_margin_positions(positions):
                 f"Successfully transformed position: {symbol} ({exchange}) -> {br_symbol_str}"
             )
 
+        except LotQuantityError:
+            # Deliberately ahead of the catch-and-skip below. A quantity that is not
+            # a whole number of lots is the caller's mistake, not a row to drop:
+            # pricing a basket that is missing a leg, as a success, is worse.
+            raise
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
             skipped_positions.append(f"{position.get('symbol', 'unknown')} - Error: {str(e)}")
