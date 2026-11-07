@@ -7,8 +7,11 @@ import urllib.parse
 import httpx
 
 from broker.paytm.mapping.transform_data import (
+    STOP_ORDER_TYPES,
+    OrderRejected,
     map_exchange,
     map_product_type,
+    require_trigger_price,
     reverse_map_order_type,
     reverse_map_product_type,
     transform_data,
@@ -334,7 +337,12 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 
 def place_order_api(data, auth):
-    payload = transform_data(data)
+    try:
+        payload = transform_data(data)
+    except OrderRejected as e:
+        logger.warning(f"Paytm order not sent: {e}")
+        res = type("Response", (), {"status": 400})()
+        return res, {"status": "error", "message": str(e)}, None
     payload = json.dumps(payload)
     logger.debug(f"Order payload: {payload}")
 
@@ -644,6 +652,18 @@ def modify_order(data, auth):
 
             logger.debug(f"Modifying order: {orderid}")
 
+            trigger_price = data.get("trigger_price", order.get("trigger_price", "0"))
+            try:
+                order_type = (
+                    reverse_map_order_type(data["pricetype"])
+                    if data.get("pricetype")
+                    else order["order_type"]
+                )
+                if order_type in STOP_ORDER_TYPES:
+                    require_trigger_price(data.get("pricetype") or order_type, trigger_price)
+            except OrderRejected as e:
+                return {"status": "error", "message": str(e)}, 400
+
             # Prepare modification payload
             payload = {
                 "order_no": orderid,
@@ -651,13 +671,11 @@ def modify_order(data, auth):
                 "segment": order["segment"],
                 "security_id": order["security_id"],
                 "quantity": data.get("quantity", order["quantity"]),
-                "price": "0"
-                if data.get("pricetype") == "MARKET"
-                else data.get("price", order["price"]),
-                "trigger_price": data.get("trigger_price", order.get("trigger_price", "0")),
+                "price": "0" if order_type in ("MKT", "SLM") else data.get("price", order["price"]),
+                "trigger_price": trigger_price,
                 "validity": "DAY",
                 "product": reverse_map_product_type(data.get("product", order["product"])),
-                "order_type": "MKT" if data.get("pricetype") == "MARKET" else order["order_type"],
+                "order_type": order_type,
                 "txn_type": order["txn_type"],
                 "source": "N",
                 "off_mkt_flag": order.get("off_mkt_flag", "N"),
