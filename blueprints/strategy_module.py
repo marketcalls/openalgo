@@ -194,7 +194,7 @@ TAB_SEGMENTS = {
 
 LEG_POSITIONS = ("B", "S")
 LEG_OPTION_TYPES = ("CE", "PE")
-LEG_STRIKE_MODES = ("atm", "strike")
+LEG_STRIKE_MODES = ("atm", "straddle_width", "strike")
 LEG_EXPIRIES = ("weekly", "next_week", "monthly", "next_month", "current", "next")
 
 #: A strike named relative to the money. Five steps either side is what the
@@ -223,6 +223,7 @@ LEG_FIELDS = (
     "option_type",
     "strike_mode",
     "atm_offset",
+    "straddle_width",
     "strike",
     "expiry",
     "sl_pts",
@@ -646,7 +647,7 @@ def _validate_leg(raw: Any, index: int) -> dict:
     # Fields that only mean something for an options leg. Accepting them on a
     # futures leg and then ignoring them is how a strategy ends up looking
     # correct in the editor and trading something else.
-    options_only = ("option_type", "strike_mode", "atm_offset", "strike")
+    options_only = ("option_type", "strike_mode", "atm_offset", "straddle_width", "strike")
     if segment == "options":
         clean["option_type"] = _choice(
             _required(leg, "option_type", label), LEG_OPTION_TYPES, f"{label}.option_type"
@@ -663,6 +664,12 @@ def _validate_leg(raw: Any, index: int) -> dict:
                 )
             clean["atm_offset"] = _choice(
                 leg.get("atm_offset") or "ATM", ATM_OFFSETS, f"{label}.atm_offset"
+            )
+        elif strike_mode == "straddle_width":
+            if leg.get("atm_offset") is not None or leg.get("strike") is not None:
+                raise ValidationError(f"{label} contains fields not used by straddle-width mode")
+            clean["straddle_width"] = _number(
+                _required(leg, "straddle_width", label), f"{label}.straddle_width"
             )
         else:
             if leg.get("atm_offset") is not None:
