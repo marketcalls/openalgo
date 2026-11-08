@@ -421,7 +421,10 @@ export default function BrokerTOTP() {
       const data = await response.json()
 
       if (data.status === 'success' || response.ok) {
-        login(formData.userid || formData.mobile || '', broker || '')
+        // Brokers with no userid/mobile field (e.g. Sahi TOTP) keep the
+        // existing app username instead of overwriting it with ''.
+        const { user } = useAuthStore.getState()
+        login(formData.userid || formData.mobile || user?.username || '', broker || '')
         showToast.success('Authentication successful')
         navigate('/dashboard')
       } else {
