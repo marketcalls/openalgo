@@ -769,10 +769,31 @@ def _broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "sahi":
-        # Sahi mints the day's token from the API key and secret in the
-        # environment; there is nothing for the trader to enter.
-        auth_token, error_message = auth_function("sahi")
-        forward_url = "broker.html"
+        if request.method == "POST":
+            # TOTP key: the trader types the day's six-digit code on OpenAlgo's
+            # own form (CSRF-checked above, like every form login).
+            from broker.sahi.api.auth_api import authenticate_broker_totp
+
+            totp = (request.form.get("totp") or "").strip()
+            if not totp:
+                return jsonify(
+                    {"status": "error", "message": "Please provide the 6-digit TOTP code"}
+                ), 400
+
+            logger.info("Sahi TOTP authentication initiated")
+            auth_token, error_message = authenticate_broker_totp(totp)
+            forward_url = "broker.html"
+        else:
+            # Regular key: mint from the saved key and secret alone. A TOTP key
+            # is refused without its code, which sends the trader to the form.
+            from broker.sahi.api.auth_api import TOTP_REQUIRED_MESSAGE
+
+            auth_token, error_message = auth_function("sahi")
+            forward_url = "broker.html"
+
+            if not auth_token and error_message == TOTP_REQUIRED_MESSAGE:
+                # Redirect to React TOTP page
+                return redirect("/broker/sahi/totp")
 
     elif broker == "wisdom":
         code = "wisdom"

@@ -113,6 +113,23 @@ const brokerFields: Record<string, BrokerConfig> = {
     ],
     callbackUrl: '/firstock/callback',
   },
+  sahi: {
+    fields: [
+      {
+        name: 'totp',
+        label: 'TOTP Code',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'Get TOTP from your authenticator app. The first correct code of the day approves the key.',
+      },
+    ],
+    callbackUrl: '/sahi/callback',
+    warning:
+      'This is for a TOTP API key from Sahi web, Profile, API Dashboard. The code is typed at each login and never stored. A Regular key does not need a code: approve it once a day in the API Dashboard instead.',
+  },
   indmoney: {
     fields: [
       {
@@ -318,6 +335,7 @@ const brokerNames: Record<string, string> = {
   definedge: 'Definedge Securities',
   firstock: 'Firstock',
   indmoney: 'IndMoney (INDstocks)',
+  sahi: 'Sahi',
   kotak: 'Kotak NEO',
   motilal: 'Motilal Oswal',
   mstock: 'MStock',
@@ -403,7 +421,10 @@ export default function BrokerTOTP() {
       const data = await response.json()
 
       if (data.status === 'success' || response.ok) {
-        login(formData.userid || formData.mobile || '', broker || '')
+        // Brokers with no userid/mobile field (e.g. Sahi TOTP) keep the
+        // existing app username instead of overwriting it with ''.
+        const { user } = useAuthStore.getState()
+        login(formData.userid || formData.mobile || user?.username || '', broker || '')
         showToast.success('Authentication successful')
         navigate('/dashboard')
       } else {

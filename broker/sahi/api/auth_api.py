@@ -1,17 +1,22 @@
 """Sahi login: exchange the API key and secret for the day's access token.
 
-Sahi has no redirect and no TOTP. The trader creates an API key in the Sahi
-web app (key id ``pk_...``, secret ``sahi_sk_...``), approves it once per
-trading day in the API Dashboard, and the token endpoint on the auth host
-mints a Bearer token valid until the next 06:00 IST boundary
+Sahi has no redirect. It issues two kinds of API key in the web app (Profile,
+API Dashboard): a Regular key (key id ``pk_...``, secret ``sahi_sk_...``),
+approved once per trading day in the dashboard, and a TOTP key (same key id
+and secret, plus a six-digit code from the trader's authenticator app), whose
+first correct code of the day approves it. The token endpoint on the auth
+host mints a Bearer token valid until the next 06:00 IST boundary
 (broker-api-docs/sahi-api-docs, Authentication).
 
     POST https://apis.sahi.com/api/v1/apikeys/token
-    {"key_id": "pk_...", "secret": "sahi_sk_..."}
+    {"key_id": "pk_...", "secret": "sahi_sk_..."}           # Regular key
+    {"key_id": "pk_...", "secret": "sahi_sk_...", "totp": "123456"}  # TOTP key
     -> {"access_token": "...", "token_type": "Bearer", "expires_in": 65275,
         "expires_at": "...T06:00:00+05:30", "scope": "orders.write ..."}
 
-BROKER_API_KEY holds the key id and BROKER_API_SECRET the secret.
+BROKER_API_KEY holds the key id and BROKER_API_SECRET the secret. The code is
+typed at each login and never stored, and it is sent only for a TOTP key:
+Sahi rejects a Regular key that arrives with ``totp``.
 """
 
 import os
@@ -27,7 +32,24 @@ logger = get_logger(__name__)
 TOKEN_PATH = "/api/v1/apikeys/token"
 
 
-def _login_error(status_code, body):
+#: Returned as the error message when the saved key is a TOTP key and no code
+#: was sent: the login route answers by sending the trader to the TOTP form.
+TOTP_REQUIRED_MESSAGE = (
+    "This Sahi API key needs the six digit code from your authenticator app. "
+    "Enter it to log in."
+)
+
+
+def _needs_totp(status_code, body):
+    """True when Sahi refuses the mint because the key needs a TOTP code."""
+    if not isinstance(body, dict):
+        return False
+    if body.get("code") != "InvalidRequest":
+        return False
+    return "totp" in (body.get("message") or "").lower()
+
+
+def _login_error(status_code, body, totp_sent=False):
     """A login failure in words a trader can act on.
 
     The auth host answers with {"code", "message"} where code is PascalCase:
@@ -37,6 +59,20 @@ def _login_error(status_code, body):
     code = body.get("code") if isinstance(body, dict) else None
     reason = body.get("message") if isinstance(body, dict) else None
 
+    if _needs_totp(status_code, body):
+        if totp_sent:
+            # A code was sent and Sahi still refused with a TOTP-shaped error: the
+            # code was wrong or expired, not missing.
+            return (
+                "Sahi did not accept that code. Enter the current code from your authenticator app. "
+                "If it keeps failing, check that this computer's clock is correct."
+            )
+        return TOTP_REQUIRED_MESSAGE
+    if code == "InvalidTotp":
+        return (
+            "Sahi did not accept that code. Enter the current code from your authenticator app. "
+            "If it keeps failing, check that this computer's clock is correct."
+        )
     if status_code == 403 or code == "Forbidden":
         return (
             "Sahi did not issue an access token because the API key is not approved for today. "
@@ -62,15 +98,21 @@ def _login_error(status_code, body):
     return message + ". Check the API key and secret in your OpenAlgo settings."
 
 
-def authenticate_broker(code=None):
+def authenticate_broker(code=None, totp=None):
     """Mint the day's Sahi access token from the API key and secret.
 
     Args:
         code: Unused. The login route passes a placeholder; the credentials come
             from BROKER_API_KEY and BROKER_API_SECRET.
+        totp: The six-digit code from the trader's authenticator app, for a TOTP
+            key only. Never sent otherwise: Sahi rejects a Regular key that
+            arrives with ``totp``.
 
     Returns:
         tuple: (access_token, None) on success, (None, error_message) on failure.
+            When the saved key is a TOTP key and no code was sent, the error
+            message is TOTP_REQUIRED_MESSAGE so the login route can send the
+            trader to the TOTP form.
     """
     key_id = (os.getenv("BROKER_API_KEY") or "").strip()
     secret = (os.getenv("BROKER_API_SECRET") or "").strip()
@@ -80,6 +122,10 @@ def authenticate_broker(code=None):
             "(the API secret, sahi_sk_...). Add both in your OpenAlgo settings."
         )
 
+    payload = {"key_id": key_id, "secret": secret}
+    if totp:
+        payload["totp"] = totp
+
     client = get_httpx_client()
     try:
         response = sahi_request(
@@ -87,7 +133,7 @@ def authenticate_broker(code=None):
             "POST",
             f"{AUTH_BASE_URL}{TOKEN_PATH}",
             "auth",
-            json={"key_id": key_id, "secret": secret},
+            json=payload,
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
@@ -117,4 +163,21 @@ def authenticate_broker(code=None):
         f"Sahi login refused: HTTP {response.status_code}, code={body.get('code') if isinstance(body, dict) else None}, "
         f"message={body.get('message') if isinstance(body, dict) else None}"
     )
-    return None, _login_error(response.status_code, body)
+    return None, _login_error(response.status_code, body, totp_sent=bool(totp))
+
+
+def authenticate_broker_totp(totp):
+    """Mint the day's token for a TOTP key, with the code typed at login.
+
+    The code is used for this mint only and is never stored.
+
+    Args:
+        totp: The six-digit code from the trader's authenticator app.
+
+    Returns:
+        tuple: (access_token, None) on success, (None, error_message) on failure.
+    """
+    code = (totp or "").strip()
+    if not (code.isdigit() and len(code) == 6):
+        return None, "Enter the six-digit code shown in your authenticator app right now."
+    return authenticate_broker(totp=code)

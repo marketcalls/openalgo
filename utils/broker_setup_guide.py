@@ -849,11 +849,12 @@ GUIDES = {
                 "secret": True,
             },
         ),
-        "banner": "Login with Sahi signs you in with one click using the API key and secret "
-        "you saved. Approve the key in Sahi's API Dashboard once each trading day "
-        "first, and register the internet address this computer's traffic leaves "
-        "from as a static IP on your Sahi account: Sahi refuses orders from any "
-        "other address.",
+        "banner": "Login with Sahi signs you in with the API key and secret you saved. "
+        "A Regular key is approved in Sahi's API Dashboard once each trading day; "
+        "a TOTP key instead asks for the six digit code from your authenticator app "
+        "at each login. Register the internet address this computer's traffic "
+        "leaves from as a static IP on your Sahi account: Sahi refuses orders "
+        "from any other address.",
         "redirect_hint": "",
     },
     "samco": {
