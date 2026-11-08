@@ -259,8 +259,10 @@ def calculate_stop_limit_price(
 
     Without a tick size (no master contract row, or one without a tick) the
     buffer cannot be snapped to a valid price, so the trigger itself is the
-    limit: the caller's trigger is already tick-valid, and the order is still
-    sent rather than refused.
+    limit and the order is still sent rather than refused. The trigger is not
+    checked against a tick here, but the broker receives it as the trigger
+    price as well, so using it as the limit adds no new way to be rejected: a
+    trigger off the tick grid is refused by the broker either way.
 
     Raises:
         ValueError: If the trigger is not positive, or a SELL limit would not
