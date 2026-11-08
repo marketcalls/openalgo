@@ -49,7 +49,7 @@ def _needs_totp(status_code, body):
     return "totp" in (body.get("message") or "").lower()
 
 
-def _login_error(status_code, body):
+def _login_error(status_code, body, totp_sent=False):
     """A login failure in words a trader can act on.
 
     The auth host answers with {"code", "message"} where code is PascalCase:
@@ -60,6 +60,13 @@ def _login_error(status_code, body):
     reason = body.get("message") if isinstance(body, dict) else None
 
     if _needs_totp(status_code, body):
+        if totp_sent:
+            # A code was sent and Sahi still refused with a TOTP-shaped error: the
+            # code was wrong or expired, not missing.
+            return (
+                "Sahi did not accept that code. Enter the current code from your authenticator app. "
+                "If it keeps failing, check that this computer's clock is correct."
+            )
         return TOTP_REQUIRED_MESSAGE
     if code == "InvalidTotp":
         return (
@@ -156,7 +163,7 @@ def authenticate_broker(code=None, totp=None):
         f"Sahi login refused: HTTP {response.status_code}, code={body.get('code') if isinstance(body, dict) else None}, "
         f"message={body.get('message') if isinstance(body, dict) else None}"
     )
-    return None, _login_error(response.status_code, body)
+    return None, _login_error(response.status_code, body, totp_sent=bool(totp))
 
 
 def authenticate_broker_totp(totp):
@@ -170,4 +177,7 @@ def authenticate_broker_totp(totp):
     Returns:
         tuple: (access_token, None) on success, (None, error_message) on failure.
     """
-    return authenticate_broker(totp=(totp or "").strip())
+    code = (totp or "").strip()
+    if not (code.isdigit() and len(code) == 6):
+        return None, "Enter the six-digit code shown in your authenticator app right now."
+    return authenticate_broker(totp=code)
