@@ -99,3 +99,38 @@ def test_other_refusals_keep_their_existing_messages(monkeypatch):
     assert token is None
     assert "not approved for today" in error
     assert "403" not in error
+
+
+def test_malformed_code_never_reaches_sahi(monkeypatch):
+    """A code that is not six digits is refused locally; Sahi is never called."""
+    calls = []
+    _mock_sahi(monkeypatch, recorder={k: None for k in ()})
+    monkeypatch.setattr(
+        auth_api,
+        "sahi_request",
+        lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(AssertionError("Sahi was called")),
+    )
+
+    for bad in ("12345", "1234567", "abcdef", "", None):
+        token, error = auth_api.authenticate_broker_totp(bad)
+        assert token is None
+        assert "six-digit" in error
+
+    assert calls == []
+
+
+def test_totp_shaped_refusal_after_code_sent_means_wrong_code(monkeypatch):
+    """When a code was sent and Sahi still answers with a TOTP-shaped refusal,
+    the trader typed a wrong or expired code - they must not be told to enter a
+    code they already typed."""
+    _mock_sahi(
+        monkeypatch,
+        status_code=400,
+        body={"code": "InvalidRequest", "message": "totp is invalid or expired"},
+    )
+
+    token, error = auth_api.authenticate_broker_totp("483920")
+
+    assert token is None
+    assert "did not accept that code" in error
+    assert error != auth_api.TOTP_REQUIRED_MESSAGE
