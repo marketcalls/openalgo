@@ -520,6 +520,22 @@ SPECS = {
         error={"status": "error", "code": "e-101", "message": "Invalid session"},
         patches={"resolve_instrument": lambda symbol, exchange: ("NSE:SBIN", "NSE_EQ", 1)},
     ),
+    "sahi": Spec(
+        path="/v1/positions",
+        book=lambda q: {
+            "positions": []
+            if q is None
+            else [
+                {
+                    "symbol": "SBIN",
+                    "exchange_segment": "NSE",
+                    "product": "I",
+                    "net_qty": q,
+                }
+            ]
+        },
+        error={"code": "UNAUTHORIZED", "message": "Session expired"},
+    ),
     "samco": Spec(
         path="/position/getPositions",
         br_symbol="SBIN-EQ",
