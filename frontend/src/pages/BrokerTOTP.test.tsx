@@ -83,6 +83,13 @@ describe('BrokerTOTP', () => {
     // isLoading here would re-enable submit in the gap and let a single-use
     // TOTP code be posted twice.
     expect(screen.getByRole('button', { name: /Authenticating/ })).toBeDisabled()
+
+    // ...unless the page is later restored from bfcache (Back from the
+    // dashboard): then the busy state must reset or the form is stuck.
+    const pageshow = new Event('pageshow')
+    Object.defineProperty(pageshow, 'persisted', { value: true })
+    fireEvent(window, pageshow)
+    expect(screen.getByRole('button', { name: 'Authenticate' })).toBeEnabled()
   })
 
   it('stays put and shows the error when the callback refuses the login', async () => {
