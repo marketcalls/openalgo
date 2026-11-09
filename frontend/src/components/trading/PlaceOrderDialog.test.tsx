@@ -24,8 +24,12 @@ vi.mock('@/utils/toast', () => ({
   showToast: { error: vi.fn(), success: vi.fn() },
 }))
 
+// The key the auth store holds. Null is the state an in-app broker login left
+// it in before it re-read the session (issue 2417).
+let storedApiKey: string | null = 'test-api-key'
+
 vi.mock('@/stores/authStore', () => ({
-  useAuthStore: () => ({ apiKey: 'test-api-key' }),
+  useAuthStore: () => ({ apiKey: storedApiKey }),
 }))
 
 vi.mock('@/hooks/useLiveQuote', () => ({
@@ -83,6 +87,24 @@ describe('lotsFor', () => {
 describe('PlaceOrderDialog', () => {
   beforeEach(() => {
     placeOrder.mockReset()
+    storedApiKey = 'test-api-key'
+  })
+
+  it('lets the chart route place without a key in the auth store', async () => {
+    storedApiKey = null
+    const place = vi.fn(async () => ({ orderId: 'ORD-3' }))
+    const onSuccess = vi.fn()
+    render(<PlaceOrderDialog {...nifty} place={place} onSuccess={onSuccess} />)
+    const button = screen.getByRole('button', { name: 'Place BUY Order' })
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith('ORD-3'))
+  })
+
+  it('keeps the API post disabled without a key in the auth store', () => {
+    storedApiKey = null
+    render(<PlaceOrderDialog {...nifty} />)
+    expect(screen.getByRole('button', { name: 'Place BUY Order' })).toBeDisabled()
   })
 
   it('shows the lots a units quantity stands for, over the same total', () => {
