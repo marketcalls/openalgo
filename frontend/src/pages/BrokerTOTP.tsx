@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
@@ -333,6 +333,19 @@ export default function BrokerTOTP() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<Record<string, string>>({})
+
+  // A successful submit keeps the form busy until the full navigation
+  // unloads this page - but the app shell is served with Cache-Control:
+  // no-cache (not no-store), so Back from /dashboard can restore this page
+  // from bfcache and revive the stuck busy state. Reset on a persisted
+  // pageshow so the restored form is usable.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setIsLoading(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [])
 
   // Normalize broker name (handle 5paisa -> fivepaisa)
   const normalizedBroker = broker === '5paisa' ? 'fivepaisa' : broker
