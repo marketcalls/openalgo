@@ -408,12 +408,16 @@ export default function BrokerTOTP() {
         // ticket's BUY/SELL stays disabled until the next full page load
         // (#2417). Select Broker completes its logins the same way.
         window.location.href = '/dashboard'
-      } else {
-        setError(data.message || 'Authentication failed. Please try again.')
+        // Stay busy until the navigation unloads this page (Select Broker
+        // does the same): resetting here would re-enable the form in the
+        // gap before the browser leaves and let a single-use TOTP code be
+        // submitted twice.
+        return
       }
+      setError(data.message || 'Authentication failed. Please try again.')
+      setIsLoading(false)
     } catch {
       setError('Authentication failed. Please check your credentials and try again.')
-    } finally {
       setIsLoading(false)
     }
   }
