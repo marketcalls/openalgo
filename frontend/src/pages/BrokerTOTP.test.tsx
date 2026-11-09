@@ -22,8 +22,13 @@ function serve(opts: { refuseCallback?: string } = {}) {
       if (init?.method === 'POST') {
         posts.push(url)
         if (url === '/kotak/callback') {
-          if (opts.refuseCallback) return json({ status: 'error', message: opts.refuseCallback }, 401)
-          return json({ status: 'success', message: 'Authentication successful', redirect: '/dashboard' })
+          if (opts.refuseCallback)
+            return json({ status: 'error', message: opts.refuseCallback }, 401)
+          return json({
+            status: 'success',
+            message: 'Authentication successful',
+            redirect: '/dashboard',
+          })
         }
       }
       return json({}, 404)
@@ -73,6 +78,11 @@ describe('BrokerTOTP', () => {
 
     await waitFor(() => expect(posts).toContain('/kotak/callback'))
     await waitFor(() => expect(assigned).toContain('/dashboard'))
+
+    // The form stays busy until the navigation unloads the page: resetting
+    // isLoading here would re-enable submit in the gap and let a single-use
+    // TOTP code be posted twice.
+    expect(screen.getByRole('button', { name: /Authenticating/ })).toBeDisabled()
   })
 
   it('stays put and shows the error when the callback refuses the login', async () => {
@@ -84,5 +94,8 @@ describe('BrokerTOTP', () => {
 
     await screen.findByText('Authentication failed. Please try again.')
     expect(assigned).toEqual([])
+
+    // A refused login re-enables the form so the code can be retried.
+    expect(screen.getByRole('button', { name: 'Authenticate' })).toBeEnabled()
   })
 })
