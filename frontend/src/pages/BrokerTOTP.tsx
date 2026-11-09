@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
 // Field configuration type
@@ -331,10 +330,22 @@ const brokerNames: Record<string, string> = {
 export default function BrokerTOTP() {
   const { broker } = useParams<{ broker: string }>()
   const navigate = useNavigate()
-  const { login } = useAuthStore()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<Record<string, string>>({})
+
+  // A successful submit keeps the form busy until the full navigation
+  // unloads this page - but the app shell is served with Cache-Control:
+  // no-cache (not no-store), so Back from /dashboard can restore this page
+  // from bfcache and revive the stuck busy state. Reset on a persisted
+  // pageshow so the restored form is usable.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setIsLoading(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [])
 
   // Normalize broker name (handle 5paisa -> fivepaisa)
   const normalizedBroker = broker === '5paisa' ? 'fivepaisa' : broker
@@ -403,15 +414,23 @@ export default function BrokerTOTP() {
       const data = await response.json()
 
       if (data.status === 'success' || response.ok) {
-        login(formData.userid || formData.mobile || '', broker || '')
         showToast.success('Authentication successful')
-        navigate('/dashboard')
-      } else {
-        setError(data.message || 'Authentication failed. Please try again.')
+        // A full navigation, not SPA routing: the auth store's API key is
+        // hydrated only by AuthSync's /auth/session-status fetch at app
+        // mount. An SPA navigate leaves the key unset, and every order
+        // ticket's BUY/SELL stays disabled until the next full page load
+        // (#2417). Select Broker completes its logins the same way.
+        window.location.href = '/dashboard'
+        // Stay busy until the navigation unloads this page (Select Broker
+        // does the same): resetting here would re-enable the form in the
+        // gap before the browser leaves and let a single-use TOTP code be
+        // submitted twice.
+        return
       }
+      setError(data.message || 'Authentication failed. Please try again.')
+      setIsLoading(false)
     } catch {
       setError('Authentication failed. Please check your credentials and try again.')
-    } finally {
       setIsLoading(false)
     }
   }
