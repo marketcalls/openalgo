@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
 // Field configuration type
@@ -331,7 +330,6 @@ const brokerNames: Record<string, string> = {
 export default function BrokerTOTP() {
   const { broker } = useParams<{ broker: string }>()
   const navigate = useNavigate()
-  const { login } = useAuthStore()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<Record<string, string>>({})
@@ -403,9 +401,13 @@ export default function BrokerTOTP() {
       const data = await response.json()
 
       if (data.status === 'success' || response.ok) {
-        login(formData.userid || formData.mobile || '', broker || '')
         showToast.success('Authentication successful')
-        navigate('/dashboard')
+        // A full navigation, not SPA routing: the auth store's API key is
+        // hydrated only by AuthSync's /auth/session-status fetch at app
+        // mount. An SPA navigate leaves the key unset, and every order
+        // ticket's BUY/SELL stays disabled until the next full page load
+        // (#2417). Select Broker completes its logins the same way.
+        window.location.href = '/dashboard'
       } else {
         setError(data.message || 'Authentication failed. Please try again.')
       }
