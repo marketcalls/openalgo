@@ -9,46 +9,43 @@ by it, and margin now does too.
 """
 
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 
-import pandas as pd
+from sqlalchemy import create_engine, inspect, text
 
-MASTER = Path("broker/dhan/database/master_contract_db.py")
+from broker.dhan.database import master_contract_db as dhan
 
-
-def _units() -> dict:
-    """MCX_CONTRACT_UNITS as the module ships it (read, not imported: the module
-    opens the broker database on import)."""
-    source = MASTER.read_text(encoding="utf-8")
-    start = source.index("MCX_CONTRACT_UNITS = {")
-    end = source.index("}", start) + 1
-    scope: dict = {}
-    exec(source[start:end], scope)
-    return scope["MCX_CONTRACT_UNITS"]
+# Verbatim rows of Dhan's api-scrip-master.csv, 10 Nov 2026.
+MASTER_CSV = """\
+SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,SEM_EXPIRY_CODE,SEM_TRADING_SYMBOL,SEM_LOT_UNITS,SEM_CUSTOM_SYMBOL,SEM_EXPIRY_DATE,SEM_STRIKE_PRICE,SEM_OPTION_TYPE,SEM_TICK_SIZE,SEM_EXPIRY_FLAG,SEM_EXCH_INSTRUMENT_TYPE,SEM_SERIES,SM_SYMBOL_NAME
+MCX,M,582926,OPTFUT,0,CRUDEOIL-17Nov2026-8800-CE,1.0,CRUDEOIL 17 NOV 8800 CALL,2026-11-17 23:30:00,8800.00000,CE,10.0000,M,OPTFUT,2,CRUDEOIL
+MCX,M,578641,FUTCOM,0,SILVER100-31Dec2026-FUT,1.0,SILVER100 DEC FUT,2026-12-31 23:30:00,0.00000,XX,100.0000,M,FUTCOM,2,SILVER100
+MCX,M,581711,FUTCOM,0,CARDAMOM-31Dec2026-FUT,1.0,CARDAMOM DEC FUT,2026-12-31 23:30:00,0.00000,XX,100.0000,M,FUTCOM,1,CARDAMOM
+NSE,D,45320,OPTIDX,0,NIFTY-Nov2026-24000-CE,65.0,NIFTY 17 NOV 24000 CALL,2026-11-17 14:30:00,24000.00000,CE,5.0000,W,OP,,
+"""
 
 
-def _fill(frame: pd.DataFrame) -> pd.Series:
-    """The fill as ``process_dhan_csv`` performs it."""
-    units = frame["name"].map(_units()).where(frame["exchange"].eq("MCX"))
-    return units.astype(object).where(units.notna(), None)
+def test_process_dhan_csv_fills_the_mcx_lots_units_and_nothing_else(tmp_path):
+    (tmp_path / "master.csv").write_text(MASTER_CSV, encoding="utf-8")
+    df = dhan.process_dhan_csv(str(tmp_path))
+    rows = {r.symbol: (r.exchange, r.lotsize, r.contract_value) for r in df.itertuples()}
+    assert rows["CRUDEOIL17NOV268800CE"] == ("MCX", 1, 100)     # Rs/barrel, 100 barrels
+    assert rows["SILVER10031DEC26FUT"] == ("MCX", 1, 10)        # Rs/10 g, 100 g
+    assert rows["CARDAMOM31DEC26FUT"][2] is None                # not in the table: empty, read as 1
+    assert rows["NIFTY17NOV2624000CE"] == ("NFO", 65, None)     # lot size already in units
 
 
-def test_mcx_rows_carry_the_lots_units_and_nothing_else_does():
-    frame = pd.DataFrame(
-        {
-            "name": ["CRUDEOIL", "SILVERM", "GOLDM", "NATURALGASM", "NIFTY", "CRUDEOIL", "CARDAMOM"],
-            "exchange": ["MCX", "MCX", "MCX", "MCX", "NFO", "NSE", "MCX"],
-        }
-    )
-    assert list(_fill(frame)) == [100, 5, 10, 250, None, None, None]
-
-
-def test_the_fill_the_module_ships_matches_this_rule():
-    source = MASTER.read_text(encoding="utf-8")
-    assert 'units = token_df["name"].map(MCX_CONTRACT_UNITS).where(token_df["exchange"].eq("MCX"))' in source
-    assert 'token_df["contract_value"] = units.astype(object).where(units.notna(), None)' in source
-    assert "contract_value = Column(Float)" in source
+def test_init_db_adds_the_column_to_an_older_symtoken(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    with engine.connect() as conn:
+        conn.execute(text("CREATE TABLE symtoken (id INTEGER PRIMARY KEY, symbol TEXT, brsymbol TEXT, name TEXT, "
+                          "exchange TEXT, brexchange TEXT, token TEXT, expiry TEXT, strike REAL, lotsize INTEGER, "
+                          "instrumenttype TEXT, tick_size REAL)"))
+        conn.commit()
+    monkeypatch.setattr(dhan, "engine", engine)
+    dhan.init_db()
+    dhan.init_db()                                     # idempotent
+    assert "contract_value" in {c["name"] for c in inspect(engine).get_columns("symtoken")}
 
 
 def test_sandbox_margin_multiplies_by_contract_value(monkeypatch):

@@ -10,7 +10,7 @@ import shutil
 import numpy as np
 import pandas as pd
 import requests
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
@@ -39,6 +39,7 @@ MCX_CONTRACT_UNITS = {
     "GOLD": 100, "GOLDM": 10,                               # Rs/10 g; 1 kg and 100 g
     "GOLDGUINEA": 1, "GOLDPETAL": 1, "GOLDTEN": 1,          # quoted per lot (8 g, 1 g, 10 g)
     "SILVER": 30, "SILVERM": 5, "SILVERMIC": 1,             # Rs/kg; 30, 5 and 1 kg
+    "SILVER100": 10,                                        # Rs/10 g; 100 g
     "COPPER": 2500,                                         # Rs/kg; 2500 kg
     "ZINC": 5000, "ZINCMINI": 1000, "LEAD": 5000, "LEADMINI": 1000,
     "ALUMINIUM": 5000, "ALUMINI": 1000,                     # Rs/kg
@@ -68,6 +69,17 @@ class SymToken(Base):
 def init_db():
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
+    # create_all never adds a column to an existing table. A symtoken created before contract_value existed (an
+    # install that skipped upgrade/migrate_contract_value.py) would fail every bulk insert below, after the table was
+    # emptied. Check before adding, as the Delta Exchange master contract does.
+    try:
+        if "contract_value" not in {c["name"] for c in inspect(engine).get_columns("symtoken")}:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE symtoken ADD COLUMN contract_value REAL"))
+                conn.commit()
+            logger.info("Migrated symtoken table: added contract_value column")
+    except Exception as e:
+        logger.error(f"contract_value migration failed; run upgrade/migrate_contract_value.py: {e}")
 
 
 def delete_symtoken_table():
