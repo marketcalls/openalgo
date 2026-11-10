@@ -88,6 +88,16 @@ def test_a_long_position_is_found(api, monkeypatch):
     assert api.get_open_position(OPTION, "NFO", "NRML", "token") == "65"
 
 
+def test_a_position_book_sent_as_a_flat_list_is_read_too(api, monkeypatch):
+    # Some XTS endpoints answer with ``result`` as the list itself rather
+    # than wrapped in ``positionList``.
+    book = _book(_position())
+    book["result"] = book["result"]["positionList"]
+    monkeypatch.setattr(api, "_get_cached_positions", lambda auth: book)
+
+    assert api.get_open_position(OPTION, "NFO", "NRML", "token") == "65"
+
+
 def test_a_short_position_keeps_its_sign(api, monkeypatch):
     _positions(api, monkeypatch, _position(Quantity="-65"))
 
