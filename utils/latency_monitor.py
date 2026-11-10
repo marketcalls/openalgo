@@ -7,7 +7,13 @@ from flask_restx import Resource
 
 from database.auth_db import db_session as auth_db_session
 from database.auth_db import get_broker_name
-from database.latency_db import OrderLatency, init_latency_db, latency_session, purge_old_data_logs
+from database.latency_db import (
+    ORDER_TYPES,
+    OrderLatency,
+    init_latency_db,
+    latency_session,
+    purge_old_data_logs,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,31 +24,11 @@ logger = get_logger(__name__)
 # long-lived thread.
 _latency_log_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="latency-log")
 
-#: Latency records of these types are kept forever; everything else is a data
-#: query and is purged after a week. Must stay in step with the set in
-#: ``database.latency_db.purge_old_data_logs``, which does the deleting -- a
-#: type here but missing there is purged despite being an order.
-#:
-#: A GTT is an order instruction, not a data query. It can also rest for a year
-#: before firing, so purging its placement latency after a week would discard
-#: the record long before the order it describes exists.
-KEEP_FOREVER_TYPES = frozenset(
-    {
-        "PLACE",
-        "SMART",
-        "MODIFY",
-        "CANCEL",
-        "CLOSE",
-        "CANCEL_ALL",
-        "BASKET",
-        "SPLIT",
-        "OPTIONS",
-        "OPTIONS_MULTI",
-        "GTT_PLACE",
-        "GTT_MODIFY",
-        "GTT_CANCEL",
-    }
-)
+#: Latency records of these types are kept forever and are the only ones the
+#: dashboard counts as orders; everything else is a data query and is purged
+#: after a week. The set lives in ``database.latency_db`` so the purge, the
+#: dashboard figures and this module read one list.
+KEEP_FOREVER_TYPES = ORDER_TYPES
 
 
 def _log_latency_async(
@@ -372,7 +358,7 @@ def init_latency_monitoring(app):
         "options_multiorder": "OPTIONS_MULTI",
         # GTT. These were already being wrapped - an unmapped namespace falls
         # back to its uppercased name - but as PLACE_GTT_ORDER etc, which does
-        # not match the ORDER_TYPES set below, so GTT latency was being purged
+        # not match database.latency_db.ORDER_TYPES, so GTT latency was being purged
         # after 7 days as though it were a data query.
         "place_gtt_order": "GTT_PLACE",
         "modify_gtt_order": "GTT_MODIFY",

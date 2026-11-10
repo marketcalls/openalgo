@@ -8,7 +8,7 @@ import pytz
 from flask import Blueprint, Response, jsonify, render_template, request, session
 from sqlalchemy import func
 
-from database.latency_db import OrderLatency, latency_session
+from database.latency_db import ORDER_TYPES, OrderLatency, latency_session
 from limiter import limiter
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -36,9 +36,9 @@ def format_ist_time(timestamp):
 
 
 def get_histogram_data(broker=None):
-    """Get histogram data for RTT distribution"""
+    """Get histogram data for the RTT distribution of order calls"""
     try:
-        query = OrderLatency.query
+        query = OrderLatency.query.filter(OrderLatency.order_type.in_(ORDER_TYPES))
         if broker:
             query = query.filter_by(broker=broker)
 
@@ -196,6 +196,9 @@ def get_logs():
                     "total_latency_ms": log.total_latency_ms,
                     "status": log.status,
                     "error": log.error,
+                    # Data queries share this table; the dashboard counts
+                    # only order calls in its order figures.
+                    "is_order": log.order_type in ORDER_TYPES,
                 }
                 for log in logs
             ]
