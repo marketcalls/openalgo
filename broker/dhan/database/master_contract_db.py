@@ -30,6 +30,21 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 
+# Dhan lists every MCX contract with lot size 1: its order quantity counts lots. A price moves rupees by the lot's
+# units, which the scrip master does not carry, so P&L and margin take them from here (MCX contract specifications,
+# lot size / price quotation unit). An underlying not listed keeps contract_value empty (1).
+MCX_CONTRACT_UNITS = {
+    "CRUDEOIL": 100, "CRUDEOILM": 10,                       # Rs/barrel; 100 and 10 barrels
+    "NATURALGAS": 1250, "NATURALGASM": 250,                 # Rs/mmBtu; 1250 and 250 mmBtu
+    "GOLD": 100, "GOLDM": 10,                               # Rs/10 g; 1 kg and 100 g
+    "GOLDGUINEA": 1, "GOLDPETAL": 1, "GOLDTEN": 1,          # quoted per lot (8 g, 1 g, 10 g)
+    "SILVER": 30, "SILVERM": 5, "SILVERMIC": 1,             # Rs/kg; 30, 5 and 1 kg
+    "COPPER": 2500,                                         # Rs/kg; 2500 kg
+    "ZINC": 5000, "ZINCMINI": 1000, "LEAD": 5000, "LEADMINI": 1000,
+    "ALUMINIUM": 5000, "ALUMINI": 1000,                     # Rs/kg
+}
+
+
 class SymToken(Base):
     __tablename__ = "symtoken"
     id = Column(Integer, Sequence("symtoken_id_seq"), primary_key=True)
@@ -44,6 +59,7 @@ class SymToken(Base):
     lotsize = Column(Integer)
     instrumenttype = Column(String)
     tick_size = Column(Float)
+    contract_value = Column(Float)  # MCX: units per lot (Dhan quotes MCX quantity in lots)
 
     # Define a composite index on symbol and exchange columns
     __table_args__ = (Index("idx_symbol_exchange", "symbol", "exchange"),)
@@ -537,6 +553,9 @@ def process_dhan_csv(path):
     # Removing the specified columns. errors="ignore" so a column Dhan drops
     # from a future master file does not break the whole download.
     token_df = df.drop(columns=columns_to_remove, errors="ignore")
+
+    units = token_df["name"].map(MCX_CONTRACT_UNITS).where(token_df["exchange"].eq("MCX"))
+    token_df["contract_value"] = units.astype(object).where(units.notna(), None)
 
     return token_df
 
