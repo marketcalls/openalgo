@@ -121,6 +121,28 @@ def test_purge_keeps_orders_and_drops_old_data_calls(latency_table):
     assert remaining == ["GTT_PLACE", "PLACE", "QUOTES"]
 
 
+def test_purge_drops_old_rows_without_a_type(latency_table):
+    # The stats count a row with no type as a data call, so the purge must
+    # drop it like one. SQL NOT IN never matches NULL.
+    old = datetime.utcnow() - timedelta(days=30)
+    _row(None, 40.0, timestamp=old)
+    _row("PLACE", 60.0, timestamp=old)
+
+    assert latency_db.purge_old_data_logs(days=7) == 1
+    assert [r.order_type for r in OrderLatency.query.all()] == ["PLACE"]
+
+
+def test_gtt_rows_from_before_the_gtt_mapping_still_count_as_orders(latency_table):
+    # GTT calls were logged under their endpoint names before they were
+    # mapped to GTT_*. Those rows are orders: counted, and never purged.
+    old = datetime.utcnow() - timedelta(days=30)
+    _row("PLACE_GTT_ORDER", 90.0, timestamp=old)
+    _row("CANCEL_GTT_ORDER", 30.0)
+
+    assert OrderLatency.get_latency_stats()["total_orders"] == 2
+    assert latency_db.purge_old_data_logs(days=7) == 0
+
+
 def test_monitor_keeps_forever_the_types_the_dashboard_counts():
     from utils import latency_monitor
 

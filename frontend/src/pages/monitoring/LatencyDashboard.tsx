@@ -514,9 +514,15 @@ export default function LatencyDashboard() {
       <Dialog open={!!selectedOrder} onOpenChange={() => setSelectedOrder(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Order Latency Breakdown</DialogTitle>
+            <DialogTitle>
+              {selectedOrder?.is_order === false
+                ? 'API Call Latency Breakdown'
+                : 'Order Latency Breakdown'}
+            </DialogTitle>
             <DialogDescription>
-              Detailed latency analysis for order {selectedOrder?.order_id}
+              {selectedOrder?.is_order === false
+                ? `Detailed latency analysis for this ${selectedOrder.order_type} call`
+                : `Detailed latency analysis for order ${selectedOrder?.order_id}`}
             </DialogDescription>
           </DialogHeader>
 
@@ -526,8 +532,17 @@ export default function LatencyDashboard() {
               <div className="grid grid-cols-2 gap-4">
                 <Card>
                   <CardContent className="p-4">
-                    <p className="text-sm text-muted-foreground">Order ID</p>
-                    <p className="font-mono font-semibold">{selectedOrder.order_id}</p>
+                    {selectedOrder.is_order === false ? (
+                      <>
+                        <p className="text-sm text-muted-foreground">Call type</p>
+                        <p className="font-mono font-semibold">{selectedOrder.order_type}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-muted-foreground">Order ID</p>
+                        <p className="font-mono font-semibold">{selectedOrder.order_id}</p>
+                      </>
+                    )}
                   </CardContent>
                 </Card>
                 <Card>

@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine, or_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -65,6 +65,12 @@ ORDER_TYPES = frozenset(
         "GTT_PLACE",
         "GTT_MODIFY",
         "GTT_CANCEL",
+        # The names GTT calls were logged under before they were mapped to
+        # GTT_* (an unmapped endpoint is logged as its uppercased name). Rows
+        # written by older versions still carry them.
+        "PLACE_GTT_ORDER",
+        "MODIFY_GTT_ORDER",
+        "CANCEL_GTT_ORDER",
     }
 )
 
@@ -169,7 +175,7 @@ class OrderLatency(LatencyBase):
 
         try:
             import numpy as np
-            from sqlalchemy import case, func, or_
+            from sqlalchemy import case, func
 
             percentile_cutoff = datetime.utcnow() - timedelta(days=PERCENTILE_WINDOW_DAYS)
 
@@ -381,7 +387,12 @@ def purge_old_data_logs(days=7):
         # Delete non-order logs older than cutoff
         deleted = (
             latency_session.query(OrderLatency)
-            .filter(OrderLatency.timestamp < cutoff, ~OrderLatency.order_type.in_(ORDER_TYPES))
+            .filter(
+                OrderLatency.timestamp < cutoff,
+                # The same non-order rule the stats use: NOT IN never matches
+                # NULL, so a row without a type is named explicitly.
+                or_(OrderLatency.order_type.is_(None), ~OrderLatency.order_type.in_(ORDER_TYPES)),
+            )
             .delete(synchronize_session=False)
         )
 

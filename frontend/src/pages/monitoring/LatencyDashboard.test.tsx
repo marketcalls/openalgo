@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@/test/test-utils'
+import { render, screen, userEvent, within } from '@/test/test-utils'
 
 const http = vi.hoisted(() => ({ get: vi.fn() }))
 
@@ -90,5 +90,28 @@ describe('LatencyDashboard', () => {
     expect(await screen.findByText('Recent API Calls')).toBeInTheDocument()
     expect(screen.getByText('4 calls, 1 of them orders')).toBeInTheDocument()
     expect(screen.queryByText('4 orders tracked')).not.toBeInTheDocument()
+  })
+
+  it('opens a data call as an API call, not as an order', async () => {
+    const user = userEvent.setup()
+    render(<LatencyDashboard />)
+
+    const row = (await screen.findByText('HISTORY')).closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Details' }))
+
+    expect(await screen.findByText('API Call Latency Breakdown')).toBeInTheDocument()
+    expect(screen.getByText('Call type')).toBeInTheDocument()
+    expect(screen.queryByText('Order Latency Breakdown')).not.toBeInTheDocument()
+  })
+
+  it('still opens an order as an order', async () => {
+    const user = userEvent.setup()
+    render(<LatencyDashboard />)
+
+    const row = (await screen.findByText('ord-1')).closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Details' }))
+
+    expect(await screen.findByText('Order Latency Breakdown')).toBeInTheDocument()
+    expect(screen.getByText('Detailed latency analysis for order ord-1')).toBeInTheDocument()
   })
 })
