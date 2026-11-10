@@ -230,7 +230,9 @@ export function ScalpChart({
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || avgPrice == null || !avgQty) return
-    const theme = chart.theme()
+    // Built from the current mode rather than read from the chart: on a theme
+    // switch this effect runs before the one that re-themes the chart.
+    const theme = buildChartTheme(mode, appMode)
     const line = chart.addPriceLine(
       {
         id: 'average-price',

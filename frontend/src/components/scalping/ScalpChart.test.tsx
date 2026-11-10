@@ -15,6 +15,8 @@
 
 import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildChartTheme } from '@/lib/trading/chartTheme'
+import { useThemeStore } from '@/stores/themeStore'
 import { ScalpChart } from './ScalpChart'
 
 const IST = 19800
@@ -231,7 +233,7 @@ describe('ScalpChart', () => {
         expect.objectContaining({
           id: 'average-price',
           price: 112.35,
-          color: '#00aa00',
+          color: currentTheme().upColor,
           lineStyle: 'dotted',
           label: 'AVG 112.35',
         }),
@@ -249,7 +251,7 @@ describe('ScalpChart', () => {
         />
       )
       expect(chart().lines).toEqual([
-        expect.objectContaining({ price: 98.2, color: '#aa0000', label: 'AVG 98.20' }),
+        expect.objectContaining({ price: 98.2, color: currentTheme().downColor, label: 'AVG 98.20' }),
       ])
     })
 
@@ -274,6 +276,22 @@ describe('ScalpChart', () => {
 
       rerender(<ScalpChart symbol={CE} exchange="NFO" interval="1m" averagePrice={null} />)
       expect(chart().lines).toEqual([])
+    })
+
+    it('takes the new theme colour when the theme switches with a position open', () => {
+      useThemeStore.setState({ mode: 'light', appMode: 'live' })
+      render(
+        <ScalpChart
+          symbol={CE}
+          exchange="NFO"
+          interval="1m"
+          averagePrice={{ price: 100, quantity: 75 }}
+        />
+      )
+      act(() => useThemeStore.setState({ mode: 'dark' }))
+      const dark = buildChartTheme('dark', 'live').upColor
+      expect(dark).not.toBe(buildChartTheme('light', 'live').upColor)
+      expect(chart().lines).toEqual([expect.objectContaining({ color: dark })])
     })
 
     it('labels a currency derivative to four decimals', () => {
@@ -304,3 +322,8 @@ describe('ScalpChart', () => {
     })
   })
 })
+
+function currentTheme() {
+  const { mode, appMode } = useThemeStore.getState()
+  return buildChartTheme(mode, appMode)
+}
