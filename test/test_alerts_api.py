@@ -284,6 +284,66 @@ def test_a_change_never_starts_from_the_defaults_when_the_row_cannot_be_read(sto
     assert set(stored.categories) != {"gtt_orders"}
 
 
+def test_a_webhook_removed_while_slack_is_switched_on_never_leaves_it_on(page):
+    """Staged at the write: the webhook is removed after the switch-on checked
+    for one and before it saved. The check used to run before the channel's
+    lock, so the removal landed in between and Slack was saved as on with no
+    webhook."""
+    slack = get_channel("slack")
+    settings.save_webhook(slack, SLACK_URL)
+    settings.update_settings(slack, enabled=False)
+    status = type(slack).status
+    checked, release = threading.Event(), threading.Event()
+
+    def held(self):
+        state = status(self)
+        checked.set()
+        release.wait(2)
+        return state
+
+    type(slack).status = held
+    try:
+        switch_on = threading.Thread(
+            target=lambda: page.post("/alerts/channels/slack", json={"enabled": True})
+        )
+        switch_on.start()
+        assert checked.wait(5)
+        remove = threading.Thread(target=lambda: settings.forget_webhook(slack))
+        remove.start()
+        time.sleep(0.3)  # long enough for an unserialised removal to finish
+        release.set()
+        switch_on.join(5)
+        remove.join(5)
+    finally:
+        type(slack).status = status
+
+    stored = alert_channels_db.load_channel("slack")
+    assert not (stored.enabled and not stored.webhook_saved), stored
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "target"),
+    [
+        ("put", "/alerts/channels/slack/webhook", "save_webhook"),
+        ("delete", "/alerts/channels/slack/webhook", "forget_webhook"),
+    ],
+)
+def test_a_webhook_change_waiting_too_long_is_refused_not_failed(
+    page, monkeypatch, method, path, target
+):
+    from utils.keyed_locks import LockBusy
+
+    def busy(*args, **kwargs):
+        raise LockBusy("slack", "alert channel settings", 10)
+
+    monkeypatch.setattr(settings, target, busy)
+
+    response = getattr(page, method)(path, json={"url": SLACK_URL})
+
+    assert response.status_code == 409
+    assert "still being saved" in response.get_json()["message"]
+
+
 def test_a_status_that_cannot_be_read_is_a_controlled_error(page, monkeypatch):
     monkeypatch.setattr(
         type(get_channel("slack")), "status", lambda self: (_ for _ in ()).throw(OSError("x"))
@@ -408,8 +468,13 @@ def test_notify_needs_the_channel_switched_on(api):
     assert "turned off" in response.get_json()["message"]
 
 
-def test_notify_without_a_webhook_says_so(api):
-    settings.update_settings(get_channel("discord"), enabled=True)
+def test_notify_without_a_usable_webhook_says_so(api, store):
+    """Switched on, but the saved webhook no longer decrypts (a key rotated
+    without the rotation script, say). Switching on with no webhook at all is
+    refused earlier, by update_settings."""
+    settings.save_webhook(get_channel("discord"), DISCORD_URL)
+    with store.begin() as conn:
+        conn.execute(text("UPDATE alert_channels SET webhook_url = 'not-a-ciphertext'"))
 
     response = _notify(api, "discord")
 

@@ -61,6 +61,10 @@ class UnknownCategory(ValueError):
     """An event group that does not exist. The message is for the trader."""
 
 
+class WebhookRequired(ValueError):
+    """A webhook channel switched on with no usable webhook. For the trader."""
+
+
 def defaults(channel: AlertChannel) -> ChannelSettings:
     """What a channel does before anybody changes it."""
     return ChannelSettings(enabled=channel.enabled_by_default, categories=frozenset(CATEGORY_IDS))
@@ -115,6 +119,7 @@ def update_settings(
 
     Raises:
         UnknownCategory: ``categories`` names a group that does not exist.
+        WebhookRequired: A webhook channel switched on with no usable webhook.
         LockBusy: Another change to this channel did not finish in time.
         Exception: The stored settings could not be read or written. Nothing
             is changed.
@@ -124,6 +129,12 @@ def update_settings(
         if unknown:
             raise UnknownCategory(f"Unknown event group: {', '.join(unknown)}")
     with _writers.hold(channel.name, timeout=WRITE_WAIT_SECONDS):
+        # Checked under the lock that forget_webhook takes, so a webhook
+        # removed at the same moment cannot leave the channel on without one.
+        if enabled and channel.uses_webhook and not channel.status().configured:
+            raise WebhookRequired(
+                f"Save a {channel.label} webhook before turning {channel.label} on."
+            )
         # The row itself, not the cached read: a read that fails raises here
         # instead of handing back the defaults.
         current = _from_stored(channel, alert_channels_db.load_channel(channel.name))

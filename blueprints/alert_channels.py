@@ -77,13 +77,13 @@ def update_channel(name: str):
     ):
         return _error("'categories' must be a list of event group names.", 400)
     try:
-        if enabled and channel.uses_webhook and not channel.status().configured:
-            return _error(f"Save a {channel.label} webhook before turning {channel.label} on.", 409)
         alert_settings.update_settings(channel, enabled=enabled, categories=categories)
     except alert_settings.UnknownCategory as error:
         return _error(str(error), 400)
+    except alert_settings.WebhookRequired as error:
+        return _error(str(error), 409)
     except LockBusy:
-        return _error("Another change to this channel is still being saved. Try again.", 409)
+        return _busy()
     except Exception:
         logger.exception(f"Could not save the {channel.label} alert settings")
         return _error("The settings could not be saved. Try again.", 500)
@@ -105,6 +105,8 @@ def save_webhook(name: str):
         return _error(str(error), 400)
     try:
         alert_settings.save_webhook(channel, valid)
+    except LockBusy:
+        return _busy()
     except Exception:
         logger.exception(f"Could not save the {channel.label} webhook")
         return _error("The webhook could not be saved. Try again.", 500)
@@ -121,6 +123,8 @@ def forget_webhook(name: str):
         return _error("Only Slack and Discord use a webhook.", 404)
     try:
         alert_settings.forget_webhook(channel)
+    except LockBusy:
+        return _busy()
     except Exception:
         logger.exception(f"Could not remove the {channel.label} webhook")
         return _error("The webhook could not be removed. Try again.", 500)
@@ -168,6 +172,11 @@ def _describe(channel: AlertChannel) -> dict[str, Any]:
         "categories": sorted(settings.categories),
         "status": status,
     }
+
+
+def _busy():
+    """Another change to the same channel held it too long."""
+    return _error("Another change to this channel is still being saved. Try again.", 409)
 
 
 def _error(message: str, status_code: int):

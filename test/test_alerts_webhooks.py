@@ -457,6 +457,8 @@ def test_a_queued_post_is_never_sent_to_a_webhook_removed_meanwhile(store, provi
     while lane.pending and time.monotonic() < deadline:
         time.sleep(0.01)
 
+    # The queued send ran; it is not merely still waiting.
+    assert lane.pending == 0
     assert provider["requests"] == []
 
 
