@@ -124,4 +124,75 @@ describe('buildPositionRows', () => {
     expect(() => r.avgPrice.toFixed(2)).not.toThrow()
     expect(r.avgPrice.toFixed(2)).toBe('90.50')
   })
+
+  describe('MTM across partial exits and re-entries (#2434)', () => {
+    // Buy 1 unit at 100, 110 and 120, sell 1 at 130, later buy 1 more at 105, then sell
+    // the remaining 3 at 125. The broker (and the sandbox) carries the open quantity at
+    // its weighted average cost and books each exit against that average.
+    const buys = [
+      trade({ action: 'BUY', quantity: 1, average_price: 100 }),
+      trade({ action: 'BUY', quantity: 1, average_price: 110 }),
+      trade({ action: 'BUY', quantity: 1, average_price: 120 }),
+    ]
+    const firstExit = trade({ action: 'SELL', quantity: 1, average_price: 130 })
+    const reEntry = trade({ action: 'BUY', quantity: 1, average_price: 105 })
+    const finalExit = trade({ action: 'SELL', quantity: 3, average_price: 125 })
+
+    it('after a partial exit: realized from the exit, unrealized on the rest', () => {
+      const positions = [pos({ quantity: 2, average_price: 110, ltp: 115 })]
+      const r = buildPositionRows(positions, [...buys, firstExit], {})[0]
+      expect(r.realizedPnl).toBeCloseTo(20) // (130 - 110) x 1
+      expect(r.unrealizedPnl).toBeCloseTo(10) // (115 - 110) x 2
+      expect(r.totalPnl).toBeCloseTo(30)
+    })
+
+    it('a buy after the partial exit does not re-price the earlier exit', () => {
+      const avg = (2 * 110 + 105) / 3
+      const positions = [pos({ quantity: 3, average_price: avg, ltp: 115 })]
+      const r = buildPositionRows(positions, [...buys, firstExit, reEntry], {})[0]
+      expect(r.realizedPnl).toBeCloseTo(20) // was 21.25: (130 - day buy avg 108.75) x 1
+      expect(r.unrealizedPnl).toBeCloseTo((115 - avg) * 3)
+      // Total MTM = sold - bought + open qty at LTP = 130 - 435 + 3 x 115
+      expect(r.totalPnl).toBeCloseTo(40)
+    })
+
+    it('after the final exit: realized is the whole day and the leg is flat', () => {
+      const r = buildPositionRows([], [...buys, firstExit, reEntry, finalExit], {})[0]
+      expect(r.netQty).toBe(0)
+      expect(r.unrealizedPnl).toBe(0)
+      expect(r.realizedPnl).toBeCloseTo(505 - 435) // 70
+    })
+
+    it('the total stays right when the broker reports a net average instead', () => {
+      // Some brokers fold the booked profit into the open average: (435 - 130) / 3.
+      const netAvg = (435 - 130) / 3
+      const positions = [pos({ quantity: 3, average_price: netAvg, ltp: 115 })]
+      const r = buildPositionRows(positions, [...buys, firstExit, reEntry], {})[0]
+      expect(r.totalPnl).toBeCloseTo(40)
+    })
+
+    it('short side: re-entry after a partial cover keeps the cover booked', () => {
+      const trades = [
+        trade({ action: 'SELL', quantity: 2, average_price: 200 }),
+        trade({ action: 'BUY', quantity: 1, average_price: 190 }), // cover 1: +10
+        trade({ action: 'SELL', quantity: 1, average_price: 230 }), // re-enter short
+      ]
+      const avg = (200 + 230) / 2
+      const positions = [pos({ quantity: -2, average_price: avg, ltp: 210 })]
+      const r = buildPositionRows(positions, trades, {})[0]
+      expect(r.side).toBe('SELL')
+      expect(r.realizedPnl).toBeCloseTo(10) // the matched-average formula gave 20
+      expect(r.unrealizedPnl).toBeCloseTo((avg - 210) * 2)
+      expect(r.totalPnl).toBeCloseTo(630 - 190 - 2 * 210) // 20
+    })
+
+    it('a lot carried in from an earlier day keeps the matched-quantity estimate', () => {
+      // Positionbook holds 3 but today shows only a sell of 1: a carried lot.
+      const trades = [trade({ action: 'SELL', quantity: 1, average_price: 130 })]
+      const positions = [pos({ quantity: 3, average_price: 110, ltp: 115 })]
+      const r = buildPositionRows(positions, trades, {})[0]
+      expect(r.realizedPnl).toBe(0) // no buy today to match against
+      expect(r.unrealizedPnl).toBeCloseTo(15)
+    })
+  })
 })
