@@ -1906,8 +1906,9 @@ def webhook(token):
 # instead of polling. Rooms are per strategy rather than per user: a page open
 # on strategy 4 must not be woken by strategy 9's ticks.
 #
-# The default Socket.IO namespace has no connect-time authentication in this
-# codebase, so ownership is checked here, on the join. Without that a connected
+# The default Socket.IO namespace admits only a signed-in session
+# (extensions.require_signed_in_session). Ownership is still checked here, on
+# the join, so the room does not depend on that alone: without it a connected
 # client could name any id and receive another strategy's live P&L and
 # positions. Answering the same way for a strategy that is not yours and one
 # that does not exist keeps the id space unprobeable, as the REST routes do.
