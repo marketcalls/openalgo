@@ -8,7 +8,36 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Added
+
+- **Alerts page (`/alerts`)**: Telegram, WhatsApp, Slack and Discord on one
+  page. Each channel has a card with how it stands, an on/off switch, a test
+  button and a link to its own setup page, and a grid chooses which orders
+  each channel hears about: orders placed, modified, cancelled, positions
+  closed, basket/split/options orders and GTT orders. The profile menu's
+  Telegram Bot and WhatsApp Bot entries are replaced by one Alerts entry; both
+  pages are a click away from it.
+- **Slack and Discord alerts** through an incoming webhook, set up on `/slack`
+  and `/discord`. Nothing to host and no bot token. The webhook URL is stored
+  encrypted, never shown again, kept out of the logs, and only Slack's or
+  Discord's own webhook URLs are accepted. Alerts can never ping a whole
+  channel (`<!channel>`, `@everyone` and other mentions are shown as text).
+- **`POST /api/v1/slack/notify` and `POST /api/v1/discord/notify`** post a
+  message to the saved webhook, like the Telegram and WhatsApp notify
+  endpoints. Both are in the API Playground. The API can only post; it can
+  never read or replace a webhook.
+
 ### Changed
+
+- Alerts are event driven end to end: one subscriber raises an alert per order
+  event and each channel receives it on its own, so a slow or failing channel
+  never delays another. Telegram and WhatsApp alerts are unchanged for an
+  install that never opens `/alerts`: both stay on with every order type, the
+  messages are word for word the same, and their own rules (bot running,
+  device paired) still apply.
+- Upgrade: one migration, `migrate_alert_channels.py`, adds the
+  `alert_channels` table (no rows are written). `migrate_all.py` runs it, and
+  the app also creates the table at startup.
 
 - `/trading`, Historify and every other chart now use openalgo-charts 2.7.0
   (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:

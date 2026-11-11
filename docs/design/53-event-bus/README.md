@@ -81,5 +81,5 @@ The bus decouples side effects on a single request path with minimal dependencie
 | `subscribers/__init__.py` | Registration |
 | `subscribers/log_subscriber.py` | Database logging |
 | `subscribers/socketio_subscriber.py` | Browser refresh/events |
-| `subscribers/telegram_subscriber.py` | Telegram alerts |
-| `subscribers/whatsapp_subscriber.py` | WhatsApp alerts |
+| `subscribers/alert_subscriber.py` | Raises one `alert.raised` event per alertable order event, and subscribes every alert channel to it |
+| `services/alerts/` | Alert groups, routing, settings and the Telegram, WhatsApp, Slack and Discord channels |

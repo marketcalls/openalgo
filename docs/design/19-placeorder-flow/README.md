@@ -350,7 +350,7 @@ bus.publish(OrderPlacedEvent(
 |------------|--------|
 | `log_subscriber` | Writes to `order_logs` (live) or `analyzer_logs` (analyze) |
 | `socketio_subscriber` | Emits `order_event` (live) or `analyzer_update` (analyze) |
-| `telegram_subscriber` | Sends Telegram alert via `send_order_alert()` |
+| `alert_subscriber` | Raises an `alert.raised` event; each alert channel (Telegram, WhatsApp, Slack, Discord) delivers it if routed there on `/alerts` |
 
 See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 
