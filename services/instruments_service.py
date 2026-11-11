@@ -4,9 +4,43 @@ from typing import Any, Dict, List, Tuple
 
 from database.auth_db import verify_api_key
 from database.symbol import SymToken, db_session
+from database.token_db_enhanced import get_cache
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+INSTRUMENT_FIELDS = (
+    "symbol",
+    "brsymbol",
+    "name",
+    "exchange",
+    "brexchange",
+    "token",
+    "expiry",
+    "strike",
+    "lotsize",
+    "instrumenttype",
+    "tick_size",
+)
+
+
+def _instrument_rows(exchange: str | None) -> list:
+    """Rows from the in-memory symbol cache when it is loaded, else the database.
+
+    The cache holds every SymToken row, grouped by exchange in database order,
+    so serving from it skips the query and the ORM objects, which for NFO took
+    long enough to stall every other request on the single worker.
+    """
+    snap = get_cache().valid_snapshot()
+    if snap is not None:
+        if exchange:
+            return list(snap.by_exchange.get(exchange, ()))
+        return [row for rows in snap.by_exchange.values() for row in rows]
+
+    query = SymToken.query
+    if exchange:
+        query = query.filter(SymToken.exchange == exchange)
+    return query.all()
 
 
 def get_instruments(
@@ -34,18 +68,12 @@ def get_instruments(
             logger.warning("No API key provided for instruments download")
             return False, {"status": "error", "message": "API key is required"}, 401, {}
 
-        # Build query
-        query = SymToken.query
-
-        # Apply exchange filter if provided
         if exchange:
-            query = query.filter(SymToken.exchange == exchange)
             logger.info(f"Filtering instruments by exchange: {exchange}")
         else:
             logger.info("Fetching all instruments from all exchanges")
 
-        # Execute query
-        results = query.all()
+        results = _instrument_rows(exchange)
 
         if not results:
             logger.info("No instruments found" + (f" for exchange: {exchange}" if exchange else ""))
@@ -57,22 +85,9 @@ def get_instruments(
             )
 
         # Convert results to dict format
-        results_data = []
-        for result in results:
-            result_dict = {
-                "symbol": result.symbol,
-                "brsymbol": result.brsymbol,
-                "name": result.name,
-                "exchange": result.exchange,
-                "brexchange": result.brexchange,
-                "token": result.token,
-                "expiry": result.expiry,
-                "strike": result.strike,
-                "lotsize": result.lotsize,
-                "instrumenttype": result.instrumenttype,
-                "tick_size": result.tick_size,
-            }
-            results_data.append(result_dict)
+        results_data = [
+            {field: getattr(result, field) for field in INSTRUMENT_FIELDS} for result in results
+        ]
 
         logger.info(
             f"Found {len(results_data)} instruments"
@@ -84,20 +99,7 @@ def get_instruments(
             # Generate CSV
             output = StringIO()
             if results_data:
-                fieldnames = [
-                    "symbol",
-                    "brsymbol",
-                    "name",
-                    "exchange",
-                    "brexchange",
-                    "token",
-                    "expiry",
-                    "strike",
-                    "lotsize",
-                    "instrumenttype",
-                    "tick_size",
-                ]
-                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                writer = csv.DictWriter(output, fieldnames=INSTRUMENT_FIELDS)
                 writer.writeheader()
                 for row in results_data:
                     writer.writerow(row)
