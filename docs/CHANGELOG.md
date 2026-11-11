@@ -92,6 +92,19 @@ fix, live in [docs/releases](releases/).
   (`db/backups/openalgo.db.before-rotate-pepper-<time>`) still holds the data
   under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
   in `.env`.
+- **Zerodha open interest on the live feed (#2319).** Whenever a symbol was
+  streamed with a Depth subscription, the open interest was read from the
+  wrong bytes of Kite's packet: the order count of the fifth sell depth
+  level, shifted, so the feed reported values such as 655360 or 65536 that
+  had nothing to do with the real OI. A Quote subscription to the same symbol
+  received the same wrong `oi`, because it is served from the Depth tick.
+  Full-mode ticks now carry Kite's own open interest,
+  plus `oi_day_high`, `oi_day_low` and a new `last_trade_time` field (epoch
+  seconds), at the offsets pykiteconnect 5.2.2 reads. `ltt` is unchanged and
+  stays the exchange timestamp. Those same packet bytes were also reported as
+  `price_change`, which held a meaningless number; a full-mode tick of a
+  tradable instrument now leaves `price_change` at 0, so compute the change
+  from `ltp` and `close` if you need it. Index ticks are unchanged.
 
 ## [2.0.3.3] - 2026-11-06
 

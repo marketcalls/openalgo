@@ -725,6 +725,10 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 transformed["oi"] = tick["open_interest"]
                 transformed["open_interest"] = tick["open_interest"]
 
+            # Last trade time (epoch seconds) from the full-mode packet. `ltt` stays the exchange timestamp.
+            if "last_trade_time" in tick:
+                transformed["last_trade_time"] = tick["last_trade_time"]
+
             # Add depth data for full mode
             if mode == "full" and "depth" in tick:
                 depth = tick["depth"]
