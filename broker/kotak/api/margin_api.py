@@ -114,7 +114,8 @@ def calculate_margin_api(positions, auth):
         error_response = {
             "status": "error",
             "message": (
-                f"Symbol not found: {', '.join(unresolved)}. Check the symbol name and expiry date."
+                f"Could not prepare these legs for the margin check: {', '.join(unresolved)}. "
+                "Check the symbol, exchange and expiry date."
                 if unresolved
                 else "No valid positions to calculate margin. Check if symbols are valid."
             ),
@@ -150,6 +151,20 @@ def calculate_margin_api(positions, auth):
     else:
         # Multiple positions - aggregate
         final_response = parse_batch_margin_response(margin_responses)
+
+    # margin_service reports any HTTP 200 as a successful calculation, and
+    # Kotak answers a rejected order with HTTP 200 and stat Not_Ok, so an
+    # error result must not ride on the broker's 200.
+    if (
+        final_response.get("status") != "success"
+        and getattr(last_response, "status_code", 500) == 200
+    ):
+
+        class MockResponse:
+            status_code = 500
+            status = 500
+
+        return MockResponse(), final_response
 
     # Return the last HTTP response object and the aggregated data
     return last_response, final_response

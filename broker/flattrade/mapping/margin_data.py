@@ -173,7 +173,8 @@ def transform_margin_positions(positions, userid, auth_token=None):
             unresolved.append(f"{position.get('symbol')} ({position.get('exchange')})")
     if unresolved:
         raise MarginLegUnresolved(
-            f"Symbol not found: {', '.join(unresolved)}. Check the symbol name and expiry date."
+            f"Could not prepare these legs for the margin check: {', '.join(unresolved)}. "
+            "Check the symbol, exchange and expiry date."
         )
     if not orders:
         return {"uid": userid, "actid": userid, "basketlists": []}
@@ -196,7 +197,7 @@ def transform_margin_positions(positions, userid, auth_token=None):
 
 
 def _amount(value):
-    """Noren sends amounts as strings and omits a field whose value is zero."""
+    """Noren sends amounts as strings; a missing amount reads as 0."""
     if value in (None, ""):
         return 0.0
     return float(value)
@@ -253,8 +254,11 @@ def parse_limits_margin_used(limits_data):
     """
     Read marginused from a Limits response, or None when the call failed.
 
-    Noren omits a zero field, so a successful Limits reply without marginused
-    means nothing is blocked yet — that is the broker's own value, 0.
+    A successful reply without marginused is read as 0, as funds.py already
+    reads it. GetBasketMargin is held to a stricter rule (a missing
+    marginusedtrade is an error, see parse_margin_response) because it sends
+    zero figures explicitly: a live reply on 2026-11-11 carried
+    'marginusedprev': '0.00'.
     """
     if not isinstance(limits_data, dict) or limits_data.get("stat") != "Ok":
         return None
