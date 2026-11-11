@@ -769,9 +769,19 @@ def _broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "sahi":
-        # Sahi mints the day's token from the API key and secret in the
-        # environment; there is nothing for the trader to enter.
-        auth_token, error_message = auth_function("sahi")
+        if request.method == "GET":
+            # The login card asks for the TOTP code of a TOTP key; a Regular
+            # key leaves it blank. The key and secret come from the keys.
+            return redirect("/broker/sahi/totp")
+
+        elif request.method == "POST":
+            auth_token, error_message = auth_function("sahi", totp=request.form.get("totp"))
+
+            if auth_token:
+                return _complete_login(auth_token, session["user"], broker)
+            else:
+                return jsonify({"status": "error", "message": error_message}), 401
+
         forward_url = "broker.html"
 
     elif broker == "wisdom":

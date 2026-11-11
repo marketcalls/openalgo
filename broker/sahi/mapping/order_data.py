@@ -24,10 +24,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # Sahi order status -> OpenAlgo order_status. PartialFilled is terminal (the
 # remainder was cancelled or an IOC expired), so it reads as cancelled, the way
 # other brokers report a partly filled order that stopped working. A stop
-# order waiting for its trigger is reported by Sahi as Open.
+# order waiting for its trigger is reported by Sahi as Open. Sahi's docs also
+# name AwaitingTrigger (an order not yet at the exchange) outside their status
+# table; it reads as OpenAlgo's "trigger pending", as on OpenAlgo Desktop.
 ORDER_STATUS_MAP = {
     "Open": "open",
     "OpenPartial": "open",
+    "AwaitingTrigger": "trigger pending",
     "PartialFilled": "cancelled",
     "Completed": "complete",
     "Cancelled": "cancelled",

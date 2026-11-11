@@ -260,6 +260,22 @@ const brokerFields: Record<string, BrokerConfig> = {
     ],
     callbackUrl: '/shoonya/callback',
   },
+  sahi: {
+    fields: [
+      {
+        name: 'totp',
+        label: 'TOTP code',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'For a TOTP key, the code your authenticator app shows. Leave it blank for a Regular key you approved in the Sahi API Dashboard today.',
+        optional: true,
+      },
+    ],
+    callbackUrl: '/sahi/callback',
+  },
   tradejini: {
     fields: [
       {
@@ -323,6 +339,7 @@ const brokerNames: Record<string, string> = {
   motilal: 'Motilal Oswal',
   mstock: 'MStock',
   nubra: 'Nubra (Nuvama)',
+  sahi: 'Sahi',
   samco: 'Samco',
   shoonya: 'Shoonya',
   tradejini: 'Tradejini',
