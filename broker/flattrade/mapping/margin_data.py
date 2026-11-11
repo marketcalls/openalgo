@@ -180,7 +180,31 @@ def transform_margin_positions(positions, userid, auth_token=None):
     }
 
 
-def parse_margin_response(response_data):
+def _amount(value):
+    """Noren sends amounts as strings and omits a field whose value is zero."""
+    if value in (None, ""):
+        return 0.0
+    return float(value)
+
+
+def parse_margin_response(response_data, existing_margin_used=0.0):
+    """
+    Map a GetBasketMargin response to OpenAlgo's margin format.
+
+    Both GetBasketMargin figures are account totals, not the basket alone:
+      marginused      -> basket margin before hedge benefit + existing usage
+      marginusedtrade -> margin after the trade (hedge benefit applied)
+                         + existing usage
+    The Noren calculation note (shoonya-api-docs/07-order-and-trade-
+    information.md, "calculation") gives the basket's own figure — what
+    Flattrade's web basket shows with "Include existing margin" unticked — as
+        post trade margin = marginusedtrade(GetBasketMargin) - marginused(Limits)
+    so the caller passes Limits.marginused as existing_margin_used (issue #2156).
+    Reporting marginusedtrade unadjusted added the margin already blocked by
+    open positions and orders to every basket.
+
+    span/exposure stay 0: Flattrade gives no breakdown.
+    """
     try:
         if not response_data or not isinstance(response_data, dict):
             return {"status": "error", "message": "Invalid response from broker"}
@@ -191,24 +215,16 @@ def parse_margin_response(response_data):
                 or "Failed to calculate margin"
             )
             return {"status": "error", "message": error_message}
-        # Flattrade doc semantics:
-        #   marginused      -> "Total margin"        (pre-hedge basket total,
-        #                                             "Basket Margin" in the web UI)
-        #   marginusedtrade -> "Margin after trade"  (post-hedge, spread benefit
-        #                                             applied, "Post Trade Margin")
-        # Parallels Zerodha's initial.total vs final.total. Map total to
-        # marginusedtrade (matches Zerodha impl using final.total) so hedged
-        # baskets such as calendar spreads are not reported at naked-leg
-        # margin. Fall back to marginused only when marginusedtrade is absent.
-        # span/exposure are 0 since Flattrade gives no breakdown.
-        margin_used = response_data.get("marginusedtrade")
-        if margin_used in (None, ""):
-            margin_used = response_data.get("marginused")
-        margin_used = float(margin_used or 0)
+        if response_data.get("marginusedtrade") in (None, ""):
+            # marginused is the pre-hedge total; reporting it in its place
+            # would quote a calendar spread at naked-leg margin again.
+            logger.warning(f"GetBasketMargin returned no marginusedtrade: {response_data}")
+            return {"status": "error", "message": "Broker did not return the post-trade margin"}
+        post_trade = _amount(response_data["marginusedtrade"]) - existing_margin_used
         return {
             "status": "success",
             "data": {
-                "total_margin_required": margin_used,
+                "total_margin_required": round(post_trade, 2),
                 "span_margin": 0,
                 "exposure_margin": 0,
             },
@@ -216,3 +232,15 @@ def parse_margin_response(response_data):
     except Exception as e:
         logger.error(f"Error parsing margin response: {e}")
         return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}
+
+
+def parse_limits_margin_used(limits_data):
+    """
+    Read marginused from a Limits response, or None when the call failed.
+
+    Noren omits a zero field, so a successful Limits reply without marginused
+    means nothing is blocked yet — that is the broker's own value, 0.
+    """
+    if not isinstance(limits_data, dict) or limits_data.get("stat") != "Ok":
+        return None
+    return _amount(limits_data.get("marginused"))

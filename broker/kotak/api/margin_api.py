@@ -126,12 +126,13 @@ def calculate_margin_api(positions, auth):
         last_response = response
         margin_responses.append(parsed_response)
 
-        # If any single margin calculation fails, we might want to continue
-        # but log the error
+        # One failed leg fails the basket (parse_batch_margin_response), so
+        # stop instead of spending calls on the remaining legs.
         if parsed_response.get("status") == "error":
             logger.warning(
                 f"Margin calculation failed for position: {position_data}, Error: {parsed_response.get('message')}"
             )
+            break
 
     # Aggregate the responses
     if len(margin_responses) == 1:
