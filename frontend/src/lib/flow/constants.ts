@@ -1159,6 +1159,18 @@ export const NODE_DEFINITIONS = {
       category: 'utility' as const,
     },
     {
+      type: 'slackAlert',
+      label: 'Slack Alert',
+      description: 'Post to the saved Slack webhook',
+      category: 'utility' as const,
+    },
+    {
+      type: 'discordAlert',
+      label: 'Discord Alert',
+      description: 'Post to the saved Discord webhook',
+      category: 'utility' as const,
+    },
+    {
       type: 'delay',
       label: 'Delay',
       description: 'Wait for duration',
@@ -1498,6 +1510,12 @@ export const DEFAULT_NODE_DATA = {
   },
   whatsappAlert: {
     to: '',
+    message: 'Workflow executed successfully',
+  },
+  slackAlert: {
+    message: 'Workflow executed successfully',
+  },
+  discordAlert: {
     message: 'Workflow executed successfully',
   },
   delay: {

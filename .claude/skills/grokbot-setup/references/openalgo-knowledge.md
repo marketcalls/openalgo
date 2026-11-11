@@ -119,7 +119,7 @@ openalgo-charts and Plotly. Diagram: `docs/architecture-diagram.png`.
 | Action Center | `/action-center` | Semi-Auto mode queue: review, approve, modify, reject; bulk approve; audit trail in IST |
 | Historify | `/historify` | DuckDB market-data warehouse; SDK `history(..., source='db')` reads it; CSV and Parquet export |
 | Monitors | `/logs/latency`, `/logs/traffic`, `/logs/live`, `/pnl-tracker`, `/health` | Latency, traffic and live logs, P&L tracker, health (thresholds in `.env`) |
-| Settings and tools | `/apikey`, `/broker`, `/logs/security`, `/telegram`, `/whatsapp`, `/playground`, `/platforms`, `/master-contract`, `/search` | API key, broker connect, security log and IP ban (README calls it `/security`), alerts, API playground, platform guides, master contract status, symbol search |
+| Settings and tools | `/apikey`, `/broker`, `/logs/security`, `/alerts`, `/telegram`, `/whatsapp`, `/slack`, `/discord`, `/playground`, `/platforms`, `/master-contract`, `/search` | API key, broker connect, security log and IP ban (README calls it `/security`), alerts, API playground, platform guides, master contract status, symbol search |
 
 A new page needs three registrations (CLAUDE.md): route in `App.tsx`,
 `blueprints/react_app.py` view, `frontend/src/config/navigation.ts` entry.
@@ -162,7 +162,7 @@ All under `/api/v1`. JSON body with `apikey` (or `X-API-KEY` header). Responses
 | Chart prefs | GET/POST `chart` | |
 | Utility | `ping` | returns `pong` and broker; 403 without broker session |
 | Strategy module | `strategy/list, status, start, stop, close_all, close_leg, runs, orders, events` | `start` needs `mode` sandbox or live (never defaulted; live 409 unless enabled in UI); `stop_pending` does not mean flat |
-| Messaging | `telegram/*` (config, start, stop, webhook, users, broadcast, notify, stats, preferences), `whatsapp/notify` | |
+| Messaging | `telegram/*` (config, start, stop, webhook, users, broadcast, notify, stats, preferences), `whatsapp/notify`, `slack/notify`, `discord/notify` | Slack and Discord post to the webhook saved on `/slack` or `/discord`, only while the channel is on at `/alerts`; not in the SDK yet |
 
 ## 7. Python SDK quick reference
 
@@ -418,8 +418,8 @@ Use the `openscript` skill to write, validate and install scripts.
   orderBook, tradeBook, positionBook, holdings, funds, margin, symbol,
   optionSymbol, expiry, intervals, optionChain, syntheticFuture, holidays,
   timings, calendar`; Streaming `subscribeLtp, subscribeQuote, subscribeDepth,
-  unsubscribe`; Utility `log, telegramAlert, whatsappAlert, variable,
-  mathExpression, httpRequest, delay, waitUntil, group`.
+  unsubscribe`; Utility `log, telegramAlert, whatsappAlert, slackAlert,
+  discordAlert, variable, mathExpression, httpRequest, delay, waitUntil, group`.
 - Variables `{{name.field}}`, webhook values `{{webhook.*}}`; condition nodes
   branch by `sourceHandle`; AND/OR gates need `targetHandle: "input-N"`.
 - Pitfalls: indicator `params` is a JSON string; history nodes capped at 200
@@ -444,6 +444,12 @@ Use the `openscript` skill to write, validate and install scripts.
   `/orders`, `/pnl`, `/status`, `/help`; SDK `client.telegram(username=...,
   message=...)`.
 - **WhatsApp**: pair the device at `/whatsapp`; SDK `client.whatsapp(...)`.
+- **Slack and Discord**: save an incoming webhook at `/slack` or `/discord`
+  and switch the channel on at `/alerts`, which routes order alerts to every
+  channel. Send your own text with `POST /api/v1/slack/notify` or
+  `/api/v1/discord/notify`, the Flow `slackAlert` and `discordAlert` nodes,
+  or the MCP tools `send_slack_alert` and `send_discord_alert`. No SDK
+  method yet. Guide: `docs/alerts.md`.
 - Other clients: Excel, Google Sheets, N8N, MetaTrader, Node, Go, Java, .NET,
   Rust SDKs; OpenAlgo CLI (Go).
 

@@ -97,6 +97,37 @@ channel switched off on `/alerts` refuses them too. Every outward option is
 off for a new alert, and alerts saved before Slack and Discord existed read
 them as off.
 
+## Flow nodes
+
+The Flow editor (`/flow`) has a **Slack** and a **Discord** node next to
+Telegram and WhatsApp, under Utility. Each takes one field, `message`, which
+can use workflow variables such as `{{orderResult.orderid}}`, and posts it to
+the webhook saved on that channel's page. The rules are the notify
+endpoint's: the channel must be switched on at `/alerts` with a webhook saved,
+or the node fails and the run log says which step is missing.
+
+Two differences from the endpoint, both because nobody is watching a running
+workflow:
+
+- the post is queued, so a slow provider never holds the workflow;
+- a message longer than the channel allows (Slack 4000 characters, Discord
+  2000) is shortened to fit and ends in `...`, instead of being refused.
+
+## MCP tools
+
+The MCP server (`mcp/mcpserver.py`, local or remote) has `send_slack_alert`
+and `send_discord_alert`, beside `send_telegram_alert`. Each calls the
+channel's notify endpoint with the server's API key, so the endpoint's rules
+apply unchanged, including its limit of 30 messages a minute. Both take
+`message` and an optional `wait_for_delivery`, and both are dropped when the
+server runs read-only (`OPENALGO_MCP_READ_ONLY`).
+
+On the remote MCP server all three alert tools need the `read:account` scope,
+not `write:orders`: they place no order and deliver only to destinations you
+set up. The consent screen says so. Remember that a Slack or Discord channel
+can have other readers, so approve a client for `read:account` only if you
+are happy for it to post there while the channel is switched on.
+
 ## How it works (for maintainers)
 
 Alerts are event driven end to end:

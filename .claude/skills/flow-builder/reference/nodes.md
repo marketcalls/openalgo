@@ -4,7 +4,7 @@ Generated from `services/flow_workflow_validator.py` and
 `services/flow_executor_service.py` by `generate_reference.py`. Do not hand-edit:
 regenerate it instead, so the table cannot drift from the contract.
 
-**61 node types.** `Required` is what strict validation
+**63 node types.** `Required` is what strict validation
 demands at import and activation. `Also read` is every other `data` key the
 executor looks at, so it is the complete set of what a node responds to.
 
@@ -20,6 +20,7 @@ executor looks at, so it is the complete set of what a node responds to.
 | `cancelOrder` | order | `orderId` | - |
 | `closePositions` | order | none | `exchange`, `outputVariable`, `product`, `strategyTag`, `symbol` |
 | `delay` | action | none | `delayMs`, `delayUnit`, `delayValue` |
+| `discordAlert` | action | `message` | - |
 | `expiry` | action | `symbol`, `exchange` | `instrumenttype`, `outputVariable` |
 | `fundCheck` | condition | none | `minAvailable`, `operator`, `threshold` |
 | `funds` | action | none | `outputVariable` |
@@ -53,6 +54,7 @@ executor looks at, so it is the complete set of what a node responds to.
 | `priceAlert` | trigger | `symbol`, `exchange`, `condition` | `outputVariable`, `price`, `priceLower`, `priceUpper` |
 | `priceCondition` | condition | `symbol`, `exchange`, `operator` | `field`, `threshold`, `value` |
 | `priorPeriodOhlc` | action | `symbol`, `exchange` | `outputVariable`, `period`, `source` |
+| `slackAlert` | action | `message` | - |
 | `smartOrder` | order | `symbol`, `exchange`, `action`, `quantity` | `outputVariable`, `positionSize`, `price`, `priceType`, `product`, `strategyTag`, `triggerPrice` |
 | `splitOrder` | order | `symbol`, `exchange`, `action`, `quantity`, `splitSize` | `outputVariable`, `price`, `priceType`, `product`, `strategyTag`, `triggerPrice` |
 | `start` | trigger | none | - |

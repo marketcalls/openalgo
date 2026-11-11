@@ -3077,6 +3077,21 @@ class NodeExecutor:
         )
         return result
 
+    def execute_slack_alert(self, node_data: dict) -> dict:
+        """Execute Slack Alert node: post to the webhook saved on /slack."""
+        return self._execute_webhook_alert("Slack", self.client.slack, node_data)
+
+    def execute_discord_alert(self, node_data: dict) -> dict:
+        """Execute Discord Alert node: post to the webhook saved on /discord."""
+        return self._execute_webhook_alert("Discord", self.client.discord, node_data)
+
+    def _execute_webhook_alert(self, label: str, send, node_data: dict) -> dict:
+        message = self.context.interpolate(node_data.get("message", ""))
+        self.log(f"Sending {label} alert: {message}")
+        result = send(message=message)
+        self.log(f"{label} result: {result}", "info" if result.get("status") == "success" else "error")
+        return result
+
     # The editor's timeout box is labelled "Timeout (ms)" and its own fallback is
     # 30000, while the executor passed the number straight to httpx as seconds --
     # so the UI minimum of 1000 meant a 1000-second timeout. Values are read as
@@ -4487,6 +4502,10 @@ def execute_node_chain(
         result = executor.execute_telegram_alert(node_data)
     elif node_type == "whatsappAlert":
         result = executor.execute_whatsapp_alert(node_data)
+    elif node_type == "slackAlert":
+        result = executor.execute_slack_alert(node_data)
+    elif node_type == "discordAlert":
+        result = executor.execute_discord_alert(node_data)
     elif node_type == "httpRequest":
         result = executor.execute_http_request(node_data)
     elif node_type == "positionCheck":
