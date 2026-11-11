@@ -76,7 +76,7 @@ const platformDesks = [
   {
     icon: Blocks,
     title: 'No-code strategy builder',
-    desc: 'Flow is a drag-and-drop canvas: wire 61 node types from triggers to indicators, conditions and orders, then activate it to run on its own.',
+    desc: 'Flow is a drag-and-drop canvas: wire 63 node types from triggers to indicators, conditions and orders, then activate it to run on its own.',
   },
   {
     icon: Sigma,

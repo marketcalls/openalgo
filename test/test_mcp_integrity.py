@@ -86,14 +86,18 @@ from utils.mcp_tool_registry import (  # noqa: E402
 READ_SCOPES = {SCOPE_READ_MARKET, SCOPE_READ_ACCOUNT}
 
 # Tools that change something but are deliberately not write-scoped.
-# Keep this list at zero-or-one entries and justify every addition —
-# each one is a tool a read-only OAuth token can still trigger.
+# Keep this list to the alert tools and justify every addition: each one
+# is a tool a read-only OAuth token can still trigger.
 WRITE_SCOPE_EXCEPTIONS = {
-    # Delivers only to the account owner's own Telegram bot; cannot move
-    # money or place an order. Rationale recorded alongside its entry in
-    # utils/mcp_tool_registry.py.
+    # Each delivers only to a destination the account owner set up (their
+    # own Telegram bot, or the Slack or Discord webhook they saved and
+    # switched on at /alerts); none can move money or place an order.
+    # Rationale recorded alongside their entries in utils/mcp_tool_registry.py.
     "send_telegram_alert",
+    "send_slack_alert",
+    "send_discord_alert",
 }
+ALERT_TOOLS = sorted(WRITE_SCOPE_EXCEPTIONS)
 
 
 @pytest.fixture(scope="module")
@@ -200,10 +204,10 @@ def test_write_tools_require_the_write_scope(server):
     """The check that actually matters: a write tool filed under a read
     scope would be callable with a read-only OAuth token.
 
-    One documented exception, matching the rationale recorded in
-    utils/mcp_tool_registry.py: send_telegram_alert has an outward side
-    effect but delivers only to the account owner's own bot, so it is
-    account-scoped rather than write-scoped. Any *other* tool that
+    Documented exceptions, matching the rationale recorded in
+    utils/mcp_tool_registry.py: the three alert tools have an outward side
+    effect but deliver only to destinations the account owner set up, so
+    they are account-scoped rather than write-scoped. Any *other* tool that
     drifts into this state fails here.
     """
     offenders = [
@@ -249,18 +253,25 @@ def test_read_scoped_tools_are_annotated_read_only(server):
         if scope not in READ_SCOPES:
             continue
         meta = server.TOOL_META[name]
-        if name == "send_telegram_alert":
+        if name in WRITE_SCOPE_EXCEPTIONS:
             # Account-scoped but has an outward side effect, so it is
             # deliberately not read-only. Asserted explicitly below.
             continue
         assert meta.read_only, f"{name} is read-scoped but not annotated read-only"
 
 
-def test_send_telegram_alert_is_not_read_only(server):
-    """It sends something outward, so read-only mode must drop it."""
-    meta = server.TOOL_META["send_telegram_alert"]
+@pytest.mark.parametrize("name", ALERT_TOOLS)
+def test_alert_tools_are_not_read_only(server, name):
+    """Each sends something outward, so read-only mode must drop it."""
+    meta = server.TOOL_META[name]
     assert not meta.read_only
     assert not meta.destructive
+
+
+@pytest.mark.parametrize("name", ALERT_TOOLS)
+def test_alert_tools_are_account_scoped(name):
+    """Not write:orders: that scope promises orders and is off on most installs."""
+    assert TOOL_SCOPES[name] == SCOPE_READ_ACCOUNT
 
 
 # ------------------------------------------------------------ descriptions
@@ -500,7 +511,7 @@ def test_read_only_mode_drops_every_write_tool():
         "'writes': [n for n, x in m.TOOL_META.items() if x.registered and not x.read_only]}))",
     )
     assert out["writes"] == []
-    for name in ("place_order", "cancel_all_orders", "analyzer_toggle", "send_telegram_alert"):
+    for name in ("place_order", "cancel_all_orders", "analyzer_toggle", *ALERT_TOOLS):
         assert name not in out["registered"], f"{name} survived read-only mode"
     assert "get_quote" in out["registered"]
     assert "get_order_book" in out["registered"]

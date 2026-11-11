@@ -38,6 +38,22 @@ SLACK_URL = "https://hooks.slack.com/services/TFAKE/BFAKE/notarealslacktoken"
 DISCORD_URL = "https://discord.com/api/webhooks/1234/not-a-real-discord-token"
 
 
+@pytest.fixture(autouse=True)
+def _limiter_left_as_found():
+    """Put the shared limiter's on/off flag back after each test.
+
+    ``limiter.init_app`` keeps the last app's RATELIMIT_ENABLED for the next
+    app that sets none, so the apps here that switch it off would switch it
+    off for every later file in the run (the Flow webhook rate-limit tests
+    then saw 200 where they expect 429).
+    """
+    from limiter import limiter
+
+    enabled = limiter.enabled
+    yield
+    limiter.enabled = enabled
+
+
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """The alert settings table on a file of its own, and an empty cache."""

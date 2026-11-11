@@ -28,8 +28,8 @@ from flask_restx import Namespace, Resource, fields
 from database.auth_db import verify_api_key
 from limiter import limiter
 from services.alerts.channels.webhook import WebhookChannel
+from services.alerts.notify import message_problem, notify
 from services.alerts.registry import get_webhook_channel
-from services.alerts.settings import settings_for
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -85,27 +85,15 @@ def _notify(channel: WebhookChannel):
         return _reply("error", "Invalid or missing API key", 401)
 
     message = data.get("message")
-    if not isinstance(message, str) or not message.strip():
-        return _reply("error", "'message' is required.", 400)
-    if len(message) > channel.max_length:
-        return _reply("error", f"'message' must be at most {channel.max_length} characters.", 400)
+    problem = message_problem(channel, message)
+    if problem:
+        return _reply("error", problem, 400)
     wait = data.get("wait_for_delivery", False)
     if not isinstance(wait, bool):
         return _reply("error", "'wait_for_delivery' must be true or false.", 400)
 
-    if not settings_for(channel).enabled:
-        return _reply(
-            "error",
-            f"{channel.label} alerts are turned off. Turn them on from the Alerts page in OpenAlgo.",
-            409,
-        )
-
-    result = channel.send_text(message, wait=wait)
-    if result.delivered:
-        return _reply("success", result.message, 200)
-    if channel.saved_url() is None:
-        return _reply("error", result.message, 409)
-    return _reply("error", result.message, 502 if wait else 503)
+    result = notify(channel, message, wait=wait)
+    return _reply("success" if result.ok else "error", result.message, result.status_code)
 
 
 def _reply(status: str, message: str, code: int):

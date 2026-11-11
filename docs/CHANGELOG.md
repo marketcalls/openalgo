@@ -29,8 +29,27 @@ fix, live in [docs/releases](releases/).
 - **Chart alerts on `/trading` can go to Slack and Discord** too, chosen per
   alert next to Telegram and WhatsApp. Both are off for a new alert, and
   alerts saved before read them as off.
+- **Flow Slack and Discord nodes** (`slackAlert`, `discordAlert`), under
+  Utility next to Telegram and WhatsApp. Each posts its message, with workflow
+  variables filled in, to the webhook saved on `/slack` or `/discord`, under
+  the notify endpoint's rules: nothing is posted unless the channel is
+  switched on at `/alerts`. The post is queued so the workflow never waits on
+  the provider, and a message over the channel's limit (Slack 4000
+  characters, Discord 2000) is shortened to fit rather than lost.
+- **MCP tools `send_slack_alert` and `send_discord_alert`**, beside
+  `send_telegram_alert`, on the local and the remote MCP server. They call the
+  notify endpoints, so the same rules and the 30-a-minute limit apply, and
+  read-only mode drops them. The Python SDK has no Slack or Discord method
+  yet; call the endpoints directly until it does.
 
 ### Changed
+
+- Remote MCP: the `read:account` scope also allows the two new alert tools,
+  as it already allowed `send_telegram_alert`, and the consent screen now
+  says so ("Send alerts to your own Telegram, and to the Slack and Discord
+  channels you switched on"). A client you approved for `read:account` can
+  post to a Slack or Discord channel you have switched on, which other people
+  may read. They still need no `write:orders`, which stays about orders.
 
 - Alerts are event driven end to end: one subscriber raises an alert per order
   event, only when a channel wants it, and hands it to each routed channel.
