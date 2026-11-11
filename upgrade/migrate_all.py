@@ -104,7 +104,16 @@ MIGRATIONS = [
 # required schema migrations are listed explicitly: their failure must reach
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
-REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
+REQUIRED_MIGRATIONS = frozenset(
+    {
+        "migrate_strategy_module.py",
+        "migrate_strategy_universe_tab.py",
+        # Without its table the /alerts page and the settings it saves fail.
+        "migrate_alert_channels.py",
+        # Without its table every password reset is refused.
+        "migrate_password_reset_grants.py",
+    }
+)
 
 
 def run_migration(script_name, description):

@@ -7,8 +7,10 @@ renders that one structure in its own markup: WhatsApp and Slack bold with
 Writing the field selection once is the point: a new order type, or a new
 field on an existing one, reaches every channel that uses this module.
 
-This is the formatter WhatsApp alerts used, moved here unchanged. WhatsApp's
-messages are pinned byte for byte by ``test/test_alerts_formatting.py``.
+This is the formatter WhatsApp alerts used, moved here unchanged except for
+GTT orders, which it used to describe as a bare "Order Update" with no
+fields. WhatsApp's other messages are pinned byte for byte by
+``test/test_alerts_formatting.py``.
 Telegram keeps its own formatter for now: it marks symbols as code and draws a
 different separator, and converging the two would change messages Telegram
 users already receive.
@@ -37,7 +39,17 @@ TITLES: dict[str, str] = {
     "cancelorder": "Order Cancelled",
     "cancelallorder": "All Orders Cancelled",
     "closeposition": "Position Closed",
+    "placegttorder": "GTT Order Placed",
+    "modifygttorder": "GTT Order Modified",
+    "cancelgttorder": "GTT Order Cancelled",
+    "gtttriggered": "GTT Triggered",
+    "gttexpired": "GTT Expired",
 }
+
+#: The GTT operations, whose fields come from ``_gtt_lines``.
+GTT_TYPES = frozenset(
+    {"placegttorder", "modifygttorder", "cancelgttorder", "gtttriggered", "gttexpired"}
+)
 DEFAULT_TITLE = "Order Update"
 
 LIVE_BANNER = "LIVE MODE - Real Order"
@@ -204,7 +216,59 @@ def _detail_lines(api_type: str, request: dict[str, Any], response: dict[str, An
     if api_type in ("optionsorder", "optionsmultiorder"):
         return _options_lines(request, response)
 
+    if api_type in GTT_TYPES:
+        return _gtt_lines(api_type, request, response)
+
     return []
+
+
+def _gtt_lines(api_type: str, request: dict[str, Any], response: dict[str, Any]) -> list[str]:
+    """A GTT placed, modified or cancelled by the trader, or fired or lapsed on its own."""
+    if api_type == "cancelgttorder":
+        return [
+            f"Trigger ID: {request.get('trigger_id', 'N/A')}",
+            _outcome(response, "Cancellation Successful"),
+        ]
+
+    if api_type in ("gtttriggered", "gttexpired"):
+        lines = [
+            f"Symbol: {request.get('symbol', 'N/A')}",
+            f"Exchange: {request.get('exchange', 'N/A')}",
+            f"Trigger ID: {request.get('trigger_id', 'N/A')}",
+        ]
+        if api_type == "gtttriggered":
+            prices = ", ".join(str(price) for price in request.get("trigger_prices") or [])
+            lines.append(f"Trigger Prices: {prices or 'N/A'}")
+            lines.append(f"Order ID: {response.get('orderid') or 'N/A'}")
+        elif response.get("message"):
+            lines.append(str(response["message"]))
+        return lines
+
+    # placegttorder and modifygttorder: the order the GTT will send.
+    lines = []
+    if api_type == "modifygttorder":
+        lines.append(f"Trigger ID: {request.get('trigger_id', 'N/A')}")
+    lines.extend(
+        [
+            f"Symbol: {request.get('symbol', 'N/A')}",
+            f"Action: {request.get('action', 'N/A')}",
+            f"Quantity: {request.get('quantity', 'N/A')}",
+            f"Exchange: {request.get('exchange', 'N/A')}",
+            f"Trigger Type: {request.get('trigger_type', 'N/A')}",
+        ]
+    )
+    # A SINGLE GTT sets one of the two; an OCO sets both.
+    if request.get("triggerprice_sl"):
+        lines.append(f"Stop Loss Trigger: {request['triggerprice_sl']}")
+    if request.get("triggerprice_tg"):
+        lines.append(f"Target Trigger: {request['triggerprice_tg']}")
+    if api_type == "modifygttorder":
+        lines.append(_outcome(response, "Modification Successful"))
+    elif response.get("status") == "success":
+        lines.append(f"Trigger ID: {response.get('trigger_id', 'N/A')}")
+    else:
+        lines.append(f"Error: {response.get('message', 'Failed')}")
+    return lines
 
 
 def _close_position_lines(request: dict[str, Any], response: dict[str, Any]) -> list[str]:

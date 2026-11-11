@@ -4,12 +4,14 @@ How an alert travels, end to end, all on the event bus:
 
 1. An order service publishes an order event (``order.placed`` and so on).
 2. ``subscribers/alert_subscriber.py`` maps it to an alert group
-   (``categories.py``) and publishes one ``AlertRaisedEvent``.
-3. Every channel in ``registry.py`` receives that event as its own bus
-   callback. ``router.deliver`` checks the channel's switch and routing
-   (``settings.py``) and hands the alert to the channel.
-4. The channel formats and sends it: Telegram and WhatsApp through their
-   existing services, Slack and Discord by posting to their webhook
+   (``categories.py``) and, when at least one channel receives that group,
+   publishes one ``AlertRaisedEvent``.
+3. One delivery subscriber hands the alert to every channel in
+   ``registry.py`` that is switched on and receives the group
+   (``router.receivers``, ``settings.py``), each in its own ``try``.
+4. The channel formats and queues it without waiting on the network:
+   Telegram and WhatsApp through their existing services and their own
+   alert pools, Slack and Discord on their own webhook lanes
    (``channels/``). Slack, Discord and WhatsApp share one formatter
    (``formatting.py``).
 

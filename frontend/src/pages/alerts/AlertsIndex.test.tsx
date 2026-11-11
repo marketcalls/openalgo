@@ -119,10 +119,56 @@ describe('Alerts page', () => {
     )
   })
 
-  it('leaves the grid alone for a channel that is off', async () => {
+  it('lets a channel that is off be routed, ready for when it is on', async () => {
     renderWithQuery(<AlertsIndex />)
 
-    expect(await screen.findByRole('checkbox', { name: 'GTT orders on Slack' })).toBeDisabled()
+    expect(await screen.findByRole('checkbox', { name: 'GTT orders on Slack' })).toBeEnabled()
+  })
+
+  it("locks a channel's routing row while one of its saves is running", async () => {
+    // Each save sends the whole list of groups. A second tick made while the
+    // first saved would be built from the old list and undo the first.
+    let finish: (value: AlertChannel) => void = () => {}
+    api.update.mockReturnValue(
+      new Promise<AlertChannel>((resolve) => {
+        finish = resolve
+      })
+    )
+    renderWithQuery(<AlertsIndex />)
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Orders placed on Discord' }))
+
+    const other = screen.getByRole('checkbox', { name: 'GTT orders on Discord' })
+    await waitFor(() => expect(other).toBeDisabled())
+    expect(screen.getByRole('checkbox', { name: 'GTT orders on Telegram' })).toBeEnabled()
+    finish(channel('discord', { categories: ALL }))
+    await waitFor(() => expect(other).toBeEnabled())
+    expect(api.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a test pending while another action finishes', async () => {
+    let finishTest: (value: string) => void = () => {}
+    api.sendTest.mockReturnValue(
+      new Promise<string>((resolve) => {
+        finishTest = resolve
+      })
+    )
+    api.update.mockResolvedValue(channel('discord', { enabled: false }))
+    renderWithQuery(<AlertsIndex />)
+
+    await screen.findByText('Telegram is ready.')
+    const telegramTest = screen.getAllByRole('button', { name: /Send test/ })[0]
+    fireEvent.click(telegramTest)
+    await waitFor(() => expect(telegramTest).toBeDisabled())
+    fireEvent.click(screen.getByRole('switch', { name: 'Send alerts to Discord' }))
+    await waitFor(() => expect(api.update).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Send alerts to Discord' })).not.toBeChecked()
+    )
+
+    expect(telegramTest).toBeDisabled()
+    finishTest('Test message sent to Telegram.')
+    await waitFor(() => expect(telegramTest).toBeEnabled())
   })
 
   it('offers a test only where an alert would arrive', async () => {

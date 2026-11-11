@@ -807,7 +807,7 @@ def setup_environment(app):
             ]
 
             db_init_start = time.time()
-            # max_workers=1 on purpose: 14 of the 20 functions above target the
+            # max_workers=1 on purpose: most of the functions above target the
             # same file (openalgo.db), and SQLite permits one writer per file,
             # so running them concurrently made them contend for the write lock
             # rather than progress in parallel - the "database is locked" seen

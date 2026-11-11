@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import httpx
 import pytest
@@ -407,13 +408,65 @@ def test_an_order_alert_is_posted_in_the_background(store, provider):
     assert '"allowed_mentions":{"parse":[]}' in body
 
 
-def test_a_full_queue_drops_rather_than_grows(monkeypatch):
-    monkeypatch.setattr(webhook, "MAX_PENDING", 1)
+def test_a_full_lane_drops_rather_than_grows():
+    lane = webhook._Lane("probe", capacity=1)
     release = threading.Event()
 
-    first = webhook._queue(lambda: release.wait(5))
-    second = webhook._queue(lambda: None)
+    first = lane.submit(lambda: release.wait(5))
+    second = lane.submit(lambda: None)
     release.set()
 
     assert first is True
     assert second is False
+
+
+def test_a_stalled_provider_does_not_hold_up_the_other(store, provider):
+    """Slack and Discord each have their own lane: Slack's full queue and busy
+    threads must not delay or drop a Discord alert."""
+    stalled = threading.Event()
+    slack_lane = webhook._lane("slack")
+    for _ in range(slack_lane.capacity):
+        slack_lane.submit(lambda: stalled.wait(5))
+    try:
+        assert slack_lane.submit(lambda: None) is False  # Slack is full
+        settings.save_webhook(DiscordChannel(), DISCORD_URL)
+        provider["status"] = 204
+
+        assert DiscordChannel().send_text("hi", wait=False).delivered
+        deadline = time.monotonic() + 5
+        while not provider["requests"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert [r.url.host for r in provider["requests"]] == ["discord.com"]
+    finally:
+        stalled.set()
+
+
+def test_a_queued_post_is_never_sent_to_a_webhook_removed_meanwhile(store, provider):
+    """A queued send reads the saved webhook when it runs, not when it was queued."""
+    channel = SlackChannel()
+    settings.save_webhook(channel, SLACK_URL)
+    held = threading.Event()
+    lane = webhook._lane("slack")
+    lane.submit(lambda: held.wait(5))  # the lane's first thread is busy
+    lane.submit(lambda: held.wait(5))  # and its second
+
+    assert channel.send_text("hi", wait=False).delivered  # queued behind them
+    settings.forget_webhook(channel)
+    held.set()
+    deadline = time.monotonic() + 5
+    while lane.pending and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert provider["requests"] == []
+
+
+def test_an_unusable_saved_webhook_reads_as_not_set_up(store):
+    """A ciphertext that no longer decrypts must not show the channel ready."""
+    settings.save_webhook(SlackChannel(), SLACK_URL)
+    with store.begin() as conn:
+        conn.execute(text("UPDATE alert_channels SET webhook_url = 'not-a-ciphertext'"))
+
+    state = SlackChannel().status()
+
+    assert not state.configured and not state.ready
+    assert "Save it again" in state.detail

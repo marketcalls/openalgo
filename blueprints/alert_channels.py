@@ -28,6 +28,7 @@ from services.alerts.categories import CATEGORIES
 from services.alerts.channels.base import AlertChannel
 from services.alerts.channels.webhook import InvalidWebhookUrl
 from services.alerts.registry import CHANNELS, get_channel, get_webhook_channel
+from utils.keyed_locks import LockBusy
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -75,13 +76,14 @@ def update_channel(name: str):
         isinstance(categories, list) and all(isinstance(c, str) for c in categories)
     ):
         return _error("'categories' must be a list of event group names.", 400)
-    if enabled and channel.uses_webhook and not channel.status().configured:
-        return _error(f"Save a {channel.label} webhook before turning {channel.label} on.", 409)
-
     try:
+        if enabled and channel.uses_webhook and not channel.status().configured:
+            return _error(f"Save a {channel.label} webhook before turning {channel.label} on.", 409)
         alert_settings.update_settings(channel, enabled=enabled, categories=categories)
     except alert_settings.UnknownCategory as error:
         return _error(str(error), 400)
+    except LockBusy:
+        return _error("Another change to this channel is still being saved. Try again.", 409)
     except Exception:
         logger.exception(f"Could not save the {channel.label} alert settings")
         return _error("The settings could not be saved. Try again.", 500)

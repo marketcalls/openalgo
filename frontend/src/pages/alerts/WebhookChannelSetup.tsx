@@ -9,6 +9,7 @@ import {
   type AlertChannelList,
   alertsApi,
   alertsErrorMessage,
+  type WebhookChannelName,
 } from '@/api/alerts'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -27,8 +28,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { showToast } from '@/utils/toast'
-
-export type WebhookChannelName = 'slack' | 'discord'
 
 /** What differs between the providers: what a URL looks like and where to get one. */
 const PROVIDERS: Record<WebhookChannelName, { placeholder: string; steps: string[] }> = {

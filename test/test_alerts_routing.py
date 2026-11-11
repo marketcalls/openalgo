@@ -298,15 +298,22 @@ def wired(store, monkeypatch):
     return types.SimpleNamespace(bus=bus, channels=channels)
 
 
-def _wait_for(channels, timeout: float = 5.0) -> None:
+def _drain(bus, timeout: float = 5.0) -> None:
+    """Wait until the bus has run every callback it was handed.
+
+    Counting after the first delivery would race a duplicate arriving later.
+    ``raise_alert`` publishes before its own slot is released, so the count
+    never touches zero between an order event and its alert.
+    """
     deadline = time.monotonic() + timeout
-    for channel in channels:
-        channel.done.wait(max(0.0, deadline - time.monotonic()))
+    while bus.stats()["pending"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert bus.stats()["pending"] == 0, "the bus did not drain"
 
 
-def test_one_order_event_reaches_every_channel_once(wired):
+def test_one_order_event_reaches_every_channel_exactly_once(wired):
     wired.bus.publish(_placed())
-    _wait_for(wired.channels)
+    _drain(wired.bus)
 
     assert [len(channel.received) for channel in wired.channels] == [1, 1, 1]
     assert {channel.received[0].category for channel in wired.channels} == {"orders_placed"}
@@ -315,25 +322,46 @@ def test_one_order_event_reaches_every_channel_once(wired):
 def test_a_failing_channel_does_not_stop_the_others(wired):
     """telegram raises on every delivery; whatsapp and slack still get the alert."""
     wired.bus.publish(_placed())
-    _wait_for(wired.channels)
+    _drain(wired.bus)
 
     assert wired.channels[1].received and wired.channels[2].received
 
 
 def test_a_failure_event_reaches_no_channel(wired):
     wired.bus.publish(OrderFailedEvent(api_type="placeorder"))
-    time.sleep(0.3)
+    _drain(wired.bus)
 
     assert all(channel.received == [] for channel in wired.channels)
 
 
-def test_every_channel_in_the_registry_is_subscribed(monkeypatch):
+def test_no_alert_is_published_when_no_channel_wants_it(wired, monkeypatch):
+    """An alert nobody receives must not take a bus slot."""
+    published = []
+    wired.bus.subscribe(ALERT_TOPIC, published.append, "spy")
+    monkeypatch.setattr(
+        settings,
+        "defaults",
+        lambda channel: settings.ChannelSettings(enabled=False, categories=frozenset(CATEGORY_IDS)),
+    )
+
+    wired.bus.publish(_placed())
+    _drain(wired.bus)
+
+    assert published == []
+    assert all(channel.received == [] for channel in wired.channels)
+
+
+def test_an_order_event_costs_the_bus_two_alert_callbacks(monkeypatch):
+    """One to raise the alert and one to deliver it, as the two removed
+    Telegram and WhatsApp subscribers took; not one per channel."""
     bus = EventBus(workers=1)
     monkeypatch.setattr(alert_subscriber, "bus", bus)
 
     alert_subscriber.register()
 
-    names = {s.name for s in bus._subscribers[ALERT_TOPIC]}
-    assert names == {f"alerts:{channel.name}" for channel in CHANNELS}
+    assert [s.name for s in bus._subscribers[ALERT_TOPIC]] == ["alerts:deliver"]
+    for topic in ALERT_TOPICS:
+        assert [s.name for s in bus._subscribers[topic]] == [f"alerts:raise:{topic}"]
     assert set(bus._subscribers) == set(ALERT_TOPICS) | {ALERT_TOPIC}
     assert set(CATEGORY_BY_TOPIC) == set(ALERT_TOPICS)
+    assert len(CHANNELS) == 4

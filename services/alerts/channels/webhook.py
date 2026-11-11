@@ -20,11 +20,15 @@ so it is treated like a password:
   checked.
 
 **Sends never block an order.** ``deliver`` runs on an event-bus thread and
-only queues the post on a small worker pool shared by every webhook channel.
-The queue is bounded: past ``MAX_PENDING`` waiting posts an alert is dropped
-and logged, because a provider that has stopped answering must not grow
-memory in a worker that never restarts. A failed post is logged and not
-retried; an alert retried a minute later describes a market that has moved.
+only queues the post on the channel's own lane: a small worker pool and a
+bounded queue that no other channel shares, so a provider that has stopped
+answering fills its own queue and holds its own threads while the other
+provider's alerts keep going. Past ``MAX_PENDING`` waiting posts an alert is
+dropped and logged, because a stalled provider must not grow memory in a
+worker that never restarts. A queued post reads the saved webhook when it
+runs, so a webhook removed or replaced while one waited is never posted to.
+A failed post is logged and not retried; an alert retried a minute later
+describes a market that has moved.
 """
 
 from __future__ import annotations
@@ -54,15 +58,11 @@ TIMEOUT_SECONDS = 10.0
 #: Longest URL accepted. Real webhook URLs are around 120 characters.
 MAX_URL_LENGTH = 500
 
-#: Posts waiting or running at once, across every webhook channel.
-MAX_PENDING = 200
+#: Posts waiting or running at once, per webhook channel.
+MAX_PENDING = 100
 
-#: One small pool for every webhook channel, created once (FD hygiene: never a
-#: pool per call). Its threads only make HTTP requests through the shared
-#: client and touch no database, so they need no session cleanup.
-_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="alert_webhook")
-_pending_lock = threading.Lock()
-_pending = 0
+#: Threads posting for one webhook channel.
+WORKERS_PER_CHANNEL = 2
 
 
 class InvalidWebhookUrl(ValueError):
@@ -172,6 +172,14 @@ class WebhookChannel(AlertChannel):
                 ready=False,
                 detail=f"No webhook is saved yet. Add one on the {self.label} page.",
             )
+        if self.saved_url() is None:
+            # Saved, but it no longer decrypts or is not this provider's URL.
+            return ChannelStatus(
+                configured=False,
+                ready=False,
+                detail=f"The saved webhook can no longer be used. Save it again on the "
+                f"{self.label} page.",
+            )
         return ChannelStatus(
             configured=True,
             ready=True,
@@ -179,11 +187,8 @@ class WebhookChannel(AlertChannel):
         )
 
     def deliver(self, alert: AlertRaisedEvent) -> None:
-        url = self.saved_url()
-        if url is None:
-            return
         message = build_message(alert.api_type, alert.request_data, alert.response_data)
-        _queue(self.post, url, self._fit(self.render(message)))
+        _lane(self.name).submit(self.post_to_saved, self._fit(self.render(message)))
 
     def send_test(self) -> DeliveryResult:
         url = self.saved_url()
@@ -212,12 +217,24 @@ class WebhookChannel(AlertChannel):
         rendered = self.render_text(text)
         if wait:
             return self.post(url, rendered)
-        if _queue(self.post, url, rendered):
+        if _lane(self.name).submit(self.post_to_saved, rendered):
             return DeliveryResult(delivered=True, message="Notification queued.")
         return DeliveryResult(
             delivered=False,
             message=f"Too many {self.label} messages are waiting to be sent. Try again shortly.",
         )
+
+    def post_to_saved(self, text: str) -> DeliveryResult:
+        """Post to the webhook saved now. What every queued send runs.
+
+        Read when the send runs rather than when it was queued, so a webhook
+        removed or replaced while the send waited is never posted to.
+        """
+        url = self.saved_url()
+        if url is None:
+            logger.info(f"{self.label} alert not sent: no usable webhook is saved")
+            return DeliveryResult(delivered=False, message=f"No {self.label} webhook is saved.")
+        return self.post(url, text)
 
     def post(self, url: str, text: str) -> DeliveryResult:
         """Post one message and report what happened. Never raises."""
@@ -290,34 +307,66 @@ def _unsafe(ch: str) -> bool:
     return ch.isspace() or ch == "\\" or ord(ch) < 0x20 or ord(ch) == 0x7F
 
 
-def _queue(send: Callable[..., DeliveryResult], *args: Any) -> bool:
-    """Run ``send(*args)`` on the webhook pool. False when the queue is full."""
-    global _pending
-    with _pending_lock:
-        if _pending >= MAX_PENDING:
-            full = True
-        else:
-            _pending += 1
-            full = False
-    if full:
-        logger.warning(f"Webhook alert queue is full ({MAX_PENDING} waiting); an alert was dropped")
-        return False
+class _Lane:
+    """One webhook channel's own worker pool and bounded queue.
 
-    def run() -> None:
-        global _pending
+    Created once per channel and kept (FD hygiene: never a pool per call).
+    Its threads make HTTP requests through the shared client and read the
+    saved webhook, which releases its database session as it returns.
+    """
+
+    def __init__(self, name: str, capacity: int):
+        self.name = name
+        self.capacity = capacity
+        self.pending = 0
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(
+            max_workers=WORKERS_PER_CHANNEL, thread_name_prefix=f"alert_{name}"
+        )
+
+    def submit(self, send: Callable[..., DeliveryResult], *args: Any) -> bool:
+        """Run ``send(*args)`` on this lane. False when its queue is full."""
+        with self._lock:
+            if self.pending >= self.capacity:
+                full = True
+            else:
+                self.pending += 1
+                full = False
+        if full:
+            logger.warning(
+                f"The {self.name} alert queue is full ({self.capacity} waiting); "
+                "an alert was dropped"
+            )
+            return False
+        try:
+            self._executor.submit(self._run, send, args)
+        except RuntimeError:
+            # The pool is shut down: the process is exiting.
+            self._release()
+            return False
+        return True
+
+    def _run(self, send: Callable[..., DeliveryResult], args: tuple) -> None:
         try:
             send(*args)
         except Exception:
-            logger.exception("Webhook alert send failed")
+            logger.exception(f"A {self.name} alert send failed")
         finally:
-            with _pending_lock:
-                _pending -= 1
+            self._release()
 
-    try:
-        _EXECUTOR.submit(run)
-    except RuntimeError:
-        # The pool is shut down: the process is exiting.
-        with _pending_lock:
-            _pending -= 1
-        return False
-    return True
+    def _release(self) -> None:
+        with self._lock:
+            self.pending -= 1
+
+
+_lanes: dict[str, _Lane] = {}
+_lanes_lock = threading.Lock()
+
+
+def _lane(name: str) -> _Lane:
+    """The lane for one webhook channel, created on first use."""
+    with _lanes_lock:
+        lane = _lanes.get(name)
+        if lane is None:
+            lane = _lanes[name] = _Lane(name, MAX_PENDING)
+        return lane

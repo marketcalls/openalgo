@@ -48,6 +48,20 @@ beforeEach(() => {
   for (const fn of [...Object.values(api), ...Object.values(toast)]) fn.mockReset()
 })
 
+describe.each([
+  ['slack', 'Slack', 'https://hooks.slack.com/services/...', /api\.slack\.com\/apps/],
+  ['discord', 'Discord', 'https://discord.com/api/webhooks/...', /Copy Webhook URL/],
+] as const)('%s setup page', (name, label, placeholder, step) => {
+  it('shows where its webhook comes from and what one looks like', async () => {
+    api.list.mockResolvedValue(listing({ ...slack(false), name, label, setup_path: `/${name}` }))
+    renderWithQuery(<WebhookChannelSetup channel={name} />)
+
+    expect(await screen.findByRole('heading', { name: `${label} alerts` })).toBeInTheDocument()
+    expect(screen.getByText(step)).toBeInTheDocument()
+    expect(screen.getByLabelText('Webhook URL')).toHaveAttribute('placeholder', placeholder)
+  })
+})
+
 describe('Slack setup page', () => {
   it('explains where a webhook comes from and masks the field', async () => {
     api.list.mockResolvedValue(listing(slack(false)))

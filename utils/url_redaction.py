@@ -34,8 +34,8 @@ _QUERY_CREDENTIAL = re.compile(
 # trader's channel. OpenAlgo never logs one on purpose; this catches the ones a
 # library puts in an exception or a debug line.
 _ALERT_WEBHOOK = re.compile(
-    r"(?P<prefix>hooks\.slack\.com/services/|"
-    r"(?:ptb\.|canary\.)?discord(?:app)?\.com/api(?:/v\d{1,2})?/webhooks/)"
+    r"(?P<prefix>hooks\.slack\.com(?::\d+)?/services/|"
+    r"(?:ptb\.|canary\.)?discord(?:app)?\.com(?::\d+)?/api(?:/v\d{1,2})?/webhooks/)"
     r"[^\s?#'\"<>]+",
     flags=re.IGNORECASE,
 )

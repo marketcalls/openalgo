@@ -27,6 +27,9 @@ export interface AlertChannelStatus {
 
 export type AlertChannelName = 'telegram' | 'whatsapp' | 'slack' | 'discord'
 
+/** The channels that post to a saved webhook. Only these take one. */
+export type WebhookChannelName = Extract<AlertChannelName, 'slack' | 'discord'>
+
 export interface AlertChannel {
   name: AlertChannelName
   label: string
@@ -83,7 +86,7 @@ export const alertsApi = {
     return response.data.data as AlertChannel
   },
 
-  saveWebhook: async (name: AlertChannelName, url: string): Promise<AlertChannel> => {
+  saveWebhook: async (name: WebhookChannelName, url: string): Promise<AlertChannel> => {
     const response = await webClient.put<Envelope<AlertChannel>>(
       `/alerts/channels/${name}/webhook`,
       { url }
@@ -91,7 +94,7 @@ export const alertsApi = {
     return response.data.data as AlertChannel
   },
 
-  forgetWebhook: async (name: AlertChannelName): Promise<AlertChannel> => {
+  forgetWebhook: async (name: WebhookChannelName): Promise<AlertChannel> => {
     const response = await webClient.delete<Envelope<AlertChannel>>(
       `/alerts/channels/${name}/webhook`
     )

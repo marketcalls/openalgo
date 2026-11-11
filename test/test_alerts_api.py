@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -223,6 +225,90 @@ def test_forgetting_a_webhook_turns_the_channel_off(page):
     assert get_channel("discord").saved_url() is None
 
 
+def test_two_changes_to_one_channel_at_once_both_land(store):
+    """Staged at the write: a second change arrives while the first is inside
+    its save. Without the per-channel lock the second read the row before the
+    first wrote it, and whichever wrote last undid the other."""
+    telegram = get_channel("telegram")
+    original = alert_channels_db.save_channel
+    first_is_writing, release = threading.Event(), threading.Event()
+    calls = []
+
+    def held(channel, **fields):
+        calls.append(fields)
+        if len(calls) == 1:
+            first_is_writing.set()
+            release.wait(2)
+        return original(channel, **fields)
+
+    alert_channels_db.save_channel = held
+    try:
+        switch = threading.Thread(target=lambda: settings.update_settings(telegram, enabled=False))
+        switch.start()
+        assert first_is_writing.wait(5)
+        route = threading.Thread(
+            target=lambda: settings.update_settings(telegram, categories=["gtt_orders"])
+        )
+        route.start()
+        time.sleep(0.3)  # long enough for an unserialised second change to finish
+        release.set()
+        switch.join(5)
+        route.join(5)
+    finally:
+        alert_channels_db.save_channel = original
+
+    stored = alert_channels_db.load_channel("telegram")
+    assert stored.enabled is False
+    assert stored.categories == ("gtt_orders",)
+
+
+def test_a_change_never_starts_from_the_defaults_when_the_row_cannot_be_read(store, monkeypatch):
+    """Telegram switched off must not be switched back on by a failed read."""
+    telegram = get_channel("telegram")
+    settings.update_settings(telegram, enabled=False)
+    settings.clear_cache()
+
+    def unreadable(channel):
+        raise RuntimeError("database is locked")
+
+    original = alert_channels_db.load_channel
+    alert_channels_db.load_channel = unreadable
+    try:
+        with pytest.raises(RuntimeError):
+            settings.update_settings(telegram, categories=["gtt_orders"])
+    finally:
+        alert_channels_db.load_channel = original
+
+    stored = alert_channels_db.load_channel("telegram")
+    assert stored.enabled is False
+    assert set(stored.categories) != {"gtt_orders"}
+
+
+def test_a_status_that_cannot_be_read_is_a_controlled_error(page, monkeypatch):
+    monkeypatch.setattr(
+        type(get_channel("slack")), "status", lambda self: (_ for _ in ()).throw(OSError("x"))
+    )
+
+    response = page.post("/alerts/channels/slack", json={"enabled": True})
+
+    assert response.status_code == 500
+    assert response.get_json()["message"] == "The settings could not be saved. Try again."
+
+
+def test_a_change_waiting_too_long_for_another_is_refused(page, monkeypatch):
+    from utils.keyed_locks import LockBusy
+
+    def busy(channel, **change):
+        raise LockBusy("telegram", "alert channel settings", 10)
+
+    monkeypatch.setattr(settings, "update_settings", busy)
+
+    response = page.post("/alerts/channels/telegram", json={"enabled": False})
+
+    assert response.status_code == 409
+    assert "still being saved" in response.get_json()["message"]
+
+
 def test_a_test_message_reports_what_happened(page, provider):
     page.put("/alerts/channels/slack/webhook", json={"url": SLACK_URL})
 
@@ -410,9 +496,24 @@ def test_the_migration_adds_the_table_and_no_rows(tmp_path, monkeypatch, capsys)
         assert db.execute("SELECT count(*) FROM alert_channels").fetchone() == (0,)
 
 
-def test_the_migration_is_registered():
-    registry = (REPO_ROOT / "upgrade" / "migrate_all.py").read_text(encoding="utf-8")
-    assert '"migrate_alert_channels.py"' in registry
+def test_the_migration_is_registered_and_required():
+    """A required migration's failure reaches migrate_all's exit code instead
+    of being reported as a warning."""
+    import ast
+
+    # Read, not imported: migrate_all replaces sys.stdout at import on Windows.
+    tree = ast.parse((REPO_ROOT / "upgrade" / "migrate_all.py").read_text(encoding="utf-8"))
+    assigned = {
+        node.targets[0].id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+    }
+    names = [script for script, _ in ast.literal_eval(assigned["MIGRATIONS"])]
+    required = ast.literal_eval(assigned["REQUIRED_MIGRATIONS"].args[0])
+
+    assert "migrate_alert_channels.py" in names
+    assert "migrate_alert_channels.py" in required
+    assert "migrate_password_reset_grants.py" in required
 
 
 def _fernet(pepper: str, salt: bytes):
@@ -474,8 +575,40 @@ def test_the_lost_salt_check_reads_saved_webhooks(tmp_path):
     assert env_check._sample_ciphertexts(str(db_file)) == ["gAAAA-a-webhook-ciphertext"]
 
 
-def test_the_pepper_rotation_re_encrypts_saved_webhooks(tmp_path, monkeypatch):
+def test_the_pepper_rotation_uses_the_installs_own_salt(tmp_path, monkeypatch):
+    """An install with FERNET_SALT encrypts with that salt; a rotation that
+    used the static salt could decrypt none of it and then wrote the new
+    pepper anyway, leaving every secret unreadable."""
     import sqlite3
+
+    sys.path.insert(0, str(REPO_ROOT / "upgrade"))
+    try:
+        import rotate_pepper
+    finally:
+        sys.path.remove(str(REPO_ROOT / "upgrade"))
+
+    salt = os.urandom(16)
+    monkeypatch.setenv("FERNET_SALT", salt.hex())
+    old_pepper, new_pepper = "c" * 64, "d" * 64
+    db_file = tmp_path / "openalgo.db"
+    _table_with_webhook(db_file, _fernet(old_pepper, salt).encrypt(SLACK_URL.encode()).decode())
+
+    with sqlite3.connect(db_file) as conn:
+        rotator = rotate_pepper.Rotator(conn, old_pepper, new_pepper)
+        rotator.rotate_all()
+        conn.commit()
+
+    assert rotator.stats["alert_channels.webhook_url"] == 1
+    assert (
+        _fernet(new_pepper, salt).decrypt(_stored_webhook(db_file).encode()).decode() == SLACK_URL
+    )
+
+
+def test_the_pepper_rotation_re_encrypts_saved_webhooks(tmp_path, monkeypatch):
+    """An install with no FERNET_SALT of its own uses the static salt."""
+    import sqlite3
+
+    monkeypatch.delenv("FERNET_SALT", raising=False)
 
     sys.path.insert(0, str(REPO_ROOT / "upgrade"))
     try:
@@ -506,6 +639,8 @@ def test_the_pepper_rotation_re_encrypts_saved_webhooks(tmp_path, monkeypatch):
         DISCORD_URL,
         "https://discordapp.com/api/v10/webhooks/1/secret-token",
         "https://canary.discord.com/api/webhooks/1/secret-token?thread_id=5",
+        "https://hooks.slack.com:443/services/T1/B2/secret-token",
+        "https://discord.com:443/api/webhooks/1/secret-token",
     ],
 )
 def test_a_webhook_url_is_redacted_from_logs(url):

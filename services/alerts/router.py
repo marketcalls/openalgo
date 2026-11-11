@@ -1,17 +1,17 @@
 """Turning order events into alerts, and alerts into deliveries.
 
-Two steps, both run by ``subscribers/alert_subscriber.py`` on the event bus:
+Both steps are run by ``subscribers/alert_subscriber.py`` on the event bus:
 
 1. ``alert_for`` reads an order event and, if it belongs to an alert group,
    returns the ``AlertRaisedEvent`` to publish.
-2. ``deliver`` runs once per channel for every published alert, and hands the
-   alert to the channel if the trader routed that group to it.
-
-Each channel's delivery is its own bus callback, so a channel that is slow or
-failing never delays or stops another.
+2. ``receivers`` names the channels that group is routed to, switched on, so
+   the alert is published only when somebody wants it and handed only to
+   those channels.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 from events.alert_events import AlertRaisedEvent
 from events.base import OrderEvent
@@ -36,14 +36,22 @@ def alert_for(event: OrderEvent) -> AlertRaisedEvent | None:
     )
 
 
+def receivers(category: str, channels: Iterable[AlertChannel]) -> list[AlertChannel]:
+    """The channels that are on and receive ``category``, in registry order.
+
+    A channel may still decline an alert it is given, by its own rules: a
+    stopped Telegram bot, an unpaired WhatsApp device.
+    """
+    return [channel for channel in channels if settings_for(channel).receives(category)]
+
+
 def deliver(channel: AlertChannel, alert: AlertRaisedEvent) -> bool:
     """Hand ``alert`` to ``channel`` if the trader routed its group there.
 
     Returns:
-        Whether the channel was given the alert. The channel may still decline
-        it by its own rules (a stopped Telegram bot, say).
+        Whether the channel was given the alert.
     """
-    if not settings_for(channel).receives(alert.category):
+    if not receivers(alert.category, (channel,)):
         return False
     channel.deliver(alert)
     return True
