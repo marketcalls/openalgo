@@ -174,6 +174,7 @@ are identified separately so a custom module can use the right surface.
 
 | | |
 | --- | --- |
+| **2.7.1** | No descriptor or export changes: 112 built-ins and 438 indexed names. Five Elliott wave drawing tools, three of them new, each starting at an origin anchor and labelled by degree (`props.degree`, `props.labelStyle`); the impulse and the correction take 6 and 4 anchors, and a count saved by 2.7.0 is given its origin on load. 90 drawing tools. |
 | **2.7.0** | No descriptor or export changes: 112 built-ins and 438 indexed names. The drawing tool icons are redrawn around open anchor rings and `DRAWING_TOOL_ACCENTS` fills only the magnet; `drawingToolAccent(id)` returns `undefined` for every other tool. Packaged widget and reference host interface fixes. |
 | **2.6.9** | No descriptor or export changes: 112 built-ins and 438 indexed names. Security updates to the library's build toolchain and documentation site; the published code is 2.6.8's. |
 | **2.6.8** | No descriptor or export changes. Renko, range bar, line break and point and figure elements carry the volume traded while they formed, so a study on Chart bars reads real `bar.volume` there; Kagi keeps its line thickness in `volume` and needs Underlying bars for a volume study. Higher-timeframe warmup crosses weekends and holidays (an empty history window doubles the next; history is declared missing only past 30 empty days). OHLC and high-low bars widen with the zoom. |
@@ -224,7 +225,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 438 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.7.0 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.7.1 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (14)

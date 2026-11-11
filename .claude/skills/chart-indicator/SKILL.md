@@ -59,6 +59,14 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.1: nothing for a descriptor to change.** Three Elliott wave drawing
+  tools (triangle, double and triple combination) join the impulse and the
+  correction, every count starts at an origin anchor, and a count is labelled
+  by degree (`props.degree`, `props.labelStyle`). The impulse and the
+  correction take 6 and 4 anchors where they took 5 and 3; a saved count is
+  given its origin on load. No indicator, descriptor field or export is added
+  or removed: the registry stays at 112 and the index at 438 names.
+
 - **2.7.0: nothing for a descriptor to change.** The drawing tool icons are
   redrawn with an open ring at each anchor, and `DRAWING_TOOL_ACCENTS` now
   fills only the magnet. The packaged widget and the reference host get

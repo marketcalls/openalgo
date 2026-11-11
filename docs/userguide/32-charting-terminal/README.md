@@ -407,12 +407,17 @@ Pick a tool from the left rail. A group button selects whatever you last used
 from that group again; the small corner wedge opens the full list without
 changing the selected tool.
 
-The terminal exposes all 87 drawing tools from openalgo-charts 2.7.0. Each
+The terminal exposes all 90 drawing tools from openalgo-charts 2.7.1. Each
 tool's icon shows its drawing with an open ring at every point you place.
-Channels
-include regression and pitchfork variants; Fibonacci and Gann include fans,
-arcs, circles and squares. Patterns include XABCD, Elliott waves and harmonic
-patterns with measured ratios. Geometric studies include tessellation and
+Channels include regression and pitchfork variants; Fibonacci and Gann include
+fans, arcs, circles and squares. Patterns include XABCD, head and shoulders and
+harmonic patterns with measured ratios. The **Elliott waves** section holds
+five counts: impulse (0 1 2 3 4 5), correction (0 A B C), triangle
+(0 A B C D E), double combination (0 W X Y) and triple combination
+(0 W X Y X Z). Click the origin first, the point the first wave starts from,
+then the end of each wave. An impulse or correction drawn before the upgrade
+to 2.7.1 keeps its old labels; drag its first point away to draw its first
+wave. Geometric studies include tessellation and
 wavefronts. The **Volume studies** group holds **Anchored VWAP** and **Fixed
 Range Volume Profile**, each placed by clicking on the chart. Use the scrollable
 group menus to reach the complete catalogue.

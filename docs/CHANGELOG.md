@@ -69,15 +69,25 @@ fix, live in [docs/releases](releases/).
   fails, `migrate_all.py` reports the failure and exits non-zero instead of
   calling it a warning.
 
-- `/trading`, Historify and every other chart now use openalgo-charts 2.7.0
+- `/trading`, Historify and every other chart now use openalgo-charts 2.7.1
   (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
   each one shows its drawing the way the chart shows it when selected, with an
   open ring at every point you place, so a trend line has a ring at each end
   and the channels, patterns, positions, Fibonacci and Gann tools show their
   anchors too. The brush, highlighter, measure, text, note and arrow tools
-  get icons of their own. Only the icons change: every tool, indicator and
-  chart type works as before, saved charts and drawings load unchanged, and
-  existing custom indicators keep working.
+  get icons of their own. Indicators, chart types and existing custom
+  indicators work as before.
+- **Elliott waves on `/trading`.** The Patterns group of the drawing rail has
+  an Elliott waves section with five counts: impulse (0 1 2 3 4 5),
+  correction (0 A B C), and three new ones, triangle (0 A B C D E), double
+  combination (0 W X Y) and triple combination (0 W X Y X Z). Each count now
+  starts at its origin, the point the first wave starts from, so the first
+  wave is drawn: place the origin first, then the end of each wave. An
+  impulse or correction you drew before this upgrade loads exactly as it
+  looked, labelled 1 to 5 or A to C; drag its first point away and the first
+  wave and its 0 appear. Counts are labelled in the Minor degree (plain
+  numbers and capital letters); the terminal has no control yet for choosing
+  another degree or a circled or bracketed label style.
 
 ### Fixed
 
