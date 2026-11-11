@@ -19,8 +19,14 @@ channel in one place:
 | Basket, split and options orders | Orders sent together, with how many went through |
 | GTT orders | GTT orders placed, modified, cancelled, triggered or expired |
 
-Failed and rejected orders are never sent as alerts on any channel. A script
-retrying a bad order would otherwise fill every chat with rejections.
+An order that fails on its own is never sent as an alert, on any channel: a
+script retrying a bad order would otherwise fill every chat with rejections.
+A basket, split or options alert does list any of its orders that were
+rejected, since that is part of what the batch did.
+
+A GTT alert names the symbol, the trigger prices and the trigger id, and when
+a GTT fires, the order it placed. (Telegram's GTT alerts still show only the
+title and the time; WhatsApp, Slack and Discord show the details.)
 
 Alerts in analyze (sandbox) mode are sent too, marked
 `ANALYZE MODE - No Real Order`.
@@ -77,7 +83,19 @@ API key and the channel switched on at `/alerts`:
 | Slack | `POST /api/v1/slack/notify` | [Slack](api/slack-services/notify.md) |
 | Discord | `POST /api/v1/discord/notify` | [Discord](api/discord-services/notify.md) |
 
-All four are listed in the API Playground (`/playground`).
+All four are listed in the API Playground (`/playground`) for stock brokers.
+The crypto broker collection does not list the messaging endpoints yet, but
+they work the same way from any broker.
+
+## Chart alerts on /trading
+
+A price or indicator alert on the chart can also be sent to Telegram,
+WhatsApp, Slack or Discord, chosen per alert under **When it fires**. These
+are separate from the order alerts above: the chart posts to the channel's
+notify endpoint itself, so the `/alerts` grid does not route them, but a
+channel switched off on `/alerts` refuses them too. Every outward option is
+off for a new alert, and alerts saved before Slack and Discord existed read
+them as off.
 
 ## How it works (for maintainers)
 
@@ -85,20 +103,29 @@ Alerts are event driven end to end:
 
 1. An order service publishes an order event on the event bus (`order.placed` and so on).
 2. `subscribers/alert_subscriber.py` maps it to an event group
-   (`services/alerts/categories.py`) and publishes one `alert.raised` event
-   (`events/alert_events.py`).
-3. Every channel in `services/alerts/registry.py` is subscribed to
-   `alert.raised` as its own bus callback, so a slow or failing channel never
-   delays another. `services/alerts/router.py` checks the channel's switch and
-   routing (`services/alerts/settings.py`, stored in the `alert_channels`
-   table) and hands the alert to the channel.
-4. The channel sends it. Telegram and WhatsApp go through their existing alert
-   services, whose own rules (bot running, device paired) still apply. Slack
-   and Discord post to their webhook on a small bounded worker pool
-   (`services/alerts/channels/webhook.py`) and never block an order.
+   (`services/alerts/categories.py`) and, when at least one channel receives
+   that group, publishes one `alert.raised` event (`events/alert_events.py`).
+3. One delivery callback on `alert.raised` asks `services/alerts/router.py`
+   which channels in `services/alerts/registry.py` are on and receive the
+   group (`services/alerts/settings.py`, stored in the `alert_channels`
+   table), and hands the alert to each in its own `try`, so a failing channel
+   never stops another. An order event costs the bus two alert callbacks,
+   however many channels there are.
+4. The channel queues the send and returns at once, so a slow provider never
+   holds a bus worker. Telegram and WhatsApp go through their existing alert
+   services and pools, whose own rules (bot running, device paired) still
+   apply. Slack and Discord each post on their own bounded lane
+   (`services/alerts/channels/webhook.py`), so one provider that stops
+   answering never delays or drops the other's alerts. A queued post reads
+   the saved webhook when it runs, so a webhook removed meanwhile is never
+   posted to.
 
 WhatsApp, Slack and Discord share one formatter (`services/alerts/formatting.py`);
 Telegram keeps its own, so the messages its users receive are unchanged.
+
+Settings changes to one channel are serialised, and each reads the stored row
+rather than the cache, so two changes made at once both land and a failed
+read never resets a channel to its defaults.
 
 **Adding a channel** is a subclass of `AlertChannel` (or `WebhookChannel` for
 one that posts to a URL) under `services/alerts/channels/`, plus one line in

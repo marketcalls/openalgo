@@ -8,8 +8,9 @@ OpenAlgo posts to it.
 Order alerts reach Discord automatically once the webhook is saved. Which
 orders are sent (orders placed, modified, cancelled, positions closed, batch
 orders, GTT orders) is chosen per channel on the `/alerts` page, alongside
-Telegram, WhatsApp and Slack. Failed and rejected orders are never sent as
-alerts.
+Telegram, WhatsApp and Slack. An order that fails on its own is never sent as an alert. A basket, split or
+options alert does list any of its orders that were rejected, since that is
+part of what the batch did.
 
 ## Security model
 

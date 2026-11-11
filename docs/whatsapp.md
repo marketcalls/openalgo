@@ -424,12 +424,11 @@ bus.publish(OrderPlacedEvent(api_key, ...))
         │
         ├──> log_subscriber          (writes to log/orders.jsonl)
         ├──> socketio_subscriber     (emits order_event for the dashboard)
-        └──> alert_subscriber        (publishes alert.raised)
-                  │
+        └──> alert_subscriber        (publishes alert.raised, then delivers it)
                   ├──> Telegram channel   (telegram_alert_service)
-                  ├──> WhatsApp channel   (below)
                   ├──> Slack channel      (webhook)
-                  └──> Discord channel    (webhook)
+                  ├──> Discord channel    (webhook)
+                  └──> WhatsApp channel   (the chain below is WhatsApp's own)
                   │
                   ▼
         whatsapp_alert_service.send_order_alert

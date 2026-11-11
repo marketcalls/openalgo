@@ -26,18 +26,43 @@ fix, live in [docs/releases](releases/).
   message to the saved webhook, like the Telegram and WhatsApp notify
   endpoints. Both are in the API Playground. The API can only post; it can
   never read or replace a webhook.
+- **Chart alerts on `/trading` can go to Slack and Discord** too, chosen per
+  alert next to Telegram and WhatsApp. Both are off for a new alert, and
+  alerts saved before read them as off.
 
 ### Changed
 
 - Alerts are event driven end to end: one subscriber raises an alert per order
-  event and each channel receives it on its own, so a slow or failing channel
+  event, only when a channel wants it, and hands it to each routed channel.
+  Every channel queues its send on its own pool, so a slow or failing channel
   never delays another. Telegram and WhatsApp alerts are unchanged for an
   install that never opens `/alerts`: both stay on with every order type, the
   messages are word for word the same, and their own rules (bot running,
   device paired) still apply.
+- GTT alerts on WhatsApp now say what happened: the symbol, the trigger
+  prices, the trigger id and, when a GTT fires, the order it placed. They
+  used to show only "Order Update" and the time. Slack and Discord get the
+  same; Telegram's GTT alerts are unchanged.
 - Upgrade: one migration, `migrate_alert_channels.py`, adds the
   `alert_channels` table (no rows are written). `migrate_all.py` runs it, and
-  the app also creates the table at startup.
+  the app also creates the table at startup. It and
+  `migrate_password_reset_grants.py` are now required migrations: if either
+  fails, `migrate_all.py` reports the failure and exits non-zero instead of
+  calling it a warning.
+
+### Fixed
+
+- **`upgrade/rotate_pepper.py` on an install with its own `FERNET_SALT`.**
+  It derived the encryption key with the legacy static salt, so on any
+  install that has a per-install salt (every install started since that salt
+  was introduced) it could decrypt none of the broker tokens, API keys, TOTP
+  secrets, broker keys or webhooks. It still wrote the new pepper to `.env`,
+  leaving them all unreadable, and encrypted a TOTP secret a second time. It
+  now uses the install's own salt, the same rule as the app. If you ran it on
+  such an install, the database backup it made
+  (`db/backups/openalgo.db.before-rotate-pepper-<time>`) still holds the data
+  under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
+  in `.env`.
 
 - `/trading`, Historify and every other chart now use openalgo-charts 2.7.0
   (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:

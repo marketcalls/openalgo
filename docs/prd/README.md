@@ -10,7 +10,7 @@ Use `PRD.md` and the linked module contracts for current behavior. Requirements 
 
 ## Inventory Verified On 2026-11-06
 
-- RESTX `/api/v1` method/path pairs: 74 (static registration parity with the API and BDD inventories)
+- RESTX `/api/v1` method/path pairs: 76 (static registration parity with the API and BDD inventories)
 - Broker plugins: 38 (metadata inventory, including Rupeezy and Sahi)
 - Tools: 20 (from `frontend/src/lib/tools.ts`)
 - RESTX Swagger UI: deliberately disabled (`doc=False`)
