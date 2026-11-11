@@ -237,3 +237,74 @@ def test_kotak_api_failed_first_leg_reports_reason_not_zero(monkeypatch):
     )
     assert len(calls) == 1
     assert result == {"status": "error", "message": "Invalid session"}
+
+
+# ------------------------------------------------- unresolved legs (live test)
+# Live Kotak test 2026-11-11: SILVER27NOV26151000CE + SILVER29DEC26151000CE
+# (December is the 28th) returned "success" with the November leg alone.
+
+_LEGS = [
+    {
+        "symbol": "SILVER27NOV26151000CE",
+        "exchange": "MCX",
+        "action": "SELL",
+        "product": "NRML",
+        "pricetype": "MARKET",
+        "quantity": "30",
+        "price": "0",
+    },
+    {
+        "symbol": "SILVER29DEC26151000CE",
+        "exchange": "MCX",
+        "action": "SELL",
+        "product": "NRML",
+        "pricetype": "MARKET",
+        "quantity": "30",
+        "price": "0",
+    },
+]
+
+
+def test_kotak_unknown_symbol_fails_the_basket(monkeypatch):
+    from broker.kotak.api import margin_api
+    from broker.kotak.mapping import margin_data
+
+    monkeypatch.setattr(
+        margin_data, "get_token", lambda symbol, exchange: "1" if "NOV26" in symbol else None
+    )
+
+    def _no_call(*args, **kwargs):
+        raise AssertionError("no leg may be priced when one is unresolved")
+
+    monkeypatch.setattr(margin_api, "calculate_single_margin", _no_call)
+    response, result = margin_api.calculate_margin_api(_LEGS, "t:::s:::https://k.example:::a")
+    assert response.status_code == 400
+    assert result["status"] == "error"
+    assert "SILVER29DEC26151000CE (MCX)" in result["message"]
+    assert "SILVER27NOV26151000CE" not in result["message"]
+
+
+def test_flattrade_unknown_symbol_fails_the_basket(monkeypatch):
+    import pytest
+
+    from broker.flattrade.mapping import margin_data
+
+    monkeypatch.setattr(
+        margin_data, "get_br_symbol", lambda symbol, exchange: symbol if "NOV26" in symbol else None
+    )
+    monkeypatch.setattr(margin_data, "_apply_mpp", lambda position, auth_token: ("LMT", "100"))
+    with pytest.raises(margin_data.MarginLegUnresolved, match="SILVER29DEC26151000CE"):
+        margin_data.transform_margin_positions(_LEGS, "FZ00000")
+
+
+def test_flattrade_api_reports_unknown_symbol(monkeypatch):
+    from broker.flattrade.api import margin_api
+
+    def _raise(positions, userid, auth_token=None):
+        raise margin_api.MarginLegUnresolved("Symbol not found: X (MCX).")
+
+    monkeypatch.setenv("BROKER_API_KEY", "FZ00000:::secret")
+    monkeypatch.setattr(margin_api, "transform_margin_positions", _raise)
+    response, result = margin_api.calculate_margin_api(_LEGS, "token")
+    assert response.status_code == 400
+    assert result == {"status": "error", "message": "Symbol not found: X (MCX)."}

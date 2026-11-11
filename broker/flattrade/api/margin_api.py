@@ -4,6 +4,7 @@ import os
 from broker.flattrade.api.funds import fetch_data
 from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
 from broker.flattrade.mapping.margin_data import (
+    MarginLegUnresolved,
     MarginPriceUnavailable,
     parse_limits_margin_used,
     parse_margin_response,
@@ -47,7 +48,7 @@ def calculate_margin_api(positions, auth):
 
     try:
         margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
-    except MarginPriceUnavailable as e:
+    except (MarginLegUnresolved, MarginPriceUnavailable) as e:
         error_response = {"status": "error", "message": str(e)}
 
         class MockResponse:

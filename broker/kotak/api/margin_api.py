@@ -98,17 +98,26 @@ def calculate_margin_api(positions, auth):
     Returns:
         Tuple of (response, response_data)
     """
-    # Transform all positions
+    # Transform all positions. A leg that cannot be resolved fails the
+    # basket: pricing the rest without it reported the margin of a different
+    # basket as "success" (issue #2156).
     transformed_positions = []
+    unresolved = []
     for position in positions:
         transformed = transform_margin_position(position)
         if transformed:
             transformed_positions.append(transformed)
+        else:
+            unresolved.append(f"{position.get('symbol')} ({position.get('exchange')})")
 
-    if not transformed_positions:
+    if unresolved or not transformed_positions:
         error_response = {
             "status": "error",
-            "message": "No valid positions to calculate margin. Check if symbols are valid.",
+            "message": (
+                f"Symbol not found: {', '.join(unresolved)}. Check the symbol name and expiry date."
+                if unresolved
+                else "No valid positions to calculate margin. Check if symbols are valid."
+            ),
         }
 
         class MockResponse:

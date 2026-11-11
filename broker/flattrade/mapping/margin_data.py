@@ -9,6 +9,14 @@ from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_s
 logger = get_logger(__name__)
 
 
+class MarginLegUnresolved(ValueError):
+    """A basket leg's symbol could not be found or prepared.
+
+    Raised rather than skipped: dropping one leg of a basket would silently
+    report the margin of a different basket (issue #2156).
+    """
+
+
 class MarginPriceUnavailable(ValueError):
     """No positive price could be found for a MARKET/SL-M leg.
 
@@ -150,16 +158,23 @@ def _build_order(position, auth_token):
 
 def transform_margin_positions(positions, userid, auth_token=None):
     orders = []
+    unresolved = []
     for position in positions:
         try:
             order = _build_order(position, auth_token)
-            if order:
-                orders.append(order)
         except MarginPriceUnavailable:
             raise
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
-            continue
+            order = None
+        if order:
+            orders.append(order)
+        else:
+            unresolved.append(f"{position.get('symbol')} ({position.get('exchange')})")
+    if unresolved:
+        raise MarginLegUnresolved(
+            f"Symbol not found: {', '.join(unresolved)}. Check the symbol name and expiry date."
+        )
     if not orders:
         return {"uid": userid, "actid": userid, "basketlists": []}
 
