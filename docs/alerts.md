@@ -111,7 +111,9 @@ workflow:
 
 - the post is queued, so a slow provider never holds the workflow;
 - a message longer than the channel allows (Slack 4000 characters, Discord
-  2000) is shortened to fit and ends in `...`, instead of being refused.
+  2000, counted as you wrote them) is shortened to fit and ends in `...`,
+  instead of being refused. Slack then escapes `&`, `<` and `>`, which can
+  make the posted text a little longer; Slack accepts it.
 
 ## MCP tools
 

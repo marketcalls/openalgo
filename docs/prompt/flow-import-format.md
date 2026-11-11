@@ -1762,7 +1762,8 @@ Posts to the Slack incoming webhook saved on the `/slack` page. Slack must be
 switched on at `/alerts`; otherwise the node fails and the run log names the
 missing step. There is no recipient field: the webhook decides the channel. The
 post is queued, so the node does not wait for Slack. A message over 4000
-characters is shortened to fit, ending in `...`.
+characters (counted before Slack escapes `&`, `<` and `>`) is shortened to
+fit, ending in `...`.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|

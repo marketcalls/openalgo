@@ -57,8 +57,10 @@ def notify(
             Flow, where a refused alert is simply lost.
 
     Returns:
-        The outcome. Never raises for a refusal; an unexpected failure (the
-        settings cannot be read) raises.
+        The outcome. Never raises for a refusal. A settings table that cannot
+        be read gives the channel's defaults (``settings_for``), under which
+        Slack and Discord are off, so the answer is "turned off" and nothing
+        is posted.
     """
     if shorten and isinstance(message, str) and len(message) > channel.max_length:
         message = message[: channel.max_length - 3] + "..."

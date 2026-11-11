@@ -3085,9 +3085,19 @@ class NodeExecutor:
         """Execute Discord Alert node: post to the webhook saved on /discord."""
         return self._execute_webhook_alert("Discord", self.client.discord, node_data)
 
+    # The run log keeps a preview, not the message: one variable can make a
+    # message as long as the channel allows, and every run's log is stored.
+    LOG_PREVIEW_CHARS = 200
+
     def _execute_webhook_alert(self, label: str, send, node_data: dict) -> dict:
         message = self.context.interpolate(node_data.get("message", ""))
-        self.log(f"Sending {label} alert: {message}")
+        text = str(message)
+        preview = (
+            text
+            if len(text) <= self.LOG_PREVIEW_CHARS
+            else f"{text[: self.LOG_PREVIEW_CHARS]}... ({len(text)} characters)"
+        )
+        self.log(f"Sending {label} alert: {preview}")
         result = send(message=message)
         self.log(f"{label} result: {result}", "info" if result.get("status") == "success" else "error")
         return result

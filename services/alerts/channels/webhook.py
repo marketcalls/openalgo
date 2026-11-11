@@ -25,8 +25,9 @@ bounded queue that no other channel shares, so a provider that has stopped
 answering fills its own queue and holds its own threads while the other
 provider's alerts keep going. Past ``MAX_PENDING`` waiting posts an alert is
 dropped and logged, because a stalled provider must not grow memory in a
-worker that never restarts. A queued post reads the saved webhook when it
-runs, so a webhook removed or replaced while one waited is never posted to.
+worker that never restarts. A queued post reads the switch and the saved
+webhook when it runs, so a channel switched off, or a webhook removed or
+replaced, while one waited is never posted to.
 A failed post is logged and not retried; an alert retried a minute later
 describes a market that has moved.
 """
@@ -47,6 +48,7 @@ from database.alert_channels_db import load_channel, read_webhook_url
 from events.alert_events import AlertRaisedEvent
 from services.alerts.channels.base import TEST_MESSAGE, AlertChannel, ChannelStatus, DeliveryResult
 from services.alerts.formatting import AlertMessage, build_message
+from services.alerts.settings import settings_for
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -225,11 +227,15 @@ class WebhookChannel(AlertChannel):
         )
 
     def post_to_saved(self, text: str) -> DeliveryResult:
-        """Post to the webhook saved now. What every queued send runs.
+        """Post to the webhook saved now, if the channel is still on.
 
-        Read when the send runs rather than when it was queued, so a webhook
-        removed or replaced while the send waited is never posted to.
+        What every queued send runs. Both are read when the send runs rather
+        than when it was queued, so a channel switched off, or a webhook
+        removed or replaced, while the send waited is never posted to.
         """
+        if not settings_for(self).enabled:
+            logger.info(f"{self.label} alert not sent: {self.label} was switched off")
+            return DeliveryResult(delivered=False, message=f"{self.label} alerts are turned off.")
         url = self.saved_url()
         if url is None:
             logger.info(f"{self.label} alert not sent: no usable webhook is saved")

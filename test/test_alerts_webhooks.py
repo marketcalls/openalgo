@@ -462,6 +462,28 @@ def test_a_queued_post_is_never_sent_to_a_webhook_removed_meanwhile(store, provi
     assert provider["requests"] == []
 
 
+def test_a_queued_post_is_never_sent_once_the_channel_is_switched_off(store, provider):
+    """A trader who switches Slack off expects nothing more to arrive there,
+    including a message that was already waiting its turn."""
+    channel = SlackChannel()
+    settings.save_webhook(channel, SLACK_URL)
+    held = threading.Event()
+    lane = webhook._lane("slack")
+    lane.submit(lambda: held.wait(5))  # the lane's first thread is busy
+    lane.submit(lambda: held.wait(5))  # and its second
+
+    assert channel.send_text("hi", wait=False).delivered  # queued behind them
+    settings.update_settings(channel, enabled=False)
+    held.set()
+    deadline = time.monotonic() + 5
+    while lane.pending and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    # The queued send ran; it is not merely still waiting.
+    assert lane.pending == 0
+    assert provider["requests"] == []
+
+
 def test_an_unusable_saved_webhook_reads_as_not_set_up(store):
     """A ciphertext that no longer decrypts must not show the channel ready."""
     settings.save_webhook(SlackChannel(), SLACK_URL)

@@ -86,8 +86,8 @@ from utils.mcp_tool_registry import (  # noqa: E402
 READ_SCOPES = {SCOPE_READ_MARKET, SCOPE_READ_ACCOUNT}
 
 # Tools that change something but are deliberately not write-scoped.
-# Keep this list at zero-or-one entries and justify every addition —
-# each one is a tool a read-only OAuth token can still trigger.
+# Keep this list to the alert tools and justify every addition: each one
+# is a tool a read-only OAuth token can still trigger.
 WRITE_SCOPE_EXCEPTIONS = {
     # Each delivers only to a destination the account owner set up (their
     # own Telegram bot, or the Slack or Discord webhook they saved and

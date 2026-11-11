@@ -173,6 +173,32 @@ def test_the_executor_dispatches_the_node_with_its_variables_filled_in(node_type
 
 
 @pytest.mark.parametrize("node_type", ["slackAlert", "discordAlert"])
+def test_the_run_log_keeps_a_preview_not_the_whole_message(node_type):
+    """Every run's log is stored; one variable can make a message 4000 long."""
+    sent = []
+
+    class Client:
+        def slack(self, message):
+            sent.append(message)
+            return {"status": "success", "data": {"message": "Notification queued."}}
+
+        discord = slack
+
+    logs: list = []
+    context = fes.WorkflowContext()
+    executor = fes.NodeExecutor(Client(), context, logs)
+    message = "z" * 5000
+    nodes = [{"id": "n1", "type": node_type, "data": {"message": message}}]
+
+    fes.execute_node_chain("n1", nodes, {}, {}, executor, context, {})
+
+    assert sent == [message]  # the channel still gets the whole text
+    assert logs, "nothing was logged"
+    assert all(len(entry["message"]) < 400 for entry in logs), [len(e["message"]) for e in logs]
+    assert any("5000 characters" in entry["message"] for entry in logs)
+
+
+@pytest.mark.parametrize("node_type", ["slackAlert", "discordAlert"])
 def test_the_validator_accepts_the_node_and_requires_a_message(node_type):
     def workflow(**data):
         return {

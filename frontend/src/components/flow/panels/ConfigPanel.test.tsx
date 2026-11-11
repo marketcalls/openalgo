@@ -242,9 +242,9 @@ describe('the options node strike offset', () => {
 })
 
 describe.each([
-  { type: 'slackAlert', title: 'Slack Alert', limit: '4000' },
-  { type: 'discordAlert', title: 'Discord Alert', limit: '2000' },
-])('the $title node', ({ type, title, limit }) => {
+  { type: 'slackAlert', title: 'Slack Alert', page: 'Slack', limit: '4000' },
+  { type: 'discordAlert', title: 'Discord Alert', page: 'Discord', limit: '2000' },
+])('the $title node', ({ type, title, page, limit }) => {
   beforeEach(() => useFlowWorkflowStore.getState().resetWorkflow())
 
   it('edits its message and says where it posts', () => {
@@ -274,7 +274,9 @@ describe.each([
     const message = screen.getByDisplayValue('Workflow executed successfully')
     fireEvent.change(message, { target: { value: 'Bought {{quote.ltp}}' } })
     expect(useFlowWorkflowStore.getState().nodes[0].data.message).toBe('Bought {{quote.ltp}}')
-    expect(screen.getByText(/turned on from the Alerts page/)).toBeInTheDocument()
+    expect(
+      screen.getByText(new RegExp(`saved on the ${page} page. ${page} must be turned on`))
+    ).toBeInTheDocument()
     expect(
       screen.getByText(new RegExp(`over ${limit} characters are shortened`))
     ).toBeInTheDocument()
