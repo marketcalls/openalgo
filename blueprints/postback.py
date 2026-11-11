@@ -1,13 +1,21 @@
 """
 Broker postback (webhook) receivers for real-time order updates.
 
-Public POST routes at /postback/<broker> — brokers cannot authenticate with
-OpenAlgo sessions, so these are CSRF-exempt (see app.py) and validated per
-broker instead:
-- the <broker> in the URL must match the instance's active broker session
-  (single-user-per-deployment, per CLAUDE.md), and
+Public POST routes at /postback/<broker>. Brokers cannot authenticate with
+OpenAlgo sessions, so these are CSRF-exempt (see app.py) and a postback is
+accepted only when the payload itself proves who sent it:
 - Zerodha payloads carry a SHA-256 checksum (order_id + order_timestamp +
-  api_secret) that is verified against BROKER_API_SECRET.
+  api_secret) that is verified against BROKER_API_SECRET, and
+- the <broker> in the URL must match the instance's active broker session
+  (single-user-per-deployment, per CLAUDE.md).
+
+Dhan, Fyers, Upstox, Angel and AliceBlue postbacks carry nothing of the kind,
+so they are refused (see VERIFIED_BROKERS). The URL names only the broker,
+which is public, and an accepted postback becomes a live order update that
+the strategy engine applies to its orders and that can fire an order-placing
+Flow workflow. Anyone who could reach the server could post a fill that never
+happened. Those brokers' updates arrive through their order WebSocket
+adapters instead, which OpenAlgo opens itself with the broker token.
 
 Each route parses the broker payload, normalizes it into OpenAlgo's common
 order-update format (reusing the status/pricetype/product tables from the
@@ -24,6 +32,7 @@ clients may see duplicate updates for the same transition — deduplicate on
 """
 
 import hashlib
+import hmac
 import os
 
 from flask import Blueprint, jsonify, request
@@ -38,6 +47,16 @@ logger = get_logger(__name__)
 postback_bp = Blueprint("postback_bp", __name__, url_prefix="/postback")
 
 SUPPORTED_BROKERS = {"zerodha", "dhan", "fyers", "upstox", "angel", "aliceblue"}
+
+#: Brokers whose postbacks prove their sender. A broker belongs here only when
+#: its payload carries something a stranger cannot produce (a signature made
+#: with the API secret, as Zerodha's is) and this module checks it. The
+#: normalizers for the others stay, tested, for the day one of them does.
+VERIFIED_BROKERS = frozenset({"zerodha"})
+
+#: One answer for every refusal, so the reply does not tell a caller which
+#: broker is logged in, or which check it failed.
+_REFUSED = ({"status": "error", "message": "Postback not accepted"}, 403)
 
 # Dhan REST-postback vocabulary differs from its order-WS single-letter codes
 # (12-postback.md: full-word product/orderType). Everything else reuses the
@@ -293,7 +312,7 @@ def _validate_zerodha_checksum(data: dict) -> bool:
     """Zerodha postbacks carry checksum = SHA-256(order_id + order_timestamp +
     api_secret) — see broker-api-docs/zerodha-api-docs/12-postbacks.md."""
     api_secret = os.getenv("BROKER_API_SECRET", "")
-    checksum = data.get("checksum", "")
+    checksum = str(data.get("checksum", ""))
     order_id = str(data.get("order_id", ""))
     order_timestamp = str(data.get("order_timestamp", ""))
     if not (api_secret and checksum and order_id):
@@ -301,7 +320,7 @@ def _validate_zerodha_checksum(data: dict) -> bool:
     expected = hashlib.sha256(
         f"{order_id}{order_timestamp}{api_secret}".encode()
     ).hexdigest()
-    return checksum == expected
+    return hmac.compare_digest(checksum, expected)
 
 
 @postback_bp.route("/<broker>", methods=["POST"])
@@ -310,11 +329,14 @@ def broker_postback(broker: str):
     if broker not in SUPPORTED_BROKERS:
         return jsonify({"status": "error", "message": f"Unsupported broker: {broker}"}), 404
 
-    session_obj = _get_active_session()
-    if session_obj is None or (session_obj.broker or "").lower() != broker:
-        # Don't leak which broker IS active to unauthenticated callers.
-        logger.warning(f"Postback for '{broker}' rejected — no matching active broker session")
-        return jsonify({"status": "error", "message": "No matching broker session"}), 403
+    # Before anything is read or looked up: a postback with no proof of its
+    # sender is never normalized, never published, and is answered the same
+    # whichever broker is logged in.
+    if broker not in VERIFIED_BROKERS:
+        logger.info(
+            f"Postback for '{broker}' not accepted: its postbacks carry no proof of the sender"
+        )
+        return jsonify(_REFUSED[0]), _REFUSED[1]
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -324,8 +346,13 @@ def broker_postback(broker: str):
         return jsonify({"status": "error", "message": "Invalid payload"}), 400
 
     if broker == "zerodha" and not _validate_zerodha_checksum(data):
-        logger.warning("Zerodha postback rejected — checksum validation failed")
-        return jsonify({"status": "error", "message": "Checksum validation failed"}), 403
+        logger.warning("Zerodha postback rejected: checksum validation failed")
+        return jsonify(_REFUSED[0]), _REFUSED[1]
+
+    session_obj = _get_active_session()
+    if session_obj is None or (session_obj.broker or "").lower() != broker:
+        logger.warning(f"Postback for '{broker}' rejected: no matching active broker session")
+        return jsonify(_REFUSED[0]), _REFUSED[1]
 
     try:
         fields = _NORMALIZERS[broker](data)

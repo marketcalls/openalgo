@@ -305,10 +305,12 @@ rejected; `mode` is `live` (broker) or `analyze` (sandbox).
 
 Sources: dedicated broker order feeds (Zerodha, Dhan, Fyers, Upstox,
 AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow, IIFL Capital, Kotak),
-REST-orderbook polling for brokers without push (Groww), and
-`/postback/<broker>` HTTPS
-webhooks on production deployments. If both a broker feed and a postback are
-configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
+REST-orderbook polling for brokers without push (Groww), and the
+`/postback/zerodha` HTTPS webhook on production deployments. Only Zerodha's
+postbacks are accepted, because only they are signed; postbacks from other
+brokers are refused and their updates come through the broker order feed. If
+both a broker feed and a postback are configured, deduplicate on `orderid` +
+`order_status` + `filled_quantity`.
 
 ### Heartbeat and Reconnection
 
