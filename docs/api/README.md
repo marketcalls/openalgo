@@ -155,6 +155,17 @@ The module also exposes a public webhook at `POST /strategy/webhook/<token>`, wh
 
 The Telegram resource contributes 11 method/path pairs. Its webhook acknowledges validated updates but does not yet dispatch them, and the REST broadcast handler currently returns zero delivery counts. Those limitations are documented on the Telegram page.
 
+The four `notify` endpoints post a message you write. Each refuses with HTTP 409 when its channel cannot send, and each names the missing step:
+
+| Endpoint | Refused while |
+|---|---|
+| `/telegram/notify` | The Telegram bot is stopped |
+| `/whatsapp/notify` | No WhatsApp device is paired and connected |
+| `/slack/notify` | Slack is switched off on `/alerts`, or no Slack webhook is saved |
+| `/discord/notify` | Discord is switched off on `/alerts`, or no Discord webhook is saved |
+
+The `/alerts` switch applies to `notify` for Slack and Discord only. For Telegram and WhatsApp it, and the event groups for every channel, govern the automatic order alerts, which need no API call. See the [alerts guide](../alerts.md).
+
 ## WebSocket Protocol
 
 WebSocket streaming is not mounted below `/api/v1`. Clients connect to the proxy on port `8765`, authenticate, and send action messages.

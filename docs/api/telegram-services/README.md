@@ -37,9 +37,19 @@ curl -X POST 'http://127.0.0.1:5000/api/v1/telegram/notify' \
 
 Telegram sends `X-Telegram-Bot-Api-Secret-Token`. OpenAlgo compares it with `TELEGRAM_WEBHOOK_SECRET`, or with a token-derived fallback when the explicit secret is absent. Missing and incorrect headers return 401 and 403 respectively. Structurally valid updates are acknowledged with an empty HTTP 200 response, but `process_webhook_update` is not implemented in this RESTX handler.
 
-## Automatic Alert Gate
+## Automatic Order Alerts
 
-Order-event and Flow alerts check the persisted bot `is_active` state. Stopping the bot suppresses those automatic alerts. Explicit admin sends and `/telegram/notify` intentionally bypass that gate.
+Order alerts are sent by OpenAlgo itself, not through this API. An order alert reaches Telegram only while all of these hold:
+
+- Telegram is switched on at `/alerts`, and the order's event group (orders placed, modified, cancelled, positions closed, basket/split/options orders, GTT orders) is routed to Telegram there. An install that has never opened `/alerts` has Telegram on with every group, as before that page existed.
+- The bot is running (the persisted `is_active` state).
+- The OpenAlgo user who placed the order is linked to a Telegram account with notifications on.
+
+A failed or rejected order never raises an alert. The Flow Telegram node also checks that the bot is running. See the [alerts guide](../../alerts.md) for the event groups and the other channels.
+
+## Bot-Running Gate On Notify
+
+`/telegram/notify` is refused with HTTP 409 and `Telegram bot is stopped. Start the bot to send notifications.` while the bot is stopped, so stopping the bot stops strategy messages as well as order alerts. The `/alerts` switch and event groups do not apply to `notify`; they govern order alerts only. The test-message and broadcast buttons on the `/telegram` page stay available while the bot is stopped.
 
 ## Rate Limits
 

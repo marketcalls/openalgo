@@ -73,8 +73,11 @@ create a new one and save it on the channel's page.
 
 ## Sending from your own code
 
-Each channel has one REST endpoint that posts a message. It needs your OpenAlgo
-API key and the channel switched on at `/alerts`:
+Each channel has one REST endpoint that posts a message, and each needs your
+OpenAlgo API key. Slack and Discord also need the channel switched on at
+`/alerts` with a webhook saved. Telegram needs the bot running, and WhatsApp a
+paired, connected device; the `/alerts` switch does not apply to those two
+endpoints, only to their order alerts:
 
 | Channel | Endpoint | Docs |
 |---------|----------|------|
@@ -92,8 +95,10 @@ they work the same way from any broker.
 A price or indicator alert on the chart can also be sent to Telegram,
 WhatsApp, Slack or Discord, chosen per alert under **When it fires**. These
 are separate from the order alerts above: the chart posts to the channel's
-notify endpoint itself, so the `/alerts` grid does not route them, but a
-channel switched off on `/alerts` refuses them too. Every outward option is
+notify endpoint itself, so the `/alerts` grid does not route them. Slack and
+Discord refuse them while switched off on `/alerts`; Telegram and WhatsApp
+apply only their own rules (bot running, device connected), whatever their
+`/alerts` switch says. Every outward option is
 off for a new alert, and alerts saved before Slack and Discord existed read
 them as off.
 

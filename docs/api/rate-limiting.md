@@ -64,7 +64,7 @@ Heavier analysis routes have their own limits:
 | `SIP_API_RATE_LIMIT` | 10 per minute | SIP backtest and frequency list |
 | `SECTOR_ROTATION_API_RATE_LIMIT` | 30 per minute | Sector map and options list |
 
-Telegram and WhatsApp routes also have route-specific limits; see their [Telegram](telegram-services/README.md) and [WhatsApp](whatsapp-services/notify.md) references. Basket, split, cancel-all and close-position use `API_RATE_LIMIT` rather than `ORDER_RATE_LIMIT`.
+Telegram and WhatsApp routes also have route-specific limits; see their [Telegram](telegram-services/README.md) and [WhatsApp](whatsapp-services/notify.md) references. `/api/v1/slack/notify` and `/api/v1/discord/notify` are fixed at 30 per minute each, about what one Slack or Discord webhook accepts, and have no setting; see [Slack](slack-services/notify.md) and [Discord](discord-services/notify.md). Basket, split, cancel-all and close-position use `API_RATE_LIMIT` rather than `ORDER_RATE_LIMIT`.
 
 ### Webhook APIs
 

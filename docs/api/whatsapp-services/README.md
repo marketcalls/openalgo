@@ -108,16 +108,26 @@ key, so results are identical to what you would get from the REST API.
 ## Event-driven order alerts
 
 When you place an order via `/api/v1/placeorder` (or any of the other
-order endpoints), the order service publishes an `order.placed` event to
-the in-process event bus. The WhatsApp subscriber listens on every order
-topic — `order.placed`, `order.modified`, `order.cancelled`,
-`orders.all_cancelled`, `position.closed`, `basket.completed`,
-`split.completed`, `options.completed`, `multiorder.completed` — and
-sends the linked user a formatted alert automatically. No explicit
-`/notify` call needed.
+order endpoints), the order service publishes an event to the in-process
+event bus: `order.placed`, `order.no_action`, `order.modified`,
+`order.cancelled`, `orders.all_cancelled`, `position.closed`,
+`basket.completed`, `split.completed`, `options.completed`,
+`multiorder.completed`, and the GTT events `gtt.placed`, `gtt.modified`,
+`gtt.cancelled`, `gtt.triggered` and `gtt.expired`.
+`subscribers/alert_subscriber.py` turns each one into a single alert and
+hands it to every channel that is switched on at `/alerts` and receives
+that event group: Telegram, WhatsApp, Slack and Discord, side by side
+from one order. WhatsApp sends it to the paired device's own number. No
+explicit `/notify` call is needed.
 
-The Telegram subscriber sits on the same topics, so both channels fire
-in parallel from a single order placement.
+WhatsApp starts on with every event group, so an install that has never
+opened `/alerts` alerts exactly as it did before that page existed. A
+failed or rejected order raises no alert. A GTT alert names the symbol,
+the trigger prices and the trigger id. See the
+[alerts guide](../../alerts.md).
+
+The `/alerts` switch and event groups apply to these order alerts only.
+`/notify` is gated by the paired, connected device alone.
 
 ## Rate limits
 

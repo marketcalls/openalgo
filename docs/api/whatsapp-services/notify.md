@@ -137,8 +137,11 @@ Exactly one recipient form is required: `self`, `username`, `phone`, or
 
 - The bot must be paired and connected for `notify` to deliver. Connect /
   disconnect lives on the `/whatsapp` admin web UI; this REST namespace
-  intentionally does not expose those controls. If the bot is paused, the
-  message is queued in `whatsapp_notification_queue` for a later retry.
+  intentionally does not expose those controls. While the bot is stopped,
+  unpaired or disconnected, the call is refused with 409 and nothing is
+  queued for later.
+- The WhatsApp switch and event groups on the `/alerts` page govern
+  automatic order alerts only. They do not apply to this endpoint.
 - Image / document paths are read from the OpenAlgo server's filesystem,
   not uploaded by the API call. Place files in a server-readable location
   first.
