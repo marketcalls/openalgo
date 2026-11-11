@@ -168,6 +168,8 @@ describe('buildPositionRows', () => {
       const netAvg = (435 - 130) / 3
       const positions = [pos({ quantity: 3, average_price: netAvg, ltp: 115 })]
       const r = buildPositionRows(positions, [...buys, firstExit, reEntry], {})[0]
+      expect(r.realizedPnl).toBeCloseTo(0) // the booked profit sits in the average
+      expect(r.unrealizedPnl).toBeCloseTo((115 - netAvg) * 3)
       expect(r.totalPnl).toBeCloseTo(40)
     })
 
@@ -193,6 +195,19 @@ describe('buildPositionRows', () => {
       const r = buildPositionRows(positions, trades, {})[0]
       expect(r.realizedPnl).toBe(0) // no buy today to match against
       expect(r.unrealizedPnl).toBeCloseTo(15)
+    })
+
+    it('a carried lot with a buy and a sell today matches the traded quantity', () => {
+      // Positionbook holds 3; today bought 1 at 100 and sold 1 at 130, so 3 were carried.
+      const trades = [
+        trade({ action: 'BUY', quantity: 1, average_price: 100 }),
+        trade({ action: 'SELL', quantity: 1, average_price: 130 }),
+      ]
+      const positions = [pos({ quantity: 3, average_price: 110, ltp: 115 })]
+      const r = buildPositionRows(positions, trades, {})[0]
+      expect(r.realizedPnl).toBeCloseTo(30) // (130 - 100) x 1 matched today
+      expect(r.unrealizedPnl).toBeCloseTo(15) // (115 - 110) x 3
+      expect(r.totalPnl).toBeCloseTo(45)
     })
   })
 })
