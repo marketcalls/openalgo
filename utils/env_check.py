@@ -876,6 +876,7 @@ def _sample_ciphertexts(db_path: str, limit: int = 20) -> list:
         ("broker_keys", "api_secret"),
         ("broker_keys", "api_key_market"),
         ("broker_keys", "api_secret_market"),
+        ("alert_channels", "webhook_url"),
     ]
     samples: list = []
     try:
@@ -957,6 +958,8 @@ def _migrate_fernet_db(env_path: str, pepper: str, new_salt: str) -> None:
         ("broker_keys", "id", "api_secret"),
         ("broker_keys", "id", "api_key_market"),
         ("broker_keys", "id", "api_secret_market"),
+        # Slack and Discord alert webhooks (database/alert_channels_db.py).
+        ("alert_channels", "channel", "webhook_url"),
     ]
 
     migrated = skipped = 0

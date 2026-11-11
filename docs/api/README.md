@@ -13,7 +13,7 @@ Replace the local host with the configured HTTPS/WSS domain in a remote deployme
 
 ## Authentication
 
-Most POST endpoints accept the OpenAlgo API key as `apikey` in a JSON object. GET endpoints accept it as the `apikey` query parameter. Telegram and WhatsApp management endpoints may also accept `X-API-KEY`; the Telegram webhook authenticates with `X-Telegram-Bot-Api-Secret-Token` instead of an OpenAlgo key.
+Most POST endpoints accept the OpenAlgo API key as `apikey` in a JSON object. GET endpoints accept it as the `apikey` query parameter. Telegram and WhatsApp management endpoints, and the Slack and Discord notify endpoints, may also accept `X-API-KEY`; the Telegram webhook authenticates with `X-Telegram-Bot-Api-Secret-Token` instead of an OpenAlgo key.
 
 ```json
 {
@@ -25,7 +25,7 @@ Never put broker credentials or broker access tokens in these requests. The Open
 
 ## Registered REST Inventory
 
-The current v1 surface contains **74 method/path pairs**. A resource with both GET and POST counts as two endpoints.
+The current v1 surface contains **76 method/path pairs**. A resource with both GET and POST counts as two endpoints.
 
 ### Order Management
 
@@ -150,6 +150,8 @@ The module also exposes a public webhook at `POST /strategy/webhook/<token>`, wh
 | GET | `/telegram/stats` | [Telegram REST surface](./telegram-services/README.md) |
 | GET, POST | `/telegram/preferences` | [Telegram REST surface](./telegram-services/README.md) |
 | POST | `/whatsapp/notify` | [WhatsApp notification](./whatsapp-services/notify.md) |
+| POST | `/slack/notify` | [Slack notification](./slack-services/notify.md) |
+| POST | `/discord/notify` | [Discord notification](./discord-services/notify.md) |
 
 The Telegram resource contributes 11 method/path pairs. Its webhook acknowledges validated updates but does not yet dispatch them, and the REST broadcast handler currently returns zero delivery counts. Those limitations are documented on the Telegram page.
 

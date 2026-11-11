@@ -474,129 +474,112 @@ class BrokerData:
             else:
                 chunk_days = 60  # For minute/hour data
 
-            # Process data in chunks
+            # Process data in chunks. Each chunk is requested once (#2422):
+            # get_api_response already retries HTTP 429 (honouring Retry-After)
+            # and the shared HTTP client resends a read after a dropped
+            # connection. Any other reply -- no_data, a bad symbol, a rejected
+            # token -- comes back the same when asked again, so retrying it
+            # only cost 2 + 4 + 6 + 1 s per chunk and used up the rate limit.
             current_start = start_dt
-            retry_count = 0
-            max_retries = 3
 
             while current_start <= end_dt:
-                try:
-                    # Calculate chunk end date
-                    current_end = min(current_start + pd.Timedelta(days=chunk_days - 1), end_dt)
+                # Calculate chunk end date
+                current_end = min(current_start + pd.Timedelta(days=chunk_days - 1), end_dt)
 
-                    # Format dates for API call
-                    chunk_start = current_start.strftime("%Y-%m-%d")
-                    chunk_end = current_end.strftime("%Y-%m-%d")
+                # Format dates for API call
+                chunk_start = current_start.strftime("%Y-%m-%d")
+                chunk_end = current_end.strftime("%Y-%m-%d")
 
-                    logger.debug(
-                        f"Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to {chunk_end}"
+                logger.debug(
+                    f"Fetching {resolution} data for {exchange}:{br_symbol} from {chunk_start} to {chunk_end}"
+                )
+
+                # URL encode the symbol to handle special characters
+                encoded_symbol = urllib.parse.quote(br_symbol)
+
+                # Determine if OI flag should be enabled based on exchange
+                # OI is only available for derivatives (NFO, BFO, MCX, CDS)
+                derivative_exchanges = ["NFO", "BFO", "MCX", "CDS"]
+                enable_oi = exchange in derivative_exchanges
+
+                # Construct endpoint with query parameters
+                endpoint = (
+                    f"/data/history?"
+                    f"symbol={encoded_symbol}&"
+                    f"resolution={resolution}&"
+                    f"date_format=1&"  # Keep epoch format
+                    f"range_from={chunk_start}&"
+                    f"range_to={chunk_end}&"
+                    f"cont_flag=1"
+                )  # For continuous data
+
+                # Add OI flag only for derivatives
+                if enable_oi:
+                    endpoint += "&oi_flag=1"
+
+                logger.debug(f"Making request to endpoint: {endpoint}")
+                response = get_api_response(endpoint, self.auth_token)
+                status = response.get("s")
+
+                if status == "no_data":
+                    # Nothing traded in this window: a weekend or holiday, or
+                    # dates before the symbol was listed. An empty chunk, not
+                    # a failure.
+                    logger.debug(f"No data available for period {chunk_start} to {chunk_end}")
+                    current_start = current_end + pd.Timedelta(days=1)
+                    continue
+
+                if status != "ok":
+                    # A failed chunk is reported, never skipped: skipping it
+                    # returned whatever the other chunks held (or nothing) as
+                    # a success, so a rejected token or a bad symbol read as
+                    # "no candles".
+                    reason = response.get("message") or "Fyers gave no reason"
+                    logger.error(
+                        f"Fyers history failed for {br_symbol} {resolution} "
+                        f"{chunk_start} to {chunk_end}: s={status!r} "
+                        f"code={response.get('code')!r} message={reason!r}"
+                    )
+                    raise Exception(
+                        f"Fyers did not return candles for {chunk_start} to {chunk_end}: {reason}"
                     )
 
-                    # URL encode the symbol to handle special characters
-                    encoded_symbol = urllib.parse.quote(br_symbol)
-
-                    # Determine if OI flag should be enabled based on exchange
-                    # OI is only available for derivatives (NFO, BFO, MCX, CDS)
-                    derivative_exchanges = ["NFO", "BFO", "MCX", "CDS"]
-                    enable_oi = exchange in derivative_exchanges
-
-                    # Construct endpoint with query parameters
-                    endpoint = (
-                        f"/data/history?"
-                        f"symbol={encoded_symbol}&"
-                        f"resolution={resolution}&"
-                        f"date_format=1&"  # Keep epoch format
-                        f"range_from={chunk_start}&"
-                        f"range_to={chunk_end}&"
-                        f"cont_flag=1"
-                    )  # For continuous data
-
-                    # Add OI flag only for derivatives
-                    if enable_oi:
-                        endpoint += "&oi_flag=1"
-
-                    logger.debug(f"Making request to endpoint: {endpoint}")
-                    response = get_api_response(endpoint, self.auth_token)
-
-                    if response.get("s") != "ok":
-                        error_msg = response.get("message", "Unknown error")
-                        logger.error(f"Error for chunk {chunk_start} to {chunk_end}: {error_msg}")
-
-                        if retry_count < max_retries:
-                            retry_count += 1
-                            logger.debug(f"Retrying... Attempt {retry_count} of {max_retries}")
-                            time.sleep(2 * retry_count)  # Exponential backoff
-                            continue
-
-                        # If max retries reached, move to next chunk
-                        retry_count = 0
-                        current_start = current_end + pd.Timedelta(days=1)
-                        time.sleep(1)
-                        continue
-
-                    # Reset retry count on success
-                    retry_count = 0
-
-                    # Get candles from response
-                    candles = response.get("candles", [])
-                    if candles:
-                        # Handle dynamic column count based on whether OI is enabled
-                        if enable_oi and len(candles[0]) == 7:
-                            # Derivatives with OI: [timestamp, open, high, low, close, volume, oi]
-                            df = pd.DataFrame(
-                                candles,
-                                columns=[
-                                    "timestamp",
-                                    "open",
-                                    "high",
-                                    "low",
-                                    "close",
-                                    "volume",
-                                    "oi",
-                                ],
-                            )
-                        else:
-                            # Equity without OI: [timestamp, open, high, low, close, volume]
-                            df = pd.DataFrame(
-                                candles,
-                                columns=["timestamp", "open", "high", "low", "close", "volume"],
-                            )
-                            # Add zero OI column for consistency
-                            df["oi"] = 0
-
-                        dfs.append(df)
-                        logger.debug(
-                            f"Got {len(candles)} candles for period {chunk_start} to {chunk_end}"
+                # Get candles from response
+                candles = response.get("candles", [])
+                if candles:
+                    # Handle dynamic column count based on whether OI is enabled
+                    if enable_oi and len(candles[0]) == 7:
+                        # Derivatives with OI: [timestamp, open, high, low, close, volume, oi]
+                        df = pd.DataFrame(
+                            candles,
+                            columns=["timestamp", "open", "high", "low", "close", "volume", "oi"],
                         )
                     else:
-                        logger.debug(f"No data available for period {chunk_start} to {chunk_end}")
+                        # Equity without OI: [timestamp, open, high, low, close, volume]
+                        df = pd.DataFrame(
+                            candles,
+                            columns=["timestamp", "open", "high", "low", "close", "volume"],
+                        )
+                        # Add zero OI column for consistency
+                        df["oi"] = 0
 
-                    # No inter-chunk sleep here: get_api_response already paces
-                    # every Fyers call through the process-wide apply_rate_limit
-                    # (125ms spacing) and honours Retry-After on 429s. The old
-                    # unconditional 0.5s sleep ran even after the LAST chunk,
-                    # putting a half-second floor under every history request --
-                    # a single-chunk intraday fetch spent 500ms sleeping on
-                    # 184ms of actual HTTP.
+                    dfs.append(df)
+                    logger.debug(
+                        f"Got {len(candles)} candles for period {chunk_start} to {chunk_end}"
+                    )
+                else:
+                    logger.debug(f"No data available for period {chunk_start} to {chunk_end}")
 
-                    # Move to next chunk
-                    current_start = current_end + pd.Timedelta(days=1)
+                # No inter-chunk sleep here: get_api_response already paces
+                # every Fyers call through the process-wide apply_rate_limit
+                # (125ms spacing) and honours Retry-After on 429s. The old
+                # unconditional 0.5s sleep ran even after the LAST chunk,
+                # putting a half-second floor under every history request --
+                # a single-chunk intraday fetch spent 500ms sleeping on
+                # 184ms of actual HTTP.
 
-                except BrokerBusyError:
-                    raise
-                except Exception as e:
-                    logger.error(f"Error fetching chunk {chunk_start} to {chunk_end}: {e}")
-                    if retry_count < max_retries:
-                        retry_count += 1
-                        logger.debug(f"Retrying... Attempt {retry_count} of {max_retries}")
-                        time.sleep(2 * retry_count)
-                        continue
-
-                    # If max retries reached, move to next chunk
-                    retry_count = 0
-                    current_start = current_end + pd.Timedelta(days=1)
-                    time.sleep(1)
-                    continue
+                # Move to next chunk
+                current_start = current_end + pd.Timedelta(days=1)
 
             # If no data was found, return empty DataFrame
             if not dfs:

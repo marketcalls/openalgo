@@ -38,7 +38,7 @@ openalgo/
 
 ## Backend Inventory
 
-`restx_api/__init__.py` registers 74 v1 method/path pairs. `blueprints/` contains the larger session and feature surface for auth, admin, Flow, Historify, strategies, tools, messaging, monitoring, and the React application. The root `DISCOVERY_MAP.md` preserves phase-1 discovery rather than a live route count; current public REST documentation and inventory are maintained in `docs/api` and `docs/bdd/rest_api_inventory.feature`.
+`restx_api/__init__.py` registers 76 v1 method/path pairs. `blueprints/` contains the larger session and feature surface for auth, admin, Flow, Historify, strategies, tools, messaging, monitoring, and the React application. The root `DISCOVERY_MAP.md` preserves phase-1 discovery rather than a live route count; current public REST documentation and inventory are maintained in `docs/api` and `docs/bdd/rest_api_inventory.feature`.
 
 The service directory currently includes order, account, market-data, option, calendar, Flow, Historify, messaging, charting, analytics, arbitrage, custom straddle, and scalping risk services. Use `rg --files services` for the live inventory instead of copying a long file list into architecture documents.
 

@@ -685,3 +685,76 @@ def test_the_auth_commit_guard_lets_the_hub_run_while_a_holder_waits():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_alert_delivery_runs_on_the_hub_without_stalling_it():
+    """Alerts travel order event -> alert subscriber -> one bus callback per
+    channel -> the shared webhook pool (services/alerts/channels/webhook.py),
+    which takes a stdlib lock and posts through httpx. Under eventlet every one
+    of those is green; nothing in the path may block the hub or cross into a
+    real thread. Fifty order events must reach Slack and Discord fifty times
+    each while a ticker on the hub keeps its 10 ms rhythm."""
+    result = run(
+        """
+        import os, tempfile
+        tmp = tempfile.mkdtemp()
+        os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(tmp, "alerts.db")
+        import httpx
+        import utils.httpx_client as hc
+        import database.alert_channels_db as db
+        from events import OrderPlacedEvent
+        from services.alerts import settings
+        from services.alerts.channels.discord import DiscordChannel
+        from services.alerts.channels.slack import SlackChannel
+        from subscribers import alert_subscriber
+        from utils.event_bus import EventBus
+
+        posts = []
+
+        def provider(request):
+            eventlet.sleep(0.05)  # a network round trip yields to the hub
+            posts.append(request.url.host)
+            return httpx.Response(200 if request.url.host == "hooks.slack.com" else 204)
+
+        client = httpx.Client(transport=httpx.MockTransport(provider))
+        hc.get_httpx_client = lambda: client
+        db.Base.metadata.create_all(db.engine)
+        slack, discord = SlackChannel(), DiscordChannel()
+        settings.save_webhook(slack, "https://hooks.slack.com/services/TFAKE/BFAKE/notarealslacktoken")
+        settings.save_webhook(discord, "https://discord.com/api/webhooks/1234/not-a-real-discord-token")
+
+        bus = EventBus(workers=10)
+        alert_subscriber.bus = bus
+        alert_subscriber.CHANNELS = (slack, discord)
+        alert_subscriber.register()
+
+        gaps = []
+
+        def ticker():
+            last = time.monotonic()
+            while len(posts) < 100:
+                eventlet.sleep(0.01)
+                now = time.monotonic()
+                gaps.append(now - last)
+                last = now
+
+        tick = eventlet.spawn(ticker)
+        for i in range(50):
+            bus.publish(OrderPlacedEvent(
+                api_type="placeorder",
+                request_data={"symbol": "SBIN"},
+                response_data={"status": "success", "orderid": str(i)},
+            ))
+        deadline = time.monotonic() + 20
+        while len(posts) < 100 and time.monotonic() < deadline:
+            eventlet.sleep(0.02)
+        tick.kill()
+
+        assert posts.count("hooks.slack.com") == 50, posts.count("hooks.slack.com")
+        assert posts.count("discord.com") == 50, posts.count("discord.com")
+        assert bus.stats()["dropped"] == 0, bus.stats()
+        assert max(gaps) < 0.5, max(gaps)  # the hub was never held
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr

@@ -48,8 +48,8 @@ Data       getQuote · multiQuotes · getDepth · history · indicator ·
            symbol · optionSymbol · expiry · intervals · optionChain ·
            syntheticFuture · holidays · timings · calendar
 Streaming  subscribeLtp · subscribeQuote · subscribeDepth · unsubscribe
-Utility    log · telegramAlert · whatsappAlert · variable · mathExpression ·
-           httpRequest · delay · waitUntil · group
+Utility    log · telegramAlert · whatsappAlert · slackAlert · discordAlert ·
+           variable · mathExpression · httpRequest · delay · waitUntil · group
 ```
 
 ### Capabilities Flow does NOT have
@@ -1753,6 +1753,48 @@ Sends a WhatsApp message via the paired bot device. Requires pairing from the
   "type": "whatsappAlert",
   "position": { "x": 100, "y": 300 },
   "data": { "to": "", "message": "Order placed: {{ord.orderid}}" }
+}
+```
+
+#### slackAlert - Slack Alert
+
+Posts to the Slack incoming webhook saved on the `/slack` page. Slack must be
+switched on at `/alerts`; otherwise the node fails and the run log names the
+missing step. There is no recipient field: the webhook decides the channel. The
+post is queued, so the node does not wait for Slack. A message over 4000
+characters (counted before Slack escapes `&`, `<` and `>`) is shortened to
+fit, ending in `...`.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `message` | string | - | Supports `{{vars}}`. |
+
+```json
+{
+  "id": "node_3",
+  "type": "slackAlert",
+  "position": { "x": 100, "y": 300 },
+  "data": { "message": "Order placed: {{ord.orderid}}" }
+}
+```
+
+#### discordAlert - Discord Alert
+
+Posts to the Discord webhook saved on the `/discord` page, under the same rules
+as `slackAlert`: Discord switched on at `/alerts`, no recipient field, queued.
+A message over 2000 characters is shortened to fit. Mentions are never
+resolved, so `@everyone` in a message pings nobody.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `message` | string | - | Supports `{{vars}}`. |
+
+```json
+{
+  "id": "node_3",
+  "type": "discordAlert",
+  "position": { "x": 100, "y": 300 },
+  "data": { "message": "Order placed: {{ord.orderid}}" }
 }
 ```
 

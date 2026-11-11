@@ -36,7 +36,8 @@ Post-flight:
   3. Confirm you can log in with the new password.
 
 Columns rotated:
-  auth_db Fernet (PBKDF2-SHA256, salt=b"openalgo_static_salt"):
+  auth_db Fernet (PBKDF2-SHA256, salt=FERNET_SALT, or b"openalgo_static_salt"
+  on an install that has none):
     - auth.auth
     - auth.feed_token
     - auth.secret_api_key  (was plaintext for some installs)
@@ -44,6 +45,7 @@ Columns rotated:
     - users.totp_secret    (was plaintext for some installs)
     - flow_workflows.api_key   (was plaintext for some installs)
     - broker_keys.api_key, api_secret, api_key_market, api_secret_market
+    - alert_channels.webhook_url (Slack and Discord alert webhooks)
   apikeys.api_key_hash:
     - re-derived from the decrypted api_key plaintext (Argon2 + new pepper)
   telegram_db Fernet (PBKDF2-SHA256, salt=TELEGRAM_KEY_SALT):
@@ -88,12 +90,35 @@ load_dotenv(ENV_PATH)
 
 # ---------- Fernet key derivations (must match the three modules) ----------
 
+def _auth_db_salt() -> bytes:
+    """The salt database/auth_db.py derives its key with.
+
+    The install's own FERNET_SALT (hex, provisioned by utils/env_check.py)
+    when it is set and valid, else the legacy static salt: the same rule as
+    auth_db._resolve_fernet_salt(). A rotation keeps the salt and changes the
+    pepper, so the old and new keys both use it.
+
+    Using the static salt on an install that has its own, as this did, left
+    every auth_db ciphertext undecryptable here: each was reported as "cannot
+    decrypt" (or, for the columns that may still hold plaintext, encrypted a
+    second time), and the new pepper written to .env then made all of them
+    unreadable.
+    """
+    raw = (os.getenv("FERNET_SALT") or "").strip()
+    if raw and len(raw) >= 32:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+    return b"openalgo_static_salt"
+
+
 def _auth_db_fernet(pepper: str) -> Fernet:
     """Match database/auth_db.py:get_encryption_key()."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"openalgo_static_salt",
+        salt=_auth_db_salt(),
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
@@ -251,6 +276,7 @@ class Rotator:
             "flow_workflows.api_key": 0,
             "flow_workflows.api_key_plaintext_promoted": 0,
             "broker_keys": 0,
+            "alert_channels.webhook_url": 0,
         }
 
     def _table_exists(self, name: str) -> bool:
@@ -462,6 +488,26 @@ class Rotator:
                         (_encrypt(self.new_auth, pt), row_id),
                     )
                     self.stats["broker_keys"] += 1
+
+        # ---- alert_channels.webhook_url (Slack and Discord webhooks) ----
+        # Always ciphertext. One that does not decrypt is left alone: the trader
+        # saves that webhook again on the Slack or Discord page.
+        if self._table_exists("alert_channels"):
+            cur = self.conn.execute(
+                "SELECT channel, webhook_url FROM alert_channels WHERE webhook_url IS NOT NULL"
+            )
+            for channel, value in cur.fetchall():
+                if not value:
+                    continue
+                pt, was_enc = _try_decrypt(self.old_auth, value)
+                if not was_enc:
+                    print(f"  WARN: alert_channels.webhook_url for {channel}: cannot decrypt, leaving alone")
+                    continue
+                self.conn.execute(
+                    "UPDATE alert_channels SET webhook_url = ? WHERE channel = ?",
+                    (_encrypt(self.new_auth, pt), channel),
+                )
+                self.stats["alert_channels.webhook_url"] += 1
 
 
 # ---------- Main ----------

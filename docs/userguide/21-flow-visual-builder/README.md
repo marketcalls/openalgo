@@ -12,7 +12,7 @@ The [Flow import reference](../../prompt/flow-import-format.md) is the canonical
 2. Add data nodes for the market/account information needed by the decision, such as Get Quote, History, Indicator, Position Book or Order Book.
 3. Add conditions and connect their matching outputs. A true/false handle determines which path runs; a condition is not an implicit loop.
 4. Configure the order action and explicitly set symbol, exchange, product, side and quantity.
-5. Add Log or Telegram/WhatsApp alerts where useful, then **Save**.
+5. Add Log or Telegram, WhatsApp, Slack or Discord alerts where useful, then **Save**. Slack and Discord post to the webhook saved on `/slack` or `/discord` and need the channel switched on at `/alerts`; see [Alerts](../../alerts.md#flow-nodes).
 6. Verify **Analyze** mode before using **Run Now**, inspect the execution result and sandbox books, then activate only the intended trigger.
 
 Run Now and Activate use the server's saved workflow. The editor saves dirty changes before these actions; if it cannot obtain a stable saved graph, it refuses the action. A successful save alone does not activate a workflow or place a trade.

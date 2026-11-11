@@ -52,6 +52,7 @@ need → drill into the specific file. Don't load everything at once.
 | Python strategy hosting and Flow workflows | [Python](userguide/20-python-strategies/README.md) · [Flow](userguide/21-flow-visual-builder/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner design proposal (external service, not shipped) | [scanner-architecture.md](scanner-architecture.md) |
+| Alerts: Telegram, WhatsApp, Slack and Discord on one page | [alerts.md](alerts.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |
 | Health monitoring | [HEALTH_MONITORING_IMPLEMENTATION.md](HEALTH_MONITORING_IMPLEMENTATION.md) · [HEALTH_MONITOR_REACT_FRONTEND.md](HEALTH_MONITOR_REACT_FRONTEND.md) |

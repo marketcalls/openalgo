@@ -1,5 +1,6 @@
 """Event types for the OpenAlgo event bus."""
 
+from events.alert_events import AlertRaisedEvent
 from events.analyzer_events import AnalyzerErrorEvent
 from events.base import OrderEvent
 from events.batch_events import (
@@ -34,6 +35,7 @@ from events.sandbox_events import (
 )
 
 __all__ = [
+    "AlertRaisedEvent",
     "OrderEvent",
     "OrderPlacedEvent",
     "OrderFailedEvent",

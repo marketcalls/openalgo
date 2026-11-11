@@ -19,6 +19,7 @@ Feature: Registered REST API v1 inventory
       | GET | /chart | chart_api.py |
       | POST | /chart | chart_api.py |
       | POST | /closeposition | close_position.py |
+      | POST | /discord/notify | webhook_alerts.py |
       | POST | /depth | depth.py |
       | POST | /expiry | expiry.py |
       | POST | /funds | funds.py |
@@ -68,6 +69,7 @@ Feature: Registered REST API v1 inventory
       | POST | /strategy/start | strategy.py |
       | POST | /strategy/status | strategy.py |
       | POST | /strategy/stop | strategy.py |
+      | POST | /slack/notify | webhook_alerts.py |
       | POST | /symbol | symbol.py |
       | POST | /syntheticfuture | synthetic_future.py |
       | POST | /telegram/broadcast | telegram_bot.py |

@@ -49,6 +49,7 @@ from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 
 from blueprints.admin import admin_bp  # Import the admin blueprint
 from blueprints.agent import agent_bp  # Import the agent blueprint
+from blueprints.alert_channels import alert_channels_bp  # Alert channels (/alerts page)
 from blueprints.alerts import alerts_bp  # Import the chart alert log blueprint
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.apikey import api_key_bp
@@ -120,6 +121,7 @@ from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.agent_db import init_db as ensure_agent_tables_exists
+from database.alert_channels_db import init_db as ensure_alert_channel_tables_exists
 from database.alert_log_db import init_db as ensure_alert_log_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
@@ -338,6 +340,7 @@ def create_app():
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
     app.register_blueprint(watchlist_bp)  # Register charting watchlist blueprint
     app.register_blueprint(alerts_bp)  # Register chart alert log blueprint
+    app.register_blueprint(alert_channels_bp)  # Register alert channels (/alerts page)
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
     app.register_blueprint(gamma_density_bp)  # Register Gamma Density blueprint
     app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
@@ -791,6 +794,7 @@ def setup_environment(app):
                 ("Scalping DB", ensure_scalping_tables_exists),
                 ("Watchlist DB", ensure_watchlist_tables_exists),
                 ("Alert Log DB", ensure_alert_log_tables_exists),
+                ("Alert Channels DB", ensure_alert_channel_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
                 ("Agent DB", ensure_agent_tables_exists),
@@ -803,7 +807,7 @@ def setup_environment(app):
             ]
 
             db_init_start = time.time()
-            # max_workers=1 on purpose: 14 of the 20 functions above target the
+            # max_workers=1 on purpose: most of the functions above target the
             # same file (openalgo.db), and SQLite permits one writer per file,
             # so running them concurrently made them contend for the write lock
             # rather than progress in parallel - the "database is locked" seen
