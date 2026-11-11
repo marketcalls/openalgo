@@ -18,9 +18,7 @@ function context(onProblem = vi.fn()) {
 }
 
 /** A fetch that answers each path with an ok flag, a body status and a reason. */
-function fetchWith(
-  answers: Record<string, { ok: boolean; status?: string; message?: string }>
-) {
+function fetchWith(answers: Record<string, { ok: boolean; status?: string; message?: string }>) {
   const calls: { url: string; body: Record<string, unknown> }[] = []
   const impl = vi.fn(async (url: string, init?: RequestInit) => {
     const answer = answers[url] ?? { ok: true }
@@ -49,6 +47,8 @@ describe('what an alert does by default', () => {
       notify: true,
       telegram: false,
       whatsapp: false,
+      slack: false,
+      discord: false,
     })
   })
 
@@ -65,6 +65,8 @@ describe('what an alert does by default', () => {
       notify: false,
       telegram: true,
       whatsapp: false,
+      slack: false,
+      discord: false,
     })
   })
 
@@ -75,7 +77,14 @@ describe('what an alert does by default', () => {
       notify: true,
       telegram: true,
       whatsapp: false,
+      slack: false,
+      discord: false,
     })
+  })
+
+  it('reads Slack and Discord as off for an alert saved before they existed', () => {
+    const saved = { deliver: { sound: true, notify: true, telegram: true, whatsapp: true } }
+    expect(deliveryOf(saved)).toMatchObject({ slack: false, discord: false, telegram: true })
   })
 
   it('reads a delivery that is not an object as the default', () => {
@@ -85,7 +94,14 @@ describe('what an alert does by default', () => {
 })
 
 describe('sending the message outward', () => {
-  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+  const OFF = {
+    sound: false,
+    notify: false,
+    telegram: false,
+    whatsapp: false,
+    slack: false,
+    discord: false,
+  }
 
   it('sends nothing at all when nothing outward was asked for', async () => {
     const calls = fetchWith({})
@@ -107,6 +123,30 @@ describe('sending the message outward', () => {
     const calls = fetchWith({})
     await deliverAlert({ ...OFF, whatsapp: true }, NOTICE, context())
     expect(calls[0]?.url).toBe('/api/v1/whatsapp/notify')
+  })
+
+  it('posts to Slack and Discord with the key and the message, and no username', async () => {
+    // Each posts to the one webhook saved for it, so there is nobody to name.
+    const calls = fetchWith({})
+    await deliverAlert({ ...OFF, slack: true, discord: true }, NOTICE, context())
+    expect(calls.map((c) => c.url)).toEqual(['/api/v1/slack/notify', '/api/v1/discord/notify'])
+    for (const call of calls) {
+      expect(Object.keys(call.body).sort()).toEqual(['apikey', 'message'])
+      expect(String(call.body.message)).toContain('RELIANCE crossing 1264.7')
+    }
+  })
+
+  it('names Discord when Discord refused, and still sends to Slack', async () => {
+    const calls = fetchWith({ '/api/v1/discord/notify': { ok: false } })
+    const onProblem = vi.fn()
+    const accepted = await deliverAlert(
+      { ...OFF, slack: true, discord: true },
+      NOTICE,
+      context(onProblem)
+    )
+    expect(calls).toHaveLength(2)
+    expect(accepted).toEqual(['slack'])
+    expect(String(onProblem.mock.calls[0]?.[0])).toContain('Discord')
   })
 
   it('does not repeat the title when the message says nothing more', async () => {
@@ -161,7 +201,14 @@ describe('sending the message outward', () => {
 })
 
 describe('what it reports back for the log', () => {
-  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+  const OFF = {
+    sound: false,
+    notify: false,
+    telegram: false,
+    whatsapp: false,
+    slack: false,
+    discord: false,
+  }
 
   it('names the channels that accepted the message', async () => {
     fetchWith({})
@@ -186,6 +233,17 @@ describe('what it reports back for the log', () => {
     expect(accepted).toEqual(['whatsapp'])
   })
 
+  it('names all four outward channels in one order', async () => {
+    fetchWith({})
+    const all = { ...OFF, telegram: true, whatsapp: true, slack: true, discord: true }
+    expect(await deliverAlert(all, NOTICE, context())).toEqual([
+      'telegram',
+      'whatsapp',
+      'slack',
+      'discord',
+    ])
+  })
+
   it('names nothing when nothing was asked for', async () => {
     fetchWith({})
     expect(await deliverAlert(OFF, NOTICE, context())).toEqual([])
@@ -193,7 +251,14 @@ describe('what it reports back for the log', () => {
 })
 
 describe('why a send failed', () => {
-  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+  const OFF = {
+    sound: false,
+    notify: false,
+    telegram: false,
+    whatsapp: false,
+    slack: false,
+    discord: false,
+  }
   const NOTICE = { title: 'BHEL crossed 250', body: '', tag: 'a1' }
   const context = (onProblem: (m: string) => void) => ({
     apiKey: 'k',
@@ -242,7 +307,14 @@ describe('why a send failed', () => {
 })
 
 describe('how the outward channels are attempted', () => {
-  const OFF = { sound: false, notify: false, telegram: false, whatsapp: false }
+  const OFF = {
+    sound: false,
+    notify: false,
+    telegram: false,
+    whatsapp: false,
+    slack: false,
+    discord: false,
+  }
   const NOTICE = { title: 'BHEL crossed 250', body: '', tag: 'a1' }
 
   /**
@@ -270,11 +342,11 @@ describe('how the outward channels are attempted', () => {
       })
     )
 
-    const sending = deliverAlert(
-      { ...OFF, telegram: true, whatsapp: true },
-      NOTICE,
-      { apiKey: 'k', username: 'rajandran', onProblem: vi.fn() }
-    )
+    const sending = deliverAlert({ ...OFF, telegram: true, whatsapp: true }, NOTICE, {
+      apiKey: 'k',
+      username: 'rajandran',
+      onProblem: vi.fn(),
+    })
 
     // Let the microtask queue drain without letting Telegram answer.
     await Promise.resolve()

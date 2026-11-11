@@ -2,7 +2,7 @@
 
 ## Registration
 
-`restx_api/__init__.py` creates `api_v1_bp` with prefix `/api/v1` and registers 74 current method/path pairs across order, account, market-data, option, calendar, analyzer, preference, messaging, and utility namespaces.
+`restx_api/__init__.py` creates `api_v1_bp` with prefix `/api/v1` and registers 76 current method/path pairs across order, account, market-data, option, calendar, analyzer, preference, messaging, and utility namespaces.
 
 The Flask-RESTX `Api` is configured with `doc=False`. Swagger/OpenAPI UI is intentionally disabled and there is no supported `/api/docs` route. The maintained external contract is [`docs/api/README.md`](../../api/README.md).
 

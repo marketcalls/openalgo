@@ -47,11 +47,11 @@ from .place_order import api as place_order_ns
 from .place_smart_order import api as place_smart_order_ns
 from .pnl_symbols import api as pnl_symbols_ns
 from .portfolio import api as portfolio_ns
-from .sip import api as sip_ns
 from .positionbook import api as positionbook_ns
 from .quotes import api as quotes_ns
 from .search import api as search_ns
 from .sector_rotation import api as sector_rotation_ns
+from .sip import api as sip_ns
 from .split_order import api as split_order_ns
 from .strategy import api as strategy_ns
 from .symbol import api as symbol_ns
@@ -59,6 +59,7 @@ from .synthetic_future import api as synthetic_future_ns
 from .telegram_bot import api as telegram_ns
 from .ticker import api as ticker_ns
 from .tradebook import api as tradebook_ns
+from .webhook_alerts import discord_ns, slack_ns
 from .whatsapp_bot import api as whatsapp_ns
 
 # Add namespaces
@@ -100,6 +101,8 @@ api.add_namespace(analyzer_ns, path="/analyzer")
 api.add_namespace(ping_ns, path="/ping")
 api.add_namespace(telegram_ns, path="/telegram")
 api.add_namespace(whatsapp_ns, path="/whatsapp")
+api.add_namespace(slack_ns, path="/slack")
+api.add_namespace(discord_ns, path="/discord")
 api.add_namespace(margin_ns, path="/margin")
 api.add_namespace(instruments_ns, path="/instruments")
 api.add_namespace(chart_ns, path="/chart")

@@ -149,7 +149,7 @@ The shared HTTP transport retries a broken read once for eligible network/protoc
 │  │  OrderPlacedEvent│          │ bus.publish(     │                         │
 │  │ )                │          │  OrderFailedEvent│                         │
 │  │ → log+socketio+  │          │ )                │                         │
-│  │   telegram via   │          │ Return error     │                         │
+│  │   alerts via     │          │ Return error     │                         │
 │  │   subscribers    │          │                  │                         │
 │  └──────────────────┘          └──────────────────┘                         │
 │                                                                              │
@@ -323,7 +323,7 @@ def place_order_api(data, auth):
 
 ## Event Bus Side-Effects
 
-All post-order side-effects (logging, SocketIO, Telegram) are dispatched through the Event Bus. The service publishes a single typed event; subscribers handle each concern independently.
+All post-order side-effects (logging, SocketIO, alerts) are dispatched through the Event Bus. The service publishes a single typed event; subscribers handle each concern independently.
 
 ### Publishing
 
@@ -350,7 +350,7 @@ bus.publish(OrderPlacedEvent(
 |------------|--------|
 | `log_subscriber` | Writes to `order_logs` (live) or `analyzer_logs` (analyze) |
 | `socketio_subscriber` | Emits `order_event` (live) or `analyzer_update` (analyze) |
-| `telegram_subscriber` | Sends Telegram alert via `send_order_alert()` |
+| `alert_subscriber` | Raises an `alert.raised` event when a channel wants it, then hands it to each channel (Telegram, WhatsApp, Slack, Discord) the event group is routed to on `/alerts` |
 
 See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 
@@ -405,4 +405,4 @@ See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 | `broker/{name}/mapping/transform_data.py` | Data transformation |
 | `utils/event_bus.py` | Event bus (side-effect dispatch) |
 | `events/order_events.py` | Order event types |
-| `subscribers/` | Log, SocketIO, Telegram subscribers |
+| `subscribers/` | Log, SocketIO and alert subscribers |

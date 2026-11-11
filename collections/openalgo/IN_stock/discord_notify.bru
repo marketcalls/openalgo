@@ -1,0 +1,34 @@
+meta {
+  name: Discord Notify
+  type: http
+  seq: 70
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/discord/notify
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "apikey": "",
+    "message": "Test alert from OpenAlgo API",
+    "wait_for_delivery": false
+  }
+}
+
+docs {
+  Post a message to the Discord channel whose webhook is saved on the /discord
+  page. Discord alerts must be switched on at /alerts.
+
+    "message":            the text, at most 2000 characters (Discord's limit)
+    "wait_for_delivery":  false (default) queues the message and returns at once;
+                          true posts it first and reports whether Discord took it
+
+  Discord markdown in the message is kept. Mentions never ping anybody:
+  @everyone, @here, users and roles are all suppressed.
+
+  The webhook URL itself is never sent or returned by the API. Saving,
+  replacing and removing it is done on the session-authenticated /discord page.
+}

@@ -93,7 +93,7 @@ Plugins share OpenAlgo's normalized API shapes. Exchange coverage, authenticatio
 ## Core Features
 
 ### Unified REST API Layer (`/api/v1/`)
-A maintained contract with 74 REST method/path pairs under `/api/v1`:
+A maintained contract with 76 REST method/path pairs under `/api/v1`:
 - **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
 - **Portfolio**: Get positions, holdings, order book, trade book, funds
 - **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
