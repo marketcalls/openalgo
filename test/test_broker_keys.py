@@ -2106,7 +2106,7 @@ def test_a_password_change_ends_every_other_sign_in(stores, environment, monkeyp
     monkeypatch.setattr(auth_db, "revoke_all_sessions", lambda name: revoked.append(name))
     monkeypatch.setattr(auth_db, "clear_user_sessions", lambda name: None)
     monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
-    user = SimpleNamespace(check_password=lambda pw: True, set_password=lambda pw: None)
+    user = SimpleNamespace(id=1, check_password=lambda pw: True, set_password=lambda pw: None)
     monkeypatch.setattr(
         auth_bp_module,
         "User",
@@ -2115,6 +2115,9 @@ def test_a_password_change_ends_every_other_sign_in(stores, environment, monkeyp
         ),
     )
     monkeypatch.setattr(auth_bp_module, "db_session", SimpleNamespace(commit=lambda: None))
+    # The user store is a stand-in here; test_password_reset_grants.py covers
+    # the open resets a password change ends.
+    monkeypatch.setattr(auth_bp_module, "clear_password_reset_grants", lambda user_id: True)
     client = _signed_in(_app(), logged_in=True, login_time=datetime.now(IST).isoformat())
 
     response = client.post(
@@ -2520,7 +2523,7 @@ def password_paths(monkeypatch):
     monkeypatch.setattr(auth_db, "clear_user_sessions", lambda name: None)
     monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
     user = SimpleNamespace(
-        username=USER, check_password=lambda pw: True, set_password=lambda pw: None
+        id=1, username=USER, check_password=lambda pw: True, set_password=lambda pw: None
     )
     monkeypatch.setattr(
         auth_bp_module,
@@ -2531,6 +2534,13 @@ def password_paths(monkeypatch):
     )
     monkeypatch.setattr(auth_bp_module, "find_user_by_email", lambda email: user)
     monkeypatch.setattr(auth_bp_module, "db_session", SimpleNamespace(commit=lambda: None))
+    # The store's record of approved resets is stubbed with the store: the
+    # reset here is one the server approved, and a password change ends none.
+    # test_password_reset_grants.py covers the record itself.
+    monkeypatch.setattr(
+        auth_bp_module, "reset_password_with_grant", lambda user_id, token_hash, password: True
+    )
+    monkeypatch.setattr(auth_bp_module, "clear_password_reset_grants", lambda user_id: True)
     return revoked
 
 
