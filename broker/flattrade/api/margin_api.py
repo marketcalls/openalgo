@@ -1,9 +1,12 @@
 import json
 import os
 
+from broker.flattrade.api.funds import fetch_data
 from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
 from broker.flattrade.mapping.margin_data import (
+    MarginLegUnresolved,
     MarginPriceUnavailable,
+    parse_limits_margin_used,
     parse_margin_response,
     transform_margin_positions,
 )
@@ -16,6 +19,9 @@ logger = get_logger(__name__)
 def calculate_margin_api(positions, auth):
     """
     Calculate basket margin via Flattrade's GetBasketMargin endpoint.
+
+    The result is the basket's own post-trade margin (hedge benefit applied),
+    excluding margin already in use: marginusedtrade - Limits.marginused.
 
     Applies MPP (Market Price Protection): MARKET/SL-M are converted to
     LMT/SL-LMT with a protected price — Flattrade's basket margin accepts
@@ -42,7 +48,7 @@ def calculate_margin_api(positions, auth):
 
     try:
         margin_data = transform_margin_positions(positions, userid, auth_token=AUTH_TOKEN)
-    except MarginPriceUnavailable as e:
+    except (MarginLegUnresolved, MarginPriceUnavailable) as e:
         error_response = {"status": "error", "message": str(e)}
 
         class MockResponse:
@@ -99,7 +105,24 @@ def calculate_margin_api(positions, auth):
 
         logger.info(f"Flattrade basket margin response: {response_data}")
 
-        standardized_response = parse_margin_response(response_data)
+        if response_data.get("stat") != "Ok":
+            return response, parse_margin_response(response_data)
+
+        # GetBasketMargin's figures include margin already blocked on the
+        # account; Limits.marginused is that amount (issue #2156).
+        limits_payload = f"jData={json.dumps({'uid': userid, 'actid': userid})}&jKey={AUTH_TOKEN}"
+        limits_data = fetch_data("/PiConnectAPI/Limits", limits_payload, headers, client)
+        existing_margin_used = parse_limits_margin_used(limits_data)
+        if existing_margin_used is None:
+            reason = (limits_data or {}).get("emsg") if isinstance(limits_data, dict) else None
+            logger.error(f"Flattrade Limits failed during basket margin: {limits_data}")
+            return response, {
+                "status": "error",
+                "message": f"Could not read margin already in use: {reason or 'Limits request failed'}",
+            }
+        logger.info(f"Flattrade margin already in use (Limits.marginused): {existing_margin_used}")
+
+        standardized_response = parse_margin_response(response_data, existing_margin_used)
         return response, standardized_response
 
     except Exception as e:
