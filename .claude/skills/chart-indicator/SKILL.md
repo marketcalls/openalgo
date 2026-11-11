@@ -59,6 +59,12 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.0: nothing for a descriptor to change.** The drawing tool icons are
+  redrawn with an open ring at each anchor, and `DRAWING_TOOL_ACCENTS` now
+  fills only the magnet. The packaged widget and the reference host get
+  interface fixes. No indicator, descriptor field or export is added or
+  removed: the registry stays at 112 and the index at 438 names.
+
 - **2.6.9: nothing for a descriptor to change.** A security release for the
   library's build toolchain and documentation site; the published code is
   2.6.8's apart from the version string. The registry stays at 112 and the

@@ -3,197 +3,197 @@
 export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: string; text: boolean; fields?: readonly string[] }>> = {
   "trend-line": {
     "name": "Trend Line",
-    "path": "M6 18 18 6M5 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM17 6a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M5.91 18.09 18.09 5.91M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "ray": {
     "name": "Ray",
-    "path": "M4 18 22 6M3 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M6.13 17.35 21.5 6.5M2.5 18.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "extended-line": {
     "name": "Extended Line",
-    "path": "M2 22 22 2M7 16a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM15 8a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M2.5 21.5 7.09 16.91M9.91 14.09 14.09 9.91M16.91 7.09 21.5 2.5M6.5 15.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM13.5 8.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "arrow": {
     "name": "Arrow",
-    "path": "M4 20 15 9M20 4l-2 8-6-6z",
+    "path": "M5.91 18.09 19.5 4.5M12.5 4.5h7v7M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "horizontal-line": {
     "name": "Horizontal Line",
-    "path": "M2 12h20",
+    "path": "M2.5 12H10M14 12h7.5M10 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "horizontal-ray": {
     "name": "Horizontal Ray",
-    "path": "M10 12h12M9 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M6.5 12h15M2.5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "vertical-line": {
     "name": "Vertical Line",
-    "path": "M12 2v20",
+    "path": "M12 2.5V10M12 14v7.5M10 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "cross-line": {
     "name": "Cross Line",
-    "path": "M2 12h20M12 2v20M11 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M2.5 12H10M14 12h7.5M12 2.5V10M12 14v7.5M10 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "rectangle": {
     "name": "Rectangle",
-    "path": "M3 5h18v14H3z",
+    "path": "M6.5 6H18a1.5 1.5 0 0 1 1.5 1.5V16M17.5 18H6a1.5 1.5 0 0 1-1.5-1.5V8M2.5 6a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 18a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "ellipse": {
     "name": "Ellipse",
-    "path": "M12 5c5 0 9 3 9 7s-4 7-9 7-9-3-9-7 4-7 9-7z",
+    "path": "M20.21 8.73A9.5 6.5 0 1 1 16.96 6.45M16.72 7.4a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "parallel-channel": {
     "name": "Parallel Channel",
-    "path": "M2 16 14 4M8 22 20 10",
+    "path": "M6.31 10.65 17.69 5.35M6.31 18.65 17.69 13.35M2.5 11.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 12.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-retracement": {
     "name": "Fib Retracement",
-    "path": "M3 4h18M3 9h18M3 14h18M3 19h18",
+    "path": "M6.5 4.5h15M2.5 10h19M2.5 14h19M2.5 19.5h15M2.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-extension": {
     "name": "Fib Extension",
-    "path": "M3 5h18M3 12h18M3 19h18M8 5v14",
+    "path": "M2.5 4h19M2.5 9h19M6.4 18.87 17.6 15.13M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 14.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "long-position": {
     "name": "Long Position",
-    "path": "M2 14h4M6 3h15v17H6zM6 14h15M10 11l3-4 3 4z",
+    "path": "M5.5 4.5h16M5.5 13.5h16M5.5 19.5h16M13.5 11V7M11 9.5l2.5-2.5 2.5 2.5M2.5 4.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM2.5 13.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM2.5 19.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "short-position": {
     "name": "Short Position",
-    "path": "M2 10h4M6 4h15v17H6zM6 10h15M10 13l3 4 3-4z",
+    "path": "M5.5 19.5h16M5.5 10.5h16M5.5 4.5h16M13.5 13v4M11 14.5l2.5 2.5 2.5-2.5M2.5 19.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM2.5 10.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM2.5 4.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "forecast": {
     "name": "Forecast",
-    "path": "M3 18 9 10l4 4 8-10M13 4h8v8",
+    "path": "M8.18 15.82h0M10.72 13.28h0M13.27 10.73h0M15.81 8.19h0M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "measure": {
     "name": "Measure",
-    "path": "M4 16h16M4 12v8M20 12v8M8 4h8M12 4v6",
+    "path": "M16.6 3.2 20.8 7.4 7.4 20.8 3.2 16.6zM6.55 13.25l1.4 1.4M9.9 9.9l1.8 1.8M13.25 6.55l1.4 1.4",
     "text": false
   },
   "price-range": {
     "name": "Price Range",
-    "path": "M12 4v16M7 9l5-5 5 5M7 15l5 5 5-5",
+    "path": "M2.5 3.5h19M2.5 20.5h19M12 7v10M9 10l3-3 3 3M9 14l3 3 3-3",
     "text": false
   },
   "date-range": {
     "name": "Date Range",
-    "path": "M4 12h16M9 7l-5 5 5 5M15 7l5 5-5 5",
+    "path": "M3.5 2.5v19M20.5 2.5v19M7 12h10M10 9l-3 3 3 3M14 9l3 3-3 3",
     "text": false
   },
   "circle": {
     "name": "Circle",
-    "path": "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
+    "path": "M19.25 7.56A8.5 8.5 0 1 1 16.44 4.75M16 6a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "triangle": {
     "name": "Triangle",
-    "path": "M12 4 21 20H3z",
+    "path": "M12.89 6.29 18.61 17.71M17.5 19.5 6.5 19.5M5.39 17.71 11.11 6.29M10 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "polyline": {
     "name": "Polyline",
-    "path": "M4 19 9 7l5 9 6-11M2 19a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM7 7a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12 16a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
+    "path": "M5.33 16.68 8.67 9.32M10.51 9.22 13.49 14.28M15.36 14.19 18.64 7.31M2.5 18.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM7.5 7.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12.5 16a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 5.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "arc": {
     "name": "Arc",
-    "path": "M3 19a12 12 0 0 1 18 0",
+    "path": "M5.19 14.62A7.69 7.69 0 0 1 10.02 10.76M13.98 10.76A7.69 7.69 0 0 1 18.81 14.62M2.5 16.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM10 10.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 16.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "curve": {
     "name": "Curve",
-    "path": "M3 18c4-12 14-12 18 0",
+    "path": "M4.9 17.54C6.5 9.5 11.5 5.5 17.52 4.8M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "rotated-rectangle": {
     "name": "Rotated Rectangle",
-    "path": "M2 14 10 4l12 6-8 10z",
+    "path": "M5.99 11.67 12.01 6.33M14.83 6.49 19.28 11.5M19.28 11.5 10.28 19.5M10.28 19.5 5.83 14.49M2.5 13a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM11.5 5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "double-curve": {
     "name": "Double Curve",
-    "path": "M3 18c3-9 7-9 9 0 2 9 6 9 9 0",
+    "path": "M5.5 10.3C7 5 10 5 12 12s5 7 6.5 1.7M2.5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "arrow-up": {
     "name": "Arrow Up",
-    "path": "M12 3v18M6 9l6-6 6 6",
+    "path": "M12 3.5l7 7.5h-4v9.5H9V11H5z",
     "text": false
   },
   "arrow-down": {
     "name": "Arrow Down",
-    "path": "M12 3v18M6 15l6 6 6-6",
+    "path": "M12 20.5l7-7.5h-4V3.5H9V13H5z",
     "text": false
   },
   "highlighter": {
     "name": "Highlighter",
-    "path": "M4 16 14 6l4 4-10 10H4z",
+    "path": "M14.5 4.5l5 5-8.5 8.5-5-5zM6 13 4.5 19.5 11 18M13.5 20.5h8",
     "text": false
   },
   "brush": {
     "name": "Brush",
-    "path": "M3 19c4 0 4-8 8-8s4 8 9 4",
+    "path": "M13.5 10.5 20.5 3.5M13.5 10.5c2 2 1.7 5.2-0.6 6.8-2.6 1.8-6 1.2-8.9 2.7 1.5-2.9 0.9-6.3 2.7-8.9 1.6-2.3 4.8-2.6 6.8-0.6z",
     "text": false
   },
   "fib-channel": {
     "name": "Fib Channel",
-    "path": "M2 14 14 4M4 18 16 8M6 22 18 12",
+    "path": "M6.38 9.31 17.62 5.19M2.5 10a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM4.5 15 19.5 9.5M4.5 21 19.5 15.5",
     "text": false
   },
   "fib-time-zone": {
     "name": "Fib Time Zone",
-    "path": "M4 3v18M8 3v18M14 3v18M22 3v18",
+    "path": "M4.5 2.5v11M4.5 16.5v5M8.5 2.5v5M8.5 10.5v11M13.5 2.5v19M21.5 2.5v19M3 15a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM7 9a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "fib-fan": {
     "name": "Fib Fan",
-    "path": "M3 20 21 4M3 20 21 10M3 20 21 16M3 20h18",
+    "path": "M5.91 18.09 18.09 5.91M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM6.29 18.61 21.5 11M6.47 19.15 21.5 16.5",
     "text": false
   },
   "gann-fan": {
     "name": "Gann Fan",
-    "path": "M3 20 21 2M3 20 21 9M3 20 21 15M3 20h18",
+    "path": "M5.91 18.09 21.5 2.5M5.35 17.69 12.5 2.5M6.29 18.61 21.5 11M6.45 19.04 21.5 15.5M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "gann-box": {
     "name": "Gann Box",
-    "path": "M3 3h18v18H3zM3 3l18 18M3 21 21 3",
+    "path": "M17.5 6.5h-13v9M6.5 17.5h13v-9M4.5 6.5l15 11M6.11 16.32 17.89 7.68M2.5 17.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 6.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "cyclic-lines": {
     "name": "Cyclic Lines",
-    "path": "M4 4v16M10 4v16M16 4v16M22 4v16",
+    "path": "M4.5 2.5v8M4.5 13.5v8M10 2.5v8M10 13.5v8M15.5 2.5v19M21 2.5v19M3 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM8.5 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "time-cycles": {
     "name": "Time Cycles",
-    "path": "M4 12a4 4 0 0 1 8 0 4 4 0 0 0 8 0M4 4v16",
+    "path": "M4.5 15.5A4.5 9 0 0 1 13.5 15.5M13.5 15.5A4.5 9 0 0 1 21.5 9.84M2.5 17.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM11.5 17.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "sine-line": {
     "name": "Sine Line",
-    "path": "M2 12c3-9 6-9 9 0 3 9 6 9 9 0",
+    "path": "M2.5 12c2.1-7.5 4.2-7.5 6.33 0s4.2 7.5 6.33 0 4.2-7.5 6.34 0",
     "text": false
   },
   "text": {
     "name": "Text",
-    "path": "M4 5h16M12 5v14M8 19h8",
+    "path": "M5 7V4.5h14V7M12 4.5v15M9 19.5h6",
     "text": true,
     "fields": [
       "text.value",
@@ -216,12 +216,12 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "path": {
     "name": "Path",
-    "path": "M3 20 7 7l5 9 5-5M20 8l-6 2 4 4z",
+    "path": "M5.43 17.23 8.57 11.27M10.78 11.04 13.22 13.96M15.59 13.82 21 5.5M16 5.5h5v5M2.5 19a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM7.5 9.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12.5 15.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "price-label": {
     "name": "Price Label",
-    "path": "M3 12 8 7h13v10H8z",
+    "path": "M8 6.5h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8L3 12zM11 12h6",
     "text": true,
     "fields": [
       "style.color",
@@ -235,7 +235,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "callout": {
     "name": "Callout",
-    "path": "M3 3h18v9H11l-6 8 1-8H3z",
+    "path": "M9 3h10.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1 -2 2h-10.5a2 2 0 0 1 -2 -2v-5.5a2 2 0 0 1 2 -2zM9.5 12.5 5.66 17.87M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": true,
     "fields": [
       "style.color",
@@ -249,12 +249,12 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "flag-mark": {
     "name": "Flag Mark",
-    "path": "M6 21V3M6 3h12l-3 4 3 4H6",
+    "path": "M5.5 21.5v-18M5.5 4.5h13l-3 4 3 4h-13",
     "text": false
   },
   "note": {
     "name": "Note",
-    "path": "M4 20 9 15M9 5h13v10H9zM4 20v-4",
+    "path": "M5 3.5h14a1.5 1.5 0 0 1 1.5 1.5v9.5l-5.5 6H5a1.5 1.5 0 0 1-1.5-1.5V5a1.5 1.5 0 0 1 1.5-1.5zM20.5 14.5h-4a1.5 1.5 0 0 0-1.5 1.5v4.5M7.5 8h9M7.5 12h5",
     "text": true,
     "fields": [
       "style.color",
@@ -273,7 +273,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "balloon": {
     "name": "Balloon",
-    "path": "M3 4h18v12H9l-4 4v-4H3z",
+    "path": "M12 3.5c5 0 9 3.1 9 7s-4 7-9 7c-1 0-2-0.1-2.9-0.4L4.5 20l1.3-4.4C4.1 14.3 3 12.5 3 10.5c0-3.9 4-7 9-7z",
     "text": true,
     "fields": [
       "style.color",
@@ -291,7 +291,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "comment": {
     "name": "Comment",
-    "path": "M3 5h18v10H3zM6 15v4l4-4",
+    "path": "M5 4h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8l-4 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
     "text": true,
     "fields": [
       "style.color",
@@ -309,7 +309,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "signpost": {
     "name": "Signpost",
-    "path": "M12 21V9M5 3h14v6H5z",
+    "path": "M6 3h12a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1 -1.5 1.5h-12a1.5 1.5 0 0 1 -1.5 -1.5v-4a1.5 1.5 0 0 1 1.5 -1.5zM12 10v7.5M10 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": true,
     "fields": [
       "style.color",
@@ -328,7 +328,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "price-note": {
     "name": "Price Note",
-    "path": "M2 12h5M7 6h15v12H7zM10 12h9",
+    "path": "M6.5 12h3M11.5 7h8a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-8a2 2 0 0 1 -2 -2v-6a2 2 0 0 1 2 -2zM12.5 12h6M2.5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": true,
     "fields": [
       "style.color",
@@ -347,7 +347,7 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "table": {
     "name": "Table",
-    "path": "M3 5h18v14H3zM3 10h18M9 10v9M15 10v9",
+    "path": "M5 4.5h14a2 2 0 0 1 2 2v11a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2zM3 9.5h18M9 9.5v10M15 9.5v10",
     "text": true,
     "fields": [
       "style.color",
@@ -367,192 +367,192 @@ export const DRAW_TOOL_METADATA: Readonly<Record<string, { name: string; path: s
   },
   "arrow-left": {
     "name": "Arrow Left",
-    "path": "M3 12h18M9 6l-6 6 6 6",
+    "path": "M3.5 12l7.5-7v4h9.5v6H11v4z",
     "text": false
   },
   "arrow-right": {
     "name": "Arrow Right",
-    "path": "M3 12h18M15 6l6 6-6 6",
+    "path": "M20.5 12l-7.5-7v4H3.5v6H13v4z",
     "text": false
   },
   "disjoint-channel": {
     "name": "Disjoint Channel",
-    "path": "M2 16 14 6M8 22 22 14",
+    "path": "M6.43 5.02 17.57 7.98M6.43 18.98 17.57 16.02M2.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 8.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 15.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "flat-top-bottom": {
     "name": "Flat Top/Bottom",
-    "path": "M3 6h18M3 20 21 12M3 6v14",
+    "path": "M6.5 5h11M2.5 5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM4.5 20.5 19.5 12.5",
     "text": false
   },
   "regression-channel": {
     "name": "Regression Channel",
-    "path": "M3 18 19 6M5 21 21 9M3 12 17 2M10 16h4",
+    "path": "M2.5 16 5.63 14.68M8.86 13.32 15.13 10.68M18.35 9.32 21.5 8M2.5 10.5 21.5 2.5M2.5 21.5 21.5 13.5",
     "text": false
   },
   "pitchfork": {
     "name": "Pitchfork",
-    "path": "M5 2v8h14V2M12 2v19M11 21a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M5 2.5v8h14v-8M12 2.5v15M10 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "schiff-pitchfork": {
     "name": "Schiff Pitchfork",
-    "path": "M5 2v8h14V2M12 2v12h7M18 14a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M5 2.5v8h14v-8M12 2.5v12h5M17 14.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "modified-schiff-pitchfork": {
     "name": "Modified Schiff Pitchfork",
-    "path": "M5 2v8h14V2M12 2v13M5 10l14 10M18 20a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M5 2.5v8h14v-8M12 2.5V15M5 10.5 17.32 18.42M17 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "inside-pitchfork": {
     "name": "Inside Pitchfork",
-    "path": "M5 2v8h14V2M12 2v8M5 10l7 10 7-10M11 20a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M5 2.5v6h14v-6M12 2.5v6M5 8.5 10.93 17.81M19 8.5 13.07 17.81M10 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "info-line": {
     "name": "Info Line",
-    "path": "M6 18 18 6M3 3h8v5H3zM5 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM17 6a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
+    "path": "M6.21 18.47 17.79 11.53M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 10.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM4 3h7.5a1.5 1.5 0 0 1 1.5 1.5v3.5a1.5 1.5 0 0 1 -1.5 1.5h-7.5a1.5 1.5 0 0 1 -1.5 -1.5v-3.5a1.5 1.5 0 0 1 1.5 -1.5zM5.5 6.25h4.5",
     "text": false
   },
   "trend-angle": {
     "name": "Trend Angle",
-    "path": "M4 20 18 8M4 20h12M8 20a8 8 0 0 0 2-5",
+    "path": "M6.01 18.19 19.5 6.5M6.5 19.5h13M13.5 19.5A9 9 0 0 0 11.3 13.6M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-extension-two-point": {
     "name": "Fib Extension (Two Point)",
-    "path": "M3 4h18M3 10h18M3 16h18M3 21h18M6 4v12",
+    "path": "M4.5 17.5v-3M6.5 19.5h15M6.5 12.5h15M2.5 8h19M2.5 3.5h19M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM2.5 12.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-speed-resistance-fan": {
     "name": "Fib Speed Resistance Fan",
-    "path": "M3 3h18v18M3 21 21 3M21 12 3 21 12 3",
+    "path": "M4.5 4.5h13M19.5 6.5v13M5.91 18.09 18.09 5.91M6.29 18.61 19.5 12M5.39 17.71 12 4.5M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "icon-stamp": {
     "name": "Icon Stamp",
-    "path": "M12 3l3 6 6 3-6 3-3 6-3-6-6-3 6-3z",
+    "path": "M12 2.5c0.6 5.2 4.3 8.9 9.5 9.5-5.2 0.6-8.9 4.3-9.5 9.5-0.6-5.2-4.3-8.9-9.5-9.5 5.2-0.6 8.9-4.3 9.5-9.5z",
     "text": false
   },
   "trend-fib-time": {
     "name": "Trend Fib Time",
-    "path": "M3 20 8 8 12 15M12 3v18M16 3v18M22 3v18",
+    "path": "M5.26 17.65 8.24 10.35M9.95 10.26 12.5 15M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM7 8.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12.5 2.5v19M16.5 2.5v19M21.5 2.5v19",
     "text": false
   },
   "fib-circles": {
     "name": "Fib Circles",
-    "path": "M9 12a3 3 0 0 0 6 0a3 3 0 0 0 -6 0zM6 12a6 6 0 0 0 12 0a6 6 0 0 0 -12 0zM3 12a9 9 0 0 0 18 0a9 9 0 0 0 -18 0z",
+    "path": "M6.5 12a5.5 5.5 0 0 0 11 0a5.5 5.5 0 0 0 -11 0zM2.5 12a9.5 9.5 0 0 0 19 0a9.5 9.5 0 0 0 -19 0zM10 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-speed-resistance-arcs": {
     "name": "Fib Speed Resistance Arcs",
-    "path": "M10 14 22 2M2 6a8 8 0 0 1 16 16M6 10a4 4 0 0 1 8 8",
+    "path": "M11.41 12.59 18.59 5.41M3.5 7.5a9 9 0 0 1 13 13M6.5 10.5a4 4 0 0 1 7 7M8 14a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM18 4a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-wedge": {
     "name": "Fib Wedge",
-    "path": "M20 18H5l9-12M10 18A5 5 0 0 0 8 14M15 18A10 10 0 0 0 11 10M20 18A15 15 0 0 0 14 6",
+    "path": "M7 18h11M6.2 16.4 12.8 7.6M10 18A5 5 0 0 0 8 14M15 18A10 10 0 0 0 11 10M19.87 16.01A15 15 0 0 0 15.52 7.3M3 18a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM18 18a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12 6a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fib-spiral": {
     "name": "Fib Spiral",
-    "path": "M8 10A2 2 0 0 0 10 8 3 3 0 0 0 7 5 5 5 0 0 0 2 10 8 8 0 0 0 10 18 13 13 0 0 0 22 10",
+    "path": "M9.33 6.12A3 3 0 0 0 7 5 5 5 0 0 0 2 10 8 8 0 0 0 10 18 13 13 0 0 0 22 10M8 8a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "gann-square": {
     "name": "Gann Square",
-    "path": "M3 3h18v18H3zM9 3v18M15 3v18M3 9h18M3 15h18M3 21 21 3",
+    "path": "M17.5 4.5h-13v13M6.5 19.5h13v-13M9.5 4.5v15M14.5 4.5v15M4.5 9.5h15M4.5 14.5h15M5.91 18.09 18.09 5.91M2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "dedekind-tessellation": {
     "name": "Dedekind Tessellation",
-    "path": "M3 3h18v18H3zM3 3A18 18 0 0 1 21 21M21 3A18 18 0 0 0 3 21M3 21a6 6 0 0 1 12 0M9 21a6 6 0 0 1 12 0M12 3 12 21",
+    "path": "M6.5 4.5h13v13M4.5 6.5v13h13M6.5 4.63A15 15 0 0 1 19.37 17.5M19.5 4.5A15 15 0 0 0 4.5 19.5M4.5 19.5a5 5 0 0 1 10 0M9.5 19.5A5 5 0 0 1 19.1 17.54M12 4.5v15M2.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM17.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "sonic": {
     "name": "Sonic",
-    "path": "M3 12a9 9 0 0 1 18 0M6 12a6 6 0 0 1 12 0M9 12a3 3 0 0 1 6 0M3 12h18",
+    "path": "M4 2.5v8M4 13.5v8M12.75 13.48A4.5 4.5 0 0 1 4.25 13.48M4.25 10.52A4.5 4.5 0 0 1 12.75 10.52M4.13 10.51A9 9 0 1 1 4.13 13.49M2.5 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM11.5 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "supersonic": {
     "name": "Supersonic",
-    "path": "M22 3 2 12l20 9M5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM8 12a4 4 0 0 0 8 0a4 4 0 0 0 -8 0z",
+    "path": "M18.95 2.5 2.5 12 18.95 21.5M16.51 13.48A4.75 4.75 0 0 1 7.49 13.48M7.49 10.52A4.75 4.75 0 0 1 16.51 10.52M5.75 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM15.25 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "golden-sonic": {
     "name": "Golden Sonic",
-    "path": "M3 12a9 9 0 0 1 18 0M7 12a5 5 0 0 1 10 0M10 12a2 2 0 0 1 4 0M3 16h18M12 16v5",
+    "path": "M4 2.5v8M4 13.5v8M14.8 13.49A5.5 5.5 0 0 1 4.2 13.49M4.2 10.51A5.5 5.5 0 0 1 14.8 10.51M4.33 10.54A3.4 3.4 0 1 1 4.33 13.46M2.5 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM13.5 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "golden-supersonic": {
     "name": "Golden Supersonic",
-    "path": "M22 5 2 12l20 7M5 12a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM8 12a3 3 0 0 0 6 0a3 3 0 0 0 -6 0zM12 12a5 5 0 0 0 10 0a5 5 0 0 0 -10 0z",
+    "path": "M21.5 4.15 2.5 12 21.5 19.85M17.43 13.48A4.2 4.2 0 0 1 9.56 13.48M9.56 10.52A4.2 4.2 0 0 1 17.43 10.52M7.8 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM16.2 12a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "xabcd-pattern": {
     "name": "XABCD Pattern",
-    "path": "M3 19 7 4 12 16 16 8 21 20M3 19 12 16 21 20M7 4 16 8",
+    "path": "M3.91 17.06 7.34 4.94M8.22 4.93 11.53 15.07M12.59 15.12 15.66 7.88M16.69 7.94 20.06 19.06M2 18.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 16.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 6.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.96 18.16 10.54 16.84M13.36 17.14 19.14 19.86M9.16 4 14.84 6",
     "text": false
   },
   "abcd-pattern": {
     "name": "ABCD Pattern",
-    "path": "M3 18 9 4 15 15 21 3M3 18 15 15M9 4 21 3",
+    "path": "M4.17 5.34 8.33 13.66M9.98 13.86 14.02 9.14M15.62 9.36 19.88 18.64M2 4a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM7.5 15a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM13.5 8a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 20a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.92 4.49 13.58 7.51M10.38 15.6 19.12 19.4",
     "text": false
   },
   "elliott-impulse": {
     "name": "Elliott Impulse",
-    "path": "M2 21 6 12 9 17 13 5 17 11 22 2",
+    "path": "M4.42 15.19 6.83 18.31M8.27 18.09 11.48 9.41M12.97 9.14 15.28 11.86M16.86 11.63 19.89 4.87M2 14a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 19.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 8a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 13a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "elliott-correction": {
     "name": "Elliott Correction",
-    "path": "M3 4 9 18 15 8 21 21M3 4h4M17 21h4",
+    "path": "M2.5 3 6.88 12.63M8.51 12.89 11.99 9.11M13.76 9.3 19.24 18.7M6 14a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM11.5 8a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM18.5 20a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "head-shoulders": {
     "name": "Head and Shoulders",
-    "path": "M2 20 5 10 8 17 12 3 16 17 19 10 22 20M3 17h18",
+    "path": "M2.5 20 5.43 12.89M6.77 12.79 9 16.5M9 16.5 11.65 5.46M12.35 5.46 15 16.5M15 16.5 17.23 12.79M18.57 12.89 21.5 20M2.5 16.5h19M4.5 11.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 4a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM16.5 11.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0z",
     "text": false
   },
   "gartley": {
     "name": "Gartley",
-    "path": "M2 21 7 3 12 14 17 7 22 17M2 21 12 14 22 17",
+    "path": "M3.86 19.04 7.39 4.96M8.29 4.9 11.46 13.1M13.03 13.41 15.22 11.09M17.07 11.26 19.68 15.24M2 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 14.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 10a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 16.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.73 19.63 10.77 15.37M13.46 14.84 19.04 16.16",
     "text": false
   },
   "bat": {
     "name": "Bat",
-    "path": "M2 21 7 3 12 11 17 5 22 19M2 21 12 11 22 19",
+    "path": "M3.86 19.04 7.39 4.96M8.53 4.78 11.22 9.22M12.87 9.28 15.38 5.72M16.69 5.94 20.06 17.06M2 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 10.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 4.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 18.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.47 19.36 11.03 11.64M13.09 11.53 19.41 17.47",
     "text": false
   },
   "butterfly": {
     "name": "Butterfly",
-    "path": "M2 16 7 3 12 13 17 6 22 21M2 16 12 13 22 21",
+    "path": "M3.98 14.58 7.27 4.92M8.34 4.88 11.41 12.12M12.87 12.28 15.38 8.72M16.72 8.93 20.03 19.07M2 16a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 13.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 7.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.94 15.58 10.56 13.92M13.16 14.45 19.34 19.55",
     "text": false
   },
   "crab": {
     "name": "Crab",
-    "path": "M2 14 7 2 12 9 17 4 22 21M2 14 12 9 22 21",
+    "path": "M4.06 12.61 7.19 4.89M8.67 4.69 11.08 7.81M13.03 7.91 15.22 5.59M16.64 5.95 20.11 19.05M2 14a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 9a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 4.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.79 13.24 10.71 9.76M12.89 10.21 19.61 19.29",
     "text": false
   },
   "shark": {
     "name": "Shark",
-    "path": "M2 22 7 5 12 13 17 2 22 22M2 22 12 13 22 22",
+    "path": "M3.94 19.06 7.31 7.94M8.62 7.72 11.13 11.28M12.64 11.14 15.61 4.86M16.61 4.96 20.14 19.04M2 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 6.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 12.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.59 19.47 10.91 13.53M13.09 13.53 19.41 19.47",
     "text": false
   },
   "cypher": {
     "name": "Cypher",
-    "path": "M2 21 7 7 12 14 17 2 22 17M2 21 12 14 22 17",
+    "path": "M3.98 19.08 7.27 9.42M8.49 9.31 11.26 14.19M12.5 14.09 15.75 4.91M16.72 4.93 20.03 15.07M2 20.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM6.25 8a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM10.5 15.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM14.75 3.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM19 16.5a1.5 1.5 0 0 0 3 0a1.5 1.5 0 0 0 -3 0zM4.79 19.74 10.71 16.26M13.49 15.68 19.01 16.32",
     "text": false
   },
   "anchored-vwap": {
     "name": "Anchored VWAP",
-    "path": "M4 4v16M4 15 8 12 12 14 16 8 20 6M2 4h4",
+    "path": "M10 2.5v1.5M8 4h4v6H8zM10 10v7.5M17.5 3v8M15.5 11h4v6h-4zM17.5 17v2.5M6.5 15.5c3.2 0 4.6-1.2 6.2-4.4s3.6-5.6 8.8-5.6M2.5 15.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   },
   "fixed-range-volume-profile": {
     "name": "Fixed Range Volume Profile",
-    "path": "M4 3v18M4 5h8v3H4M4 10h16v3H4M4 15h12v3H4",
+    "path": "M4.5 6.5v11M4.5 7h7v3h-7M4.5 10.5h15.5v3H4.5M4.5 14h10.5v3H4.5M2.5 4.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM2.5 19.5a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
     "text": false
   }
 }

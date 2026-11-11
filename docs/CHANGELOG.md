@@ -6,6 +6,20 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Changed
+
+- `/trading`, Historify and every other chart now use openalgo-charts 2.7.0
+  (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
+  each one shows its drawing the way the chart shows it when selected, with an
+  open ring at every point you place, so a trend line has a ring at each end
+  and the channels, patterns, positions, Fibonacci and Gann tools show their
+  anchors too. The brush, highlighter, measure, text, note and arrow tools
+  get icons of their own. Only the icons change: every tool, indicator and
+  chart type works as before, saved charts and drawings load unchanged, and
+  existing custom indicators keep working.
+
 ## [2.0.3.3] - 2026-11-06
 
 ### Broker Keys and Live Data Release
