@@ -829,7 +829,7 @@ GUIDES = {
     },
     "sahi": {
         "name": "Sahi",
-        "sign_in": "saved_keys",
+        "sign_in": "form",
         "fields": (
             {
                 "hint": "The key id of an API key from Sahi web, Profile, API Dashboard "
@@ -842,17 +842,17 @@ GUIDES = {
             },
             {
                 "hint": "The secret shown once when that key was created (it starts with "
-                "sahi_sk_). For a TOTP key, add the TOTP secret Sahi showed at setup after "
-                ":::, as sahi_sk_...:::TOTPSECRET, and OpenAlgo enters the code for you.",
+                "sahi_sk_).",
                 "key": "api_secret",
                 "label": "API Secret",
                 "required": True,
                 "secret": True,
             },
         ),
-        "banner": "Login with Sahi signs you in with one click using the API key and secret "
-        "you saved. Approve a Regular key in Sahi's API Dashboard once each trading day "
-        "first (a TOTP key needs no Approve), and register the internet address this computer's traffic leaves "
+        "banner": "Login with Sahi opens a short form in OpenAlgo with one optional field. "
+        "For a TOTP key, enter the code your authenticator app shows; for a Regular key, "
+        "leave it blank and approve the key in Sahi's API Dashboard once each trading day "
+        "first. Register the internet address this computer's traffic leaves "
         "from as a static IP on your Sahi account: Sahi refuses orders from any "
         "other address.",
         "redirect_hint": "",

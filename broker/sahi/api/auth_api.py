@@ -17,21 +17,13 @@ A key is one of two types, fixed when it is created:
     TOTP     the first correct authenticator code of the day approves it; every
              mint must carry the current 6-digit code in ``totp``
 
-BROKER_API_KEY holds the key id. BROKER_API_SECRET holds the secret, and for a
-TOTP key the TOTP secret the dashboard showed at setup after ``:::``
-(``sahi_sk_...:::JBSWY3DPEHPK3PXP``), the same ``:::`` joining other brokers
-use for a second value. The code is worked out here at each login, so a TOTP
-key logs in with no daily click, which is what Sahi built the key type for.
+BROKER_API_KEY holds the key id and BROKER_API_SECRET the secret. The login
+card asks for the code, which is optional: blank for a Regular key, the code
+the authenticator app shows for a TOTP key. Nothing about the TOTP is stored.
 """
 
-import base64
-import binascii
-import hashlib
-import hmac
 import os
-import struct
-import time
-from datetime import UTC, datetime, timezone
+import re
 
 from broker.sahi.api.baseurl import AUTH_BASE_URL, USER_AGENT
 from broker.sahi.api.rate_limiter import sahi_request
@@ -43,60 +35,9 @@ logger = get_logger(__name__)
 
 TOKEN_PATH = "/api/v1/apikeys/token"
 
-# RFC 6238 as Sahi uses it: the dashboard's TOTP secret with no other settings,
-# that is HMAC-SHA1, 30-second steps and 6 digits.
-TOTP_STEP_SECONDS = 30
-TOTP_DIGITS = 6
-SECRET_SEPARATOR = ":::"
-
-
-class TotpSecretError(ValueError):
-    """The TOTP secret is not one an authenticator app could read."""
-
-
-def split_secret(raw):
-    """(api_secret, totp_secret or None) from BROKER_API_SECRET."""
-    api_secret, sep, totp_secret = (raw or "").strip().partition(SECRET_SEPARATOR)
-    totp_secret = totp_secret.strip()
-    return api_secret.strip(), (totp_secret if sep and totp_secret else None)
-
-
-def totp_code(totp_secret, now=None):
-    """The current 6-digit code for a base32 TOTP secret, as a string.
-
-    Spaces, dashes and lower case are allowed, as authenticator apps show and
-    accept the secret that way; missing base32 padding is added.
-
-    Raises:
-        TotpSecretError: The secret is not base32.
-    """
-    cleaned = "".join(totp_secret.split()).replace("-", "").upper()
-    cleaned += "=" * (-len(cleaned) % 8)
-    try:
-        key = base64.b32decode(cleaned)
-    except (binascii.Error, ValueError) as e:
-        raise TotpSecretError(str(e)) from e
-    if not key:
-        raise TotpSecretError("empty secret")
-    counter = int((time.time() if now is None else now) // TOTP_STEP_SECONDS)
-    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
-    offset = digest[-1] & 0x0F
-    value = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
-    return str(value % 10**TOTP_DIGITS).zfill(TOTP_DIGITS)
-
-
-def _clock_drift_seconds(body):
-    """This computer's clock minus Sahi's, from an InvalidTotp reply, or None."""
-    server_time = body.get("server_time") if isinstance(body, dict) else None
-    if not server_time:
-        return None
-    try:
-        server = datetime.fromisoformat(str(server_time).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if server.tzinfo is None:
-        server = server.replace(tzinfo=UTC)
-    return round(time.time() - server.timestamp())
+# The code an authenticator app shows: six digits, sent as a string so that a
+# leading zero stays.
+_TOTP_CODE = re.compile(r"\d{6}")
 
 
 def _login_error(status_code, body):
@@ -111,32 +52,24 @@ def _login_error(status_code, body):
     reason = body.get("message") if isinstance(body, dict) else None
 
     if code == "InvalidTotp":
-        drift = _clock_drift_seconds(body)
-        message = (
-            "Sahi did not accept the TOTP code worked out from the TOTP secret saved after ::: "
-            "in BROKER_API_SECRET. Check that it is the TOTP secret Sahi showed when the key "
-            "was set up"
+        return (
+            "Sahi did not accept the TOTP code. Enter the code your authenticator app shows for "
+            "this API key now (it changes every 30 seconds), and check that your phone's clock "
+            "is set automatically."
         )
-        if drift is not None and abs(drift) > TOTP_STEP_SECONDS:
-            return (
-                f"{message}. This computer's clock is {abs(drift)} seconds "
-                f"{'ahead of' if drift > 0 else 'behind'} Sahi's: set it to update "
-                "automatically, then log in again."
-            )
-        return message + ", and that this computer's clock is set automatically."
     if status_code == 403 or code == "Forbidden":
         return (
             "Sahi did not issue an access token. Either the API key is not approved for today "
             "(open Sahi web, go to Profile, API Dashboard, and click Approve on the key), or API "
             "keys are not enabled for your Sahi account yet (contact Sahi). Then log in again. "
-            "A TOTP key needs no Approve: add its TOTP secret after ::: in BROKER_API_SECRET."
+            "A TOTP key needs no Approve: enter its code when you log in."
         )
     if status_code == 400 and code == "InvalidRequest":
         return (
             "Sahi refused the login request"
             + (f": {reason}" if reason else "")
-            + ". A TOTP key needs its TOTP secret after ::: in BROKER_API_SECRET; a Regular key "
-            "must have nothing after the secret."
+            + ". A TOTP key needs its 6-digit code when you log in; for a Regular key leave the "
+            "code blank."
         )
     if code == "Locked":
         return (
@@ -161,18 +94,20 @@ def _login_error(status_code, body):
     return message + ". Check the API key and secret in your OpenAlgo settings."
 
 
-def authenticate_broker(code=None):
+def authenticate_broker(code=None, totp=None):
     """Mint the day's Sahi access token from the API key and secret.
 
     Args:
         code: Unused. The login route passes a placeholder; the credentials come
             from BROKER_API_KEY and BROKER_API_SECRET.
+        totp: The 6-digit code from the login card for a TOTP key; empty or
+            None for a Regular key.
 
     Returns:
         tuple: (access_token, None) on success, (None, error_message) on failure.
     """
     key_id = (os.getenv("BROKER_API_KEY") or "").strip()
-    secret, totp_secret = split_secret(os.getenv("BROKER_API_SECRET"))
+    secret = (os.getenv("BROKER_API_SECRET") or "").strip()
     if not key_id or not secret:
         return None, (
             "Sahi needs BROKER_API_KEY (the API key id, pk_...) and BROKER_API_SECRET "
@@ -180,15 +115,14 @@ def authenticate_broker(code=None):
         )
 
     payload = {"key_id": key_id, "secret": secret}
-    if totp_secret:
-        try:
-            payload["totp"] = totp_code(totp_secret)
-        except TotpSecretError:
-            logger.warning("Sahi TOTP secret in BROKER_API_SECRET is not base32")
+    totp = "".join((totp or "").split())
+    if totp:
+        if not _TOTP_CODE.fullmatch(totp):
             return None, (
-                "The TOTP secret after ::: in BROKER_API_SECRET is not a valid authenticator "
-                "secret. Copy the TOTP secret exactly as Sahi showed it when the key was set up."
+                "Enter the 6-digit code from your authenticator app, or leave the code blank "
+                "for a Regular key."
             )
+        payload["totp"] = totp
 
     client = get_httpx_client()
     try:
@@ -219,7 +153,7 @@ def authenticate_broker(code=None):
 
     if response.status_code == 200 and isinstance(body, dict) and body.get("access_token"):
         logger.info(
-            f"Sahi access token issued ({'TOTP' if totp_secret else 'Regular'} key), "
+            f"Sahi access token issued ({'TOTP' if totp else 'Regular'} key), "
             f"expires at {body.get('expires_at')}, scopes: {body.get('scope')}"
         )
         return body["access_token"], None
