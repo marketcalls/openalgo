@@ -95,6 +95,7 @@ MIGRATIONS = [
     ("migrate_qty_freeze_nov_2026.py", "NSE Index Freeze Limits (2 November 2026)"),
     ("migrate_muhurat_2026.py", "Diwali Muhurat 2026 Published Timings"),
     ("migrate_broker_keys.py", "Broker Keys, Session Sign-out and Broker Login State"),
+    ("migrate_alert_channels.py", "Alert Channels (/alerts, Slack and Discord webhooks)"),
     ("migrate_password_reset_grants.py", "Password Reset Grants (single-use, expiring resets)"),
 ]
 

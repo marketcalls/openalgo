@@ -44,6 +44,7 @@ Columns rotated:
     - users.totp_secret    (was plaintext for some installs)
     - flow_workflows.api_key   (was plaintext for some installs)
     - broker_keys.api_key, api_secret, api_key_market, api_secret_market
+    - alert_channels.webhook_url (Slack and Discord alert webhooks)
   apikeys.api_key_hash:
     - re-derived from the decrypted api_key plaintext (Argon2 + new pepper)
   telegram_db Fernet (PBKDF2-SHA256, salt=TELEGRAM_KEY_SALT):
@@ -251,6 +252,7 @@ class Rotator:
             "flow_workflows.api_key": 0,
             "flow_workflows.api_key_plaintext_promoted": 0,
             "broker_keys": 0,
+            "alert_channels.webhook_url": 0,
         }
 
     def _table_exists(self, name: str) -> bool:
@@ -462,6 +464,26 @@ class Rotator:
                         (_encrypt(self.new_auth, pt), row_id),
                     )
                     self.stats["broker_keys"] += 1
+
+        # ---- alert_channels.webhook_url (Slack and Discord webhooks) ----
+        # Always ciphertext. One that does not decrypt is left alone: the trader
+        # saves that webhook again on the Slack or Discord page.
+        if self._table_exists("alert_channels"):
+            cur = self.conn.execute(
+                "SELECT channel, webhook_url FROM alert_channels WHERE webhook_url IS NOT NULL"
+            )
+            for channel, value in cur.fetchall():
+                if not value:
+                    continue
+                pt, was_enc = _try_decrypt(self.old_auth, value)
+                if not was_enc:
+                    print(f"  WARN: alert_channels.webhook_url for {channel}: cannot decrypt, leaving alone")
+                    continue
+                self.conn.execute(
+                    "UPDATE alert_channels SET webhook_url = ? WHERE channel = ?",
+                    (_encrypt(self.new_auth, pt), channel),
+                )
+                self.stats["alert_channels.webhook_url"] += 1
 
 
 # ---------- Main ----------
