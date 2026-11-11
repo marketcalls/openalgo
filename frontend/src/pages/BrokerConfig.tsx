@@ -298,11 +298,17 @@ export default function BrokerConfig() {
             <form onSubmit={handleSave} className="space-y-5">
               <div className="space-y-2">
                 <Label htmlFor="broker-select">Broker</Label>
+                {/* A solid background, as every other native select in the app
+                    has. The browser paints the open list with the select's own
+                    background over white, and its text in the select's colour.
+                    The text input look (transparent, or the input token at 30%
+                    in dark mode) left the list white with the theme's near-white
+                    text on it, so only the highlighted broker could be read. */}
                 <select
                   id="broker-select"
                   value={selected}
                   onChange={(e) => chooseBroker(e.target.value)}
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-xs focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 >
                   <option value="">Select a broker...</option>
                   {brokers.map((b) => (

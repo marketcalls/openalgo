@@ -87,6 +87,20 @@ afterEach(() => {
 })
 
 describe('Broker Configuration', () => {
+  it('gives the broker list a solid background, so the open list can be read', async () => {
+    // Issue 2432. The browser paints a native select's open list with the
+    // select's own background over white, and its text in the select's colour.
+    // With the text input look (transparent, and the input token at 30% in
+    // dark mode) the list came out white with near-white broker names on it.
+    serve()
+    renderPage()
+    const classes = (await select()).className.split(/\s+/)
+    expect(classes).toContain('bg-background')
+    expect(classes).toContain('text-foreground')
+    // No see-through background in any variant: bg-transparent, dark:bg-input/30.
+    expect(classes.filter((c) => /bg-transparent|bg-[\w-]+\/\d+/.test(c))).toEqual([])
+  })
+
   it('lists every broker and marks the configured and the active one', async () => {
     list = brokerList([
       brokerEntry('zerodha', 'Zerodha', 'redirect'),
