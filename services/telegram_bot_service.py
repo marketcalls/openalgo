@@ -92,6 +92,75 @@ def _write_analyze_mode_only(requested: bool) -> bool:
     set_analyze_mode(requested)
     return requested
 
+
+#: What a chat reads when it is linked with a key that is not this OpenAlgo's
+#: current API key: a key regenerated since the chat was linked, or a link made
+#: before /link checked the key here.
+LINK_AGAIN_MESSAGE = (
+    "This chat is not linked with your current OpenAlgo API key.\n"
+    "Link it again with /link <api_key> <host_url>"
+)
+
+
+def _username_for_api_key(api_key: str | None) -> str | None:
+    """The OpenAlgo user an API key belongs to on this instance, or None.
+
+    The check is made against this instance's own stored key and nowhere else.
+    Anything that goes wrong reads as "not this instance's key".
+
+    Args:
+        api_key: The key to check.
+
+    Returns:
+        The username, or None when the key is missing, wrong or unreadable.
+    """
+    if not api_key:
+        return None
+    try:
+        return get_username_by_apikey(api_key) or None
+    except Exception:
+        logger.exception("Could not check an API key for the Telegram bot")
+        return None
+
+
+def _linked_owner(telegram_id: int) -> str | None:
+    """The OpenAlgo user a Telegram account may act for on this server, or None.
+
+    Most commands go out through the linked account's own API key and host, so
+    the API decides what they may do. A few act on this server directly: the
+    mode buttons and the Python strategy stops. For those "linked" is not
+    enough, because a row in the link table is only a record that /link once
+    succeeded. The stored key has to be this instance's API key now.
+
+    Args:
+        telegram_id: The Telegram account.
+
+    Returns:
+        The username the stored key belongs to, or None when the account is
+        not linked or its stored key is not this instance's.
+    """
+    credentials = get_user_credentials(telegram_id)
+    if not credentials:
+        return None
+    return _username_for_api_key(credentials.get("api_key"))
+
+
+def _acts_on_this_server(callback_data: str) -> bool:
+    """Whether a button acts on this server instead of through the linked API key.
+
+    Args:
+        callback_data: The pressed button's callback data.
+
+    Returns:
+        True for the mode buttons and every Python strategy stop button.
+    """
+    return callback_data in (
+        "confirm_closeall_with_strategies",
+        "mode_live",
+        "mode_analyze",
+    ) or callback_data.startswith(("spy_", "csy_"))
+
+
 #: Seconds between reconnect attempts' stop checks while backing off.
 _BACKOFF_STEP_SECONDS = 1.0
 
@@ -1245,7 +1314,27 @@ class TelegramBotService:
         api_key = context.args[0]
         host_url = context.args[1].rstrip("/")
 
-        # Validate API key by making a test call
+        # The key is checked against this OpenAlgo's own API key, and before
+        # anything is sent anywhere. The host in the command is the sender's
+        # to choose, so its answer proves nothing: a stranger who found the
+        # bot could name a server of their own that says yes to any key, and
+        # be linked. The account name is taken from this check for the same
+        # reason, never from what the host returns.
+        openalgo_username = _username_for_api_key(api_key)
+        if not openalgo_username:
+            logger.warning(
+                f"Telegram user {user.id} sent /link with an API key that is not this OpenAlgo's"
+            )
+            await update.message.reply_text(
+                "Failed to validate API key.\nPlease check your credentials and try again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            log_command(user.id, "link", chat_id)
+            return
+
+        # The key is the owner's. The test call now only confirms that the
+        # host they typed reaches OpenAlgo, since every later command goes
+        # through it.
         try:
             from openalgo import api as openalgo_api
 
@@ -1257,41 +1346,9 @@ class TelegramBotService:
             test_response = await loop.run_in_executor(None, test_client.funds)
 
             if test_response and test_response.get("status") == "success":
-                # Valid credentials, save them
-                # Get the actual OpenAlgo username from the API key
-                openalgo_username = None
-                try:
-                    openalgo_username = get_username_by_apikey(api_key)
-                    logger.info(f"API key lookup returned: '{openalgo_username}'")
-                except Exception as e:
-                    logger.exception(f"Error getting username from API key: {e}")
-
-                # If we couldn't get username from API key, try to extract from response
-                if not openalgo_username and test_response.get("data"):
-                    # Some brokers return username in the funds response
-                    data = test_response.get("data", {})
-                    if isinstance(data, dict):
-                        openalgo_username = (
-                            data.get("username") or data.get("user_id") or data.get("client_id")
-                        )
-                        if openalgo_username:
-                            logger.info(f"Got username from funds response: {openalgo_username}")
-
-                # Log for debugging
                 logger.info(
                     f"Linking Telegram user {user.id} (@{user.username}) with OpenAlgo username: '{openalgo_username}'"
                 )
-
-                # If we still can't get username, DON'T use telegram username with @
-                # Use a proper fallback
-                if not openalgo_username:
-                    # Try to get from session or use telegram ID
-                    openalgo_username = f"user_{user.id}"
-                    logger.warning(
-                        f"Could not get OpenAlgo username, using fallback: {openalgo_username}"
-                    )
-                else:
-                    logger.info(f"Successfully retrieved OpenAlgo username: {openalgo_username}")
 
                 # Determine broker for currency symbol selection
                 broker_name = get_broker_name(api_key) or "default"
@@ -2375,6 +2432,10 @@ class TelegramBotService:
         if not telegram_user:
             await update.message.reply_text("Please link your account first using /link")
             return
+        # Stopping a strategy acts on this server, not through the API key.
+        if not _linked_owner(user.id):
+            await update.message.reply_text(LINK_AGAIN_MESSAGE)
+            return
 
         # Snapshot the running strategies (id, display name) at the moment of invocation.
         # Using user_data for index→id mapping keeps callback_data within Telegram's 64-byte cap.
@@ -2420,6 +2481,10 @@ class TelegramBotService:
         if not telegram_user:
             await update.message.reply_text("Please link your account first using /link")
             return
+        # The mode is this server's own setting, not something the API key decides.
+        if not _linked_owner(user.id):
+            await update.message.reply_text(LINK_AGAIN_MESSAGE)
+            return
 
         from database.settings_db import get_analyze_mode
 
@@ -2463,6 +2528,14 @@ class TelegramBotService:
         # Handle cancel action
         if callback_data == "cancel_action":
             await query.edit_message_text("Action cancelled.")
+            return
+
+        # The buttons that act on this server are checked here, at the press,
+        # and not only where the command offered them: in a group any member
+        # who sees a button can press it, and the link or the API key can
+        # change between the command and the press.
+        if _acts_on_this_server(callback_data) and not _linked_owner(user.id):
+            await query.edit_message_text(LINK_AGAIN_MESSAGE)
             return
 
         # Handle close all positions confirmation
