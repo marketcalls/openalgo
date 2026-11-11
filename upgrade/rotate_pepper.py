@@ -36,7 +36,8 @@ Post-flight:
   3. Confirm you can log in with the new password.
 
 Columns rotated:
-  auth_db Fernet (PBKDF2-SHA256, salt=b"openalgo_static_salt"):
+  auth_db Fernet (PBKDF2-SHA256, salt=FERNET_SALT, or b"openalgo_static_salt"
+  on an install that has none):
     - auth.auth
     - auth.feed_token
     - auth.secret_api_key  (was plaintext for some installs)
@@ -89,12 +90,35 @@ load_dotenv(ENV_PATH)
 
 # ---------- Fernet key derivations (must match the three modules) ----------
 
+def _auth_db_salt() -> bytes:
+    """The salt database/auth_db.py derives its key with.
+
+    The install's own FERNET_SALT (hex, provisioned by utils/env_check.py)
+    when it is set and valid, else the legacy static salt: the same rule as
+    auth_db._resolve_fernet_salt(). A rotation keeps the salt and changes the
+    pepper, so the old and new keys both use it.
+
+    Using the static salt on an install that has its own, as this did, left
+    every auth_db ciphertext undecryptable here: each was reported as "cannot
+    decrypt" (or, for the columns that may still hold plaintext, encrypted a
+    second time), and the new pepper written to .env then made all of them
+    unreadable.
+    """
+    raw = (os.getenv("FERNET_SALT") or "").strip()
+    if raw and len(raw) >= 32:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError:
+            pass
+    return b"openalgo_static_salt"
+
+
 def _auth_db_fernet(pepper: str) -> Fernet:
     """Match database/auth_db.py:get_encryption_key()."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=b"openalgo_static_salt",
+        salt=_auth_db_salt(),
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
