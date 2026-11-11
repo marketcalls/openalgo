@@ -28,6 +28,15 @@ REVERSE_ACTION_MAP = {"B": "BUY", "S": "SELL"}
 # OpenAlgo exchange -> Sahi exchange_segment. Indices cannot be traded.
 EXCHANGE_SEGMENT_MAP = {"NSE": "NSE", "BSE": "BSE", "NFO": "NFO", "BFO": "BFO"}
 
+# Segments each Sahi product is valid on (docs.sahi.com, Conventions, "Product").
+# Any other pair is refused by Sahi with 400 VALIDATION_FAILED, so it is refused
+# here first with a message that names the product to use.
+PRODUCT_SEGMENTS = {
+    "C": ("NSE", "BSE"),
+    "I": ("NSE", "BSE", "NFO", "BFO"),
+    "M": ("NFO", "BFO"),
+}
+
 
 def to_paise(value):
     """Rupees (str or number) to integer paise, rounding half up."""
@@ -92,6 +101,11 @@ def transform_data(data):
     if not product:
         raise OrderMappingError(
             f"Product {data.get('product')} is not supported. Use CNC, MIS or NRML."
+        )
+    if segment not in PRODUCT_SEGMENTS[product]:
+        raise OrderMappingError(
+            f"Sahi does not take {str(data.get('product')).upper()} orders on {exchange}. "
+            "Use CNC or MIS on NSE and BSE, and NRML or MIS on NFO and BFO."
         )
     order_type = map_order_type(data.get("pricetype"))
     if not order_type:

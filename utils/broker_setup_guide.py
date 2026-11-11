@@ -842,7 +842,8 @@ GUIDES = {
             },
             {
                 "hint": "The secret shown once when that key was created (it starts with "
-                "sahi_sk_).",
+                "sahi_sk_). For a TOTP key, add the TOTP secret Sahi showed at setup after "
+                ":::, as sahi_sk_...:::TOTPSECRET, and OpenAlgo enters the code for you.",
                 "key": "api_secret",
                 "label": "API Secret",
                 "required": True,
@@ -850,8 +851,8 @@ GUIDES = {
             },
         ),
         "banner": "Login with Sahi signs you in with one click using the API key and secret "
-        "you saved. Approve the key in Sahi's API Dashboard once each trading day "
-        "first, and register the internet address this computer's traffic leaves "
+        "you saved. Approve a Regular key in Sahi's API Dashboard once each trading day "
+        "first (a TOTP key needs no Approve), and register the internet address this computer's traffic leaves "
         "from as a static IP on your Sahi account: Sahi refuses orders from any "
         "other address.",
         "redirect_hint": "",
