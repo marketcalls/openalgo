@@ -729,6 +729,14 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if "last_trade_time" in tick:
                 transformed["last_trade_time"] = tick["last_trade_time"]
 
+            if mode == "full":
+                # OI day high/low from the full-mode packet (bytes 52:60).
+                for key in ("oi_day_high", "oi_day_low"):
+                    if key in tick:
+                        transformed[key] = tick[key]
+                # Kite's full packet carries no price change; publish 0 rather than omit it.
+                transformed["price_change"] = 0
+
             # Add depth data for full mode
             if mode == "full" and "depth" in tick:
                 depth = tick["depth"]

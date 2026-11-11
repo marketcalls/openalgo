@@ -224,6 +224,14 @@ class TestAdapterFullMode:
         assert message["oi"] == tick["open_interest"] == expected["oi"]
         assert message["open_interest"] == tick["open_interest"]
 
+    def test_oi_day_high_and_low_are_published(self, message, tick, expected):
+        assert message["oi_day_high"] == tick["oi_day_high"] == expected["oi_day_high"]
+        assert message["oi_day_low"] == tick["oi_day_low"] == expected["oi_day_low"]
+
+    def test_price_change_is_zero(self, message):
+        """The packet has no price change; the field is present and 0, not omitted."""
+        assert message["price_change"] == 0
+
     def test_ltt_stays_the_exchange_timestamp(self, message, tick):
         """Consumers bucket ticks by `ltt`; its meaning does not change."""
         assert message["ltt"] == tick["exchange_timestamp"]
