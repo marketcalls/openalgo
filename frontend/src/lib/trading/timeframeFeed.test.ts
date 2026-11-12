@@ -181,14 +181,22 @@ describe('broker custom timeframes', () => {
     expect(sourceSpanSeconds('D')).toBe(2000 * 86400)
     const to = Date.parse('2026-11-12T00:00:00Z') / 1000
     for (const interval of ['W', 'M', '2W', '3M']) {
-      const getBars = vi.fn(async (_req: BarsRequest) => [])
-      const service = createTradingTimeframes(
-        { getBars },
-        { ...options(['1m', 'D']), now: () => to }
-      )
+      // One daily bar per window, so a derived result proves the windows were read.
+      const getBars = vi.fn(async (req: BarsRequest) => [
+        { time: req.from!, open: 1, high: 2, low: 1, close: 2, volume: 1 },
+      ])
+      const service = createTradingTimeframes({ getBars }, { ...options(['D']), now: () => to })
       const from = to - lookbackDays(interval) * 86400
-      await service.feed.getBars({ symbol: 'NIFTY', exchange: 'NSE', interval, from, to })
+      const bars = await service.feed.getBars({
+        symbol: 'NIFTY',
+        exchange: 'NSE',
+        interval,
+        from,
+        to,
+      })
+      expect(bars.length).toBeGreaterThan(0)
       const calls = getBars.mock.calls.map(([req]) => req)
+      expect(calls.length).toBeGreaterThan(0)
       expect(calls.every((req) => req.interval === 'D')).toBe(true)
       expect(calls.every((req) => req.to! - req.from! <= 2000 * 86400)).toBe(true)
       // At the server's 0.35 s spacing the whole derived load fits well inside 15 s.
