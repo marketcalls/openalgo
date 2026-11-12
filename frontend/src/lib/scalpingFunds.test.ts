@@ -28,18 +28,27 @@ describe('summarizeFunds', () => {
     })
   })
 
-  it('treats one missing field as zero when the other is present', () => {
-    expect(summarizeFunds({ availablecash: 1000 })).toEqual({ available: 1000, utilised: 0 })
+  it('leaves a missing field unknown instead of zero when the other is present', () => {
+    expect(summarizeFunds({ availablecash: 1000 })).toEqual({ available: 1000, utilised: null })
+    expect(summarizeFunds({ utiliseddebits: 250 })).toEqual({ available: null, utilised: 250 })
   })
 
-  it('returns null when there is no usable figure, so the header shows a placeholder', () => {
-    expect(summarizeFunds(undefined)).toBeNull()
-    expect(summarizeFunds(null)).toBeNull()
-    expect(summarizeFunds({})).toBeNull()
+  it('leaves an unusable field unknown while keeping the usable one', () => {
+    const data = { availablecash: 'n/a', utiliseddebits: '500' } as unknown as Parameters<
+      typeof summarizeFunds
+    >[0]
+    expect(summarizeFunds(data)).toEqual({ available: null, utilised: 500 })
+  })
+
+  it('reports both fields unknown when there is no usable figure', () => {
+    const unknown = { available: null, utilised: null }
+    expect(summarizeFunds(undefined)).toEqual(unknown)
+    expect(summarizeFunds(null)).toEqual(unknown)
+    expect(summarizeFunds({})).toEqual(unknown)
     const junk = { availablecash: 'n/a', utiliseddebits: '' } as unknown as Parameters<
       typeof summarizeFunds
     >[0]
-    expect(summarizeFunds(junk)).toBeNull()
+    expect(summarizeFunds(junk)).toEqual(unknown)
   })
 })
 
@@ -48,5 +57,9 @@ describe('formatFundsAmount', () => {
     expect(formatFundsAmount(1234567.5)).toBe('12,34,567.50')
     expect(formatFundsAmount(0)).toBe('0.00')
     expect(formatFundsAmount(-500)).toBe('-500.00')
+  })
+
+  it("shows '-' for an unknown amount", () => {
+    expect(formatFundsAmount(null)).toBe('-')
   })
 })

@@ -1064,15 +1064,11 @@ export default function Scalping() {
           <div className="flex items-center gap-4 font-mono text-sm" data-testid="scalping-funds">
             <span>
               <span className="text-muted-foreground">Available Balance:</span>{' '}
-              <span className="font-semibold">
-                {funds ? formatFundsAmount(funds.available) : '-'}
-              </span>
+              <span className="font-semibold">{formatFundsAmount(funds.available)}</span>
             </span>
             <span>
               <span className="text-muted-foreground">Utilised Margin:</span>{' '}
-              <span className="font-semibold">
-                {funds ? formatFundsAmount(funds.utilised) : '-'}
-              </span>
+              <span className="font-semibold">{formatFundsAmount(funds.utilised)}</span>
             </span>
           </div>
           {lastLatencyMs != null && (
