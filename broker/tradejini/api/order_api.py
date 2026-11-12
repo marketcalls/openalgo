@@ -1038,10 +1038,12 @@ def place_order_api(data, auth):
                 logger.error(f"place_order_api - Unexpected response shape: {response_data!r}")
                 return _order_refused(502, NO_ORDER_ID_MESSAGE)
 
-            payload_d = response_data.get("d")
-
-            # Parse successful response
-            if response_data.get("s") == "ok" and isinstance(payload_d, dict):
+            # Parse successful response. Any "ok" may be a placed order, whatever
+            # shape its payload has, so it is never reported as a refusal.
+            if response_data.get("s") == "ok":
+                payload_d = response_data.get("d")
+                if not isinstance(payload_d, dict):
+                    payload_d = {}
                 order_id = payload_d.get("orderId")
                 message = payload_d.get("msg", "Order placed successfully")
 

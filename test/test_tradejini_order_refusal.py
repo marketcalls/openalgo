@@ -142,6 +142,21 @@ def test_ok_without_order_id_sends_trader_to_order_book(tradejini):
     assert_failed(events)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [{"s": "ok"}, {"s": "ok", "d": None}, {"s": "ok", "d": "Order Placed"}, {"s": "ok", "d": []}],
+    ids=["no-d", "d-null", "d-string", "d-list"],
+)
+def test_ok_with_unexpected_payload_is_never_a_refusal(tradejini, body):
+    # "ok" means the order may exist, whatever shape the payload has.
+    tradejini((200, body))
+    (ok, resp, status), events = place()
+    assert ok is False
+    assert resp["message"] == order_api.NO_ORDER_ID_MESSAGE
+    assert status == 502
+    assert_failed(events)
+
+
 def test_unreadable_200_sends_trader_to_order_book(tradejini):
     tradejini((200, "not json"))
     (ok, body, status), _ = place()
