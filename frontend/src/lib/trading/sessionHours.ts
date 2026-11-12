@@ -31,6 +31,12 @@ const RETRY_AFTER_MS = 5 * 60_000
 /** Exchanges that trade round the clock, every day, with no holidays. */
 const ROUND_THE_CLOCK = new Set(['CRYPTO'])
 /**
+ * The first year `/api/v1/market/holidays` serves. Earlier years get an empty
+ * holiday list instead of a request, so a long derived range (10 years of M,
+ * 30 of 3M) still builds a calendar; those years then show every weekday open.
+ */
+const FIRST_HOLIDAY_YEAR = 2020
+/**
  * Minutes of pre-open before the regular open. The backend keeps the regular
  * hours only, and the cash market's pre-open (09:00 to 09:15, orders until
  * 09:08) is a fixed exchange rule rather than something an admin edits.
@@ -268,6 +274,12 @@ export async function prepareSessionHours(apiKey: string, request: BarsRequest):
   const needed = requestYears(request)
   for (const year of needed) {
     if (target.years.has(year)) continue
+    if (year < FIRST_HOLIDAY_YEAR) {
+      target.years.set(year, [])
+      target.calendars.clear()
+      target.revision++
+      continue
+    }
     let pending = target.yearPending.get(year)
     if (!pending) {
       pending = (async () => {

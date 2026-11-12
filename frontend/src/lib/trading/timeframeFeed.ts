@@ -51,7 +51,9 @@ function sourceBounds(
       calendar.timezone
     )
     const session = calendar.sessionFrom(from)
-    if (!session || session.open >= from + DAY) return null
+    // A daily bar on a day the calendar has no session for (a Sunday Muhurat
+    // session, a year with no holiday list) still covers its calendar day.
+    if (!session || session.open >= from + DAY) return { time, from, to: from + DAY }
     return { time, from, to: session.close }
   }
   // The same exchange contract applies to native and derived clock periods.

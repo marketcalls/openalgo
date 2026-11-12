@@ -213,6 +213,35 @@ describe('derived weekly and monthly history from a daily-only broker (#2384)', 
     service.destroy()
   }, 20_000)
 
+  it('builds M from a daily bar on a day with no session, such as a Sunday Muhurat session', async () => {
+    // 2019-10-25 (Fri), 2019-10-27 (Sun, Muhurat) and 2019-10-28 (Mon), at IST midnight.
+    const day = (date: string) => Date.parse(`${date}T00:00:00+05:30`) / 1000
+    const daily = ['2019-10-25', '2019-10-27', '2019-10-28'].map((date, i) => ({
+      time: day(date),
+      open: 10 + i,
+      high: 12 + i,
+      low: 9 + i,
+      close: 11 + i,
+      volume: 1,
+    }))
+    const service = createTradingTimeframes(
+      {
+        getBars: async (req) => daily.filter((bar) => bar.time >= req.from! && bar.time < req.to!),
+      },
+      { ...options(['D']), now: () => end }
+    )
+    const bars = await service.feed.getBars({
+      symbol: 'NIFTY',
+      exchange: 'NSE_INDEX',
+      interval: 'M',
+      from: day('2019-10-01'),
+      to: day('2019-11-01'),
+    })
+    expect(bars).toHaveLength(1)
+    expect(bars[0]).toMatchObject({ open: 10, high: 14, low: 9, close: 13, volume: 3 })
+    service.destroy()
+  })
+
   it('still splits intraday sources into 30-day windows', async () => {
     const getBars = vi.fn(async (_req: BarsRequest) => [])
     const service = createTradingTimeframes({ getBars }, { ...options(['1m']), now: () => end })
