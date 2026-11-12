@@ -1,12 +1,45 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Paytm Broking Parameters https://developer.paytmmoney.com/docs/api/login
 
+import math
+
 from database.token_db import get_token
+
+# OpenAlgo price type -> Paytm order_type (MKT, LMT, SL, SLM in Paytm's pyPMClient)
+ORDER_TYPE_MAP = {
+    "MARKET": "MKT",
+    "LIMIT": "LMT",
+    "SL": "SL",
+    "SL-M": "SLM",
+}
+
+STOP_ORDER_TYPES = ("SL", "SLM")
+
+
+class OrderRejected(ValueError):
+    """An order OpenAlgo refuses before sending it to Paytm."""
+
+
+def require_trigger_price(pricetype, trigger_price):
+    """Raise OrderRejected unless an SL or SL-M trigger price is a finite number above 0."""
+    try:
+        trigger = float(trigger_price)
+    except (TypeError, ValueError, OverflowError):
+        trigger = 0.0
+    if not (math.isfinite(trigger) and trigger > 0):
+        raise OrderRejected(
+            f"A trigger price is required for an {pricetype} order. "
+            "Set the trigger price and place the order again."
+        )
 
 
 def transform_data(data):
     """
     Transforms the OpenAlgo API request structure to Paytm v2 API structure.
+
+    Raises:
+        OrderRejected: For a price type Paytm cannot take, or an SL or SL-M
+            order without a trigger price.
     """
     symbol = get_token(data["symbol"], data["exchange"])
     txn_type = "B" if data["action"].upper() == "BUY" else "S"
@@ -25,15 +58,19 @@ def transform_data(data):
         "quantity": data["quantity"],
         "product": reverse_map_product_type(data["product"]),
         "price": data.get("price", "0"),
-        # "trigger_price": data.get("trigger_price", "0"),
         # "disclosed_quantity": data.get("disclosed_quantity", "0"),
         "validity": "DAY",
         "segment": segment,
         "source": source,
     }
 
-    # Extended mapping for fields that might need conditional logic or additional processing
-    # transformed["trigger_price"] = data.get("trigger_price", "0")
+    if transformed["order_type"] in STOP_ORDER_TYPES:
+        trigger_price = data.get("trigger_price")
+        require_trigger_price(data["pricetype"], trigger_price)
+        transformed["trigger_price"] = trigger_price
+        if transformed["order_type"] == "SLM":
+            # A stop-loss market order executes at market once triggered.
+            transformed["price"] = "0"
 
     return transformed
 
@@ -91,16 +128,18 @@ def reverse_map_product_type(product):
 
 def reverse_map_order_type(order_type):
     """
-    Reverse maps the Paytm order type to the OpenAlgo order type.
+    Maps an OpenAlgo price type (MARKET, LIMIT, SL, SL-M) to Paytm's order_type.
+
+    Raises:
+        OrderRejected: For a price type Paytm cannot take. It is never sent
+            as a market order instead.
     """
-    reverse_order_type_mapping = {
-        "MARKET": "MKT",
-        "LIMIT": "LMT",
-        "STOP_LOSS": "SL",
-        "STOP_LOSS_MARKET": "SLM",
-    }
-    # Default to MKT if not found
-    return reverse_order_type_mapping.get(order_type, "MKT")
+    paytm_order_type = ORDER_TYPE_MAP.get((order_type or "").upper())
+    if paytm_order_type is None:
+        raise OrderRejected(
+            f"Paytm does not accept the price type {order_type!r}. Use MARKET, LIMIT, SL or SL-M."
+        )
+    return paytm_order_type
 
 
 def map_exchange(exchange):
