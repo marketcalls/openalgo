@@ -1,0 +1,153 @@
+name: Deploy OpenAlgo to DigitalOcean Droplet
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Deploy even during market hours (the restart drops the live feed and running strategies for about a minute)
+        type: boolean
+        default: false
+
+# One deploy at a time; a newer push waits rather than cancelling a restart halfway.
+concurrency:
+  group: deploy-droplet-openalgo
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Syntax and compile check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Syntax errors and invalid statements only. The full lint, tests and the
+      # gthread suite run in ci.yml on the same push.
+      - name: Ruff syntax gate
+        run: uv run ruff check . --select E9,F63,F7 --output-format concise
+
+      - name: Compile all Python
+        run: uv run python -m compileall -q -x '(\.venv|node_modules|frontend)' .
+
+  deploy:
+    name: Deploy main
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH to DigitalOcean Droplet
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          FORCE: ${{ inputs.force || 'false' }}
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USERNAME || 'root' }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_PASSPHRASE }}
+          port: ${{ secrets.DROPLET_PORT || 22 }}
+          envs: FORCE
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            APP=/var/python/openalgo
+            SERVICE=openalgo
+            BRANCH=main
+            WEB_USER=www-data
+            WORK=/var/log/openalgo-deploy
+            # uv from snap or pip is not on PATH in a non-interactive SSH shell.
+            export PATH="$PATH:/snap/bin:/usr/local/bin:/root/.local/bin"
+
+            echo "Checking market hours..."
+            # A restart drops the broker feed, open WebSocket clients and running
+            # strategies for about a minute. 08:30 to 15:35 IST on weekdays also
+            # covers the 08:45 auto login.
+            NOW=$(TZ=Asia/Kolkata date +%H%M)
+            DOW=$(TZ=Asia/Kolkata date +%u)
+            if [ "$FORCE" != "true" ] && [ "$DOW" -le 5 ] && [ "$NOW" -ge 0830 ] && [ "$NOW" -le 1535 ]; then
+              echo "Refusing to restart OpenAlgo at $NOW IST during market hours. Re-run after 15:35, or run the workflow manually with force."
+              exit 1
+            fi
+
+            if [ ! -d "$APP/.git" ]; then
+              echo "No OpenAlgo checkout at $APP. Install it with install/install.sh first."
+              exit 1
+            fi
+            if [ ! -f "$APP/.env" ]; then
+              echo ".env is missing in $APP. Restore it from your backup before deploying: a new one would make saved passwords and broker keys unreadable."
+              exit 1
+            fi
+
+            # The checkout is owned by www-data; git refuses it to root without this.
+            git config --global --get-all safe.directory | grep -qx "$APP" \
+              || git config --global --add safe.directory "$APP"
+
+            CURRENT=$(git -C "$APP" branch --show-current)
+            if [ "$CURRENT" != "$BRANCH" ]; then
+              echo "$APP is on branch '$CURRENT', not $BRANCH. Switch it first: git -C $APP checkout $BRANCH"
+              exit 1
+            fi
+
+            PREVIOUS=$(git -C "$APP" rev-parse HEAD)
+            echo "Fetching origin/$BRANCH (currently at $PREVIOUS)..."
+            git -C "$APP" fetch origin "$BRANCH"
+
+            # Run the newest official updater from a copy: it pulls the code it
+            # lives in, and bash reads a script while running it. It stops the
+            # service, backs up the databases, pulls, installs dependencies,
+            # fixes ownership, runs upgrade/migrate_all.py and starts the service.
+            mkdir -p "$WORK"
+            git -C "$APP" show "origin/$BRANCH:install/update.sh" > "$WORK/update.sh"
+            chmod 700 "$WORK/update.sh"
+            echo "Running install/update.sh (log in $WORK/logs)..."
+            bash "$WORK/update.sh"
+
+            NEW=$(git -C "$APP" rev-parse HEAD)
+            HOST=$(grep -E "^HOST_SERVER" "$APP/.env" | head -1 | cut -d= -f2- | tr -d " '\"")
+
+            healthy() {
+              for _ in $(seq 1 24); do
+                if systemctl is-active --quiet "$SERVICE" && curl -sf -o /dev/null --max-time 5 "$HOST/auth/app-info"; then
+                  return 0
+                fi
+                sleep 5
+              done
+              return 1
+            }
+
+            echo "Waiting for OpenAlgo to answer at $HOST..."
+            if ! healthy; then
+              echo "$SERVICE did not come up. Recent logs:"
+              journalctl -u "$SERVICE" -n 60 --no-pager -o cat || true
+              if [ "$PREVIOUS" != "$NEW" ]; then
+                echo "Rolling back code to $PREVIOUS. The updater backed up the databases before migrating; see its log in $WORK/logs."
+                git -C "$APP" reset --hard "$PREVIOUS"
+                uv pip install --python "$APP/.venv/bin/python" -r "$APP/requirements-nginx.txt"
+                chown -R "$WEB_USER:$WEB_USER" "$APP"
+                systemctl restart "$SERVICE"
+                if healthy; then
+                  echo "Rolled back; $SERVICE is running $PREVIOUS."
+                else
+                  echo "Rollback did not come up either. Check: journalctl -u $SERVICE -n 100"
+                fi
+              fi
+              exit 1
+            fi
+
+            echo "Deployed $(git -C "$APP" rev-parse --short HEAD) (was $(git -C "$APP" rev-parse --short "$PREVIOUS")); $SERVICE is active at $HOST."
