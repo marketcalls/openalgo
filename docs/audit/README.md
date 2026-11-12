@@ -1,3 +1,15 @@
+# OpenAlgo Audit Reports
+
+- [Documentation gap audit, 2026-11-06](2026-11-06-documentation-gap-audit.md):
+  current source comparisons, fixes and validation boundaries.
+
+The security review below and the reports linked from it are historical audit
+evidence. Their ratings and dependency findings are not a new security
+assessment of the current checkout. Use the current
+[security architecture](../design/05-security-architecture/README.md) and
+[security settings guide](../userguide/27-security-settings/README.md) for
+operating guidance.
+
 # OpenAlgo Security Audit Report
 
 ## Executive Summary

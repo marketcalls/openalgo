@@ -142,6 +142,10 @@ Order 6: 5 units (remainder)
 Total: 105 units
 ```
 
+## Child outcomes
+
+Inspect every child result, even when the batch HTTP request succeeds. If a child reports that the connection dropped after sending and the order may have been placed, reconcile that child with the broker order book before retrying it. Resending the whole batch can duplicate successful or ambiguously acknowledged orders. See [order outcomes](../README.md#order-outcomes-and-retries).
+
 ## Notes
 
 - **Maximum 100 orders** per split request

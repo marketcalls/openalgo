@@ -56,3 +56,12 @@ Feature: Notifications and observability
     When a non-exempt HTTP request completes
     Then client IP, method, path, status, duration, host, error, and user ID are submitted to a single-worker executor
     And the traffic record is stored in logs.db rather than the primary application database
+
+  # Source: utils/event_bus.py:EventBus, utils/db_sessions.py:remove_all_scoped_sessions
+  Scenario: Event subscribers have bounded independent dispatch lanes
+    Given ordinary notification callbacks have reached their pending capacity
+    When an event has both ordinary and critical subscribers
+    Then the ordinary lane may drop callbacks without blocking the publisher
+    And critical subscribers use their own bounded executor and capacity
+    And every critical overflow is logged as an error
+    And each completed or failed callback releases its scoped database sessions

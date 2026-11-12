@@ -57,7 +57,7 @@ This guide takes you from zero to automated trading, covering everything from ba
 - [30 - FAQs](./30-faqs/README.md)
 
 ### Analytics Tools (Module 31)
-- [31 - Tools (Options & Strategy Analytics Suite)](./31-tools/README.md)
+- [31 - Tools (Options & Portfolio Analytics Suite)](./31-tools/README.md)
 
 ### Charting (Module 32)
 - [32 - Charting Terminal](./32-charting-terminal/README.md) - trade from the chart, the order dock, drawing tools and every keyboard shortcut
@@ -75,11 +75,16 @@ This guide takes you from zero to automated trading, covering everything from ba
 | Connect TradingView | [Module 16](./16-tradingview-integration/README.md) |
 | Build visual strategies | [Module 21](./21-flow-visual-builder/README.md) |
 | Get Telegram alerts | [Module 23](./23-telegram-bot/README.md) |
-| Use options analytics tools | [Module 31](./31-tools/README.md) |
+| Use options and portfolio analytics | [Module 31](./31-tools/README.md) |
+| Host a Python script with a schedule | [Module 20](./20-python-strategies/README.md) |
+| Write, backtest or deploy OpenScript | [OpenScript](../openscript.md) |
+| Configure a batch or signal strategy with RMS | [Strategy Module & RMS](../prompt/strategy_rms_documentation.md) |
+| Connect a remote MCP client | [Remote MCP](./remote-mcp.md) |
+| Install Desktop or companion apps | [Installation](./04-installation/README.md#desktop-and-companion-apps) |
 
 ## Additional Resources
 
-- **Developer Documentation**: See `/design` folder for technical architecture
+- **Developer Documentation**: [System design](../design/README.md) and [documentation index](../INDEX.md)
 - **Official Docs**: [docs.openalgo.in](https://docs.openalgo.in)
 - **Community**: [Discord](https://www.openalgo.in/discord)
 - **Video Tutorials**: [YouTube](https://www.youtube.com/@openalgo)

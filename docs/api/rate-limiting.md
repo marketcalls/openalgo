@@ -1,6 +1,6 @@
 # Rate Limiting
 
-To protect OpenAlgo from abuse and ensure fair usage, rate limits are enforced at both login and API levels. These limits are configurable via the `.env` file and apply globally per IP address.
+To protect OpenAlgo from abuse and ensure fair usage, rate limits are enforced at both login and API levels. These limits are configurable via `.env`. The default key is the caller IP address; ordinary `limit()` decorators have route-specific budgets. Explicit shared limits, such as the Flow webhook limits below, can combine routes or use a workflow token as their key.
 
 ## UI Login Rate Limits
 
@@ -45,13 +45,26 @@ OpenAlgo implements differentiated rate limiting for various types of operations
 
 | Scope | Limit | Description |
 |-------|-------|-------------|
-| Per Second | 50 per second | All other API endpoints including market data |
+| Per Second | 50 per second | General data/account APIs using `API_RATE_LIMIT` |
 
 **Applies to all other API endpoints including:**
 - Market data APIs (quotes, depth, history)
 - Account APIs (funds, positions, holdings)
 - Information APIs (orderbook, tradebook)
 - Search and symbol APIs
+
+### Analysis and messaging exceptions
+
+Heavier analysis routes have their own limits:
+
+| Setting | Default | Routes |
+|---|---|---|
+| `PORTFOLIO_API_RATE_LIMIT` | 10 per minute | Portfolio backtest and holdings analysis |
+| `PORTFOLIO_TEARSHEET_RATE_LIMIT` | 5 per minute | Portfolio HTML report |
+| `SIP_API_RATE_LIMIT` | 10 per minute | SIP backtest and frequency list |
+| `SECTOR_ROTATION_API_RATE_LIMIT` | 30 per minute | Sector map and options list |
+
+Telegram and WhatsApp routes also have route-specific limits; see their [Telegram](telegram-services/README.md) and [WhatsApp](whatsapp-services/notify.md) references. Basket, split, cancel-all and close-position use `API_RATE_LIMIT` rather than `ORDER_RATE_LIMIT`.
 
 ### Webhook APIs
 
@@ -133,11 +146,11 @@ There is **no application-level cap** on how many separate client applications o
 
 ### Per-client settings
 
-Each client connection has its own send queue and keepalive timers:
+The WebSocket library uses the following receive-queue and keepalive settings:
 
 | Variable | Default | Description |
 |---|---|---|
-| `WS_MAX_QUEUE` | 1024 | Per-client send queue; absorbs tick bursts without disconnecting slow clients |
+| `WS_MAX_QUEUE` | 1024 | Incoming receive queue passed to `websockets.serve`; not an outgoing tick buffer |
 | `WS_PING_INTERVAL` | 20 | Seconds between keepalive pings |
 | `WS_PING_TIMEOUT` | 20 | Seconds to wait for a pong before closing the connection |
 
@@ -154,14 +167,19 @@ If a client exceeds any configured rate limit:
 
 Clients should not require a `Retry-After` header because header emission is not explicitly enabled in `limiter.py`.
 
+A `429` can also come from the broker or, under gthread, from a bounded broker queue or smart-order guard. A queue refusal occurs before sending and carries its own message. Do not assume all `429` bodies or retry conditions are identical; see [order outcomes](README.md#order-outcomes-and-retries).
+
 ## Error Response
 
 ```json
 {
   "status": "error",
-  "message": "Rate limit exceeded. Please try again later."
+  "message": "Rate limit exceeded. Please slow down your requests.",
+  "retry_after": 60
 }
 ```
+
+The application handler supplies `retry_after: 60` for API limiter errors; this is a fixed hint, not a calculation of each limiter's remaining window. Broker/service refusals can have a different body.
 
 ## Security Impact
 

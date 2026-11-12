@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
+import { syncBrokerSession } from '@/components/auth/AuthSync'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -259,6 +260,22 @@ const brokerFields: Record<string, BrokerConfig> = {
     ],
     callbackUrl: '/shoonya/callback',
   },
+  sahi: {
+    fields: [
+      {
+        name: 'totp',
+        label: 'TOTP code',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'For a TOTP key, the code your authenticator app shows. Leave it blank for a Regular key you approved in the Sahi API Dashboard today.',
+        optional: true,
+      },
+    ],
+    callbackUrl: '/sahi/callback',
+  },
   tradejini: {
     fields: [
       {
@@ -322,6 +339,7 @@ const brokerNames: Record<string, string> = {
   motilal: 'Motilal Oswal',
   mstock: 'MStock',
   nubra: 'Nubra (Nuvama)',
+  sahi: 'Sahi',
   samco: 'Samco',
   shoonya: 'Shoonya',
   tradejini: 'Tradejini',
@@ -404,6 +422,9 @@ export default function BrokerTOTP() {
 
       if (data.status === 'success' || response.ok) {
         login(formData.userid || formData.mobile || '', broker || '')
+        // No page reload follows, so load the API key, capabilities and app
+        // mode now; without the key every order ticket stays disabled.
+        await syncBrokerSession()
         showToast.success('Authentication successful')
         navigate('/dashboard')
       } else {

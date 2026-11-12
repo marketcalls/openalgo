@@ -1,6 +1,6 @@
 # OpenAlgo - Algorithmic Trading Platform
 
-OpenAlgo is a production-ready algorithmic trading platform providing a unified API layer across 36 broker plugins: 35 securities integrations and Delta Exchange for crypto derivatives. Seamlessly integrate with TradingView, Amibroker, Excel, Python, and AI agents.
+OpenAlgo is a production-ready algorithmic trading platform providing a unified API layer across 38 broker plugins, including Dhan Sandbox and Delta Exchange for crypto derivatives. Seamlessly integrate with TradingView, Amibroker, Excel, Python, and AI agents.
 
 ## Quick Start
 
@@ -21,7 +21,7 @@ chmod +x docker-run.sh
 
 - **Web UI**: http://127.0.0.1:5000
 - **WebSocket**: ws://127.0.0.1:8765
-- **REST API**: Full Swagger documentation at `/api/docs`
+- **REST API**: [Registered endpoint reference](docs/api/README.md); the Swagger UI is deliberately disabled
 - **Automatic Setup**: Secure key generation, broker configuration
 - **Auto Migrations**: Database updates on container start
 
@@ -35,13 +35,15 @@ Zerodha, Fyers, Angel One, Dhan, Delta Exchange, Upstox, Shoonya, Flattrade, Kot
 # Windows
 docker-run.bat start      # Start OpenAlgo
 docker-run.bat stop       # Stop OpenAlgo
-docker-run.bat restart    # Update & restart
+docker-run.bat restart    # Restart OpenAlgo
+docker-run.bat pull       # Pull latest image before restarting
 docker-run.bat logs       # View logs
 docker-run.bat status     # Check status
 
 # macOS / Linux
 ./docker-run.sh start
 ./docker-run.sh stop
+./docker-run.sh pull
 ./docker-run.sh restart
 ./docker-run.sh logs
 ./docker-run.sh status
@@ -58,7 +60,7 @@ All data is stored locally in the script directory:
 ## Documentation
 
 - **Full Docs**: https://docs.openalgo.in
-- **Installation Guide**: https://github.com/marketcalls/openalgo/blob/main/install/Docker-install-readme.md
+- **Installation Guide**: [Docker guide](docs/docker/README.md)
 - **GitHub**: https://github.com/marketcalls/openalgo
 
 ## Community

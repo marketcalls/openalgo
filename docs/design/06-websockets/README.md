@@ -26,13 +26,13 @@ WebSocket proxy SUB socket
 subscription index -> authenticated WebSocket clients
 ```
 
-The SUB side binds and publisher sockets connect. This permits multiple broker/worker publishers to fan into one proxy under gunicorn/eventlet. Reversing the topology can drop ticks in multi-process deployments.
+The SUB side is the sole binder and every publisher connects, including cache-invalidation publishers in the web process. This permits multiple publisher processes to fan into one proxy under either Gunicorn worker. The configured `ZMQ_PORT` stays fixed: no publisher bind, port scan, or fallback port is allowed. Reversing the topology can acknowledge subscriptions while dropping all ticks in production.
 
 ## Proxy Lifecycle
 
 `websocket_proxy/app_integration.py` chooses the execution model:
 
-- Under eventlet/gunicorn, start the asyncio WebSocket proxy as a child process.
+- Under Gunicorn with either eventlet or gthread, start the asyncio WebSocket proxy as a child process.
 - Under direct development startup, run it in a real OS thread.
 - Docker or standalone-proxy modes can suppress embedded startup.
 

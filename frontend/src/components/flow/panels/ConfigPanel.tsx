@@ -173,6 +173,8 @@ const NODE_TITLES: Record<string, string> = {
   log: 'Log',
   telegramAlert: 'Telegram Alert',
   whatsappAlert: 'WhatsApp Alert',
+  slackAlert: 'Slack Alert',
+  discordAlert: 'Discord Alert',
   variable: 'Variable',
   mathExpression: 'Math Expression',
   httpRequest: 'HTTP Request',
@@ -2839,6 +2841,31 @@ export function ConfigPanel() {
                 </div>
                 <p className="text-[10px] text-muted-foreground">
                   Requires the WhatsApp bot to be paired from the /whatsapp page first.
+                </p>
+              </>
+            )}
+
+            {(nodeType === 'slackAlert' || nodeType === 'discordAlert') && (
+              <>
+                <div className="space-y-2">
+                  <Label className="text-xs">Message</Label>
+                  <Textarea
+                    className="min-h-[80px]"
+                    placeholder="Order placed for {{orderResult.symbol}}"
+                    value={(nodeData.message as string) || ''}
+                    onChange={(e) => handleDataChange('message', e.target.value)}
+                  />
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-2">
+                  <p className="text-[10px] font-medium mb-1">Variables:</p>
+                  <p className="text-[9px] font-mono text-muted-foreground">
+                    {`{{orderResult.orderid}}`}, {`{{quote.ltp}}`}, {`{{timestamp}}`}
+                  </p>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  {nodeType === 'slackAlert'
+                    ? 'Posts to the webhook saved on the Slack page. Slack must be turned on from the Alerts page. Messages over 4000 characters are shortened.'
+                    : 'Posts to the webhook saved on the Discord page. Discord must be turned on from the Alerts page. Messages over 2000 characters are shortened.'}
                 </p>
               </>
             )}

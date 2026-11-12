@@ -24,10 +24,14 @@ from database.settings_db import get_smtp_settings, set_smtp_settings
 from database.user_db import (  # Import the function
     User,
     authenticate_user,
+    clear_password_reset_grants,
     db_session,
     find_user_by_email,
     find_user_by_exact_username,
     find_user_by_username,
+    issue_password_reset_grant,
+    password_reset_grant_is_open,
+    reset_password_with_grant,
 )
 from extensions import socketio
 from limiter import limiter  # Import the limiter instance
@@ -762,6 +766,11 @@ def reset_password():
             try:
                 # Generate a secure token for the email reset
                 token = secrets.token_urlsafe(32)
+                # The server keeps its own record of the reset, so the link
+                # works once and lapses when the email says it does. Without
+                # the record no email is sent: its link could not be used.
+                if not issue_password_reset_grant(user.id, _hash_reset_token(token), "email"):
+                    raise RuntimeError("the password reset could not be recorded")
                 session["reset_token"] = _hash_reset_token(token)
                 session["reset_email"] = email
 
@@ -798,6 +807,16 @@ def reset_password():
         if user and user.verify_totp(totp_code):
             # Generate a secure token for the password reset
             token = secrets.token_urlsafe(32)
+            # Recorded on the server as well as in the cookie: the cookie is
+            # the browser's to keep and copy, so on its own it could not make
+            # the token single-use or let it lapse.
+            if not issue_password_reset_grant(user.id, _hash_reset_token(token), "totp"):
+                return jsonify(
+                    {
+                        "status": "error",
+                        "message": "The password reset could not be started. Please try again.",
+                    }
+                ), 500
             session["reset_token"] = _hash_reset_token(token)
             session["reset_email"] = email
 
@@ -833,11 +852,15 @@ def reset_password():
         if not is_valid:
             return jsonify({"status": "error", "message": error_message}), 400
 
+        # The cookie says this browser was approved. The server's own record
+        # says whether that approval is still open: it is used up here, in
+        # the same transaction that writes the password, so a copy of this
+        # cookie and token kept from before cannot set the password again,
+        # and of two requests arriving together one wins.
         user = find_user_by_email(email)
+        if user is not None and not reset_password_with_grant(user.id, submitted, password):
+            return jsonify({"status": "error", "message": "Invalid or expired reset token."}), 400
         if user:
-            user.set_password(password)
-            db_session.commit()
-
             # Security: a password reset means we cannot trust any other
             # active session for this account. Kick every device — the
             # operator (or attacker) chose the reset path because they
@@ -889,6 +912,13 @@ def reset_password_email(token):
             flash("Reset session expired. Please start again.", "error")
             return redirect("/reset-password?error=session_expired")
 
+        # The link is good only while the server's record of the reset is
+        # open: not used already, and not past the hour the email promises.
+        user = find_user_by_email(reset_email)
+        if user is None or not password_reset_grant_is_open(user.id, stored_token):
+            flash("Invalid or expired reset link.", "error")
+            return redirect("/reset-password?error=expired_link")
+
         # Set up session for password reset (email verification counts as verified)
         session["email_reset_token"] = _hash_reset_token(token)
 
@@ -939,8 +969,11 @@ def change_password():
             if not is_valid:
                 return jsonify({"status": "error", "message": error_message}), 400
 
+            user_id = user.id
             user.set_password(new_password)
             db_session.commit()
+            # A reset approved before this change would set another password.
+            clear_password_reset_grants(user_id)
 
             # Security: a password change is a strong signal of suspected
             # compromise (or routine rotation). Either way, every active
@@ -1630,8 +1663,11 @@ def change_password_api():
         return jsonify({"status": "error", "message": error_message}), 400
 
     try:
+        user_id = user.id
         user.set_password(new_password)
         db_session.commit()
+        # A reset approved before this change would set another password.
+        clear_password_reset_grants(user_id)
         logger.info(f"Password changed successfully for user: {username}")
 
         # Security: a password change should invalidate every active session

@@ -669,6 +669,25 @@ def react_whatsapp_index():
     return serve_react_app()
 
 
+# Alerts - every alert channel on one page. alerts_bp (the chart's alert log)
+# and alert_channels_bp share the "/alerts" prefix but neither registers the
+# bare path, so the page is served here.
+@react_bp.route("/alerts", strict_slashes=False)
+def react_alerts_index():
+    return serve_react_app()
+
+
+# Slack and Discord alert setup (webhook channels).
+@react_bp.route("/slack", strict_slashes=False)
+def react_slack_alerts():
+    return serve_react_app()
+
+
+@react_bp.route("/discord", strict_slashes=False)
+def react_discord_alerts():
+    return serve_react_app()
+
+
 # ============================================================
 # Phase 7 Routes - Monitoring Dashboards
 # ============================================================

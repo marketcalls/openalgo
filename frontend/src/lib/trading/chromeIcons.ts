@@ -60,7 +60,7 @@ export const CHROME_ICON_PATHS: Readonly<Record<string, string>> = {
   "coordinates": "M3 2v11h11M10 6h0M3 6h4M10 13v-4",
   "copy": "M6 6h8v8H6zM10 6V2H2v8h4",
   "crosshair": "M4 8a4 4 0 0 0 8 0a4 4 0 0 0 -8 0zM8 2 8 4M8 12 8 14M2 8 4 8M12 8 14 8",
-  "cursor": "M4 2v10l3-3h5zM8 10l2 4",
+  "cursor": "M4 2v10l3-2 2 4 2-1-2-4h4z",
   "dom-ladder": "M4 2v12M12 2v12M4 5h8M4 8h8M4 11h8",
   "download": "M8 2v9M4 7l4 4 4-4M2 14h12",
   "drawing-sync": "M4 12 12 4M3 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM11 4a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
@@ -134,7 +134,7 @@ export const CHROME_ICON_PATHS: Readonly<Record<string, string>> = {
   "sun": "M6 8a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM8 2 8 3M8 13 8 14M2 8 3 8M13 8 14 8M3 3 4 4M12 12 13 13M13 3 12 4M3 13 4 12",
   "swap": "M2 5h11M10 2l3 3-3 3M14 11H3M6 8l-3 3 3 3",
   "template": "M2 2h12v4H2zM2 9h5v5H2zM10 9h4M10 12h4",
-  "text": "M3 3h10M8 3v10M6 13h4",
+  "text": "M3 5V3h10v2M8 3v10M6 13h4",
   "time-range": "M3 4v8M13 4v8M3 8h10",
   "trading": "M2 11l4-4 3 2 5-5M11 4h3v3M2 14h12",
   "trash": "M2 4h12M6 4V2h4v2M3 4l1 10h8l1-10",
@@ -162,26 +162,11 @@ export const CHROME_ICON_FILLED_IDS: ReadonlySet<string> = new Set(["buy","marke
 
 /** Rail glyphs on the tool grid that are not themselves tools. */
 export const RAIL_TOOL_PATHS: Readonly<Record<string, string>> = {
-  "cursor": "M6 3v15l4-4h7zM11 15l3 6",
-  "magnet": "M6 7v5a6 6 0 0 0 12 0V7M5 3h2v3H5zM17 3h2v3h-2z"
+  "cursor": "M6 3.5v14.5l3.9-3.6 2.6 6.1 2.3-1-2.6-6h5.3z",
+  "magnet": "M5 7.5V12a7 7 0 0 0 14 0V7.5M9 7.5V12a3 3 0 0 0 6 0V7.5M5 3.5h4v4H5zM15 3.5h4v4h-4z"
 }
 
 /** The solid marks painted over a tool glyph's own outline (anchor dots, heads). */
 export const TOOL_ICON_ACCENT_PATHS: Readonly<Record<string, string>> = {
-  "arrow": "M20 4l-2 8-6-6z",
-  "cross-line": "M11 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "extended-line": "M7 16a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM15 8a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "horizontal-ray": "M9 12a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "info-line": "M5 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM17 6a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "inside-pitchfork": "M11 20a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "long-position": "M10 11l3-4 3 4z",
-  "magnet": "M5 3h2v3H5zM17 3h2v3h-2z",
-  "modified-schiff-pitchfork": "M18 20a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "path": "M20 8l-6 2 4 4z",
-  "pitchfork": "M11 21a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "polyline": "M2 19a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM7 7a2 2 0 0 0 4 0a2 2 0 0 0 -4 0zM12 16a2 2 0 0 0 4 0a2 2 0 0 0 -4 0z",
-  "ray": "M3 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "schiff-pitchfork": "M18 14a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z",
-  "short-position": "M10 13l3 4 3-4z",
-  "trend-line": "M5 18a1 1 0 0 0 2 0a1 1 0 0 0 -2 0zM17 6a1 1 0 0 0 2 0a1 1 0 0 0 -2 0z"
+  "magnet": "M5 3.5h4v4H5zM15 3.5h4v4h-4z"
 }

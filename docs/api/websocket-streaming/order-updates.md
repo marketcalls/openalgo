@@ -116,14 +116,19 @@ A live rejection example (pushed by the broker's own order feed):
   (`broker/*/streaming/*_order_adapter.py`).
 - **REST polling fallback**: brokers with no push mechanism (e.g. Groww) are
   covered by server-side orderbook polling (`ORDER_POLL_INTERVAL`, default 5s).
-- **HTTPS postbacks**: `/postback/<broker>` webhook receivers feed the same
-  stream on production deployments (public HTTPS URL required by brokers).
-  Postback coverage is broker-defined and can be narrower than the WebSocket
-  source — e.g. Zerodha postbacks fire only for orders placed through your
-  API key and omit intermediate states such as `open`, while the ticker
-  WebSocket covers all order origins with the full lifecycle. The WS adapter
-  is therefore the more complete source; postbacks are a parallel inlet, not
-  a fallback.
+- **HTTPS postbacks**: the `/postback/zerodha` webhook receiver feeds the same
+  stream on production deployments (public HTTPS URL required by the broker).
+  A postback is accepted only when its payload proves who sent it. Zerodha
+  signs each one with your API secret, and OpenAlgo checks that signature.
+  Dhan, Fyers, Upstox, Angel One and AliceBlue postbacks carry no signature,
+  so `/postback/<broker>` refuses them: anyone who could reach your server
+  could otherwise post a fill that never happened. Those brokers' updates
+  arrive through their order WebSocket adapters, with nothing to register at
+  the broker.
+  Zerodha postbacks fire only for orders placed through your API key and omit
+  intermediate states such as `open`, while the ticker WebSocket covers all
+  order origins with the full lifecycle. The WS adapter is therefore the more
+  complete source; postbacks are a parallel inlet, not a fallback.
 - Sandbox (analyze mode) emits the same messages for order placements
   (open), engine fills, rejections, and cancellations — test end-to-end without a live broker.
 

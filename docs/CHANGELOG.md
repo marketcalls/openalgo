@@ -6,6 +6,258 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Added
+
+- **Alerts page (`/alerts`)**: Telegram, WhatsApp, Slack and Discord on one
+  page. Each channel has a card with how it stands, an on/off switch, a test
+  button and a link to its own setup page, and a grid chooses which orders
+  each channel hears about: orders placed, modified, cancelled, positions
+  closed, basket/split/options orders and GTT orders. The profile menu's
+  Telegram Bot and WhatsApp Bot entries are replaced by one Alerts entry; both
+  pages are a click away from it.
+- **Slack and Discord alerts** through an incoming webhook, set up on `/slack`
+  and `/discord`. Nothing to host and no bot token. The webhook URL is stored
+  encrypted, never shown again, kept out of the logs, and only Slack's or
+  Discord's own webhook URLs are accepted. Alerts can never ping a whole
+  channel (`<!channel>`, `@everyone` and other mentions are shown as text).
+- **`POST /api/v1/slack/notify` and `POST /api/v1/discord/notify`** post a
+  message to the saved webhook, like the Telegram and WhatsApp notify
+  endpoints. Both are in the API Playground. The API can only post; it can
+  never read or replace a webhook.
+- **Chart alerts on `/trading` can go to Slack and Discord** too, chosen per
+  alert next to Telegram and WhatsApp. Both are off for a new alert, and
+  alerts saved before read them as off.
+- **Flow Slack and Discord nodes** (`slackAlert`, `discordAlert`), under
+  Utility next to Telegram and WhatsApp. Each posts its message, with workflow
+  variables filled in, to the webhook saved on `/slack` or `/discord`, under
+  the notify endpoint's rules: nothing is posted unless the channel is
+  switched on at `/alerts`. The post is queued so the workflow never waits on
+  the provider, and a message over the channel's limit (Slack 4000
+  characters, Discord 2000) is shortened to fit rather than lost.
+- **MCP tools `send_slack_alert` and `send_discord_alert`**, beside
+  `send_telegram_alert`, on the local and the remote MCP server. They call the
+  notify endpoints, so the same rules and the 30-a-minute limit apply, and
+  read-only mode drops them. The Python SDK has no Slack or Discord method
+  yet; call the endpoints directly until it does.
+
+### Changed
+
+- Remote MCP: the `read:account` scope also allows the two new alert tools,
+  as it already allowed `send_telegram_alert`, and the consent screen now
+  says so ("Send alerts to your own Telegram, and to the Slack and Discord
+  channels you switched on"). A client you approved for `read:account` can
+  post to a Slack or Discord channel you have switched on, which other people
+  may read. They still need no `write:orders`, which stays about orders.
+
+- Alerts are event driven end to end: one subscriber raises an alert per order
+  event, only when a channel wants it, and hands it to each routed channel.
+  Every channel queues its send on its own pool, so a slow or failing channel
+  never delays another. Telegram and WhatsApp alerts are unchanged for an
+  install that never opens `/alerts`: both stay on with every order type, the
+  messages are word for word the same, and their own rules (bot running,
+  device paired) still apply.
+- GTT alerts on WhatsApp now say what happened: the symbol, the trigger
+  prices, the trigger id and, when a GTT fires, the order it placed. They
+  used to show only "Order Update" and the time. Slack and Discord get the
+  same; Telegram's GTT alerts are unchanged.
+- Upgrade: one migration, `migrate_alert_channels.py`, adds the
+  `alert_channels` table (no rows are written). `migrate_all.py` runs it, and
+  the app also creates the table at startup. It and
+  `migrate_password_reset_grants.py` are now required migrations: if either
+  fails, `migrate_all.py` reports the failure and exits non-zero instead of
+  calling it a warning.
+
+- `/trading`, Historify and every other chart now use openalgo-charts 2.7.1
+  (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
+  each one shows its drawing the way the chart shows it when selected, with an
+  open ring at every point you place, so a trend line has a ring at each end
+  and the channels, patterns, positions, Fibonacci and Gann tools show their
+  anchors too. The brush, highlighter, measure, text, note and arrow tools
+  get icons of their own. Indicators, chart types and existing custom
+  indicators work as before.
+- **Elliott waves on `/trading`.** The Patterns group of the drawing rail has
+  an Elliott waves section with five counts: impulse (0 1 2 3 4 5),
+  correction (0 A B C), and three new ones, triangle (0 A B C D E), double
+  combination (0 W X Y) and triple combination (0 W X Y X Z). Each count now
+  starts at its origin, the point the first wave starts from, so the first
+  wave is drawn: place the origin first, then the end of each wave. An
+  impulse or correction you drew before this upgrade loads exactly as it
+  looked, labelled 1 to 5 or A to C; drag its first point away and the first
+  wave and its 0 appear. Counts are labelled in the Minor degree (plain
+  numbers and capital letters); the terminal has no control yet for choosing
+  another degree or a circled or bracketed label style.
+
+### Fixed
+
+- **`upgrade/rotate_pepper.py` on an install with its own `FERNET_SALT`.**
+  It derived the encryption key with the legacy static salt, so on any
+  install that has a per-install salt (every install started since that salt
+  was introduced) it could decrypt none of the broker tokens, API keys, TOTP
+  secrets, broker keys or webhooks. It still wrote the new pepper to `.env`,
+  leaving them all unreadable, and encrypted a TOTP secret a second time. It
+  now uses the install's own salt, the same rule as the app. If you ran it on
+  such an install, the database backup it made
+  (`db/backups/openalgo.db.before-rotate-pepper-<time>`) still holds the data
+  under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
+  in `.env`.
+
+## [2.0.3.3] - 2026-11-06
+
+### Broker Keys and Live Data Release
+
+20 commits since 2.0.3.2, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.3-released.md](releases/version-2.0.3.3-released.md).
+This release adds one migration, `migrate_broker_keys.py`, and extends
+`migrate_strategy_module.py`. Run `migrate_all.py` and restart.
+
+### Highlights
+
+- Save broker keys in OpenAlgo, on OpenAlgo Desktop's screens, and log in to
+  one broker at a time (#2337).
+- Broker logins that only OpenAlgo can start, and sign-outs that reach every
+  device.
+- A Live strategy run trades only at the broker it started on.
+- Live data fixes for fifteen broker feeds.
+- Corrected Shoonya day-end candles (#2343) and Historify older history
+  (#2310).
+- The AI agent works again on LiteLLM 1.106.6.
+
+### Broker keys, one broker at a time
+
+- **Select Broker (`/broker`)** shows a card for each broker, with search,
+  status and the buttons Login with, Configure, Edit keys and Open Dashboard.
+  **Broker Configuration (`/broker/config`)** takes each broker's keys, names
+  each field the way that broker does, and masks what is saved. These are the
+  same screens as OpenAlgo Desktop.
+- **`.env` comes first.** The broker named in `.env` always logs in with the
+  `.env` keys, and saving its keys on Broker Configuration writes `.env`. Keys
+  for every other broker are stored encrypted in OpenAlgo. Installs that log
+  in from `.env` need to do nothing.
+- **One broker at a time.** Logging in to another broker asks first, and the
+  old session ends on every device only when the new login is stored. A
+  failed or abandoned login leaves the old broker connected. The switch is
+  refused while the current or last broker still runs Live automation: a Live
+  strategy module run, a Live OpenScript run, or outside analyzer mode a
+  Python strategy or scalping protection.
+- **A Live strategy run trades only at its own broker.** It records the broker
+  and, where the broker names one, the account it started on, and sends every
+  order, cancel and status check there. Before, an exit could go to whichever
+  broker was logged in when it fired.
+- **New installs.** A fresh download runs with `uv run app.py` alone: the
+  first start writes `.env` with fresh security keys and no broker. The
+  installers no longer ask for a broker, keys or redirect URL, and offer
+  fail2ban for SSH (default No). Docker Compose refuses to start without
+  `.env` instead of creating a folder named `.env`.
+
+### Security
+
+- A broker's answer completes a login only if this OpenAlgo started it, once,
+  within ten minutes. Before, any broker request token that reached OpenAlgo
+  while you were signed in completed a login.
+- An answer posted to the CompositEdge or RMoney login page could sign the
+  poster in to OpenAlgo with no password. It now completes nothing unless
+  OpenAlgo started that login.
+- Zerodha, Upstox and Paytm Money now send and require a login check, as
+  Fyers, Pocketful, CompositEdge, RMoney and IIFL Capital already did.
+- The account comes only from the broker's own answer. A Dhan login is refused
+  for another account than the configured client ID, or when Dhan does not
+  report the account. An RMoney or CompositEdge login is refused when the
+  account is not your market data keys' account.
+- Logging out, changing or resetting your password, and switching broker end
+  the sign-in on your other devices too, and a copied login cookie stops
+  working.
+- `follow-redirects` 1.16.2 in the frontend, for advisory
+  GHSA-mrwp-f3q8-3g9p.
+
+### Live data
+
+A field a broker's feed does not carry is now left out instead of being sent
+as 0. A client that computed change against a previous close of 0 showed the
+whole price as the change. **A script that reads every field from every
+WebSocket message should now handle a missing one.**
+
+- **Zerodha** (#2347): index quotes and depth carry OHLC and change.
+- **Groww**: index subscriptions receive ticks; MCX, NCDEX, NCO, CDS and BCD
+  are refused with a plain message.
+- **Dhan**: the previous close is no longer 0 all session.
+- **Angel One**: depth OHLC is no longer 0, and currency prices use the
+  divisor Angel's docs give.
+- **Upstox**: the previous close is the real previous close, not today's
+  candle, and depth carries the full quote.
+- **Fyers**: a quote on a symbol with depth open is no longer blank; 50-level
+  depth carries the quote; LTP and Quote on one symbol no longer replace each
+  other.
+- **Kotak**: quotes and depth carry the full quote with the exchange's trade
+  time; index ticks reach NIFTY and NIFTY50.
+- **Sahi**: fields the stream does not carry are left out.
+- **Definedge**: a Quote subscriber receives ticks when Depth was subscribed
+  first.
+- **mStock**: a token on two exchanges no longer publishes one exchange's
+  prices under both symbols.
+- **Tradejini**: quote totals are no longer 0, the master contract download
+  no longer fails on the new ETF group, and the feed no longer leaks sockets.
+- **Flattrade** (#2324): the feed keeps reconnecting after a long outage
+  instead of giving up for the day.
+- **Samco**: the exchange's trade time, average price and totals.
+- **5paisa**: depth no longer sends volume 0 to quote subscribers.
+- **HDFC Sky**: partial packets no longer publish a price of 0, and one
+  unsubscribe no longer drops every mode.
+
+### Fixed
+
+- **Shoonya intraday history** (#2343): on 3m to 4h requests spanning more
+  than one day, each day's last candle took the next morning's pre-open price
+  as its high and close. It is now rebuilt from 1-minute bars.
+- **Historify older history** (#2310): scrolling back past a session's opening
+  candle on 3m, 5m, 15m and 1h no longer fails with "Could not load older
+  history".
+- **Kotak holdings and margins** (#2365): holdings show the OpenAlgo symbol,
+  margin errors give Kotak's reason, the position average uses Kotak's
+  precision, and carried NSE and BSE cash delivery is valued at its holdings
+  average price.
+- **The AI agent works again.** Since LiteLLM 1.106.6, every agent turn failed
+  with "cannot import name 'CacheableResult' from 'mcp.types'". Opening
+  `/agent/config` also no longer leaves model tests failing until a restart.
+
+### Added
+
+- The download page lists OpenAlgo Desktop 1.0.5, FastScalper Desktop 0.1.0,
+  the Chrome Plugin 1.0 and the Excel Add-in 1.0.7 (Windows only).
+- API references for Portfolio, SIP and Sector Rotation, and documentation
+  updated for recent platform changes.
+- A `python-strategy` skill for building, backtesting and rehearsing `/python`
+  strategies with Claude Code.
+
+### Not yet covered
+
+- The RMoney and CompositEdge account checks, and the new login check for
+  IIFL Capital, Upstox and Paytm Money, had not been tried against real
+  accounts when they were merged. Report a refused login on the issue tracker.
+- The broker switch check does not cover Flow workflows, queued Action Center
+  orders or delayed external alerts. Finish or stop them before logging in to
+  another broker.
+
+### Dependencies
+
+- `joserfc` 1.7.4 to 1.7.7.
+- `follow-redirects` 1.16.1 to 1.16.2 (frontend).
+- `litellm` stays at 1.106.6. The pinned `openalgo` Python SDK remains 2.0.5.
+
+### Contributors
+
+- **@marketcalls** - broker keys, one broker at a time and the server-started
+  broker login (#2337), the agent fix, the download page, `follow-redirects`
+  1.16.2, the `python-strategy` skill, the documentation updates and the
+  release.
+- **@Kalaiviswa** - live data fixes for fifteen broker feeds (#2341, #2359,
+  #2376, #2377, #2383, #2396), Flattrade's among them (#2324), Shoonya
+  day-end candles (#2343, #2360), Zerodha index packets (#2347, #2361),
+  Historify older history (#2310, #2358) and Kotak holdings and margins
+  (#2365, #2367).
+
 ## [2.0.3.2] - 2026-10-31
 
 ### Freeze Limits and Muhurat Session Release

@@ -36,7 +36,7 @@ interesting happens**, and the rest of this document is about that step.
 
 ## 2. Why Chromium must be installed on the host (or in the container)
 
-openalgo pins `kaleido==1.2.0` in `pyproject.toml`. Kaleido had a major
+OpenAlgo pins `kaleido==1.3.0` in `pyproject.toml`. Kaleido had a major
 architectural change between v0.2.x and v1.x, and the switchover is the
 single most common reason new openalgo installs see `/chart` silently fail:
 
@@ -297,7 +297,8 @@ already here — we just reuse it one layer deeper.
 
 ### 4.4 The fix: `_render_plotly_png`
 
-Full implementation lives at `services/telegram_bot_service.py:112`. Shape:
+Full implementation lives in `services/telegram_bot_service.py`, method
+`_render_plotly_png`. Shape:
 
 ```python
 def _render_plotly_png(self, fig) -> bytes:
@@ -354,8 +355,9 @@ img_bytes = self._render_plotly_png(fig)
 return img_bytes
 ```
 
-Call sites: `services/telegram_bot_service.py:323` (intraday) and
-`services/telegram_bot_service.py:499` (daily).
+Call sites: `_generate_intraday_chart` and `_generate_daily_chart` in
+`services/telegram_bot_service.py`. Search by function name rather than relying
+on line numbers that change between releases.
 
 ### 4.5 Rule of thumb for future contributors
 
@@ -501,15 +503,12 @@ When `/chart RELIANCE` returns ` Failed to generate charts for RELIANCE`:
   inside `_render_plotly_png` and the chart generators — Kaleido will be
   auto-selected. No other changes needed.
 
-- **Moving off eventlet.** The gunicorn maintainers have deprecated the
-  eventlet worker class (`install.sh` and `start.sh` both still use it for
-  backward compatibility with how openalgo integrates Flask-SocketIO). If
-  openalgo ever migrates to `gthread`, `gevent`, or `uvicorn`, the
-  `original_threading` dance becomes unnecessary and the `_render_plotly_png`
-  helper can be replaced with a plain
-  `await asyncio.get_running_loop().run_in_executor(None, ...)`. Do **not**
-  make that simplification while eventlet is still the worker class — it
-  will reintroduce the `asyncio.run()` error documented in §4.2.
+- **Two production workers are supported.** Eventlet remains the default;
+  gthread with 64 threads is opt-in. The dev server uses standard threading.
+  `_render_plotly_png` must work under all three. Keep the real-thread helper
+  while eventlet is supported; selecting gthread for one install does not
+  justify removing the default worker's protection. See the
+  [worker guide](gthread/README.md) for switching and rollback.
 
 - **Replacing Kaleido with a different renderer.** If someone wants to swap
   Kaleido for `playwright`, `pyppeteer`, `matplotlib`, or a server-side

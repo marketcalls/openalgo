@@ -3,8 +3,9 @@ Sahi market-data mapping: exchanges, modes, capabilities and tick normalization.
 
 Sahi streams prices as integer paise; OpenAlgo publishes rupees. The stream
 carries no open/high/low/close, last traded quantity, average price or total
-buy/sell quantity. Those keys are still emitted (as 0) so the proxy and UI see
-the same key set as the other adapters; nothing is derived or invented.
+buy/sell quantity, so those keys are left out of the payload rather than sent
+as 0; nothing is derived or invented. last_trade_time is absent for indices,
+and then ltt / last_trade_time are left out too.
 """
 
 from . import sahi_proto as pb
@@ -102,33 +103,29 @@ def _depth_side(levels: list) -> list[dict]:
 
 
 def build_ltp_payload(tick: dict, symbol: str, exchange: str, now_ms: int) -> dict:
-    ltt = tick.get("last_trade_time")
-    return {
+    payload = {
         "symbol": symbol,
         "exchange": exchange,
         "mode": "ltp",
         "ltp": _rupees(tick["last_trade_price"]),
-        "ltt": ltt if ltt is not None else 0,
         "timestamp": now_ms,
     }
+    ltt = tick.get("last_trade_time")
+    if ltt is not None:  # absent for indices: no trade time to publish
+        payload["ltt"] = ltt
+        payload["last_trade_time"] = ltt
+    return payload
 
 
 def build_quote_payload(tick: dict, symbol: str, exchange: str, now_ms: int) -> dict:
     payload = build_ltp_payload(tick, symbol, exchange, now_ms)
     oi = tick.get("open_interest")
+    # open/high/low/close, last_quantity, average_price and total buy/sell
+    # quantity are not carried by the Sahi stream, so they are not published.
     payload.update(
         {
             "mode": "quote",
             "volume": tick.get("volume_today", 0),
-            # Not carried by the Sahi stream: emitted as 0, never derived.
-            "last_quantity": 0,
-            "average_price": 0,
-            "total_buy_quantity": 0,
-            "total_sell_quantity": 0,
-            "open": 0,
-            "high": 0,
-            "low": 0,
-            "close": 0,
             "oi": oi if oi is not None else 0,
             "open_interest": oi if oi is not None else 0,
             "upper_circuit": _rupees(tick.get("dpr_upper", 0)),

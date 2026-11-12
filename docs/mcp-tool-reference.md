@@ -2,7 +2,10 @@
 
 Companion reference to the main MCP setup guide. Once the MCP server is wired into Claude Desktop, Cursor, Windsurf, Antigravity, or any other MCP-capable client, you can ask for these operations in plain English — the client decides which tool to call.
 
-The currently supported tools are listed below. The live MCP `tools/list` schema remains authoritative for the installed revision.
+The reference covers the 51 tools declared in `mcp/mcpserver.py` at the audited
+revision. The live MCP `tools/list` schema remains authoritative for the installed
+revision and enabled toolsets. Example symbols and expiry dates are illustrative;
+resolve an available contract and its current lot size before placing an order.
 
 - What the tool does
 - Key parameters (required / optional)
@@ -79,7 +82,10 @@ Break a large order into equal chunks (helpful for low-liquidity names or to avo
 
 **Prompts:**
 - *"Sell 500 YESBANK in slices of 50, market orders"*
-- *"Split 1200 NIFTY lots across 100-lot chunks"*
+- *"Read the current NIFTY lot size and freeze quantity, then split my order into valid whole-lot chunks"*
+
+`quantity` and `split_size` are units, not lot counts. Read the current symbol
+metadata before choosing chunks; do not assume a fixed exchange freeze limit.
 
 ---
 
@@ -137,7 +143,11 @@ Change price / quantity / type / trigger on a working order.
 
 **Prompts:**
 - *"Cancel every pending order I have"*
-- *"Kill all open orders for strategy 'nifty scalper'"*
+- *"Cancel all pending orders in the connected account"*
+
+The `strategy` argument tags the request; it does not isolate cancellation to
+orders from that strategy. To cancel a subset, inspect the order book and call
+`cancel_order` with each selected order ID.
 
 ---
 
@@ -145,7 +155,9 @@ Change price / quantity / type / trigger on a working order.
 
 ### `close_all_positions`
 
-Square off everything for a strategy.
+Square off the connected account's open positions (or the user's sandbox positions
+in analyzer mode). The `strategy` argument tags the request; it is not a filter
+that restricts which positions are closed.
 
 **Prompt:** *"Close all my open positions now"*
 
@@ -342,7 +354,10 @@ Bulk instrument master download for an exchange (or all exchanges when `exchange
 
 ### `get_index_symbols`
 
-Returns the full standardized OpenAlgo index symbol list (57 NSE + 40 BSE), rolled out uniformly across every supported broker.
+Returns the standardized NSE or BSE index-name catalogue built into the MCP
+server. This is a naming reference, not a list of instruments your broker
+actually streams. Confirm availability in the connected broker's symbol master
+and feed entitlements; indices are quote instruments, not tradable contracts.
 
 **Prompts:**
 - *"List all NSE index symbols I can subscribe to"*
@@ -394,6 +409,17 @@ Full holiday list for a year (year optional → defaults to current year).
 
 ---
 
+### `check_holiday`
+
+This tool is declared for compatibility but currently calls
+`/api/v1/checkholiday`, which is not registered by this server. It cannot
+provide a reliable holiday result at this revision. Use `get_timings(date)` to
+inspect the actual exchange session schedule and `get_holidays(year)` for the
+calendar. The missing route is recorded in the
+[documentation audit](audit/2026-11-06-documentation-gap-audit.md).
+
+---
+
 ### `get_timings`
 
 Exchange open/close epoch timestamps for a given date (date optional → defaults to today).
@@ -423,6 +449,23 @@ Push a Telegram notification via the OpenAlgo Telegram bot (must be configured i
 **Prompts:**
 - *"Send me a Telegram alert: NIFTY crossed 26000, priority 8"*
 - *"Ping me on Telegram if my NIFTY CE fills"*
+
+### `send_slack_alert`
+
+Post a message to the Slack channel whose incoming webhook is saved on OpenAlgo's `/slack` page. Slack must be switched on at `/alerts`; otherwise the tool returns an error naming the missing step. Takes `message` (at most 4000 characters) and optional `wait_for_delivery` (default false queues the post; true posts it and reports whether Slack accepted it). Mentions never ping anyone.
+
+**Prompts:**
+- *"Post to Slack: NIFTY broke 26000, long straddle hedged"*
+- *"Send the day's realized P&L to our Slack channel and confirm it was delivered"*
+
+### `send_discord_alert`
+
+Post a message to the Discord channel whose webhook is saved on OpenAlgo's `/discord` page. Discord must be switched on at `/alerts`. Takes `message` (at most 2000 characters) and optional `wait_for_delivery`. Mentions are never resolved, so `@everyone` cannot ping a server.
+
+**Prompts:**
+- *"Tell the Discord channel that all positions are squared off"*
+
+The Slack and Discord channels may have other readers. On the remote MCP server all three alert tools need `read:account`, not `write:orders`; all three are dropped in read-only mode.
 
 ---
 

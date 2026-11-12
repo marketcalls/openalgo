@@ -166,7 +166,7 @@ def test_subscribe_with_socket_down_is_recovered_on_login(adapter):
     frames = subscribe_frames(adapter)
     assert len(frames) == 1
     assert frames[0]["params"]["tokenList"] == [{"exchangeType": 1, "tokens": ["22"]}]
-    assert adapter.token_modes == {"22": 3}
+    assert adapter.token_modes == {"1|22": 3}
 
 
 def test_dropped_batch_leaves_the_token_unconfirmed(adapter):
@@ -182,7 +182,7 @@ def test_dropped_batch_leaves_the_token_unconfirmed(adapter):
     wait_until(lambda: adapter.token_modes)
 
     assert len(subscribe_frames(adapter)) == 1
-    assert adapter.token_modes == {"22": 3}
+    assert adapter.token_modes == {"1|22": 3}
 
 
 def test_refused_send_leaves_the_token_retryable(adapter):
@@ -241,7 +241,7 @@ def test_a_transient_refusal_still_recovers(adapter):
     want(adapter, "S")
     wait_until(lambda: adapter.token_modes)
 
-    assert adapter.token_modes == {"22": 3}
+    assert adapter.token_modes == {"1|22": 3}
     assert adapter.send_retries == {}, "the budget resets once the send lands"
 
 
@@ -249,13 +249,13 @@ def test_resync_uses_the_highest_requested_mode(adapter):
     want(adapter, "S", mode=1)
     want(adapter, "S", mode=3)
     want(adapter, "T", mode=2)
-    assert wait_until(lambda: adapter.token_modes == {"22": 3, "33": 2}), (
+    assert wait_until(lambda: adapter.token_modes == {"1|22": 3, "1|33": 2}), (
         f"the initial subscribes never settled: {adapter.token_modes}"
     )
     adapter.ws_client.ws.sent.clear()
 
     adapter._resync_subscriptions()
-    wait_until(lambda: adapter.token_modes == {"22": 3, "33": 2})
+    wait_until(lambda: adapter.token_modes == {"1|22": 3, "1|33": 2})
 
     by_mode = {f["params"]["mode"]: f["params"]["tokenList"] for f in subscribe_frames(adapter)}
     assert by_mode.get(3) == [{"exchangeType": 1, "tokens": ["22"]}]
@@ -267,8 +267,8 @@ def test_successful_send_confirms_state(adapter):
     want(adapter, "S")
     wait_until(lambda: adapter.token_modes)
 
-    assert adapter.token_modes == {"22": 3}
-    assert adapter.token_correlation_ids == {"22": "mstock_22_3"}
+    assert adapter.token_modes == {"1|22": 3}
+    assert adapter.token_correlation_ids == {"1|22": "mstock_1_22_3"}
 
 
 def test_unsubscribe_prunes_the_pending_entry_immediately(adapter):
@@ -452,7 +452,7 @@ def test_unsubscribing_restores_the_retry_budget(adapter):
 
     want(adapter, "S")
     wait_until(lambda: len(attempts) == 1 + adapter.max_send_retries)
-    assert adapter.send_retries == {"22": 3}
+    assert adapter.send_retries == {"1|22": 3}
 
     adapter.unsubscribe("S", "NSE", 3)
     assert adapter.send_retries == {}, "the budget goes with the subscription"

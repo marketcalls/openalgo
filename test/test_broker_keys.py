@@ -2106,7 +2106,7 @@ def test_a_password_change_ends_every_other_sign_in(stores, environment, monkeyp
     monkeypatch.setattr(auth_db, "revoke_all_sessions", lambda name: revoked.append(name))
     monkeypatch.setattr(auth_db, "clear_user_sessions", lambda name: None)
     monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
-    user = SimpleNamespace(check_password=lambda pw: True, set_password=lambda pw: None)
+    user = SimpleNamespace(id=1, check_password=lambda pw: True, set_password=lambda pw: None)
     monkeypatch.setattr(
         auth_bp_module,
         "User",
@@ -2115,6 +2115,9 @@ def test_a_password_change_ends_every_other_sign_in(stores, environment, monkeyp
         ),
     )
     monkeypatch.setattr(auth_bp_module, "db_session", SimpleNamespace(commit=lambda: None))
+    # The user store is a stand-in here; test_password_reset_grants.py covers
+    # the open resets a password change ends.
+    monkeypatch.setattr(auth_bp_module, "clear_password_reset_grants", lambda user_id: True)
     client = _signed_in(_app(), logged_in=True, login_time=datetime.now(IST).isoformat())
 
     response = client.post(
@@ -2520,7 +2523,7 @@ def password_paths(monkeypatch):
     monkeypatch.setattr(auth_db, "clear_user_sessions", lambda name: None)
     monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *a, **k: None)
     user = SimpleNamespace(
-        username=USER, check_password=lambda pw: True, set_password=lambda pw: None
+        id=1, username=USER, check_password=lambda pw: True, set_password=lambda pw: None
     )
     monkeypatch.setattr(
         auth_bp_module,
@@ -2531,6 +2534,13 @@ def password_paths(monkeypatch):
     )
     monkeypatch.setattr(auth_bp_module, "find_user_by_email", lambda email: user)
     monkeypatch.setattr(auth_bp_module, "db_session", SimpleNamespace(commit=lambda: None))
+    # The store's record of approved resets is stubbed with the store: the
+    # reset here is one the server approved, and a password change ends none.
+    # test_password_reset_grants.py covers the record itself.
+    monkeypatch.setattr(
+        auth_bp_module, "reset_password_with_grant", lambda user_id, token_hash, password: True
+    )
+    monkeypatch.setattr(auth_bp_module, "clear_password_reset_grants", lambda user_id: True)
     return revoked
 
 
@@ -3089,6 +3099,31 @@ def test_a_login_form_needs_a_started_login_and_uses_it_up(stores, environment, 
     assert sent == [("A1", "1234", "123456")]
     assert completed == [("angel-token", USER, "angel")]
     assert keys_db.BrokerLoginState.query.count() == 0
+
+
+@pytest.mark.parametrize(("typed", "sent_totp"), [("042917", "042917"), ("", "")])
+def test_sahi_logs_in_from_its_card_with_an_optional_code(
+    stores, environment, completed, monkeypatch, typed, sent_totp
+):
+    """Sahi's login card asks for the TOTP code of a TOTP key and passes a
+    blank one for a Regular key; the API key and secret come from the keys."""
+    monkeypatch.setenv("VALID_BROKERS", "zerodha,sahi")
+    keys_db.save_broker_keys("sahi", {"api_key": "pk_1", "api_secret": "sahi_sk_1"}, None)
+    app = _app()
+    sent = []
+    app.broker_auth_functions = {
+        "sahi_auth": lambda code, totp=None: sent.append((code, totp)) or ("sahi-token", None)
+    }
+    client = _signed_in(app)
+    client.post("/auth/broker/login", json={"broker": "sahi"})
+
+    card = client.get("/sahi/callback")
+    accepted = client.post("/sahi/callback", data={"totp": typed}, headers=JSON)
+
+    assert card.headers["Location"].endswith("/broker/sahi/totp")
+    assert accepted.get_data(as_text=True) == "logged in"
+    assert sent == [("sahi", sent_totp)]
+    assert completed == [("sahi-token", USER, "sahi")]
 
 
 def test_the_migration_adds_the_pre_broker_column_to_an_existing_table(tmp_path):

@@ -198,6 +198,7 @@ def test_status_map():
     assert order_data.map_order_status("Completed") == "complete"
     assert order_data.map_order_status("PartialFilled") == "cancelled"
     assert order_data.map_order_status("Open") == "open"
+    assert order_data.map_order_status("AwaitingTrigger") == "trigger pending"
 
 
 def test_trade_book_mapping():

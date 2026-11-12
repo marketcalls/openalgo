@@ -4,7 +4,7 @@
 
 `utils/event_bus.py` is a lightweight, **per-process** topic bus for asynchronous order side effects. It is not the cross-process market-data bus; ZeroMQ owns that job.
 
-Each Flask worker that imports the global singleton has its own subscriber registry and 10-worker `ThreadPoolExecutor`. A service publishes in the process handling the request, and that process dispatches its local subscribers.
+The single production Flask worker owns the singleton subscriber registry. A service publishes in the process handling the request, and that process dispatches its local subscribers. Ordinary callbacks use a shared 10-worker executor with at most 1,000 queued-or-running callbacks. `critical=True` subscriptions use a separate four-worker executor with a 10,000-callback cap so slow notification delivery does not consume the strategy/order-update lane.
 
 ## Flow
 
@@ -15,11 +15,13 @@ order/sandbox service
   -> shared per-process thread pool
      -> log subscriber
      -> Socket.IO subscriber
-     -> Telegram subscriber
-     -> WhatsApp subscriber
+     -> alert subscriber (raise_alert)
+          -> alert.raised, only when a channel receives the event group
+               -> alert subscriber (deliver_alert)
+                    -> each routed channel: Telegram, WhatsApp, Slack, Discord
 ```
 
-Callbacks are copied under a lock and submitted without blocking the publisher. `_safe_call` catches/logs subscriber exceptions so notification or logging failure cannot change the order response.
+Callbacks are copied under a lock and submitted without waiting for subscribers. At capacity, the ordinary lane drops callbacks and logs sampled warnings; the critical lane is also bounded and logs every overflow as an error. Neither lane guarantees durable delivery. Callback failures are isolated, and every callback releases the SQLAlchemy scoped sessions it opened. `bus.stats()` reports pending/capacity/drop counters for both lanes.
 
 ## Topics
 
@@ -27,6 +29,11 @@ Callbacks are copied under a lock and submitted without blocking the publisher. 
 |---|---|
 | `order.placed` | Successful single order |
 | `order.failed` | Failed order |
+| `order.update` | Broker postback/order-WebSocket and sandbox execution transitions |
+| `gtt.placed`, `gtt.failed` | GTT placement outcomes |
+| `gtt.modified`, `gtt.modify_failed` | GTT modification outcomes |
+| `gtt.cancelled`, `gtt.cancel_failed` | GTT cancellation outcomes |
+| `gtt.triggered`, `gtt.expired` | GTT lifecycle transitions |
 | `order.no_action` | Smart order already at target |
 | `order.modified`, `order.modify_failed` | Modify result |
 | `order.cancelled`, `order.cancel_failed` | Cancel result |
@@ -45,9 +52,11 @@ Batch services suppress child events and publish one summary, preventing duplica
 
 ## Subscribers
 
-`subscribers/register_all()` wires log, Socket.IO, Telegram, and WhatsApp callbacks for order topics. Sandbox engine-internal topics go only to Socket.IO because they are UI refresh signals rather than user API calls; they are not duplicated into analyzer logs or chat alerts.
+`subscribers/__init__.py:register_all()` wires log and Socket.IO callbacks for order topics, and `alert_subscriber.register()` adds one callback per alertable topic plus one delivery callback for `alert.raised`. An order event therefore costs two alert callbacks whatever the number of channels; each channel's `deliver` only queues on its own pool, so a slow provider does not hold a bus worker. Sandbox engine-internal topics go only to Socket.IO because they are UI refresh signals rather than user API calls; they are not duplicated into analyzer logs or chat alerts.
 
-Telegram/WhatsApp subscribers skip failure and analyzer-error chat notifications. The log and Socket.IO consumers still record/emit the applicable state.
+`order.update` also feeds the ZMQ relay and registered critical strategy-book, Strategy Module and Flow order monitors; these are distinct from best-effort chat alerts.
+
+Failure and analyzer-error events have no alert group, so they raise no alert on any channel. The log and Socket.IO consumers still record/emit the applicable state.
 
 ## Event Data
 
@@ -74,5 +83,5 @@ The bus decouples side effects on a single request path with minimal dependencie
 | `subscribers/__init__.py` | Registration |
 | `subscribers/log_subscriber.py` | Database logging |
 | `subscribers/socketio_subscriber.py` | Browser refresh/events |
-| `subscribers/telegram_subscriber.py` | Telegram alerts |
-| `subscribers/whatsapp_subscriber.py` | WhatsApp alerts |
+| `subscribers/alert_subscriber.py` | Raises one `alert.raised` event per alertable order event, and subscribes every alert channel to it |
+| `services/alerts/` | Alert groups, routing, settings and the Telegram, WhatsApp, Slack and Discord channels |

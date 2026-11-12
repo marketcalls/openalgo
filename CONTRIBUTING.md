@@ -106,7 +106,7 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 Before you begin, make sure you have the following installed:
 
 - **Python 3.12+** - [Download Python](https://www.python.org/downloads/)
-- **Node.js (frontend contributors only)** - [Download Node.js](https://nodejs.org/). The `engines` field in `frontend/package.json` is the source of truth: `>=20.20.0 || >=22.22.0 || >=24.13.0`. Node below 20.20.0 will emit an `EBADENGINE` warning on `npm install`. Skip this if you are working on the backend or documentation.
+- **Node.js (frontend contributors only)** - [Download Node.js](https://nodejs.org/). The `engines` field in `frontend/package.json` is the source of truth: `^22.23.4 || ^24.22.1 || >=26.12.1`. Use a version in one of those supported ranges. Skip this if you are working on the backend or documentation.
 - **Git** - [Download Git](https://git-scm.com/downloads)
 - **Code Editor** - VS Code recommended with extensions:
   - Python
@@ -143,19 +143,15 @@ cd ..
 
 ### Configure Environment
 
-```bash
-# Copy the sample environment file
-cp .sample.env .env
+A first start with `uv run app.py` creates `.env` from `.sample.env` with fresh
+installation secrets when there is no existing database. Sign in, open
+**Select Broker → Configure**, and save the broker keys. `VALID_BROKERS` must
+remain set even if the broker credential fields are empty. Existing `.env`
+broker configuration retains precedence for that broker.
 
-# Generate secure random keys for APP_KEY and API_KEY_PEPPER:
-uv run python -c "import secrets; print(secrets.token_hex(32))"
-
-# Edit .env and update:
-# 1. APP_KEY (paste generated key)
-# 2. API_KEY_PEPPER (paste another generated key)
-# 3. VALID_BROKERS (comma-separated list of brokers to enable)
-# 4. Broker API credentials
-```
+For an existing installation, retain its `.env` and database together. Do not
+generate replacement installation secrets merely to upgrade. See the
+[setup guide](docs/userguide/05-first-time-setup/README.md) for the current flow.
 
 > [!NOTE]
 > **Static IP whitelisting:** Many Indian brokers require you to whitelist a static IP address when generating API keys and secrets. If you are developing locally, you may need to whitelist your public IP. For cloud/VPS deployments, use the server's static IP. Check your broker's API documentation for specific requirements.
@@ -244,7 +240,7 @@ openalgo/
 │   ├── auth.py               # Authentication routes
 │   ├── react_app.py          # Serves React SPA from frontend/dist/
 │   └── ...
-├── broker/                   # Broker integrations (36 plugins)
+├── broker/                   # Broker integrations (38 plugins)
 │   ├── zerodha/              # Reference implementation
 │   ├── dhan/                 # Modern API design
 │   ├── angel/                # AngelOne integration
@@ -1010,9 +1006,11 @@ tests not run (Markdown-only change)" when applicable.
    # Bad - Never do this!
    API_KEY = 'abc123xyz'
 
-   # Good - Use environment variables
+   # Read broker keys when called; each request can stage a different broker.
    import os
-   API_KEY = os.getenv('BROKER_API_KEY')
+
+   def broker_api_key():
+       return os.getenv('BROKER_API_KEY')
    ```
 
 2. **Validate all inputs at system boundaries**
@@ -1021,8 +1019,8 @@ tests not run (Markdown-only change)" when applicable.
        if data.get('quantity', 0) <= 0:
            raise ValueError('Quantity must be positive')
 
-       valid_types = ['MARKET', 'LIMIT', 'SL', 'SLM']
-       if data.get('order_type') not in valid_types:
+       valid_types = ['MARKET', 'LIMIT', 'SL', 'SL-M']
+       if data.get('pricetype') not in valid_types:
            raise ValueError('Invalid order type')
    ```
 
@@ -1056,16 +1054,15 @@ tests not run (Markdown-only change)" when applicable.
 
 2. **Use caching**
    ```python
-   from cachetools import TTLCache
+   from utils.thread_safe_cache import LockedTTLCache
 
-   symbol_cache = TTLCache(maxsize=1000, ttl=300)
+   symbol_cache = LockedTTLCache(maxsize=1000, ttl=300)
 
    def get_symbol_info(symbol):
-       if symbol in symbol_cache:
-           return symbol_cache[symbol]
-       info = fetch_symbol_from_db(symbol)
-       symbol_cache[symbol] = info
-       return info
+       return symbol_cache.get_or_load(symbol, lambda: fetch_symbol_from_db(symbol))
+
+   # After committing a symbol change:
+   # symbol_cache.invalidate(symbol)
    ```
 
 3. **Minimize API calls — use batch endpoints**
@@ -1111,7 +1108,7 @@ tests not run (Markdown-only change)" when applicable.
 #### Frontend Build Errors
 
 ```bash
-# Ensure a supported Node.js version: >=20.20.0, >=22.22.0 or >=24.13.0
+# Ensure Node.js matches frontend/package.json: ^22.23.4 || ^24.22.1 || >=26.12.1
 # (the engines field in frontend/package.json is the source of truth)
 node --version
 

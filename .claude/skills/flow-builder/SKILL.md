@@ -27,7 +27,7 @@ them as errors unless you know why.
 
 ## Workflow
 
-1. **Read `reference/nodes.md`.** All 61 node types, their required fields, and
+1. **Read `reference/nodes.md`.** All 63 node types, their required fields, and
    every `data` key each one actually reads. Generated from the validator and
    the executor, so it cannot drift.
 2. **Pick the trigger.** Exactly one, and it is the execution root:
@@ -182,7 +182,7 @@ the Sandbox engine, `0` sends them to a live broker.
 | Path | |
 |---|---|
 | `validate.py` | the gate; wraps the importer's own validator |
-| `reference/nodes.md` | all 61 node types, generated |
+| `reference/nodes.md` | all 63 node types, generated |
 | `generate_reference.py` | regenerate it after a node's fields change |
 | `coverage.py` | fails if a node type is undocumented |
 | `docs/prompt/flow-import-format.md` | the long-form contract |

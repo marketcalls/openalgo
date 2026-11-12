@@ -72,7 +72,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/depth \
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
 | symbol | Trading symbol | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
+| exchange | Exchange code from the [shared constants](../../prompt/order-constants.md), supported by the active broker | Mandatory | - |
 
 ## Response Fields
 
@@ -118,12 +118,16 @@ Qty     Price                        Price     Qty
 399     769.20                              769.80    430
 ```
 
+## Availability
+
+The sample is one possible broker snapshot, not a guarantee of every field for every instrument. Exchanges, OHLC, previous close, volume, OI and depth depend on broker support; indices can lack tradable bid/ask depth or volume. Some broker mappers use zero placeholders for unavailable fields. Verify capability and freshness before interpreting zero as a measured value. REST `prev_close` differs from the streaming `close` key.
+
 ## Notes
 
 - Depth shows the **order book** structure for a symbol
 - **Bid-Ask spread** indicates liquidity (tighter = more liquid)
 - **totalbuyqty vs totalsellqty** shows demand-supply balance
-- For F&O, **oi** (open interest) is available
+- For F&O, **oi** (open interest) is returned where the broker supplies it
 - The REST call returns one broker snapshot. Use WebSocket Depth for continuous updates.
 
 ## Use Cases

@@ -148,6 +148,10 @@ const TelegramAnalytics = lazy(() => import('@/pages/telegram/TelegramAnalytics'
 // WhatsApp pages
 const WhatsAppIndex = lazy(() => import('@/pages/whatsapp/WhatsAppIndex'))
 
+// Alert channels: every channel on /alerts, Slack and Discord setup
+const AlertsIndex = lazy(() => import('@/pages/alerts/AlertsIndex'))
+const WebhookChannelSetup = lazy(() => import('@/pages/alerts/WebhookChannelSetup'))
+
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
 const LiveLogs = lazy(() => import('@/pages/Logs'))
@@ -296,6 +300,9 @@ function App() {
                 <Route path="/telegram/users" element={<TelegramUsers />} />
                 <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
                 <Route path="/whatsapp" element={<WhatsAppIndex />} />
+                <Route path="/alerts" element={<AlertsIndex />} />
+                <Route path="/slack" element={<WebhookChannelSetup channel="slack" />} />
+                <Route path="/discord" element={<WebhookChannelSetup channel="discord" />} />
                 {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />

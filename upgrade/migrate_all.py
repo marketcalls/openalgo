@@ -95,6 +95,8 @@ MIGRATIONS = [
     ("migrate_qty_freeze_nov_2026.py", "NSE Index Freeze Limits (2 November 2026)"),
     ("migrate_muhurat_2026.py", "Diwali Muhurat 2026 Published Timings"),
     ("migrate_broker_keys.py", "Broker Keys, Session Sign-out and Broker Login State"),
+    ("migrate_alert_channels.py", "Alert Channels (/alerts, Slack and Discord webhooks)"),
+    ("migrate_password_reset_grants.py", "Password Reset Grants (single-use, expiring resets)"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,
@@ -102,7 +104,16 @@ MIGRATIONS = [
 # required schema migrations are listed explicitly: their failure must reach
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
-REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
+REQUIRED_MIGRATIONS = frozenset(
+    {
+        "migrate_strategy_module.py",
+        "migrate_strategy_universe_tab.py",
+        # Without its table the /alerts page and the settings it saves fail.
+        "migrate_alert_channels.py",
+        # Without its table every password reset is refused.
+        "migrate_password_reset_grants.py",
+    }
+)
 
 
 def run_migration(script_name, description):

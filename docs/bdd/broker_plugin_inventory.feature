@@ -38,6 +38,8 @@ Feature: Broker plugin inventory
       | paytm | IN_stock |
       | pocketful | IN_stock |
       | rmoney | IN_stock |
+      | rupeezy | IN_stock |
+      | sahi | IN_stock |
       | samco | IN_stock |
       | shoonya | IN_stock |
       | tradejini | IN_stock |

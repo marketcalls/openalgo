@@ -139,19 +139,21 @@ def get_token(self, symbol: str, exchange: str) -> Optional[str]:
 
 ### 2. Authentication Caches
 
+Shared TTL caches use `utils.thread_safe_cache.LockedTTLCache`, not bare `cachetools.TTLCache`. Reads can expire entries and mutate the cache; they need the same synchronization as writes under gthread and the development server. Use atomic helpers for check-and-use sequences rather than assuming individually locked operations make a compound action atomic. The snippets below illustrate the cache policy; `database/auth_db.py` also fences cache fills against concurrent invalidation.
+
 **Location:** `database/auth_db.py`
 
 ```python
-from cachetools import TTLCache
+from utils.thread_safe_cache import LockedTTLCache
 
 # Auth token cache - TTL based on session expiry
-auth_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+auth_cache = LockedTTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 
 # Feed token cache - same TTL as auth
-feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+feed_token_cache = LockedTTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 
 # Broker name cache - 50 minute TTL
-broker_cache = TTLCache(maxsize=1024, ttl=3000)
+broker_cache = LockedTTLCache(maxsize=1024, ttl=3000)
 ```
 
 **Session-Based TTL Calculation:**
@@ -213,11 +215,11 @@ API Request with Key
 ```python
 # Valid API keys - long TTL (10 hours)
 # Only stores user_id, not the key itself
-verified_api_key_cache = TTLCache(maxsize=1024, ttl=36000)
+verified_api_key_cache = LockedTTLCache(maxsize=1024, ttl=36000)
 
 # Invalid API keys - short TTL (5 minutes)
 # Prevents repeated expensive Argon2 verification
-invalid_api_key_cache = TTLCache(maxsize=512, ttl=300)
+invalid_api_key_cache = LockedTTLCache(maxsize=512, ttl=300)
 
 def verify_api_key(api_key: str) -> Optional[str]:
     """Verify API key with 3-level caching"""

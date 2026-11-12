@@ -3,7 +3,10 @@ import threading
 from flask_socketio import SocketIO
 
 from utils import real_threading
+from utils.logging import get_logger
 from utils.runtime import is_monkey_patched
+
+logger = get_logger(__name__)
 
 
 class SerializedSocketIO(SocketIO):
@@ -91,6 +94,48 @@ socketio = SerializedSocketIO(
     logger=False,  # Disable built-in logging to avoid noise from disconnection errors
     engineio_logger=False,  # Disable engine.io logging
 )
+
+
+def require_signed_in_session(auth=None):
+    """Refuse a Socket.IO connection that carries no valid broker session.
+
+    The default namespace is where every server broadcast goes: live order
+    events, analyzer updates, the signed-in device list, scalping levels and
+    the WhatsApp pairing QR. None of those emits names a room, so whoever is
+    connected receives them. Socket.IO is served ahead of Flask's routing, so
+    no ``before_request`` hook or route decorator ever sees a connection, and
+    python-socketio accepts a connect that has no handler. Without this one a
+    client with no cookie could connect and listen.
+
+    The rule is the one the ``/market`` namespace and the ``/api/websocket/*``
+    routes apply (``get_username_from_session`` in
+    ``blueprints/websocket_example.py``): a signed-in user whose broker session
+    is still valid, which covers the daily rollover and a sign-out recorded on
+    another device. The web app opens its socket only after a broker login, so
+    a refused connection is one it never makes.
+
+    Anything that goes wrong while checking refuses the connection.
+
+    Args:
+        auth: The client's connect payload. Not used: the session cookie is
+            the only credential.
+
+    Returns:
+        False to refuse the connection, None to accept it.
+    """
+    try:
+        from flask import session
+
+        from utils.session import is_session_valid
+
+        if session.get("user") and is_session_valid():
+            return None
+    except Exception:
+        logger.exception("Socket.IO connect check failed; refusing the connection")
+    return False
+
+
+socketio.on_event("connect", require_signed_in_session)
 
 
 def emit_from_any_thread(event, data, **kwargs) -> None:

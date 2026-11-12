@@ -136,7 +136,14 @@ class FyersDataMapper:
                 change = round(ltp - prev_close, precision)
                 change_percent = round(change / prev_close * 100, 2)
 
-            # Map to OpenAlgo Quote format
+            avg_trade_price = convert_price(fyers_data.get("avg_trade_price", 0))
+            last_trade_quantity = fyers_data.get("last_traded_qty", 0)
+            last_traded_time = fyers_data.get("last_traded_time", 0)
+
+            # Map to OpenAlgo Quote format. The Fyers-era names stay for the
+            # consumers that read them; average_price, percent_change,
+            # last_quantity and last_trade_time are the reference names other
+            # brokers publish, carrying the same values.
             openalgo_data = {
                 "symbol": f"{exchange}:{symbol_name}",
                 "exchange": exchange,
@@ -154,17 +161,29 @@ class FyersDataMapper:
                 "oi": fyers_data.get("OI", 0),
                 "upper_circuit": convert_price(fyers_data.get("upper_ckt", 0)),
                 "lower_circuit": convert_price(fyers_data.get("lower_ckt", 0)),
-                "last_traded_time": fyers_data.get("last_traded_time", 0),
+                "last_traded_time": last_traded_time,
                 "exchange_time": fyers_data.get("exch_feed_time", 0),
-                "avg_trade_price": convert_price(fyers_data.get("avg_trade_price", 0)),
-                "last_trade_quantity": fyers_data.get("last_traded_qty", 0),
+                "avg_trade_price": avg_trade_price,
+                "last_trade_quantity": last_trade_quantity,
                 "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
                 "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
                 "change": change,
                 "change_percent": change_percent,
+                "percent_change": change_percent,
                 "timestamp": int(time.time()),
                 "data_type": "Quote",
             }
+
+            # The reference names go out only when the frame carried their
+            # source. Index (if) frames have no trade time, average price or
+            # traded quantity, and a 0 there would read as real data.
+            for name, raw_key, value in (
+                ("last_trade_time", "last_traded_time", last_traded_time),
+                ("average_price", "avg_trade_price", avg_trade_price),
+                ("last_quantity", "last_traded_qty", last_trade_quantity),
+            ):
+                if raw_key in fyers_data:
+                    openalgo_data[name] = value
 
             return openalgo_data
 

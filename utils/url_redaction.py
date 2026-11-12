@@ -29,8 +29,20 @@ _QUERY_CREDENTIAL = re.compile(
     flags=re.IGNORECASE,
 )
 
+# Slack and Discord incoming webhooks (alert channels). The whole path after
+# the fixed prefix is the credential: anybody holding it can post into the
+# trader's channel. OpenAlgo never logs one on purpose; this catches the ones a
+# library puts in an exception or a debug line.
+_ALERT_WEBHOOK = re.compile(
+    r"(?P<prefix>hooks\.slack\.com(?::\d+)?/services/|"
+    r"(?:ptb\.|canary\.)?discord(?:app)?\.com(?::\d+)?/api(?:/v\d{1,2})?/webhooks/)"
+    r"[^\s?#'\"<>]+",
+    flags=re.IGNORECASE,
+)
+
 
 def redact_url_credentials(value: Any) -> str:
     """Return ``value`` with shipped path and query credentials masked."""
     redacted = _URL_CREDENTIAL.sub(r"\g<prefix><redacted>", str(value))
+    redacted = _ALERT_WEBHOOK.sub(r"\g<prefix><redacted>", redacted)
     return _QUERY_CREDENTIAL.sub(r"\g<prefix>[REDACTED]", redacted)

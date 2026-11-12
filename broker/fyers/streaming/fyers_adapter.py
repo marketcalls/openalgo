@@ -18,6 +18,35 @@ from .fyers_mapping import FyersDataMapper
 from .fyers_token_converter import FyersTokenConverter
 
 
+# Quote fields a depth message borrows from the symbol feed, each with the raw
+# HSM field it comes from. A Fyers depth (dp) frame carries only the five
+# levels, so these are copied from the latest symbol-feed (sf/if) state of the
+# same scrip; a field is copied only when Fyers actually sent its source.
+_QUOTE_FIELDS_FOR_DEPTH = {
+    "ltp": ("ltp",),
+    "open": ("open_price",),
+    "high": ("high_price",),
+    "low": ("low_price",),
+    "close": ("prev_close_price",),
+    "volume": ("vol_traded_today",),
+    "oi": ("OI",),
+    "avg_trade_price": ("avg_trade_price",),
+    "average_price": ("avg_trade_price",),
+    "last_trade_quantity": ("last_traded_qty",),
+    "last_quantity": ("last_traded_qty",),
+    "last_traded_time": ("last_traded_time",),
+    "last_trade_time": ("last_traded_time",),
+    "exchange_time": ("exch_feed_time",),
+    "total_buy_quantity": ("tot_buy_qty",),
+    "total_sell_quantity": ("tot_sell_qty",),
+    "upper_circuit": ("upper_ckt",),
+    "lower_circuit": ("lower_ckt",),
+    "change": ("ltp", "prev_close_price"),
+    "change_percent": ("ltp", "prev_close_price"),
+    "percent_change": ("ltp", "prev_close_price"),
+}
+
+
 class FyersAdapter:
     """
     Fyers WebSocket adapter for OpenAlgo streaming service
@@ -60,6 +89,14 @@ class FyersAdapter:
 
         # Real LTP per symbol, borrowed by depth messages (which carry none)
         self.last_ltp = {}  # "EXCHANGE:SYMBOL" -> last traded price from the sf/if feed
+
+        # Latest quote fields per scrip from the sf/if feed, merged into every
+        # depth message so a DEPTH tick carries the quote too
+        self.latest_quote = {}  # "EXCHANGE:SYMBOL" -> {openalgo key: value}
+        # Depth published before the scrip's first sf snapshot, sent again once
+        # that snapshot arrives so the quote fields are not missing until the
+        # next book change
+        self.depth_awaiting_quote = {}  # "EXCHANGE:SYMBOL" -> depth payload
 
         # self.logger.info(f"Fyers adapter initialized for user: {userid}")
 
@@ -147,13 +184,13 @@ class FyersAdapter:
                 self.symbol_to_hsm.clear()
                 self.hsm_to_symbol.clear()  # Clear reverse mapping too
                 self.subscription_callbacks.clear()  # Clear callbacks
-                self.last_ltp.clear()
+                self._clear_quote_state()
                 self.logger.info("Disconnected from Fyers WebSocket (cleared all mappings)")
             else:
                 # Keep mappings but clear active subscriptions for reconnection
                 self.active_subscriptions.clear()
                 self.subscription_callbacks.clear()
-                self.last_ltp.clear()
+                self._clear_quote_state()
                 # self.logger.info(f"Disconnected from Fyers WebSocket (preserved {len(self.hsm_to_symbol)} mappings)")
 
         except Exception as e:
@@ -265,18 +302,14 @@ class FyersAdapter:
                         continue
                     pair = brsymbol_to_openalgo.get(brsym)
                     if not pair:
-                        self.logger.warning(
-                            f"brsymbol {brsym} did not match any input symbol"
-                        )
+                        self.logger.warning(f"brsymbol {brsym} did not match any input symbol")
                         continue
                     exch, sym = pair
                     full_symbol = f"{exch}:{sym}"
                     self.symbol_to_hsm[full_symbol] = hsm_token
                     self.hsm_to_symbol[hsm_token] = full_symbol
                     mapped_count += 1
-                    self.logger.debug(
-                        f"Mapped {full_symbol} <-> {hsm_token} (brsymbol: {brsym})"
-                    )
+                    self.logger.debug(f"Mapped {full_symbol} <-> {hsm_token} (brsymbol: {brsym})")
 
                 # Sanity check: every input symbol should have ended up mapped.
                 unmapped_subs = [
@@ -286,6 +319,26 @@ class FyersAdapter:
                 ]
                 for fs in unmapped_subs:
                     self.logger.warning(f"Unmapped subscription: {fs}")
+
+                # A depth (dp) topic carries only the five book levels: no LTP,
+                # OHLC, volume or traded quantities. Subscribe the same scrip's
+                # symbol feed (sf) with it, so every depth message can carry the
+                # quote. The sf topic is the dp topic with the feed prefix
+                # changed, exactly as the token converter builds both. Index
+                # depth already rides the index feed (if), which is the quote.
+                if data_type == "DepthUpdate":
+                    for hsm_token in list(hsm_tokens):
+                        if not hsm_token.startswith("dp|"):
+                            continue
+                        full_symbol = self.hsm_to_symbol.get(hsm_token)
+                        if not full_symbol:
+                            continue
+                        sf_token = "sf|" + hsm_token[3:]
+                        if sf_token not in hsm_tokens:
+                            hsm_tokens.append(sf_token)
+                        token_mappings[sf_token] = token_mappings[hsm_token]
+                        self.hsm_to_symbol[sf_token] = full_symbol
+                        self.logger.debug(f"Depth {full_symbol} also subscribes {sf_token}")
 
                 # Final verification
                 self.logger.debug("\nMapping Summary:")
@@ -327,6 +380,53 @@ class FyersAdapter:
         """Last traded price seen on the sf/if feed, or None if not subscribed there"""
         return self.last_ltp.get(f"{exchange}:{symbol}")
 
+    def get_latest_quote(self, exchange: str, symbol: str) -> dict | None:
+        """Quote fields from the latest sf/if message for a scrip, or None.
+
+        Only fields Fyers actually sent are present, so a caller merging them
+        into a depth message never publishes a placeholder.
+        """
+        latest_quote, _ = self._quote_state()
+        fields = latest_quote.get(f"{exchange}:{symbol}")
+        return dict(fields) if fields else None
+
+    def forget_quote(self, exchange: str, symbol: str) -> None:
+        """Drop the stored quote of a scrip nothing reads any more."""
+        full_symbol = f"{exchange}:{symbol}"
+        latest_quote, awaiting = self._quote_state()
+        latest_quote.pop(full_symbol, None)
+        awaiting.pop(full_symbol, None)
+        self.last_ltp.pop(full_symbol, None)
+
+    def _quote_state(self) -> tuple[dict, dict]:
+        """The latest-quote and awaiting-depth maps, created on first use."""
+        if getattr(self, "latest_quote", None) is None:
+            self.latest_quote = {}
+        if getattr(self, "depth_awaiting_quote", None) is None:
+            self.depth_awaiting_quote = {}
+        return self.latest_quote, self.depth_awaiting_quote
+
+    def _clear_quote_state(self) -> None:
+        self.last_ltp.clear()
+        latest_quote, awaiting = self._quote_state()
+        latest_quote.clear()
+        awaiting.clear()
+
+    @staticmethod
+    def _quote_fields_for_depth(fyers_data: dict[str, Any], quote_data: dict[str, Any]) -> dict:
+        """
+        The quote fields a depth message borrows, taken from one sf/if message.
+
+        Only fields whose raw HSM source Fyers actually sent are kept, so a
+        field the feed never carried (an index has no volume) is left out of
+        the depth message instead of being published as zero.
+        """
+        return {
+            key: quote_data[key]
+            for key, sources in _QUOTE_FIELDS_FOR_DEPTH.items()
+            if key in quote_data and all(src in fyers_data for src in sources)
+        }
+
     def unsubscribe_symbols(self, symbols: list[dict[str, str]]):
         """
         Unsubscribe from symbols
@@ -360,7 +460,6 @@ class FyersAdapter:
             if not fyers_data:
                 return
 
-            # Determine data type and get appropriate callback
             fyers_type = fyers_data.get("type", "sf")
             update_type = fyers_data.get("update_type", "snapshot")
 
@@ -369,161 +468,46 @@ class FyersAdapter:
             if not mapped_data:
                 return
 
-            # Extract symbol information from mapped data
-            symbol_str = mapped_data.get("symbol", "")
-            if not symbol_str:
-                return
-
-            # Find matching subscription using HSM token or original symbol
-            callback = None
-            openalgo_data_type = "Quote"  # Default
-            matched_subscription = None
-
-            # Try to match using HSM token first (most reliable)
+            # Route by the HSM topic only. Every topic this adapter subscribes
+            # is mapped to its OpenAlgo symbol when it is subscribed, joined
+            # through brsymbol. The old fallbacks (symbol-name substrings, a
+            # "NIFTY ... FUT" pattern, "the only subscription") could hand one
+            # scrip's tick to another symbol, so an unmapped tick is dropped.
             hsm_token = fyers_data.get("hsm_token")
-            if hsm_token:
-                # Use bidirectional mapping for fast lookup
-                if hsm_token in self.hsm_to_symbol:
-                    full_symbol = self.hsm_to_symbol[hsm_token]
-                    if full_symbol in self.active_subscriptions:
-                        matched_subscription = self.active_subscriptions[full_symbol]
-                        self.logger.debug(f"Matched by HSM token: {hsm_token} -> {full_symbol}")
-                else:
-                    # Log missing mapping for debugging
-                    self.logger.debug(f"HSM token {hsm_token} not in mappings")
-                    self.logger.debug(f"Current HSM->Symbol mappings: {self.hsm_to_symbol}")
-                    # Try fallback matching
-                    for full_symbol, sub_info in self.active_subscriptions.items():
-                        if (
-                            full_symbol in self.symbol_to_hsm
-                            and self.symbol_to_hsm[full_symbol] == hsm_token
-                        ):
-                            matched_subscription = sub_info
-                            # Update reverse mapping for future fast lookup
-                            self.hsm_to_symbol[hsm_token] = full_symbol
-                            self.logger.debug(
-                                f"Matched by HSM token (fallback): {hsm_token} -> {full_symbol}"
-                            )
-                            break
-
-            # If no match by HSM token, try matching by original_symbol field
-            if not matched_subscription and "original_symbol" in fyers_data:
-                original_symbol = fyers_data.get("original_symbol", "")
-                # Try exact match
-                if original_symbol in self.active_subscriptions:
-                    matched_subscription = self.active_subscriptions[original_symbol]
-                    self.logger.debug(f"Matched by original_symbol: {original_symbol}")
-                else:
-                    # Try to find a match in active subscriptions
-                    # Handle cases like NSE:NIFTY25SEPFUT -> NFO:NIFTY30SEP25FUT
-                    for full_symbol, sub_info in self.active_subscriptions.items():
-                        # Check for NFO futures match
-                        if (
-                            sub_info["exchange"] == "NFO"
-                            and "NIFTY" in original_symbol
-                            and "FUT" in original_symbol
-                        ):
-                            if "NIFTY" in sub_info["symbol"] and "FUT" in sub_info["symbol"]:
-                                matched_subscription = sub_info
-                                self.logger.debug(
-                                    f"Matched NFO future by pattern: {original_symbol} -> {full_symbol}"
-                                )
-                                # Update the mapping for future use
-                                if hsm_token and hsm_token not in self.hsm_to_symbol:
-                                    self.hsm_to_symbol[hsm_token] = full_symbol
-                                    self.symbol_to_hsm[full_symbol] = hsm_token
-                                break
-
-            # If no match by token, fall back to symbol matching from fyers data
+            full_symbol = self.hsm_to_symbol.get(hsm_token) if hsm_token else None
+            matched_subscription = (
+                self.active_subscriptions.get(full_symbol) if full_symbol else None
+            )
             if not matched_subscription:
-                # Try to match using the symbol from fyers_data
-                fyers_symbol = fyers_data.get("symbol", "")
-                if fyers_symbol:
-                    # Try exact match first
-                    for full_symbol, sub_info in self.active_subscriptions.items():
-                        # Check various matching patterns
-                        if sub_info["symbol"] in fyers_symbol or fyers_symbol.endswith(
-                            sub_info["symbol"]
-                        ):
-                            matched_subscription = sub_info
-                            self.logger.debug(
-                                f"Matched by symbol name: {fyers_symbol} -> {full_symbol}"
-                            )
-                            # Update the mapping for future use
-                            if hsm_token and hsm_token not in self.hsm_to_symbol:
-                                self.hsm_to_symbol[hsm_token] = full_symbol
-                                self.symbol_to_hsm[full_symbol] = hsm_token
-                            break
-                        # Special case for NFO futures
-                        elif sub_info["exchange"] == "NFO" and "FUT" in sub_info["symbol"]:
-                            # Extract core symbol from both
-                            fyers_core = (
-                                fyers_symbol.replace("-EQ", "").split("FUT")[0]
-                                if "FUT" in fyers_symbol
-                                else ""
-                            )
-                            sub_core = (
-                                sub_info["symbol"].split("FUT")[0]
-                                if "FUT" in sub_info["symbol"]
-                                else ""
-                            )
-                            if fyers_core and sub_core and fyers_core in sub_core:
-                                matched_subscription = sub_info
-                                self.logger.debug(
-                                    f"Matched NFO by core symbol: {fyers_symbol} -> {full_symbol}"
-                                )
-                                # Update the mapping for future use
-                                if hsm_token and hsm_token not in self.hsm_to_symbol:
-                                    self.hsm_to_symbol[hsm_token] = full_symbol
-                                    self.symbol_to_hsm[full_symbol] = hsm_token
-                                break
-
-                # If still no match and only one subscription, use it
-                if not matched_subscription and len(self.active_subscriptions) == 1:
-                    for full_symbol, sub_info in self.active_subscriptions.items():
-                        matched_subscription = sub_info
-                        self.logger.debug(f"Single subscription match: {full_symbol}")
-                        break
-
-            # Final check - if still no match, log detailed debug info and return
-            if not matched_subscription:
-                self.logger.warning(f"No HSM token match for data. HSM token: {hsm_token}")
-                self.logger.debug(f"   HSM to Symbol mappings: {self.hsm_to_symbol}")
-                self.logger.debug(f"   Symbol to HSM mappings: {self.symbol_to_hsm}")
                 self.logger.debug(
-                    f"   Active subscriptions: {list(self.active_subscriptions.keys())}"
+                    f"Dropping tick for unmapped HSM topic {hsm_token} "
+                    f"(symbol {fyers_data.get('symbol', 'N/A')})"
                 )
-                self.logger.debug(f"   Fyers symbol: {fyers_data.get('symbol', 'N/A')}")
-                self.logger.debug(f"   Original symbol: {fyers_data.get('original_symbol', 'N/A')}")
                 return
 
-            """
-            # Complex string matching logic removed - we rely on HSM token matching
-            # This follows the same pattern as Angel adapter which uses token-based matching
-            """
-
-            # Build the list of callbacks to invoke for this tick.
-            #
-            # Stocks have two distinct HSM streams — `sf` (symbol feed → quote)
-            # and `dp` (depth feed) — and each tick belongs to exactly one
-            # subscriber. Indices have a SINGLE feed (`if`), so a single tick
-            # may need to be fanned out to both Quote (mode 2) and Depth
-            # (mode 3) subscribers when both are registered. Previously this
-            # branch only delivered to whichever callback existed, with Depth
-            # winning when both did — so a Quote-only subscriber that ran
-            # alongside any prior Depth registration silently received
-            # depth-shaped data labelled `subscription_mode: 3`. See issue
-            # #1093.
             full_symbol = f"{matched_subscription['exchange']}:{matched_subscription['symbol']}"
+
+            # Stocks have two HSM streams, `sf` (quote) and `dp` (depth). A
+            # depth subscription subscribes both, and every depth message
+            # carries the latest quote fields from `sf`. Indices have a single
+            # feed (`if`) which is fanned out to Quote and Depth subscribers
+            # alike (issue #1093).
             quote_cb = self.subscription_callbacks.get(f"SymbolUpdate_{full_symbol}")
             depth_cb = self.subscription_callbacks.get(f"DepthUpdate_{full_symbol}")
+            latest_quote, depth_awaiting_quote = self._quote_state()
+
+            if fyers_type in ("sf", "if"):
+                # Remember the real last traded price and quote fields. A depth
+                # message carries none, so it borrows them from here.
+                if mapped_data.get("ltp"):
+                    self.last_ltp[full_symbol] = mapped_data["ltp"]
+                latest_quote[full_symbol] = self._quote_fields_for_depth(fyers_data, mapped_data)
 
             dispatches: list[tuple[Callable, str]] = []
             if fyers_type == "dp":
                 if depth_cb:
                     dispatches.append((depth_cb, "Depth"))
             elif fyers_type == "if":
-                # Index feed: fan out to whichever sides are subscribed.
                 if quote_cb:
                     dispatches.append((quote_cb, "Quote"))
                 if depth_cb:
@@ -531,11 +515,11 @@ class FyersAdapter:
             else:
                 if quote_cb:
                     dispatches.append((quote_cb, "Quote"))
-
-            # Remember the real last traded price. A Fyers depth (dp) message
-            # carries no LTP, so depth messages borrow it from here.
-            if fyers_type in ("sf", "if") and mapped_data.get("ltp"):
-                self.last_ltp[full_symbol] = mapped_data["ltp"]
+                # A depth sent before the first quote of this scrip went out
+                # without the quote fields; send it once more, now complete.
+                pending_depth = depth_awaiting_quote.pop(full_symbol, None)
+                if depth_cb and pending_depth is not None:
+                    dispatches.append((depth_cb, "PendingDepth"))
 
             if not dispatches:
                 return
@@ -546,22 +530,25 @@ class FyersAdapter:
             now = int(time.time())
 
             for cb, openalgo_data_type in dispatches:
-                # Re-map per side. The Quote map already happened above; only
-                # rebuild for Depth to keep the cost of equity/futures (the
-                # common case, single dispatch) unchanged.
-                if openalgo_data_type == "Depth":
+                if openalgo_data_type == "PendingDepth":
+                    side_data = pending_depth
+                    openalgo_data_type = "Depth"
+                elif openalgo_data_type == "Depth":
                     side_data = self.data_mapper.map_fyers_data(fyers_data, "Depth")
                     if not side_data:
                         continue
                 else:
                     side_data = dict(mapped_data)
 
-                if fyers_type == "dp":
-                    # Real LTP only, from the quote feed when it is subscribed.
-                    # Without one the field is left out rather than invented.
+                if openalgo_data_type == "Depth":
+                    # Real quote fields only, from the symbol feed. Before its
+                    # first message they are left out rather than invented.
                     side_data.pop("ltp", None)
-                    if full_symbol in self.last_ltp:
-                        side_data["ltp"] = self.last_ltp[full_symbol]
+                    quote_fields = latest_quote.get(full_symbol)
+                    if quote_fields:
+                        side_data.update(quote_fields)
+                    elif fyers_type == "dp":
+                        depth_awaiting_quote[full_symbol] = dict(side_data)
 
                 side_data["symbol"] = matched_subscription["symbol"]
                 side_data["exchange"] = matched_subscription["exchange"]
@@ -580,9 +567,8 @@ class FyersAdapter:
 
                 cb(side_data)
 
-        except Exception as e:
-            self.logger.error(f"Error processing message: {e}")
-            self.logger.debug(f"Raw data: {fyers_data}")
+        except Exception:
+            self.logger.exception("Error processing Fyers market data message")
 
     def get_connection_status(self) -> dict[str, Any]:
         """
@@ -651,6 +637,10 @@ class FyersAdapter:
                 self.hsm_to_symbol.clear()
             if hasattr(self, "last_ltp"):
                 self.last_ltp.clear()
+            if getattr(self, "latest_quote", None):
+                self.latest_quote.clear()
+            if getattr(self, "depth_awaiting_quote", None):
+                self.depth_awaiting_quote.clear()
 
             # Force cleanup WebSocket client
             if hasattr(self, "ws_client") and self.ws_client:

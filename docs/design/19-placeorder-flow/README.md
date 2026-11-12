@@ -4,6 +4,10 @@
 
 The PlaceOrder API is the core order execution endpoint in OpenAlgo. It handles order validation, authentication, broker routing, and response processing through multiple layers.
 
+## Broker Transport Outcomes
+
+The shared HTTP transport retries a broken read once for eligible network/protocol failures. It does not retry writes. A connect/pool refusal means the write did not leave OpenAlgo; a lost reply after a potentially sent write means the order may exist at the broker. `watch_for_unanswered_writes()` preserves that distinction even when a plugin catches the transport exception. PlaceOrder returns the check-the-order-book message with HTTP 502 for an unanswered write; clients must reconcile broker state before placing it again. A gthread-only broker-pacer refusal is returned before send with HTTP 429. Sources: `utils/httpx_client.py`, `utils/broker_backpressure.py`, `services/place_order_service.py`.
+
 ## Complete Flow Diagram
 
 ```
@@ -145,7 +149,7 @@ The PlaceOrder API is the core order execution endpoint in OpenAlgo. It handles 
 │  │  OrderPlacedEvent│          │ bus.publish(     │                         │
 │  │ )                │          │  OrderFailedEvent│                         │
 │  │ → log+socketio+  │          │ )                │                         │
-│  │   telegram via   │          │ Return error     │                         │
+│  │   alerts via     │          │ Return error     │                         │
 │  │   subscribers    │          │                  │                         │
 │  └──────────────────┘          └──────────────────┘                         │
 │                                                                              │
@@ -319,7 +323,7 @@ def place_order_api(data, auth):
 
 ## Event Bus Side-Effects
 
-All post-order side-effects (logging, SocketIO, Telegram) are dispatched through the Event Bus. The service publishes a single typed event; subscribers handle each concern independently.
+All post-order side-effects (logging, SocketIO, alerts) are dispatched through the Event Bus. The service publishes a single typed event; subscribers handle each concern independently.
 
 ### Publishing
 
@@ -346,7 +350,7 @@ bus.publish(OrderPlacedEvent(
 |------------|--------|
 | `log_subscriber` | Writes to `order_logs` (live) or `analyzer_logs` (analyze) |
 | `socketio_subscriber` | Emits `order_event` (live) or `analyzer_update` (analyze) |
-| `telegram_subscriber` | Sends Telegram alert via `send_order_alert()` |
+| `alert_subscriber` | Raises an `alert.raised` event when a channel wants it, then hands it to each channel (Telegram, WhatsApp, Slack, Discord) the event group is routed to on `/alerts` |
 
 See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 
@@ -401,4 +405,4 @@ See [53-event-bus](../53-event-bus/README.md) for full architecture details.
 | `broker/{name}/mapping/transform_data.py` | Data transformation |
 | `utils/event_bus.py` | Event bus (side-effect dispatch) |
 | `events/order_events.py` | Order event types |
-| `subscribers/` | Log, SocketIO, Telegram subscribers |
+| `subscribers/` | Log, SocketIO and alert subscribers |
