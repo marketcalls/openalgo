@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
+import { formatFundsAmount, summarizeFunds } from '@/lib/scalpingFunds'
 import { priceDecimals } from '@/lib/scalpingPrice'
 import { buildPositionRows } from '@/lib/scalpingRows'
 import { mergeTick, type TickView } from '@/lib/scalpingTick'
@@ -511,6 +512,15 @@ export default function Scalping() {
     enabled: !!apiKey,
     refetchOnWindowFocus: true,
   })
+  // Available balance and utilised margin for the header. Same event-driven refresh
+  // as the books: an order, cancel or exit changes both, so refreshBooks refetches it.
+  const { data: fundsResp } = useQuery({
+    queryKey: ['scalping', 'funds', appMode],
+    queryFn: () => tradingApi.getFunds(apiKey ?? ''),
+    enabled: !!apiKey,
+    refetchOnWindowFocus: true,
+  })
+  const funds = summarizeFunds(fundsResp?.data)
   // The scalping list: instruments this terminal has traded (scopes the book to
   // the scalping strategy, since broker positions carry no strategy tag).
   const { data: trackedResp } = useQuery({
@@ -556,6 +566,7 @@ export default function Scalping() {
       queryClient.invalidateQueries({ queryKey: ['scalping', 'orders'] })
       queryClient.invalidateQueries({ queryKey: ['scalping', 'trades'] })
       queryClient.invalidateQueries({ queryKey: ['scalping', 'tracked'] })
+      queryClient.invalidateQueries({ queryKey: ['scalping', 'funds'] })
     }
     const since = Date.now() - lastRefreshRef.current
     if (since >= REFRESH_THROTTLE_MS) {
@@ -1049,7 +1060,21 @@ export default function Scalping() {
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Scalping Terminal</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex items-center gap-4 font-mono text-sm" data-testid="scalping-funds">
+            <span>
+              <span className="text-muted-foreground">Available Balance:</span>{' '}
+              <span className="font-semibold">
+                {funds ? formatFundsAmount(funds.available) : '-'}
+              </span>
+            </span>
+            <span>
+              <span className="text-muted-foreground">Utilised Margin:</span>{' '}
+              <span className="font-semibold">
+                {funds ? formatFundsAmount(funds.utilised) : '-'}
+              </span>
+            </span>
+          </div>
           {lastLatencyMs != null && (
             <span className="font-mono text-xs text-muted-foreground">order {lastLatencyMs}ms</span>
           )}
