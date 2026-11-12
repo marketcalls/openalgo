@@ -59,6 +59,13 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.2: nothing for a descriptor to change.** Elliott wave counts leave
+  their origin unlabelled and number their waves from the second anchor,
+  default to the Intermediate degree, `(1)` to `(5)`, centre each label on
+  its point and are drawn as they are placed. The drawing tool contract
+  gains an optional `progressive` field for that; the indicator descriptor
+  is untouched, the registry stays at 112 and the index at 438 names.
+
 - **2.7.1: nothing for a descriptor to change.** Three Elliott wave drawing
   tools (triangle, double and triple combination) join the impulse and the
   correction, every count starts at an origin anchor, and a count is labelled
