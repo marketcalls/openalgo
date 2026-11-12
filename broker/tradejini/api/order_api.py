@@ -27,6 +27,7 @@ from ..mapping.order_data import (
     transform_tradebook_data,
 )
 from ..mapping.transform_data import (
+    SymbolNotFoundError,
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -900,6 +901,35 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
         raise PositionReadError("tradejini", f"{type(e).__name__}: {e}") from e
 
 
+class _OrderResponse:
+    """Response object returned by place_order_api.
+
+    The order services decide success from ``.status == 200`` alone, so a
+    refusal must never carry 200: Tradejini can answer a refused order with its
+    error envelope over HTTP 200, which was reported as a placed order with
+    order id None (issue #2385). ``None`` is never returned either, because the
+    services read ``.status`` without a check.
+    """
+
+    def __init__(self, status):
+        self.status = status
+        self.status_code = status
+
+
+# The order may exist: Tradejini said ok, or sent a 200 that could not be read.
+NO_ORDER_ID_MESSAGE = (
+    "Tradejini accepted the order but did not return an order id. "
+    "Check the order book before placing it again."
+)
+
+
+def _order_refused(status, message):
+    """Build the (response, data, order_id) answer for an order that was not placed."""
+    if status == 200:
+        status = 400
+    return _OrderResponse(status), {"status": "error", "message": message}, None
+
+
 def place_order_api(data, auth):
     """
     Place an order using Tradejini API.
@@ -910,7 +940,8 @@ def place_order_api(data, auth):
 
     Returns:
         tuple: (response_obj, response_data, order_id)
-            - response_obj: Object with status attribute
+            - response_obj: Object with status attribute; 200 only when the
+              order was placed and Tradejini returned its order id
             - response_data: Dict with status and message
             - order_id: String order ID if successful, None otherwise
     """
@@ -923,7 +954,7 @@ def place_order_api(data, auth):
         if missing_fields:
             error_msg = f"Missing required fields: {', '.join(missing_fields)}"
             logger.error(f"place_order_api - {error_msg}")
-            return None, {"status": "error", "message": error_msg}, None
+            return _order_refused(400, error_msg)
 
         AUTH_TOKEN = auth
         logger.debug(f"place_order_api - Placing order for {data['symbol']} on {data['exchange']}")
@@ -939,10 +970,16 @@ def place_order_api(data, auth):
             token = get_token(data["symbol"], data["exchange"])
             transformed_data = transform_data(data, token)
             logger.debug(f"place_order_api - Transformed data: {transformed_data}")
+        except SymbolNotFoundError as e:
+            logger.warning(
+                f"place_order_api - {data['symbol']} on {data['exchange']} is not in the "
+                "master contract; order not sent"
+            )
+            return _order_refused(400, str(e))
         except Exception as e:
             error_msg = f"Error transforming order data: {str(e)}"
             logger.exception(error_msg)
-            return None, {"status": "error", "message": error_msg}, None
+            return _order_refused(400, error_msg)
 
         # httpx form-encodes the dict, so values containing spaces or '&'
         # (remarks, for instance) are escaped correctly.
@@ -953,7 +990,7 @@ def place_order_api(data, auth):
         api_key = get_api_key()
         if not api_key:
             logger.error(API_KEY_MISSING_ERROR)
-            return None, {"status": "error", "message": API_KEY_MISSING_ERROR}, None
+            return _order_refused(500, API_KEY_MISSING_ERROR)
 
         # Prepare authorization
         auth_header = f"{api_key}:{AUTH_TOKEN}"
@@ -987,60 +1024,74 @@ def place_order_api(data, auth):
             logger.debug(f"place_order_api - Response header fields: {list(response.headers)}")
 
             response.raise_for_status()
-            response_data = response.json()
+            try:
+                response_data = response.json()
+            except ValueError:
+                # A 2xx we cannot read: the order may have been placed.
+                logger.exception(
+                    f"place_order_api - Unreadable response (HTTP {response.status_code}): "
+                    f"{response.text[:500]}"
+                )
+                return _order_refused(502, NO_ORDER_ID_MESSAGE)
             logger.debug(f"place_order_api - API response: {response_data}")
+            if not isinstance(response_data, dict):
+                logger.error(f"place_order_api - Unexpected response shape: {response_data!r}")
+                return _order_refused(502, NO_ORDER_ID_MESSAGE)
 
-            # Create a response-like object with status attribute
-            class ResponseLike:
-                def __init__(self, status_code):
-                    self.status = status_code
-
-            response_obj = ResponseLike(response.status_code)
-
-            # Parse successful response
-            if response_data.get("s") == "ok" and "d" in response_data:
-                order_id = response_data["d"].get("orderId")
-                message = response_data["d"].get("msg", "Order placed successfully")
+            # Parse successful response. Any "ok" may be a placed order, whatever
+            # shape its payload has, so it is never reported as a refusal.
+            if response_data.get("s") == "ok":
+                payload_d = response_data.get("d")
+                if not isinstance(payload_d, dict):
+                    payload_d = {}
+                order_id = payload_d.get("orderId")
+                message = payload_d.get("msg", "Order placed successfully")
 
                 if not order_id:
+                    # Tradejini said ok, so the order may exist: send the trader
+                    # to the order book rather than reporting a refusal or a
+                    # placed order with no id.
                     logger.warning(f"place_order_api - No order ID in response: {response_data}")
-                    return (
-                        response_obj,
-                        {"status": "error", "message": "No order ID in response"},
-                        None,
-                    )
+                    return _order_refused(502, NO_ORDER_ID_MESSAGE)
 
                 logger.debug(f"place_order_api - Order placed successfully. Order ID: {order_id}")
                 return (
-                    response_obj,
+                    _OrderResponse(200),
                     {"status": "success", "message": message, "orderid": str(order_id)},
                     str(order_id),
                 )
-            else:
-                # Error envelope carries the message at the top level as 'msg'
-                error_msg = _envelope_error(response_data)
-                logger.error(f"place_order_api - Order placement failed: {error_msg}")
-                return response_obj, {"status": "error", "message": error_msg}, None
+
+            # Error envelope ({"s": "error", "msg": ...}), even over HTTP 200
+            error_msg = _envelope_error(response_data, "Tradejini refused the order")
+            logger.error(
+                f"place_order_api - Order placement failed (HTTP {response.status_code}): "
+                f"{error_msg}"
+            )
+            return _order_refused(response.status_code, error_msg)
 
         except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP error: {str(e)}"
+            status = e.response.status_code if e.response is not None else 502
+            error_msg = "Tradejini refused the order"
             if e.response is not None:
                 try:
-                    error_msg = _envelope_error(e.response.json())
+                    error_msg = _envelope_error(e.response.json(), error_msg)
                 except Exception:
-                    error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
-            logger.error(f"place_order_api - {error_msg}")
-            return None, {"status": "error", "message": error_msg}, None
+                    logger.error(
+                        f"place_order_api - Unreadable error body (HTTP {status}): "
+                        f"{e.response.text[:500]}"
+                    )
+            logger.error(f"place_order_api - HTTP {status}: {error_msg}")
+            return _order_refused(status, error_msg)
 
         except Exception as e:
             error_msg = f"Error placing order: {str(e)}"
             logger.exception(error_msg)
-            return None, {"status": "error", "message": error_msg}, None
+            return _order_refused(500, error_msg)
 
     except Exception as e:
         error_msg = f"Unexpected error in place_order_api: {str(e)}"
         logger.exception(error_msg)
-        return None, {"status": "error", "message": error_msg}, None
+        return _order_refused(500, error_msg)
 
 
 @refuse_smart_order_on_read_failure
@@ -1239,7 +1290,9 @@ def place_smartorder_api(data, auth):
                             f"place_smartorder_api - Invalid response format from place_order_api: {response}"
                         )
 
-                    return None, {"status": "error", "message": error_msg}, None
+                    # Pass place_order_api's response object on (never 200 for a
+                    # failure) so the caller gets Tradejini's real status.
+                    return res, {"status": "error", "message": error_msg}, None
 
             except Exception as e:
                 error_msg = f"Exception in place_order_api: {str(e)}"
