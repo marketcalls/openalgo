@@ -51,11 +51,29 @@ function sourceBounds(
       calendar.timezone
     )
     const session = calendar.sessionFrom(from)
-    if (!session || session.open >= from + DAY) return null
+    // A daily bar the broker reports on a day the calendar shows closed (a
+    // weekend special session in a year with no holiday list) still belongs
+    // to its own date, which lies inside exactly one W, M or multi-day bucket.
+    if (!session || session.open >= from + DAY) return { time, from, to: from + DAY }
     return { time, from, to: session.close }
   }
   // The same exchange contract applies to native and derived clock periods.
   return timeframeBucketAt({ interval, native: false, market: { calendar } } as TimeframePlan, time)
+}
+
+/**
+ * Widest date window asked of one native source per history call while deriving.
+ *
+ * Windows are fetched one after another under one deadline, and the server
+ * spaces broker history calls apart, so a daily source cut into 30-day windows
+ * cannot build 5 years of W or 10 years of M in time (#2384). Broker plugins
+ * already split long daily ranges into their own API chunks, so a daily or
+ * coarser source can ask for years at once. Intraday sources keep 30 days.
+ */
+export function sourceSpanSeconds(interval: string): number {
+  const rule = resolveInterval(interval).bucketing
+  const daily = rule.mode === 'calendar' || (rule.mode === 'interval' && rule.seconds >= DAY)
+  return (daily ? 2000 : 30) * DAY
 }
 
 export function createTradingTimeframes(source: DataFeed, options: TradingTimeframeOptions) {
@@ -81,7 +99,7 @@ export function createTradingTimeframes(source: DataFeed, options: TradingTimefr
             ),
           // The API uses finite date windows. Split large derived requests without
           // inventing a retention date or promising that a broker has older bars.
-          maxSpanSeconds: 30 * DAY,
+          maxSpanSeconds: sourceSpanSeconds(interval),
         })),
     }
   }
