@@ -105,18 +105,51 @@ jobs:
             fi
 
             PREVIOUS=$(git -C "$APP" rev-parse HEAD)
-            echo "Fetching origin/$BRANCH (currently at $PREVIOUS)..."
-            git -C "$APP" fetch origin "$BRANCH"
+            echo "git $(git --version | cut -d' ' -f3); fetching origin/$BRANCH (currently at $PREVIOUS)..."
+            # An explicit destination, so the commit is read from a named ref and
+            # never from FETCH_HEAD.
+            git -C "$APP" fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+            TARGET=$(git -C "$APP" rev-parse "refs/remotes/origin/$BRANCH")
+            echo "Deploying $TARGET"
 
-            # Run the newest official updater from a copy: it pulls the code it
-            # lives in, and bash reads a script while running it. It stops the
-            # service, backs up the databases, pulls, installs dependencies,
-            # fixes ownership, runs upgrade/migrate_all.py and starts the service.
+            # Run the official updater from a copy taken from the commit being
+            # deployed: it updates the code it lives in, and bash reads a script
+            # while running it. It stops the service, backs up the databases,
+            # updates the code, installs dependencies, fixes ownership, runs
+            # upgrade/migrate_all.py and starts the service.
             mkdir -p "$WORK"
-            git -C "$APP" show "origin/$BRANCH:install/update.sh" > "$WORK/update.sh"
+            git -C "$APP" show "$TARGET:install/update.sh" > "$WORK/update.sh"
             chmod 700 "$WORK/update.sh"
+
+            # Its `git pull origin main` fetched main on this droplet and then
+            # found nothing to merge ("There are no candidates for merging").
+            # Fast-forward to the commit fetched above instead. If the updater
+            # ever changes that line, stop rather than guess.
+            PULL='sudo git -C "$OPENALGO_PATH" pull origin "$CURRENT_BRANCH"'
+            MERGE='sudo git -C "$OPENALGO_PATH" merge --ff-only '"$TARGET"
+            if [ "$(grep -cF "$PULL" "$WORK/update.sh")" != "1" ]; then
+              echo "install/update.sh no longer has the expected pull line. Update deploy.yml before deploying."
+              exit 1
+            fi
+            # Literal substring replacement; bash's own ${var/a/b} treats quotes
+            # in the replacement differently from one bash version to the next.
+            awk -v pull="$PULL" -v merge="$MERGE" '{
+              i = index($0, pull)
+              if (i) $0 = substr($0, 1, i - 1) merge substr($0, i + length(pull))
+              print
+            }' "$WORK/update.sh" > "$WORK/update.sh.new"
+            mv "$WORK/update.sh.new" "$WORK/update.sh"
+            chmod 700 "$WORK/update.sh"
+
             echo "Running install/update.sh (log in $WORK/logs)..."
-            bash "$WORK/update.sh"
+            UPDATE_OK=true
+            bash "$WORK/update.sh" || UPDATE_OK=false
+            if [ "$UPDATE_OK" = false ]; then
+              # The updater stops the service in its first step, so a failure
+              # after that must not leave OpenAlgo down.
+              echo "install/update.sh did not finish (log in $WORK/logs). Starting $SERVICE again..."
+              systemctl start "$SERVICE" || true
+            fi
 
             NEW=$(git -C "$APP" rev-parse HEAD)
             HOST=$(grep -E "^HOST_SERVER" "$APP/.env" | head -1 | cut -d= -f2- | tr -d " '\"")
@@ -147,6 +180,15 @@ jobs:
                   echo "Rollback did not come up either. Check: journalctl -u $SERVICE -n 100"
                 fi
               fi
+              exit 1
+            fi
+
+            if [ "$UPDATE_OK" = false ]; then
+              echo "$SERVICE is running $(git -C "$APP" rev-parse --short HEAD), but the update did not finish. Read the updater log before deploying again."
+              exit 1
+            fi
+            if [ "$NEW" != "$TARGET" ]; then
+              echo "$SERVICE is running, but the checkout is at $NEW instead of $TARGET."
               exit 1
             fi
 
