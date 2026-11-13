@@ -84,16 +84,18 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.tradejini.streaming.tradejini_order_adapter",
         "create_tradejini_order_adapter",
     ),
+    "groww": (
+        "broker.groww.streaming.groww_order_adapter",
+        "create_groww_order_adapter",
+    ),
 }
 
 # Brokers with no *usable* push mechanism fall back to REST-orderbook polling.
 #
-# groww: no push feed at all (its public API documents only REST live data).
-#
-# samco: same — Trade API v3.2 exposes exactly one socket (wss://stream.samco.in)
-# and it carries market data only. The documented streaming_type values are
-# "quote" and "quote2"; there is no order/trade confirmation stream, postback or
-# webhook anywhere in the v3.2 reference.
+# samco: no push feed at all. Trade API v3.2 exposes exactly one socket
+# (wss://stream.samco.in) and it carries market data only. The documented
+# streaming_type values are "quote" and "quote2"; there is no order/trade
+# confirmation stream, postback or webhook anywhere in the v3.2 reference.
 #
 # fivepaisa: it does document an OrderTradeConfirmations WebSocket, but 5Paisa
 # permits only ONE feed connection per {access_token, client_code} and a new
@@ -104,7 +106,7 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 # updates onto the market-data socket instead is not viable either: that adapter
 # runs in the websocket_proxy *subprocess* under gunicorn+eventlet and Docker, so
 # the OrderUpdateEvent would be published on the wrong process's event bus.
-_POLLING_BROKERS = {"groww", "fivepaisa", "samco"}
+_POLLING_BROKERS = {"fivepaisa", "samco"}
 
 # Brokers deliberately left out of both sets above, so they get no order updates:
 #
