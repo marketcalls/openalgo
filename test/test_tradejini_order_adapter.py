@@ -226,6 +226,49 @@ def test_every_event_in_a_frame_is_published(adapter):
     assert [c.args[0]["orderid"] for c in publish.call_args_list] == ["1", "2"]
 
 
+def test_malformed_event_does_not_drop_the_rest_of_the_frame(adapter):
+    frame = _frame(
+        _event_packet(_event(orderId="1")),
+        _event_packet(_event(orderId="2", qty="not-a-number")),
+        _event_packet(_event(orderId="3")),
+    )
+    with patch.object(adapter, "_publish_event_fields") as publish:
+        adapter._handle_message(frame)
+    assert [c.args[0]["orderid"] for c in publish.call_args_list] == ["1", "3"]
+
+
+def _opened_socket(adapter):
+    """A WebSocketApp after on_open: adapter's close watcher installed."""
+    ws = MagicMock()
+    original_close = MagicMock()
+    ws.on_close = original_close
+    adapter._ws = ws
+    adapter.on_open_extra(ws)
+    return ws, original_close
+
+
+def test_close_4001_stands_the_adapter_down(adapter):
+    ws, original_close = _opened_socket(adapter)
+    ws.on_close(ws, 4001, "Unauthorized Access")
+    assert adapter._auth_rejected is True
+    original_close.assert_called_once_with(ws, 4001, "Unauthorized Access")
+
+
+@pytest.mark.parametrize("code", [1000, 1006, None])
+def test_other_closes_still_reconnect(adapter, code):
+    ws, original_close = _opened_socket(adapter)
+    ws.on_close(ws, code, "")
+    assert adapter._auth_rejected is False
+    original_close.assert_called_once()
+
+
+def test_4001_from_a_superseded_socket_is_ignored(adapter):
+    ws, _ = _opened_socket(adapter)
+    adapter._ws = None  # disconnect() already dropped this socket
+    ws.on_close(ws, 4001, "Unauthorized Access")
+    assert adapter._auth_rejected is False
+
+
 def test_auth_accepted_packet_is_quiet(adapter):
     assert adapter.normalize(_frame(_auth_packet(1))) is None
     assert adapter._auth_rejected is False

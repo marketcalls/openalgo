@@ -18,7 +18,9 @@ Wire protocol, as the SDK speaks it:
        carries one string field (key 61) whose length is given by key 56; that
        string is the event, a JSON object routed by "evntType". Packet type 13
        (auth) carries auth_status (key 25), 1 meaning accepted.
-    4. an expired or invalid token closes the socket with code 4001
+    4. an expired or invalid token closes the socket with code 4001, and the
+       same token fails again on reconnect, so the adapter stands down until
+       the next login
 
 The documented event fields are evntType, type, trdSym, exch, qty, product,
 price, side, status, orderId, orderTime, actStatus, msg and reason. There is no
@@ -64,6 +66,7 @@ _KEY_AUTH_STATUS = 25
 _KEY_MSG_LEN = 56
 _KEY_MESSAGE = 61
 _DEFAULT_MESSAGE_LEN = 100  # the SDK spec's length when no nLen precedes it
+_CLOSE_UNAUTHORIZED = 4001  # expired or invalid token (12-websocket-sdks.md)
 
 # Tradejini status -> OpenAlgo's lowercase push vocabulary. Mirrors
 # broker/tradejini/mapping/order_data.py::map_order_data, which the order book
@@ -179,10 +182,35 @@ class TradejiniOrderUpdateAdapter(BaseOrderUpdateAdapter):
         return None  # authenticated by the token query parameter
 
     def on_open_extra(self, ws) -> None:
+        self._watch_auth_close(ws)
         # NxtradStream.subscribeEvents + __send_data: JSON plus a newline.
         request = {"type": "event", "action": "sub", "events": ORDER_EVENTS}
         ws.send(json.dumps(request) + "\n")
         self.logger.info("Sent Tradejini order-event subscribe")
+
+    def _watch_auth_close(self, ws) -> None:
+        """Stand down on close code 4001 instead of reconnecting.
+
+        12-websocket-sdks.md: an expired or invalid token is closed with 4001
+        ("Unauthorized Access"), and reconnecting with the same token fails the
+        same way. The upgrade itself succeeds, so the base class sees an
+        ordinary close and would retry forever. WebSocketApp looks on_close up
+        when the socket closes, so wrapping it here covers this connection.
+        """
+        original = ws.on_close
+
+        def on_close(app, close_status_code, close_reason):
+            if close_status_code == _CLOSE_UNAUTHORIZED and self._ws is app:
+                self.logger.warning(
+                    f"Tradejini order-update stream refused the session ({self.user_id}): "
+                    f"{close_reason or 'Unauthorized Access'}. "
+                    "Not retrying until the next broker login."
+                )
+                self._auth_rejected = True
+            if original:
+                original(app, close_status_code, close_reason)
+
+        ws.on_close = on_close
 
     def _stand_down_after_auth_failure(self, status) -> None:
         self.logger.warning(
@@ -213,7 +241,12 @@ class TradejiniOrderUpdateAdapter(BaseOrderUpdateAdapter):
                 return []
         out = []
         for event in events:
-            fields = self.normalize_event(event)
+            # One malformed event must not cost the rest of the frame.
+            try:
+                fields = self.normalize_event(event)
+            except (ValueError, TypeError) as e:
+                self.logger.debug(f"Skipping undecodable Tradejini order event: {e}")
+                continue
             if fields:
                 out.append(fields)
         return out
