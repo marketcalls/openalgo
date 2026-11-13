@@ -75,23 +75,44 @@ def get_order_book(auth):
 
     HDFC Sky splits the book across two calls (`type=pending` and
     `type=completed`); OpenAlgo's orderbook is a single list, so both are
-    fetched and merged. A failure on one half is logged and skipped rather
-    than sinking the whole book.
+    fetched and merged. If either half fails the whole book is reported as an
+    error: half a book returned as a success hides orders from the trader, and
+    the order-update poller would take it as the new baseline and then
+    announce the missing half again as fresh updates once it returns.
     """
     orders = []
     for order_type in ("pending", "completed"):
         try:
             payload = _request("GET", "/oapi/v1/orders", auth, params={"type": order_type})
-            if payload.get("status") == "error":
-                logger.warning(
-                    f"HDFC Sky {order_type} order book error: {payload.get('message')}"
-                )
-                continue
-            rows = (payload.get("data") or {}).get("orders") or []
-            orders.extend(rows)
-        except Exception as e:
-            logger.exception(f"Error fetching HDFC Sky {order_type} orders: {e}")
+        except Exception:
+            logger.exception(f"Error fetching HDFC Sky {order_type} orders")
+            return _order_book_unavailable()
+        # The documented error is {"status": "error", "message": ...}; an
+        # expired session answers {"error": "invalid credentials"} instead.
+        if (
+            not isinstance(payload, dict)
+            or payload.get("status") == "error"
+            or "error" in payload
+            or not isinstance(payload.get("data", {}), dict)
+        ):
+            message = (
+                payload.get("message") or payload.get("error")
+                if isinstance(payload, dict)
+                else payload
+            )
+            logger.warning(f"HDFC Sky {order_type} order book error: {message}")
+            return _order_book_unavailable()
+        rows = (payload.get("data") or {}).get("orders") or []
+        orders.extend(rows)
     return {"status": "success", "data": {"orders": orders}}
+
+
+def _order_book_unavailable():
+    return {
+        "status": "error",
+        "message": "HDFC Sky did not return the full order book. Refresh in a moment; "
+        "if it keeps failing, log in to HDFC Sky again.",
+    }
 
 
 def get_trade_book(auth):
