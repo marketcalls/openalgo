@@ -7,7 +7,7 @@ import pandas as pd
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
 from services.broker_busy import BrokerBusyError, broker_busy_result
-from utils import real_threading
+from utils import real_threading, request_counter
 from utils.broker_backpressure import check_queue_wait
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
@@ -128,6 +128,7 @@ def get_history_with_auth(
         - Response data (dict)
         - HTTP status code (int)
     """
+    request_counter.record("history")
     # Validate symbol and exchange before making broker API call
     is_valid, error_msg = validate_symbol_exchange(symbol, exchange)
     if not is_valid:
