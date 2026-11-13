@@ -80,6 +80,10 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.pocketful.streaming.pocketful_order_adapter",
         "create_pocketful_order_adapter",
     ),
+    "tradejini": (
+        "broker.tradejini.streaming.tradejini_order_adapter",
+        "create_tradejini_order_adapter",
+    ),
 }
 
 # Brokers with no *usable* push mechanism fall back to REST-orderbook polling.
