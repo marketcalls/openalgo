@@ -19,7 +19,7 @@
  * toolbar, from a right-click on the chart, or from a row in that list.
  */
 
-import { Loader2 } from 'lucide-react'
+import { BellRing, Loader2, Play, Volume2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -40,9 +40,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { type AlertDelivery, readySound } from '@/lib/trading/alertDelivery'
+import { readySound } from '@/lib/trading/alertDelivery'
 import { ALERT_PLACEHOLDERS } from '@/lib/trading/alertMessage'
 import { askToNotify } from '@/lib/trading/alertNotify'
+import {
+  ALERT_DURATION_OPTIONS,
+  ALERT_SOUND_OPTIONS,
+  type AlertSoundDuration,
+  type AlertSoundName,
+  alertSoundManager,
+} from '@/lib/trading/alertSoundManager'
 import {
   ALERT_CONDITIONS,
   ALERT_KINDS,
@@ -109,9 +116,11 @@ function Choice({
   )
 }
 
+type DeliveryChannelKey = 'sound' | 'notify' | 'telegram' | 'whatsapp' | 'slack' | 'discord'
+
 /** The six ways to be told, in the order the dialog draws them. */
 const DELIVERY_CHOICES: readonly {
-  readonly key: keyof AlertDelivery
+  readonly key: DeliveryChannelKey
   readonly label: string
   readonly means: string
 }[] = [
@@ -474,6 +483,148 @@ export function AlertsDialog({ handle, onClose }: Props) {
                   </div>
                 ))}
               </div>
+
+              {draft.deliver.sound && (
+                <div className="space-y-2.5 rounded-md border border-border/60 bg-muted/30 p-2.5 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-[11px] text-muted-foreground">Sound Tone</Label>
+                      <Choice
+                        label="Sound tone"
+                        value={draft.deliver.soundName ?? 'chime'}
+                        options={ALERT_SOUND_OPTIONS}
+                        onChange={(val) =>
+                          patch({
+                            deliver: { ...draft.deliver, soundName: val as AlertSoundName },
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[11px] text-muted-foreground">Ringing Duration</Label>
+                      <Choice
+                        label="Sound duration"
+                        value={draft.deliver.soundDuration ?? 'once'}
+                        options={ALERT_DURATION_OPTIONS}
+                        onChange={(val) =>
+                          patch({
+                            deliver: {
+                              ...draft.deliver,
+                              soundDuration: val as AlertSoundDuration,
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <div className="flex flex-1 items-center gap-2">
+                      <Volume2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={Math.round((draft.deliver.soundVolume ?? 0.8) * 100)}
+                        onChange={(e) =>
+                          patch({
+                            deliver: {
+                              ...draft.deliver,
+                              soundVolume: Number(e.target.value) / 100,
+                            },
+                          })
+                        }
+                        className="h-1.5 flex-1 cursor-pointer accent-primary"
+                        aria-label="Alert volume"
+                      />
+                      <span className="w-8 text-right font-mono text-[10px] text-muted-foreground">
+                        {Math.round((draft.deliver.soundVolume ?? 0.8) * 100)}%
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={() =>
+                          alertSoundManager.preview(
+                            draft.deliver.soundName ?? 'chime',
+                            draft.deliver.soundVolume ?? 0.8
+                          )
+                        }
+                        title="Preview this alert sound"
+                      >
+                        <Play className="h-3 w-3 fill-current" />
+                        Preview
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 border-primary/40 px-2 text-xs text-primary hover:bg-primary/10"
+                        onClick={() => {
+                          const title =
+                            draft.title.trim() ||
+                            (handle
+                              ? titleFor(draft, handle.chart, handle.symbol, handle.at)
+                              : 'Test Alert')
+                          const symbol = handle?.symbol || 'TEST'
+                          const notice = {
+                            title: `${symbol}: ${title}`,
+                            body: 'Test alert fired: checking sounds and desktop notification.',
+                            tag: `test-alert-${Date.now()}`,
+                          }
+                          if (draft.deliver.sound) {
+                            alertSoundManager.trigger({
+                              id: notice.tag,
+                              title: notice.title,
+                              soundName: draft.deliver.soundName ?? 'chime',
+                              volume: draft.deliver.soundVolume ?? 0.8,
+                              duration: draft.deliver.soundDuration ?? 'once',
+                            })
+                          }
+                          if (
+                            draft.deliver.notify &&
+                            typeof window !== 'undefined' &&
+                            'Notification' in window
+                          ) {
+                            if (Notification.permission === 'granted') {
+                              try {
+                                new Notification(notice.title, {
+                                  body: notice.body,
+                                  tag: notice.tag,
+                                })
+                              } catch {
+                                // ignore
+                              }
+                            } else if (Notification.permission !== 'denied') {
+                              void askToNotify().then((granted) => {
+                                if (granted) {
+                                  try {
+                                    new Notification(notice.title, {
+                                      body: notice.body,
+                                      tag: notice.tag,
+                                    })
+                                  } catch {
+                                    // ignore
+                                  }
+                                }
+                              })
+                            }
+                          }
+                        }}
+                        title="Test firing this alert (sound, notification & ringing)"
+                      >
+                        <BellRing className="h-3 w-3" />
+                        Test Alert
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 Sound and the desktop notification reach you with the tab behind another window and
                 never leave this machine. Telegram, WhatsApp, Slack and Discord send the message

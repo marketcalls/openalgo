@@ -93,4 +93,16 @@ describe('the alert editor', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }))
     expect(controller.update.mock.calls[0][1]).toMatchObject({ payload: { autoTitle: true } })
   })
+
+  it('renders sound controls and triggers preview when clicked', async () => {
+    const user = userEvent.setup()
+    const { handle } = handleOf([existing()], 'a1')
+    render(<AlertsDialog handle={handle} onClose={noop} />)
+
+    expect(screen.getByLabelText('Alert volume')).toBeInTheDocument()
+    const previewBtn = screen.getByRole('button', { name: /preview/i })
+    expect(previewBtn).toBeInTheDocument()
+
+    await user.click(previewBtn)
+  })
 })
