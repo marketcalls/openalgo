@@ -59,6 +59,12 @@ describe('formatFundsAmount', () => {
     expect(formatFundsAmount(-500)).toBe('-500.00')
   })
 
+  it('shows near-zero negatives as 0.00, not -0.00', () => {
+    expect(formatFundsAmount(-0)).toBe('0.00')
+    expect(formatFundsAmount(-0.004)).toBe('0.00')
+    expect(formatFundsAmount(-0.005)).toBe('-0.01')
+  })
+
   it("shows '-' for an unknown amount", () => {
     expect(formatFundsAmount(null)).toBe('-')
   })

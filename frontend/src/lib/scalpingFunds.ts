@@ -31,5 +31,7 @@ export function summarizeFunds(data: Partial<MarginData> | null | undefined): Fu
 /** Full rupee amount with Indian digit grouping, e.g. 1,23,456.70; '-' when unknown. */
 export function formatFundsAmount(value: number | null): string {
   if (value === null) return '-'
-  return value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  // toLocaleString prints -0 and sub-paisa negatives such as -0.004 as "-0.00".
+  const amount = Math.abs(value) < 0.005 ? 0 : value
+  return amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
