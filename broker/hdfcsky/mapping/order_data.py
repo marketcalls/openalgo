@@ -184,9 +184,33 @@ def transform_order_data(orders):
                 "orderid": str(order.get("oms_order_id", "")),
                 "order_status": map_order_status(order.get("order_status", "")),
                 "timestamp": order.get("order_entry_time") or order.get("exchange_time", ""),
+                # Fill progress: the order-update poller diffs filled_quantity,
+                # so a partial fill on a still-open order is reported.
+                "filled_quantity": _int(_first_present(order, "filled_quantity", "fill_quantity")),
+                "pending_quantity": _int(order.get("remaining_quantity")),
+                "average_price": _float(_first_present(order, "average_price", "avg_price")),
+                "rejection_reason": _rejection_reason(order),
             }
         )
     return transformed
+
+
+def _first_present(row, *keys):
+    """The first of `keys` the row carries. The docs name the fill fields
+    filled_quantity / average_price; live rows have also shown avg_price."""
+    for key in keys:
+        if row.get(key) is not None:
+            return row[key]
+    return None
+
+
+def _rejection_reason(row):
+    """The broker's reason on a rejected order; HDFC Sky sends the literal
+    "NONE" on every other row."""
+    if map_order_status(row.get("order_status", "")) != "rejected":
+        return ""
+    reason = str(row.get("rejection_reason") or "").strip()
+    return "" if reason.upper() == "NONE" else reason
 
 
 # --- trade book ---------------------------------------------------------
