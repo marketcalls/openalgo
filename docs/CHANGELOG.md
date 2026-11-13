@@ -96,6 +96,14 @@ fix, live in [docs/releases](releases/).
 
 ### Fixed
 
+- **MCP `get_quote` and `get_expiry_dates` for SENSEX, BANKEX and NIFTY.**
+  Asked for an index without naming an exchange, `get_quote` looked on NSE
+  and failed ("Symbol 'SENSEX' not found for exchange 'NSE'"; NIFTY failed
+  the same way), and `get_expiry_dates` looked on NFO and found no SENSEX
+  expiries. An index now uses its index exchange (`BSE_INDEX` or
+  `NSE_INDEX`) and the BSE indices' expiries come from `BFO`. An exchange
+  the assistant names is still used as given, and every other symbol keeps
+  the NSE and NFO defaults.
 - **`upgrade/rotate_pepper.py` on an install with its own `FERNET_SALT`.**
   It derived the encryption key with the legacy static salt, so on any
   install that has a per-install salt (every install started since that salt
