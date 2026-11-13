@@ -6,9 +6,10 @@ it. ``fixtures/whatsapp_alert_golden.json`` holds the messages the old code
 produced for 24 order events, recorded before the move with the clock pinned.
 A trader on WhatsApp must receive exactly the same text.
 
-GTT orders are the one deliberate change: the old code had no template for
-them and sent a bare "Order Update" with the mode and the time and nothing
-else. They are checked separately below.
+Two deliberate changes are checked separately below. GTT orders: the old code
+had no template for them and sent a bare "Order Update" with the mode and the
+time and nothing else. A smart order that placed nothing: the old code titled
+it "Smart Order Placed" with "Order ID: N/A" (#2054).
 """
 
 from __future__ import annotations
@@ -27,7 +28,22 @@ GOLDEN = json.loads(
     (Path(__file__).parent / "fixtures" / "whatsapp_alert_golden.json").read_text(encoding="utf-8")
 )
 RECORDED_AT = datetime(2026, 11, 11, 9, 15, 30)
-UNCHANGED = [case for case in GOLDEN if case["api_type"] not in formatting.GTT_TYPES]
+
+
+def _smart_order_placed_nothing(case):
+    """The recorded smart order that placed nothing, picked out by hand.
+
+    Not by ``formatting.placed_nothing``: filtering the corpus with the rule
+    under test would silently drop any case that rule wrongly matched.
+    """
+    return case["api_type"] == "placesmartorder" and "orderid" not in case["response"]
+
+
+UNCHANGED = [
+    case
+    for case in GOLDEN
+    if case["api_type"] not in formatting.GTT_TYPES and not _smart_order_placed_nothing(case)
+]
 
 
 @pytest.mark.parametrize(
@@ -43,6 +59,21 @@ def test_the_golden_corpus_covers_every_titled_order_type():
     covered = {case["api_type"] for case in UNCHANGED}
 
     assert set(formatting.TITLES) - formatting.GTT_TYPES <= covered
+
+
+def test_a_smart_order_that_placed_nothing_no_longer_says_placed():
+    (old,) = [case for case in GOLDEN if _smart_order_placed_nothing(case)]
+    assert old["message"].startswith("*Smart Order Placed*")
+    assert "Order ID: N/A" in old["message"]
+
+    message = build_message(old["api_type"], old["request"], old["response"], now=RECORDED_AT)
+
+    # The title and the one line that claimed an order change; nothing else.
+    assert WhatsAppAlertService.render(message) == (
+        old["message"]
+        .replace("*Smart Order Placed*", "*Smart Order - No Action Taken*")
+        .replace("Order ID: N/A", "Result: No action needed")
+    )
 
 
 def test_a_gtt_alert_used_to_say_nothing_and_now_says_what_it_is():

@@ -9,8 +9,9 @@ field on an existing one, reaches every channel that uses this module.
 
 This is the formatter WhatsApp alerts used, moved here unchanged except for
 GTT orders, which it used to describe as a bare "Order Update" with no
-fields. WhatsApp's other messages are pinned byte for byte by
-``test/test_alerts_formatting.py``.
+fields, and smart orders that placed nothing, which it titled "Smart Order
+Placed" with "Order ID: N/A" (#2054). WhatsApp's other messages are pinned
+byte for byte by ``test/test_alerts_formatting.py``.
 Telegram keeps its own formatter for now: it marks symbols as code and draws a
 different separator, and converging the two would change messages Telegram
 users already receive.
@@ -51,6 +52,11 @@ GTT_TYPES = frozenset(
     {"placegttorder", "modifygttorder", "cancelgttorder", "gtttriggered", "gttexpired"}
 )
 DEFAULT_TITLE = "Order Update"
+
+#: The title for a smart order that placed nothing. A smart order aims at a
+#: target position size, so placing nothing is a correct outcome; under "Smart
+#: Order Placed" with "Order ID: N/A" it read as an executed order (#2054).
+NO_ACTION_TITLE = "Smart Order - No Action Taken"
 
 LIVE_BANNER = "LIVE MODE - Real Order"
 ANALYZE_BANNER = "ANALYZE MODE - No Real Order"
@@ -104,7 +110,10 @@ def build_message(
     Returns:
         The alert, ready for a channel to render.
     """
-    title = TITLES.get(api_type, DEFAULT_TITLE)
+    if placed_nothing(api_type, response):
+        title = NO_ACTION_TITLE
+    else:
+        title = TITLES.get(api_type, DEFAULT_TITLE)
     try:
         return AlertMessage(
             title=title,
@@ -119,6 +128,34 @@ def build_message(
             title=title,
             lines=(f"Order Type: {api_type}", f"Status: {response.get('status', 'unknown')}"),
         )
+
+
+def placed_nothing(api_type: str, response: dict[str, Any]) -> bool:
+    """Whether the alert is for a smart order that placed no order at all.
+
+    Read off the shape rather than the message text, because the wording
+    differs per broker adapter and one sends none: a placed order carries an
+    order id, and a no-action result carries a message and no order id
+    (place_smart_order_service always gives it one). Both halves are required.
+    An order that went in but whose id the adapter failed to parse has
+    neither, and must not be announced as "no order was placed": it keeps the
+    "Placed" title and the old "Order ID" line.
+
+    Telegram, which keeps its own formatter, decides with this same function.
+
+    Args:
+        api_type: The order operation the alert is for.
+        response: What the broker or the sandbox answered.
+
+    Returns:
+        True when this is a successful smart order that named no order.
+    """
+    return (
+        api_type == "placesmartorder"
+        and response.get("status") == "success"
+        and not response.get("orderid")
+        and bool(response.get("message"))
+    )
 
 
 def _detail_lines(api_type: str, request: dict[str, Any], response: dict[str, Any]) -> list[str]:
@@ -148,7 +185,10 @@ def _detail_lines(api_type: str, request: dict[str, Any], response: dict[str, An
             f"Position Size: {request.get('position_size', 'N/A')}",
             f"Exchange: {request.get('exchange', 'N/A')}",
         ]
-        if succeeded:
+        if placed_nothing(api_type, response):
+            # The adapter's own reason, which is the only account of why.
+            lines.append(f"Result: {response['message']}")
+        elif succeeded:
             lines.append(f"Order ID: {response.get('orderid', 'N/A')}")
         return lines
 

@@ -22,6 +22,7 @@ from database.telegram_db import (
     get_bot_config,
     get_telegram_user_by_username,
 )
+from services.alerts.formatting import placed_nothing
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,40 +34,6 @@ alert_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="telegram_
 _http_client = httpx.Client(timeout=30.0)
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
-
-
-def _placed_nothing(order_type: str, response: dict[str, Any]) -> bool:
-    """Whether a successful smart order resulted in no order at all.
-
-    A smart order targets a position size, so the adapter placing nothing is a
-    correct outcome rather than a failure, and the two response shapes are
-    distinct: a placed order carries an order id and no message, and a
-    no-action result carries a message and no order id. Both halves are
-    required. An order that went in but whose id the adapter failed to parse
-    has neither, and must not be announced as "no order was placed" - it falls
-    through to the unchanged heading and the old "Order ID: N/A".
-
-    Read off the shape rather than the message text, so this holds whatever
-    wording an adapter uses.
-
-    Args:
-        order_type: The api_type the alert is being sent for.
-        response: The order response dict.
-
-    Returns:
-        bool: True when this is a smart order that placed nothing.
-    """
-    return (
-        order_type == "placesmartorder"
-        and response.get("status") == "success"
-        and not response.get("orderid")
-        and bool(response.get("message"))
-    )
-
-
-def _no_action_reason(response: dict[str, Any]) -> str:
-    """The adapter's explanation for placing no order, for a trader to read."""
-    return response.get("message") or "No order was placed."
 
 
 class TelegramAlertService:
@@ -137,12 +104,12 @@ class TelegramAlertService:
                 if response.get("status") == "success":
                     if response.get("orderid"):
                         details.append(f"Order ID: `{response.get('orderid')}`")
-                    elif _placed_nothing(order_type, response):
+                    elif placed_nothing(order_type, response):
                         # A success with a message and no order id is the
                         # adapter reporting that it placed nothing on purpose.
                         # "Order ID: N/A" under the Placed heading told the user
                         # an order had gone in.
-                        details.append(f"Result: {_no_action_reason(response)}")
+                        details.append(f"Result: {response['message']}")
                     else:
                         # Neither an id nor a reason. Something went in and the
                         # id was lost, so say no more than the old line did.
@@ -479,9 +446,7 @@ class TelegramAlertService:
 
             # Format message
             template_key = (
-                f"{order_type}_no_action"
-                if _placed_nothing(order_type, response)
-                else order_type
+                f"{order_type}_no_action" if placed_nothing(order_type, response) else order_type
             )
             template = self.alert_templates.get(template_key, "*Order Update*\n{details}")
             details = self.format_order_details(order_type, order_data, response)
