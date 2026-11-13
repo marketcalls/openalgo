@@ -88,6 +88,10 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.groww.streaming.groww_order_adapter",
         "create_groww_order_adapter",
     ),
+    "sahi": (
+        "broker.sahi.streaming.sahi_order_adapter",
+        "create_sahi_order_adapter",
+    ),
 }
 
 # Brokers with no *usable* push mechanism fall back to REST-orderbook polling.
