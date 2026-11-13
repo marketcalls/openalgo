@@ -8,7 +8,7 @@ moment, so the backend knew.
 
 The cause is not the inverted control flow the report suspected. The alert
 services are handed the broker response and run after it, and there is already
-a dedicated `order.no_action` event that both channels subscribe to. The cause
+a dedicated `order.no_action` event that every alert channel receives. The cause
 is that the service recognised a do-nothing outcome by one wording, "No action
 needed", and the adapters do not share a wording. The standard ones return
 "No OpenPosition Found. Not placing Exit order." for the quantity == 0 case in
@@ -287,23 +287,7 @@ def test_analyze_placed_order_is_still_a_placed_order(service):
 # The alert wording
 # ---------------------------------------------------------------------------
 
-
-@pytest.fixture(scope="module", params=["telegram", "whatsapp"])
-def alert_service(request):
-    """Both channels, checked identically: they must not describe it differently.
-
-    Returns the module (for its helpers) and the service singleton (for its
-    templates and formatter).
-    """
-    if request.param == "telegram":
-        from services import telegram_alert_service as module
-
-        return module, module.telegram_alert_service
-
-    from services import whatsapp_alert_service as module
-
-    return module, module.whatsapp_alert_service
-
+CHANNELS = ["telegram", "whatsapp", "slack", "discord"]
 
 SMART_ORDER_REQUEST = {
     "symbol": "NIFTY25SEP2625000CE",
@@ -314,77 +298,109 @@ SMART_ORDER_REQUEST = {
 }
 
 
-def _rendered_alert(alert_service, response):
-    """The full alert text the user would receive, headline included.
+def _rendered_alert(channel, response):
+    """The full alert text the user would receive on one channel, title included.
 
-    Mirrors the two steps send_order_alert() performs once it has resolved a
-    recipient, which is the part that needs a linked account and a network.
+    Telegram keeps its own formatter, so this mirrors the two steps its
+    send_order_alert() performs once it has resolved a recipient, which is the
+    part that needs a linked account and a network. WhatsApp, Slack and
+    Discord render the shared formatter's message, as their deliver() does.
     """
-    module, service = alert_service
-    template_key = (
-        "placesmartorder_no_action"
-        if module._placed_nothing("placesmartorder", response)
-        else "placesmartorder"
-    )
-    template = service.alert_templates[template_key]
-    details = service.format_order_details("placesmartorder", SMART_ORDER_REQUEST, response)
-    return template.format(details=details)
+    from services.alerts.formatting import build_message, placed_nothing
+
+    if channel == "telegram":
+        from services.telegram_alert_service import telegram_alert_service as service
+
+        template_key = (
+            "placesmartorder_no_action"
+            if placed_nothing("placesmartorder", response)
+            else "placesmartorder"
+        )
+        template = service.alert_templates[template_key]
+        details = service.format_order_details("placesmartorder", SMART_ORDER_REQUEST, response)
+        return template.format(details=details)
+
+    message = build_message("placesmartorder", SMART_ORDER_REQUEST, response)
+    if channel == "whatsapp":
+        from services.whatsapp_alert_service import WhatsAppAlertService
+
+        return WhatsAppAlertService.render(message)
+    if channel == "slack":
+        from services.alerts.channels.slack import SlackChannel
+
+        return SlackChannel().render(message)
+
+    from services.alerts.channels.discord import DiscordChannel
+
+    return DiscordChannel().render(message)
 
 
-def test_no_action_alert_does_not_claim_an_order_was_placed(alert_service):
+@pytest.mark.parametrize("channel", CHANNELS)
+def test_no_action_alert_does_not_claim_an_order_was_placed(channel):
     """THE DEFECT: the headline said Placed and the body said 'Order ID: N/A'."""
     response = {"status": "success", "message": NO_POSITION, "mode": "live"}
-    message = _rendered_alert(alert_service, response)
+    message = _rendered_alert(channel, response)
 
     assert "Smart Order Placed" not in message
     assert "Order ID" not in message
     assert "N/A" not in message
 
 
-def test_no_action_alert_states_the_reason(alert_service):
+@pytest.mark.parametrize("channel", CHANNELS)
+def test_no_action_alert_states_the_reason(channel):
     """A trader must be told why nothing happened, not just that it didn't."""
     response = {"status": "success", "message": NO_POSITION, "mode": "live"}
-    message = _rendered_alert(alert_service, response)
+    message = _rendered_alert(channel, response)
 
     assert NO_POSITION in message
     assert "No Action Taken" in message
 
 
-def test_a_real_smart_order_still_reports_its_order_id(alert_service):
+@pytest.mark.parametrize("channel", CHANNELS)
+def test_a_real_smart_order_still_reports_its_order_id(channel):
     """The fix must not swallow the order id on an order that did go in."""
     response = {"status": "success", "orderid": "251114000123", "mode": "live"}
-    message = _rendered_alert(alert_service, response)
+    message = _rendered_alert(channel, response)
 
     assert "Smart Order Placed" in message
     assert "251114000123" in message
     assert "No Action Taken" not in message
 
 
-def test_placed_nothing_only_applies_to_smart_orders(alert_service):
-    """A plain placeorder success without an id must not take this path."""
-    module, _ = alert_service
-    assert module._placed_nothing("placeorder", {"status": "success"}) is False
-    assert module._placed_nothing("placesmartorder", {"status": "error"}) is False
-
-
-def test_a_lost_order_id_is_not_called_a_no_action(alert_service):
+@pytest.mark.parametrize("channel", CHANNELS)
+def test_a_lost_order_id_is_not_called_a_no_action(channel):
     """A success with neither an id nor a reason must not claim nothing happened.
 
     An adapter that returns 200 but whose order id failed to parse produces
-    exactly that shape. Announcing "No order was placed" for it would be a
-    false statement about a live order, which is worse than the vague line it
+    exactly that shape. Announcing that no order was placed would be a false
+    statement about a live order, which is worse than the vague line it
     replaced, so the message half of the shape test is required.
     """
-    module, _ = alert_service
-    lost_id = {"status": "success", "mode": "live"}
+    message = _rendered_alert(channel, {"status": "success", "mode": "live"})
 
-    assert module._placed_nothing("placesmartorder", lost_id) is False
-
-    message = _rendered_alert(alert_service, lost_id)
     assert "Smart Order Placed" in message
     assert "No Action Taken" not in message
-    assert "No order was placed" not in message
     assert "N/A" in message
+
+
+def test_placed_nothing_only_applies_to_a_successful_smart_order():
+    """A plain placeorder success without an id must not take this path."""
+    from services.alerts.formatting import placed_nothing
+
+    reason = {"status": "success", "message": NO_POSITION}
+    assert placed_nothing("placesmartorder", reason) is True
+    assert placed_nothing("placeorder", reason) is False
+    assert placed_nothing("placesmartorder", {"status": "error", "message": "Rejected"}) is False
+    assert placed_nothing("placesmartorder", {"status": "success"}) is False
+    assert placed_nothing("placesmartorder", {**reason, "orderid": "251114000123"}) is False
+
+
+def test_telegram_decides_with_the_shared_rule():
+    """One rule for one fact: the channels must not drift apart again."""
+    from services import telegram_alert_service
+    from services.alerts import formatting
+
+    assert telegram_alert_service.placed_nothing is formatting.placed_nothing
 
 
 # ---------------------------------------------------------------------------
