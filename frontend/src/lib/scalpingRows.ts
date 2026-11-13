@@ -145,3 +145,15 @@ export function buildPositionRows(
   )
   return rows
 }
+
+/**
+ * Live P&L of the open trade(s): the unrealized P&L of every row that still holds
+ * quantity (netQty != 0), each priced off its LTP against the broker average. Today's
+ * closed trades (realized P&L) are left out, which is what separates it from MTM.
+ * Null when the book is flat, so the header can show a placeholder instead of 0.
+ */
+export function openTradePnl(rows: ScalpingPositionRow[]): number | null {
+  const open = rows.filter((r) => r.netQty !== 0)
+  if (open.length === 0) return null
+  return open.reduce((sum, r) => sum + r.unrealizedPnl, 0)
+}

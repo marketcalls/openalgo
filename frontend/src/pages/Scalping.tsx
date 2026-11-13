@@ -29,7 +29,7 @@ import { useMarketData } from '@/hooks/useMarketData'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
 import { priceDecimals } from '@/lib/scalpingPrice'
-import { buildPositionRows } from '@/lib/scalpingRows'
+import { buildPositionRows, openTradePnl } from '@/lib/scalpingRows'
 import { mergeTick, type TickView } from '@/lib/scalpingTick'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -708,6 +708,8 @@ export default function Scalping() {
   // Summary reflects the displayed rows (scalping book), not raw account totals.
   const netQty = positionRows.reduce((a, r) => a + r.netQty, 0)
   const mtm = positionRows.reduce((a, r) => a + r.totalPnl, 0)
+  // Live P&L of the open trade(s) only; null when flat (#2285).
+  const openPnl = openTradePnl(positionRows)
 
   // Set-SL dialog targets one (symbol, exchange, product) leg at a time. The
   // product is carried on the target so a per-row SL edits the correct MIS/NRML SL.
@@ -1545,10 +1547,22 @@ export default function Scalping() {
 
             <div
               className="ml-auto flex items-center gap-6 font-mono"
-              title="Sum across the position-book rows below (open + today's closed trades)"
+              title="Open P&L: unrealized P&L of the positions still open, at the live LTP. MTM: sum across the position-book rows below (open + today's closed trades)"
             >
               <span>
                 Net Qty: <span className="font-semibold">{netQty}</span>
+              </span>
+              <span data-testid="scalping-open-pnl">
+                Open P&amp;L:{' '}
+                {openPnl === null ? (
+                  <span className="font-semibold text-muted-foreground">-</span>
+                ) : (
+                  <span
+                    className={`font-semibold ${openPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                  >
+                    {openPnl.toFixed(2)}
+                  </span>
+                )}
               </span>
               <span>
                 MTM:{' '}
