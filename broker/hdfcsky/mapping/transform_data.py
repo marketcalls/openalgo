@@ -310,23 +310,20 @@ def transform_modify_order_data(data, auth_token):
     """OpenAlgo modify-order dict -> HDFC Sky modify payload.
 
     HDFC Sky modifies via PUT /oapi/v1/orders with the SAME body shape as
-    placement plus `oms_order_id`. The product cannot be changed, but the
-    field is still required by the validator.
-    """
-    exchange = data["exchange"]
-    order_type = map_order_type(data.get("pricetype", "MARKET"))
+    placement plus `oms_order_id`. Product and side cannot be changed, but both
+    fields are still required by the validator, so the placement builder is
+    reused verbatim rather than re-listing the fields.
 
-    return {
-        "exchange": to_rest_exchange(exchange),
-        "instrument_token": _resolve_token(data["symbol"], exchange),
-        "client_id": get_client_id(auth_token),
-        "oms_order_id": str(data["orderid"]),
-        "order_type": order_type,
-        "product": map_product_type(data.get("product", "MIS")),
-        "quantity": int(data.get("quantity", 0)),
-        "price": float(data.get("price", 0) or 0),
-        "trigger_price": float(data.get("trigger_price", 0) or 0),
-        "disclosed_quantity": int(data.get("disclosed_quantity", 0) or 0),
-        "validity": "DAY",
-        "execution_type": "REGULAR",
-    }
+    Building on top of transform_data also means a modify to MARKET or SL-M
+    inherits the same MPP protected-limit conversion that placement applies;
+    calling map_order_type() directly here would send a bare MARKET order that
+    the exchange rejects on MPP-regulated scrips.
+
+    `action` is required on ModifyOrderSchema, so order_side is always present.
+    """
+    payload = transform_data(data, auth_token)
+    payload["oms_order_id"] = str(data["orderid"])
+    # Tags are applied once at placement; re-sending them on modify is not part
+    # of the modify contract.
+    payload.pop("tags", None)
+    return payload
