@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
+import { openAveragePrice } from '@/lib/scalpingAveragePrice'
 import { priceDecimals } from '@/lib/scalpingPrice'
 import { buildPositionRows } from '@/lib/scalpingRows'
 import { mergeTick, type TickView } from '@/lib/scalpingTick'
@@ -1367,6 +1368,11 @@ export default function Scalping() {
                   exchange={singleLeg?.exchange ?? ''}
                   interval={chartTf}
                   title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
+                  averagePrice={
+                    singleLeg
+                      ? openAveragePrice(positions, singleLeg.symbol, singleLeg.exchange, product)
+                      : null
+                  }
                 />
               </div>
             </div>
@@ -1378,6 +1384,11 @@ export default function Scalping() {
                   exchange={ceLeg?.exchange ?? ''}
                   interval={chartTf}
                   title="Call (CE)"
+                  averagePrice={
+                    ceLeg
+                      ? openAveragePrice(positions, ceLeg.symbol, ceLeg.exchange, product)
+                      : null
+                  }
                 />
               </div>
               <div className="h-[340px]">
@@ -1394,6 +1405,11 @@ export default function Scalping() {
                   exchange={peLeg?.exchange ?? ''}
                   interval={chartTf}
                   title="Put (PE)"
+                  averagePrice={
+                    peLeg
+                      ? openAveragePrice(positions, peLeg.symbol, peLeg.exchange, product)
+                      : null
+                  }
                 />
               </div>
             </div>
