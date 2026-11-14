@@ -58,7 +58,7 @@ import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { onModeChange } from '@/stores/themeStore'
+import { onModeChange, useThemeStore } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 
@@ -147,6 +147,11 @@ const PRODUCT_COLORS: Record<string, string> = {
 
 export default function Positions() {
   const { apiKey, user } = useAuthStore()
+  // Recompute P&L only in analyzer mode. Every live broker adapter returns a
+  // real positions P&L, so recomputing would overwrite the exchange's figure.
+  // Holdings is deliberately different -- see the note there.
+  const { appMode } = useThemeStore()
+  const shouldRecalculatePnl = appMode === 'analyzer'
   const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [positions, setPositions] = useState<Position[]>([])
@@ -183,6 +188,7 @@ export default function Positions() {
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,
     pauseWhenHidden: true,
+    recalculatePnl: shouldRecalculatePnl,
   })
 
   // Load preferences from localStorage
