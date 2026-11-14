@@ -7,6 +7,8 @@ import httpx
 
 from broker.fyers.api.rate_limiter import MAX_RETRIES, apply_rate_limit, retry_delay_from_headers
 from broker.fyers.mapping.transform_data import (
+    LotQuantityError,
+    from_fyers_qty,
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -175,6 +177,7 @@ def _invalidate_position_cache(auth):
 
 def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+    symbol = tradingsymbol
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
 
     positions_data = _get_cached_positions(auth)
@@ -183,7 +186,8 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     if positions_data and positions_data.get("s") and positions_data.get("netPositions"):
         for position in positions_data["netPositions"]:
             if position.get("symbol") == tradingsymbol and position.get("productType") == product:
-                net_qty = position.get("netQty", "0")
+                # Units, which the smart order sizes against: Fyers counts MCX and CDS in lots.
+                net_qty = from_fyers_qty(position.get("netQty", "0"), symbol, exchange)
                 logger.debug(f"Net Quantity {net_qty}")
                 break  # Assuming you need the first match
 
@@ -245,6 +249,11 @@ def place_order_api(data, auth):
 
         return response, response_data, orderid
 
+    except LotQuantityError as e:
+        # Refused before anything was sent to Fyers.
+        logger.info(f"Rejected order before sending to Fyers: {e}")
+        response = type("obj", (object,), {"status_code": 400, "status": 400})
+        return response, {"s": "error", "message": str(e)}, None
     except httpx.HTTPError as e:
         logger.error(f"HTTP error during order placement: {e}")
         response = type("obj", (object,), {"status_code": 500, "status": 500})
@@ -489,6 +498,9 @@ def modify_order(data, auth):
             logger.warning(f"Failed to modify order: {error_msg}")
             return {"status": "error", "message": error_msg}, response.status_code
 
+    except LotQuantityError as e:
+        logger.info(f"Rejected modify before sending to Fyers: {e}")
+        return {"status": "error", "message": str(e)}, 400
     except httpx.HTTPError as e:
         logger.exception("HTTP error during order modification")
         return {"status": "error", "message": f"HTTP error: {e}"}, 500
