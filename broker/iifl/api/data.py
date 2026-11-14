@@ -882,9 +882,9 @@ class BrokerData:
 
             # Get exchange_token from database
             logger.info("Querying database for symbol token...")
-            with db_session() as session:
+            with db_session() as db:
                 symbol_info = (
-                    session.query(SymToken)
+                    db.query(SymToken)
                     .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
                     .first()
                 )
