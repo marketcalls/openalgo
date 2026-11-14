@@ -8,7 +8,6 @@ import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -21,6 +20,7 @@ from database.apscheduler_jobstore_db import (
 from database.engine_factory import create_db_engine
 from utils import real_threading
 from utils.logging import get_logger
+from utils.resilient_scheduler import LockTolerantJobStore, ResilientBackgroundScheduler
 
 logger = get_logger(__name__)
 
@@ -89,12 +89,18 @@ class HistorifyScheduler:
                 # NullPool policy instead of SQLAlchemy's default QueuePool,
                 # which would hold connections open for the life of the
                 # process. See database/engine_factory.py.
+                #
+                # These two classes, not APScheduler's own: with those, one
+                # "database is locked" while saving a job's next run time ended
+                # the scheduler's thread, and no scheduled download ran again
+                # until the application was restarted. See
+                # utils/resilient_scheduler.py.
                 jobstores = {
-                    "default": SQLAlchemyJobStore(
+                    "default": LockTolerantJobStore(
                         engine=create_db_engine(db_url), tablename=HISTORIFY_JOBSTORE_TABLE
                     )
                 }
-                self._scheduler = BackgroundScheduler(
+                self._scheduler = ResilientBackgroundScheduler(
                     jobstores=jobstores,
                     job_defaults={
                         "coalesce": True,

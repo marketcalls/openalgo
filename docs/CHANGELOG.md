@@ -104,6 +104,27 @@ fix, live in [docs/releases](releases/).
   `NSE_INDEX`) and the BSE indices' expiries come from `BFO`. An exchange
   the assistant names is still used as given, and every other symbol keeps
   the NSE and NFO defaults.
+- **Scheduled Flow workflows stopping until OpenAlgo was restarted** (#2355,
+  #2326). Every scheduled workflow could stop at the same moment and stay
+  stopped: the Flow page still showed them Active, switching one off and on
+  again logged "Added job", and nothing ran until a restart. An exit workflow
+  that should have closed an open position was among the ones that did not
+  run. Two faults made it:
+  - A workflow run kept the database locked for writing for as long as it ran.
+    A run that took more than 15 seconds, or a workflow running every few
+    seconds, made every other write to `openalgo.db` fail with "database is
+    locked", including other workflows recording their own runs. A run now
+    holds nothing while it works.
+  - One of the writes that failed was the scheduler saving a workflow's next
+    run time, and that single failure ended the scheduler. It now keeps the
+    schedule in memory, keeps running every workflow on time, each run once,
+    and saves when the database allows. A stopped scheduler is also started
+    again the next time a workflow is activated.
+  The Historify download scheduler had the same weakness and has the same
+  protection. Nothing to configure. If you restarted OpenAlgo to work around
+  this, you no longer need to. One thing is unchanged: a run that cannot
+  record itself because the database is busy is still skipped and logged, not
+  run without a record.
 - **`upgrade/rotate_pepper.py` on an install with its own `FERNET_SALT`.**
   It derived the encryption key with the legacy static salt, so on any
   install that has a per-install salt (every install started since that salt

@@ -177,3 +177,96 @@ def test_an_error_that_is_not_a_lock_is_raised_at_once():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_a_scheduler_keeps_firing_while_the_lock_outlasts_the_budget():
+    """The budget running out used to end the Flow scheduler for good.
+
+    A write that gives up is right for a request, which can report it. The
+    scheduler's own write, saving a job's next run time, has nobody to report
+    to: the error left APScheduler's loop, its green thread ended, and no
+    scheduled workflow ran again until the application was restarted (issues
+    #2355 and #2326). Here a handler keeps the write lock well past the budget,
+    across several fire times of a one-second job. The job has to go on running
+    while the lock is held, the hub has to keep running, and the row has to be
+    written once the lock goes. See utils/resilient_scheduler.py.
+
+    The lock is held for six seconds and two runs are asked for in five. That
+    is deliberately loose: the second run is due after 1.5 seconds, and a
+    tighter window failed about one time in twenty on a loaded machine, when
+    the whole process was not scheduled for a second, without anything being
+    wrong.
+    """
+    result = run(
+        """
+        from datetime import datetime, timedelta
+
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        import database
+        from database.apscheduler_jobstore_db import ensure_jobstore_table
+        from database.engine_factory import create_db_engine
+        from utils.resilient_scheduler import (
+            LockTolerantJobStore,
+            ResilientBackgroundScheduler,
+        )
+
+        database.LOCK_RETRY_BUDGET_S = 0.3
+        url = "sqlite:///" + DB
+        ensure_jobstore_table("jobs", database_url=url)
+        store = LockTolerantJobStore(engine=create_db_engine(url), tablename="jobs")
+        sched = ResilientBackgroundScheduler(
+            jobstores={"default": store},
+            job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60},
+        )
+        sched.start()
+
+        runs = []
+
+        def job():
+            runs.append(time.monotonic())
+
+        def wait_for(condition, timeout):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline and not condition():
+                eventlet.sleep(0.05)
+            return condition()
+
+        HOLD = 6.0
+        # The job goes in first: adding one is a caller's write, and that is
+        # still refused while the database is locked.
+        first = datetime.now().astimezone() + timedelta(seconds=0.5)
+        sched.add_job(job, IntervalTrigger(seconds=1, start_date=first), id="tick")
+        del ticks[:]
+        beat = eventlet.spawn(_beat)
+        holder = eventlet.spawn(hold_then_commit, HOLD)
+        eventlet.sleep(0.1)
+        t0, wall0 = time.monotonic(), time.time()
+
+        assert wait_for(lambda: len(runs) >= 2, HOLD - 1.0), (
+            f"{len(runs)} run(s) while the database was locked: the scheduler stopped. "
+            f"Runs at {[round(r - t0, 2) for r in runs]}s, first due at "
+            f"{first.timestamp() - wall0:.2f}s, held {list(store._held)}, "
+            f"loop alive {sched.loop_alive()}"
+        )
+        took, during = time.monotonic() - t0, len(ticks)
+        assert took < HOLD, f"the second run came only after the lock went ({took:.2f}s)"
+        assert "tick" in store._held, "the refused save was not kept"
+        assert sched.loop_alive(), "the scheduler's thread ended"
+        assert during > took / 0.02 / 3, (
+            f"only {during} hub ticks in {took:.2f}s: the worker was frozen"
+        )
+
+        holder.wait()
+        assert wait_for(lambda: not store._held, 5), "the schedule was never saved"
+        before = len(runs)
+        assert wait_for(lambda: len(runs) >= before + 2, 5), "runs stopped after the lock went"
+        due = int((datetime.now().astimezone() - first).total_seconds()) + 1
+        assert len(runs) <= due, f"{len(runs)} runs for {due} ticks: a tick was run twice"
+
+        beat.kill()
+        sched.shutdown(wait=False)
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr
