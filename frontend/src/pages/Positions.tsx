@@ -56,6 +56,7 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { compareGroupKeys } from '@/lib/positionGroups'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -583,11 +584,7 @@ export default function Positions() {
   }
 
   // Sort group keys
-  const sortedGroupKeys = Object.keys(groupedPositions).sort((a, b) => {
-    if (a.startsWith('Equity') && !b.startsWith('Equity')) return -1
-    if (!a.startsWith('Equity') && b.startsWith('Equity')) return 1
-    return a.localeCompare(b)
-  })
+  const sortedGroupKeys = Object.keys(groupedPositions).sort(compareGroupKeys)
 
   return (
     <div className="space-y-6">
