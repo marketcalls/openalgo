@@ -697,6 +697,7 @@ class OptionsToolkit(OpenAlgoToolkit):
         expiry_date: str,
         offset: str,
         option_type: str,
+        include_quotes: bool = False,
     ) -> str:
         """Resolve one tradable option symbol from an offset relative to ATM.
 
@@ -737,6 +738,7 @@ class OptionsToolkit(OpenAlgoToolkit):
                 offset; say ``OTM2`` or ``ITM2``.
             option_type: ``CE`` for a call or ``PE`` for a put. ``CALL`` and
                 ``PUT`` are read as those.
+            include_quotes: Include the selected option quote in the response.
 
         Returns:
             JSON with ``symbol`` (the OpenAlgo option symbol to trade),
@@ -744,13 +746,15 @@ class OptionsToolkit(OpenAlgoToolkit):
             NFO, which is not the exchange you passed in), ``lotsize``,
             ``tick_size``, ``freeze_qty`` (the largest quantity the exchange
             accepts in one order) and ``underlying_ltp`` (the price ATM was
-            resolved against).
+            resolved against). When ``include_quotes`` is true, it also includes
+            the selected option's quote.
         """
         underlying = self._symbol_argument(underlying, "underlying")
         exchange = self._exchange_argument(exchange, UNDERLYING_EXCHANGES)
         expiry = self._expiry_argument(expiry_date, underlying, allow_embedded=True)
         offset = self._offset_argument(offset)
         option_type = self._option_type_argument(option_type)
+        include_quotes = self._bool_argument(include_quotes, "include_quotes")
         exchange, notice = index_underlying(underlying, exchange)
 
         payload = self.service_call(
@@ -764,6 +768,7 @@ class OptionsToolkit(OpenAlgoToolkit):
             strike_int=None,
             offset=offset,
             option_type=option_type,
+            include_quotes=include_quotes,
         )
 
         return wrap_tool_result(

@@ -116,6 +116,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
 | expiry_date | Expiry date in DDMMMYY format | Mandatory | - |
 | offset | Strike offset: ATM, ITM1-ITM50, OTM1-OTM50 | Mandatory | - |
 | option_type | Option type: CE or PE | Mandatory | - |
+| include_quotes | Include the selected option's current quote in the response | Optional | false |
 
 ## Response Fields
 
@@ -128,6 +129,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
 | tick_size | number | Minimum price movement |
 | freeze_qty | number | Maximum quantity per order |
 | underlying_ltp | number | Current underlying price |
+| quote | object | Selected option quote; returned only when `include_quotes` is true |
 
 ## Understanding Offset
 
@@ -149,6 +151,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/optionsymbol \
 
 - The offset is calculated based on actual **strike intervals** in the database
 - **underlying_ltp** shows the current price used for ATM calculation
+- Set **include_quotes** to `true` when the selected option's quote is needed with the resolved symbol. The underlying and candidate option quotes are fetched in one batch when supported.
 - Use this endpoint to **discover the symbol** before placing orders
 - For placing orders directly with offset, use [OptionsOrder](../order-management/optionsorder.md)
 
