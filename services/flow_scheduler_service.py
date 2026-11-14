@@ -9,7 +9,6 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Optional
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -17,6 +16,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from database.apscheduler_jobstore_db import (
     FLOW_JOBSTORE_TABLE,
+    LockTolerantJobStore,
     ensure_jobstore_table,
     get_database_url,
 )
@@ -106,9 +106,11 @@ class FlowScheduler:
                 # engine= rather than url= so the job store uses the project
                 # NullPool policy instead of SQLAlchemy's default QueuePool,
                 # which would hold connections open for the life of the
-                # process. See database/engine_factory.py.
+                # process. See database/engine_factory.py. LockTolerantJobStore
+                # keeps a locked database from killing the scheduler thread
+                # (issue #2355).
                 jobstores = {
-                    "default": SQLAlchemyJobStore(
+                    "default": LockTolerantJobStore(
                         engine=create_db_engine(db_url), tablename=FLOW_JOBSTORE_TABLE
                     )
                 }
