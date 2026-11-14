@@ -97,6 +97,7 @@ class FakeMarket:
         self.expiry_calls: list[tuple[str, str, str]] = []
         self.strike_calls: list[tuple[str, str, str, str]] = []
         self.quote_calls: list[tuple[str, str]] = []
+        self.option_prices: dict[tuple[str, str], float] = {}
         self.lookups: list[tuple[str, str]] = []
 
     def list_contract(self, symbol, exchange, lotsize=UNSET, tick_size=0.05):
@@ -147,6 +148,14 @@ class FakeMarket:
             return False, {"status": "error", "message": f"No quote for {symbol}"}, 404
         return True, {"status": "success", "data": {"ltp": price}}, 200
 
+    def get_multiquotes(self, symbols, api_key=None, **kwargs):
+        results = []
+        for item in symbols:
+            price = self.option_prices.get((item["symbol"], item["exchange"]))
+            if price is not None:
+                results.append({**item, "data": {"ltp": price}})
+        return True, {"status": "success", "results": results}, 200
+
 
 @pytest.fixture
 def market(monkeypatch):
@@ -164,6 +173,7 @@ def market(monkeypatch):
         option_symbol_service, "find_near_month_futures", fake.find_near_month_futures
     )
     monkeypatch.setattr(quotes_service, "get_quotes", fake.get_quotes)
+    monkeypatch.setattr(quotes_service, "get_multiquotes", fake.get_multiquotes)
     return fake
 
 
@@ -440,6 +450,56 @@ class TestFractionalStrikes:
         leg = resolve_leg(option_leg(), "VEDL", "NSE")
         assert leg.strike != 292
         assert "292.5" in leg.symbol
+
+
+class TestUnderlyingPercentStrikes:
+    def _prices(self, market, prices, option_type="CE"):
+        for strike, premium in prices.items():
+            symbol = f"NIFTY03JAN30{strike}{option_type}"
+            market.option_prices[(symbol, "NFO")] = premium
+
+    @pytest.mark.parametrize(
+        ("percent", "option_type", "prices", "expected_strike", "expected_premium"),
+        [
+            (1, "CE", {23400: 251.15, 23450: 180}, 23400, 251.15),
+            (1, "PE", {23400: 300, 23450: 230.4}, 23450, 230.4),
+            (0.5, "CE", {23400: 170, 23450: 115}, 23450, 115),
+            (0.5, "PE", {23400: 123.15, 23450: 80}, 23400, 123.15),
+        ],
+    )
+    def test_selects_premium_closest_to_percentage_of_spot(
+        self, market, percent, option_type, prices, expected_strike, expected_premium
+    ):
+        self._prices(market, prices, option_type)
+        leg = resolve_leg(
+            option_leg(
+                strike_mode="underlying_percent",
+                atm_offset=None,
+                underlying_percent=percent,
+                option_type=option_type,
+            ),
+            "NIFTY",
+            "NSE_INDEX",
+            underlying_ltp=24622.15,
+        )
+        assert leg.ok, leg.error
+        assert leg.strike == expected_strike
+        assert leg.detail["selected_premium"] == expected_premium
+        assert leg.detail["underlying_percent"] == percent
+        assert leg.detail["target_premium"] == pytest.approx(24622.15 * percent / 100)
+
+    def test_refuses_a_non_positive_percentage(self, market):
+        leg = resolve_leg(
+            option_leg(
+                strike_mode="underlying_percent",
+                atm_offset=None,
+                underlying_percent=0,
+            ),
+            "NIFTY",
+            "NSE_INDEX",
+        )
+        assert not leg.ok
+        assert leg.code == "invalid_underlying_percent"
 
 
 class TestQuantityAndLotSize:
