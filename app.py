@@ -110,6 +110,7 @@ from blueprints.strike_profile import strike_profile_bp  # Import the Strike Pro
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
+from blueprints.system_update import system_update_bp  # Update OpenAlgo from the web UI
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.tv_json import tv_json_bp
@@ -359,6 +360,7 @@ def create_app():
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
+    app.register_blueprint(system_update_bp)  # Register System Update blueprint
 
     # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
     # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode
