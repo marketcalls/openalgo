@@ -116,6 +116,26 @@ fix, live in [docs/releases](releases/).
   under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
   in `.env`.
 
+### Dependencies
+
+- `dnspython` 2.9.0 to 2.9.2 (GHSA-vvf4-9x63-8xvv, high): a crafted zone file
+  could use up memory and CPU. Nothing in OpenAlgo imports dnspython or reads
+  zone files; it comes with the email-validator package and, on the eventlet
+  web server, looks up the broker hosts. Both were checked on 2.9.2.
+- `tornado` 6.6 to 6.6.1 (GHSA-5cjw-f85j-cv6r, low): an open redirect through
+  a path starting with three slashes. OpenAlgo does not import tornado or
+  serve HTTP with it; it is installed for the Jupyter kernel packages. A
+  kernel was started and ran code on 6.6.1.
+- `soupsieve` to 4.1 (GHSA-mmhr-3c5m-f64f and GHSA-6655-6qjp-jx7x, high;
+  GHSA-7g44-g9rc-x53w and GHSA-4j63-6c4x-wfg4, medium): a crafted CSS selector
+  or page could take a very long time to match. Nothing in OpenAlgo imports
+  it; it comes with the portfolio statistics library, through yfinance and
+  beautifulsoup4. It was 2.9.1 in `uv.lock` and not listed in the
+  requirements files at all, so an Ubuntu server updated with `update.sh`
+  kept whichever version it already had. It is now pinned in both, and the
+  next update installs 4.1.
+- No behaviour change is expected from any of the three.
+
 ## [2.0.3.3] - 2026-11-06
 
 ### Broker Keys and Live Data Release
