@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine, or_
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -40,6 +40,40 @@ PERCENTILE_WINDOW_DAYS = 30
 # The dashboard polls stats; cache the computed result briefly so polling
 # does not re-scan the table on every request.
 _stats_cache = LockedTTLCache(maxsize=1, ttl=60)
+
+#: The order_type values of order calls. Every endpoint wrapped by
+#: utils.latency_monitor logs a row, data queries (QUOTES, HISTORY, PING,
+#: FUNDS, ...) included. The dashboard's order figures count only these
+#: types, and these rows are kept forever while the rest are purged after
+#: a week (purge_old_data_logs).
+#:
+#: A GTT is an order instruction, not a data query. It can also rest for a
+#: year before firing, so purging its placement latency after a week would
+#: discard the record long before the order it describes exists.
+ORDER_TYPES = frozenset(
+    {
+        "PLACE",
+        "SMART",
+        "MODIFY",
+        "CANCEL",
+        "CLOSE",
+        "CANCEL_ALL",
+        "BASKET",
+        "SPLIT",
+        "OPTIONS",
+        "OPTIONS_MULTI",
+        "GTT_PLACE",
+        "GTT_MODIFY",
+        "GTT_CANCEL",
+        # The names GTT calls were logged under before they were mapped to
+        # GTT_* (an unmapped endpoint is logged as its uppercased name). Rows
+        # written by older versions still carry them.
+        "PLACE_GTT_ORDER",
+        "MODIFY_GTT_ORDER",
+        "CANCEL_GTT_ORDER",
+    }
+)
+
 LatencyBase = declarative_base()
 LatencyBase.query = latency_session.query_property()
 
@@ -145,24 +179,33 @@ class OrderLatency(LatencyBase):
 
             percentile_cutoff = datetime.utcnow() - timedelta(days=PERCENTILE_WINDOW_DAYS)
 
+            # Only order calls count toward the order figures. Data queries
+            # are logged to the same table and would otherwise be reported
+            # as orders.
+            is_order = OrderLatency.order_type.in_(ORDER_TYPES)
+
             # OPTIMIZED: Single query for all overall stats using CASE statements
             # This replaces 9 separate queries with 1
-            overall_stats = latency_session.query(
-                func.count(OrderLatency.id).label("total"),
-                func.sum(case((OrderLatency.status == "FAILED", 1), else_=0)).label("failed"),
-                func.avg(OrderLatency.rtt_ms).label("avg_rtt"),
-                func.avg(OrderLatency.overhead_ms).label("avg_overhead"),
-                func.avg(OrderLatency.total_latency_ms).label("avg_total"),
-                func.sum(case((OrderLatency.total_latency_ms < 100, 1), else_=0)).label(
-                    "under_100"
-                ),
-                func.sum(case((OrderLatency.total_latency_ms < 150, 1), else_=0)).label(
-                    "under_150"
-                ),
-                func.sum(case((OrderLatency.total_latency_ms < 200, 1), else_=0)).label(
-                    "under_200"
-                ),
-            ).first()
+            overall_stats = (
+                latency_session.query(
+                    func.count(OrderLatency.id).label("total"),
+                    func.sum(case((OrderLatency.status == "FAILED", 1), else_=0)).label("failed"),
+                    func.avg(OrderLatency.rtt_ms).label("avg_rtt"),
+                    func.avg(OrderLatency.overhead_ms).label("avg_overhead"),
+                    func.avg(OrderLatency.total_latency_ms).label("avg_total"),
+                    func.sum(case((OrderLatency.total_latency_ms < 100, 1), else_=0)).label(
+                        "under_100"
+                    ),
+                    func.sum(case((OrderLatency.total_latency_ms < 150, 1), else_=0)).label(
+                        "under_150"
+                    ),
+                    func.sum(case((OrderLatency.total_latency_ms < 200, 1), else_=0)).label(
+                        "under_200"
+                    ),
+                )
+                .filter(is_order)
+                .first()
+            )
 
             total_orders = overall_stats.total or 0
             failed_orders = overall_stats.failed or 0
@@ -186,6 +229,7 @@ class OrderLatency(LatencyBase):
                     row[0]
                     for row in latency_session.query(OrderLatency.total_latency_ms)
                     .filter(
+                        is_order,
                         OrderLatency.total_latency_ms.isnot(None),
                         OrderLatency.timestamp >= percentile_cutoff,
                     )
@@ -212,7 +256,7 @@ class OrderLatency(LatencyBase):
                         "under_150"
                     ),
                 )
-                .filter(OrderLatency.broker.isnot(None))
+                .filter(is_order, OrderLatency.broker.isnot(None))
                 .group_by(OrderLatency.broker)
                 .all()
             )
@@ -228,6 +272,7 @@ class OrderLatency(LatencyBase):
                 latency_rows = (
                     latency_session.query(OrderLatency.broker, OrderLatency.total_latency_ms)
                     .filter(
+                        is_order,
                         OrderLatency.broker.in_(broker_names),
                         OrderLatency.total_latency_ms.isnot(None),
                         OrderLatency.timestamp >= percentile_cutoff,
@@ -265,8 +310,18 @@ class OrderLatency(LatencyBase):
                     "sla_150ms": broker_sla,
                 }
 
+            # Shown beside the order count so the excluded calls stay visible.
+            # They are purged after a week, so this is a recent count.
+            non_order_calls = (
+                latency_session.query(func.count(OrderLatency.id))
+                .filter(or_(OrderLatency.order_type.is_(None), ~is_order))
+                .scalar()
+                or 0
+            )
+
             stats = {
                 "total_orders": total_orders,
+                "non_order_calls": non_order_calls,
                 "failed_orders": failed_orders,
                 "success_rate": ((total_orders - failed_orders) / total_orders * 100)
                 if total_orders
@@ -289,6 +344,7 @@ class OrderLatency(LatencyBase):
             logger.exception(f"Error getting latency stats: {str(e)}")
             return {
                 "total_orders": 0,
+                "non_order_calls": 0,
                 "failed_orders": 0,
                 "success_rate": 0,
                 "avg_rtt": 0,
@@ -323,25 +379,6 @@ def purge_old_data_logs(days=7):
     Purge non-order endpoint latency logs older than specified days.
     Order execution logs (PLACE, SMART, MODIFY, CANCEL, etc.) are kept forever.
     """
-    # Order types to keep forever. Must stay in step with the set in
-    # utils.latency_monitor: a type present there but missing here is purged
-    # after a week despite being an order.
-    ORDER_TYPES = {
-        "PLACE",
-        "SMART",
-        "MODIFY",
-        "CANCEL",
-        "CLOSE",
-        "CANCEL_ALL",
-        "BASKET",
-        "SPLIT",
-        "OPTIONS",
-        "OPTIONS_MULTI",
-        "GTT_PLACE",
-        "GTT_MODIFY",
-        "GTT_CANCEL",
-    }
-
     try:
         from datetime import timedelta
 
@@ -350,7 +387,12 @@ def purge_old_data_logs(days=7):
         # Delete non-order logs older than cutoff
         deleted = (
             latency_session.query(OrderLatency)
-            .filter(OrderLatency.timestamp < cutoff, ~OrderLatency.order_type.in_(ORDER_TYPES))
+            .filter(
+                OrderLatency.timestamp < cutoff,
+                # The same non-order rule the stats use: NOT IN never matches
+                # NULL, so a row without a type is named explicitly.
+                or_(OrderLatency.order_type.is_(None), ~OrderLatency.order_type.in_(ORDER_TYPES)),
+            )
             .delete(synchronize_session=False)
         )
 
