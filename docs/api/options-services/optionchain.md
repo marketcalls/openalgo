@@ -72,6 +72,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
         "prev_close": 388.25,
         "volume": 2841075,
         "oi": 4218300,
+        "last_trade_time": null,
         "lotsize": 75,
         "tick_size": 0.05,
         "implied_volatility": 15.33,
@@ -94,6 +95,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
         "prev_close": 236.0,
         "volume": 3162450,
         "oi": 5104275,
+        "last_trade_time": null,
         "lotsize": 75,
         "tick_size": 0.05,
         "implied_volatility": 15.33,
@@ -119,6 +121,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
         "prev_close": 324.05,
         "volume": 2841075,
         "oi": 4218300,
+        "last_trade_time": null,
         "lotsize": 75,
         "tick_size": 0.05,
         "implied_volatility": 14.92,
@@ -141,6 +144,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
         "prev_close": 273.15,
         "volume": 3162450,
         "oi": 5104275,
+        "last_trade_time": null,
         "lotsize": 75,
         "tick_size": 0.05,
         "implied_volatility": 14.92,
@@ -166,6 +170,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
         "prev_close": 269.45,
         "volume": 2841075,
         "oi": 4218300,
+        "last_trade_time": null,
         "lotsize": 75,
         "tick_size": 0.05,
         "implied_volatility": 14.71,
@@ -188,6 +193,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
         "prev_close": 319.25,
         "volume": 3162450,
         "oi": 5104275,
+        "last_trade_time": null,
         "lotsize": 75,
         "tick_size": 0.05,
         "implied_volatility": 14.71,
@@ -257,6 +263,7 @@ Trimmed to three strikes for brevity. The Greek fields are present only when `wi
 | prev_close | number | Previous close |
 | volume | number | Trading volume |
 | oi | number | Open interest |
+| last_trade_time | string \| null | Broker-provided actual last-trade timestamp, passed through unchanged from normalized quotes; `null` when unavailable. The adapter does not parse or normalize its format or timezone. This is not `server_ts` or quote-retrieval time. |
 | lotsize | number | Lot size |
 | tick_size | number | Tick size |
 
