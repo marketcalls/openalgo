@@ -1084,7 +1084,7 @@ class BrokerData:
         chunks = []
 
         current = start
-        while current < end:
+        while current <= end:  # inclusive: a single-day request (start == end) is one chunk
             chunk_end = min(current + timedelta(days=max_days - 1), end)
             chunks.append((current.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
             current = chunk_end + timedelta(days=1)
