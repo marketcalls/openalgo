@@ -1,22 +1,35 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping ibullssecurities Broking Parameters https://symphonyfintech.com/xts-trading-front-end-api/
 
-from flask import session
+from flask import has_request_context, session
 
 from broker.ibulls.api.data import BrokerData
-from database.auth_db import get_auth_token, get_feed_token
-from database.token_db import get_br_symbol, get_token
+from database.auth_db import Auth, get_auth_token, get_feed_token
+from database.token_db import get_br_symbol, get_symbol_info, get_token
 from utils.logging import get_logger
+from utils.mpp_slab import calculate_protected_price
 
 logger = get_logger(__name__)
+
+
+def _feed_token_username():
+    """The OpenAlgo user whose Ibulls feed token prices a MARKET order.
+
+    A browser order has it in the session (``session["user"]``, set at login).
+    An API, strategy or webhook order has no browser session, so it is the user
+    of the stored Ibulls broker session (one user per deployment).
+    """
+    if has_request_context() and session.get("user"):
+        return session["user"]
+    row = Auth.query.filter_by(broker="ibulls", is_revoked=False).first()
+    return row.name if row else None
 
 
 def transform_data(data, token):
     """
     Transforms the new API request structure to the current expected structure.
-    For market orders, fetches quotes and adjusts price accordingly:
-    - BUY: Uses bid price + 0.1%
-    - SELL: Uses ask price + 0.1%
+    A MARKET order is sent as LIMIT at the LTP plus the Market Price Protection
+    slab (utils/mpp_slab.py), rounded to the instrument's tick size.
     """
     symbol = get_br_symbol(data["symbol"], data["exchange"])
 
@@ -27,15 +40,8 @@ def transform_data(data, token):
 
     if data["pricetype"] == "MARKET":
         try:
-            # Get username from Flask session
-            username = None
-            if session and hasattr(session, "get"):
-                username = session.get("username")
-
-            # Get feed token for market data using username (not broker name)
-            feed_token = get_feed_token(username if username else "kalaivani")
-
-            logger.info(f"Using feed token for user: {username if username else 'kalaivani'}")
+            username = _feed_token_username()
+            feed_token = get_feed_token(username)
 
             if feed_token:
                 # Create BrokerData instance to use get_quotes - only need feed_token for market data
@@ -45,25 +51,24 @@ def transform_data(data, token):
                 quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
                 logger.info(f"Quote data for market order adjustment: {quote_data}")
 
-                # Adjust price based on action (BUY or SELL)
-                if action == "BUY":
-                    bid_price = float(quote_data.get("bid", 0))
-                    if bid_price > 0:
-                        # Add 0.1% to bid price for BUY orders
-                        adjusted_price = bid_price * 1.001
-                        price = str(round(adjusted_price, 2))
-                        logger.info(f"Adjusted BUY price: bid {bid_price} + 0.1% = {price}")
-                        # Change order type to LIMIT
-                        order_type = "LIMIT"
-                elif action == "SELL":
-                    ask_price = float(quote_data.get("ask", 0))
-                    if ask_price > 0:
-                        # Subtract 0.1% from ask price for SELL orders
-                        adjusted_price = ask_price * 0.999
-                        price = str(round(adjusted_price, 2))
-                        logger.info(f"Adjusted SELL price: ask {ask_price} - 0.1% = {price}")
-                        # Change order type to LIMIT
-                        order_type = "LIMIT"
+                ltp = float(quote_data.get("ltp") or 0)
+                if ltp > 0:
+                    info = get_symbol_info(data["symbol"], data["exchange"])
+                    price = str(
+                        calculate_protected_price(
+                            price=ltp,
+                            action=action,
+                            symbol=data["symbol"],
+                            tick_size=getattr(info, "tick_size", None) if info else None,
+                            exchange=data["exchange"],
+                        )
+                    )
+                    order_type = "LIMIT"
+                    logger.info(f"MPP: MARKET {action} sent as LIMIT at {price} (LTP {ltp})")
+                else:
+                    logger.warning(
+                        f"MPP: no LTP for {data['symbol']}, sending the MARKET order as it is"
+                    )
             else:
                 logger.warning(
                     "No feed token available, cannot fetch quotes for market order price adjustment"
