@@ -202,6 +202,13 @@ sign in and use **Select Broker → Configure** to save your broker keys. Leave
 the broker placeholders unset; keep `VALID_BROKERS`. A configured `.env`
 broker continues to use its `.env` keys before any saved keys for that broker.
 
+If you create `.env` yourself for a nonstandard startup flow, or the file
+cannot be written on first run, generate `APP_KEY`, `API_KEY_PEPPER` and
+`FERNET_SALT` yourself with
+`uv run python -c "import secrets; print(secrets.token_hex(32))"` and paste one
+value into each. On an existing database, do not change `API_KEY_PEPPER` or
+`FERNET_SALT` by hand; use `uv run python upgrade/rotate_pepper.py`.
+
 Never commit your `.env`. It is gitignored, and after first run it holds real
 secrets.
 

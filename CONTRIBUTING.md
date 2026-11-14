@@ -143,15 +143,48 @@ cd ..
 
 ### Configure Environment
 
-A first start with `uv run app.py` creates `.env` from `.sample.env` with fresh
-installation secrets when there is no existing database. Sign in, open
-**Select Broker → Configure**, and save the broker keys. `VALID_BROKERS` must
-remain set even if the broker credential fields are empty. Existing `.env`
-broker configuration retains precedence for that broker.
+A first start with `uv run app.py` creates `.env` from `.sample.env` and replaces
+the public sample placeholders for `APP_KEY`, `API_KEY_PEPPER` and `FERNET_SALT`
+with fresh random installation secrets when there is no existing database. Look
+for the one-time `[OpenAlgo first-run setup]` message in the console. You do not
+need to generate or paste any secrets for a normal setup.
+
+The placeholder values are safe only on a fresh installation before its first
+boot. They are public, so they protect nothing, and there is no stored data for
+them to unlock yet. Once OpenAlgo rotates them, `.env` holds the real
+installation secrets: keep it private, never commit it, and never paste its
+values into issues, logs or screenshots.
+
+Sign in, open **Select Broker → Configure**, and save the broker keys.
+`VALID_BROKERS` must remain set even if the broker credential fields are empty.
+Existing `.env` broker configuration retains precedence for that broker.
 
 For an existing installation, retain its `.env` and database together. Do not
 generate replacement installation secrets merely to upgrade. See the
 [setup guide](docs/userguide/05-first-time-setup/README.md) for the current flow.
+
+#### Manual secret generation (advanced fallback)
+
+Use this only when you create `.env` yourself for a nonstandard startup flow, or
+when OpenAlgo cannot write `.env` on first run (for example, a read-only bind
+mount). Copy the sample file and generate each value separately:
+
+```bash
+cp .sample.env .env
+uv run python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Paste one generated value into each of `APP_KEY`, `API_KEY_PEPPER` and
+`FERNET_SALT` in `.env`, then start the app. Never commit the resulting `.env`
+or share the generated values.
+
+On an installation with an existing database, do not change `API_KEY_PEPPER` or
+`FERNET_SALT` by hand: doing so makes stored passwords and broker credentials
+unreadable. Use the dedicated migration instead:
+
+```bash
+uv run python upgrade/rotate_pepper.py
+```
 
 > [!NOTE]
 > **Static IP whitelisting:** Many Indian brokers require you to whitelist a static IP address when generating API keys and secrets. If you are developing locally, you may need to whitelist your public IP. For cloud/VPS deployments, use the server's static IP. Check your broker's API documentation for specific requirements.
