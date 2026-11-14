@@ -69,6 +69,25 @@ fix, live in [docs/releases](releases/).
   fails, `migrate_all.py` reports the failure and exits non-zero instead of
   calling it a warning.
 
+- **The Latency Monitor (`/logs/latency`) shows one group of endpoints at a
+  time.** Buttons at the top choose between Orders, Account and books,
+  Market data, Options, Symbols and settings, Tools and alerts, and All
+  calls, each with how many calls it holds. The page opens on Orders, and
+  every figure, the broker table, the recent list and the CSV export are for
+  the chosen group only. A new By Endpoint table lists each endpoint of the
+  group on its own, so history is no longer averaged into quotes, or either
+  into orders. What changes for you:
+  - The numbers under Orders will differ from what the page showed before,
+    usually lower in count. They were not order figures before.
+  - The Excellent, Good, Acceptable and Slow ratings and the under 150 ms
+    figure are shown for Orders only. A history call that takes a second is
+    not rated as a slow order.
+  - The latency distribution now counts every recorded order. It used to
+    count the 100 most recent calls of any kind.
+  - Orders are kept for all time and other calls for 7 days, so the groups
+    cover different spans. Each group says which on its first card.
+  - Not measured, as before: the time to an exchange fill, and anything
+    outside the OpenAlgo API such as signing in.
 - `/trading`, Historify and every other chart now use openalgo-charts 2.7.2
   (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
   each one shows its drawing the way the chart shows it when selected, with an
@@ -104,6 +123,18 @@ fix, live in [docs/releases](releases/).
   `NSE_INDEX`) and the BSE indices' expiries come from `BFO`. An exchange
   the assistant names is still used as given, and every other symbol keeps
   the NSE and NFO defaults.
+- **Latency Monitor counting every API call as an order** (#2421, #2286). The
+  page at `/logs/latency` put every recorded call into one set of figures and
+  called them orders. A chart or a scanner makes hundreds of history calls
+  for each order, so those decided the average, the P99 and the share under
+  150 ms: an install that had never placed an order through the API could
+  read "2,607 orders tracked". See **Changed** for what the page does now.
+- **Latency of options orders deleted after a week.** Order latency is kept
+  for good and everything else for 7 days. Options orders and options
+  multi-leg orders were recorded under names the keep list did not have, so
+  their records went with the data calls. They are kept now, and records
+  from the last week that are still there are counted as the orders they are.
+  Records already deleted cannot be brought back.
 - **Scheduled Flow workflows stopping until OpenAlgo was restarted** (#2355,
   #2326). Every scheduled workflow could stop at the same moment and stay
   stopped: the Flow page still showed them Active, switching one off and on

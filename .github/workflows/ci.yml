@@ -79,6 +79,7 @@ jobs:
             test/test_broker_keys.py \
             test/test_broker_callback_logging.py \
             test/test_flow_scheduler_resilience.py \
+            test/test_latency_groups.py \
             -v --timeout=60
 
   # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
