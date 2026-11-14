@@ -370,6 +370,17 @@ def transform_order_data(orders):
                 "orderid": str(order.get("order_id", "")),
                 "order_status": map_order_status(order.get("status")),
                 "timestamp": order.get("order_timestamp", ""),
+                # Fill progress (10-order-book.md field table): the order-update
+                # poller diffs filled_quantity, so a partial fill on a still-open
+                # order is reported.
+                "filled_quantity": _int(order.get("filled_quantity")),
+                "pending_quantity": _int(order.get("pending_quantity")),
+                "average_price": _float(order.get("average_price")),
+                "rejection_reason": (
+                    str(order.get("status_message") or "").strip()
+                    if map_order_status(order.get("status")) == "rejected"
+                    else ""
+                ),
             }
         )
     return transformed
