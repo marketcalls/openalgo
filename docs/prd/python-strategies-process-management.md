@@ -194,12 +194,18 @@ def set_resource_limits():
     memory_limit = STRATEGY_MEMORY_LIMIT_MB * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
-    # CPU time limit: No limit (managed by scheduler)
-    # resource.setrlimit(resource.RLIMIT_CPU, (unlimited, unlimited))
+    # CPU time limit: 3600 CPU-seconds per run, not configurable
+    resource.setrlimit(resource.RLIMIT_CPU, (3600, 3600))
 
-    # File descriptor limit: 1024
-    resource.setrlimit(resource.RLIMIT_NOFILE, (1024, 1024))
+    # File descriptor limit: 256
+    resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+
+    # Process and thread limit: 256, counted across the whole user
+    resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
 ```
+
+What each limit does when a strategy reaches it, and how to size a server, is in
+[`strategies/RESOURCE_LIMITS.md`](../../strategies/RESOURCE_LIMITS.md).
 
 ### Docker Thread Limiting
 
