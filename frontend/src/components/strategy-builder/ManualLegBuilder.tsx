@@ -292,8 +292,8 @@ export function ManualLegBuilder({
 
   return (
     <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card shadow-sm">
-      {/* Header — icon + title only. Buy/Sell moved down next to Add. */}
-      <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-3">
+      {/* Header — icon + title, contract symbol and live LTP inline */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-2.5">
         <div className="flex items-center gap-2">
           <div className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-emerald-500/15 to-blue-500/15 text-emerald-600 dark:text-emerald-400">
             <ListPlus className="h-3.5 w-3.5" />
@@ -306,7 +306,11 @@ export function ManualLegBuilder({
           </div>
         </div>
         {resolvedContract && (
-          <div className="hidden items-center gap-2 text-[11px] sm:flex">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="font-mono text-[10px] font-semibold text-foreground">
+              {resolvedContract.symbol}
+            </span>
+            <span className="text-border/60">•</span>
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
               LTP
@@ -319,7 +323,7 @@ export function ManualLegBuilder({
       </div>
 
       {/* Action row — everything inline so mouse travel is minimal. */}
-      <div className="flex flex-wrap items-end gap-3 px-4 py-4">
+      <div className="flex flex-wrap items-end gap-3 px-4 py-3">
         {/* Segment */}
         <div className="flex min-w-[120px] flex-col gap-1.5">
           <FieldLabel>Segment</FieldLabel>
@@ -564,21 +568,6 @@ export function ManualLegBuilder({
           {contractError ??
             chainError ??
             (isChainResolving ? 'Loading expiry strikes…' : 'Resolving listed contract…')}
-        </div>
-      )}
-
-      {/* Live symbol footer (LTP was moved to header; keep symbol here). */}
-      {resolvedContract && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-2">
-          <span className="text-[10px] text-muted-foreground sm:hidden">
-            LTP
-            <span className="ml-1 font-bold tabular-nums text-foreground">
-              ₹{resolvedContract.marketPrice.toFixed(2)}
-            </span>
-          </span>
-          <span className="font-mono text-[10px] text-muted-foreground">
-            {resolvedContract.symbol}
-          </span>
         </div>
       )}
     </div>
