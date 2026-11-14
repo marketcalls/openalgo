@@ -182,6 +182,11 @@ class TestFindAtmStrikeFromActual:
         """NaN compares false against every strike, so min() returned STRIKES[0]."""
         assert find_atm_strike_from_actual(ltp, STRIKES) is None
 
+    @pytest.mark.parametrize("ltp", [0, 0.0, -1.0])
+    def test_unpriced_ltp_returns_none_instead_of_the_lowest_strike(self, ltp):
+        """A broker with no price answers 0, and min() then picked STRIKES[0]."""
+        assert find_atm_strike_from_actual(ltp, STRIKES) is None
+
     def test_a_numpy_ltp_still_resolves(self):
         assert find_atm_strike_from_actual(numpy.float64(23587.50), STRIKES) == 23600.0
 
