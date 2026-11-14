@@ -22,6 +22,7 @@ from database.telegram_db import (
     get_bot_config,
     get_telegram_user_by_username,
 )
+from services.alerts.formatting import placed_nothing
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -43,6 +44,10 @@ class TelegramAlertService:
         self.alert_templates = {
             "placeorder": "*Order Placed*\n{details}",
             "placesmartorder": "*Smart Order Placed*\n{details}",
+            # A smart order aims at a target position size, so placing nothing
+            # is a correct outcome and needs its own heading. Under the
+            # "Placed" heading it read as an executed order (issue #2054).
+            "placesmartorder_no_action": "*Smart Order - No Action Taken*\n{details}",
             "basketorder": "*Basket Order Executed*\n{details}",
             "splitorder": "*Split Order Executed*\n{details}",
             "optionsorder": "*Options Order Executed*\n{details}",
@@ -97,7 +102,18 @@ class TelegramAlertService:
                     ]
                 )
                 if response.get("status") == "success":
-                    details.append(f"Order ID: `{response.get('orderid', 'N/A')}`")
+                    if response.get("orderid"):
+                        details.append(f"Order ID: `{response.get('orderid')}`")
+                    elif placed_nothing(order_type, response):
+                        # A success with a message and no order id is the
+                        # adapter reporting that it placed nothing on purpose.
+                        # "Order ID: N/A" under the Placed heading told the user
+                        # an order had gone in.
+                        details.append(f"Result: {response['message']}")
+                    else:
+                        # Neither an id nor a reason. Something went in and the
+                        # id was lost, so say no more than the old line did.
+                        details.append("Order ID: `N/A`")
 
             elif order_type == "basketorder":
                 if response.get("status") == "success":
@@ -429,7 +445,10 @@ class TelegramAlertService:
             )
 
             # Format message
-            template = self.alert_templates.get(order_type, "*Order Update*\n{details}")
+            template_key = (
+                f"{order_type}_no_action" if placed_nothing(order_type, response) else order_type
+            )
+            template = self.alert_templates.get(template_key, "*Order Update*\n{details}")
             details = self.format_order_details(order_type, order_data, response)
             message = template.format(details=details)
 
