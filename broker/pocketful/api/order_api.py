@@ -656,7 +656,7 @@ def place_order_api(data, auth_token):
             return None, info_response, None
     logger.debug(f"Client ID: {client_id}")
     # Transform OpenAlgo order format to Pocketful format
-    newdata = transform_data(data, client_id=client_id)
+    newdata = transform_data(data, client_id=client_id, auth_token=auth_token)
     logger.debug(f"Transformed data: {newdata}")
     # Make the API request
     response_data = get_api_response(ORDER_ENDPOINT, auth_token, method="POST", payload=newdata)
