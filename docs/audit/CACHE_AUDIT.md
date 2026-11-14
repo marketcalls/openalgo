@@ -410,7 +410,7 @@ Logging uses the centralized `utils/logging.py` module with configurable log lev
 - SQLite databases stored in `db/` directory
 - Docker: `chmod 700 /app/keys` for API keys directory
 - Docker: App runs as non-root `appuser`
-- `.env` mounted read-only in Docker (`ro` flag)
+- `.env` was mounted read-only in Docker (`ro` flag) when this audit was written. Since 2.0.0.8 it is mounted read/write, because startup has to replace the public sample keys, and it is kept private with owner UID 1000 and mode 600.
 
 ### D. Security Recommendations
 

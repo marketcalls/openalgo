@@ -100,7 +100,7 @@ The scripts automatically handle file permissions:
 - **db/** directory: Created with write access for the container
 - **strategies/** directory: Python strategy scripts (persisted locally)
 - **log/** directory: Application and strategy logs (persisted locally)
-- **.env** file: Read-only mount inside container (`:ro`)
+- **.env** file: Mounted read/write inside the container, because OpenAlgo saves to it: startup replaces the public sample keys, and server settings are saved there. On Linux the script gives the file to UID 1000 with mode 600, so only the container user can read or write it.
 - **Container user**: Runs as non-root user `appuser` (UID 1000)
 
 If you encounter permission issues on Linux:
@@ -108,6 +108,10 @@ If you encounter permission issues on Linux:
 # Fix directory permissions
 sudo chown -R 1000:1000 db/ strategies/ log/
 chmod -R 755 db/ strategies/ log/
+
+# .env must be readable and writable by the container user
+sudo chown 1000:1000 .env
+sudo chmod 600 .env
 ```
 
 ### XTS Brokers
