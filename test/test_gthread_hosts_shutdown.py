@@ -49,14 +49,63 @@ class FakeChild:
         return None if self.alive else 0
 
 
+def test_dead_process_reaper_preserves_shutdown_recovery_intent(host, monkeypatch):
+    """The reaper must not turn a shutdown into a manual/stale stop."""
+    sid = "sensex_0918"
+    child = FakeChild(3_200_000)
+    child.alive = False
+    ps.RUNNING_STRATEGIES[sid] = {"process": child, "pid": child.pid}
+    ps.STRATEGY_CONFIGS[sid] = {
+        "is_running": True,
+        "pid": child.pid,
+        "lifecycle_state": "recovery_pending",
+    }
+    monkeypatch.setattr(ps, "save_configs", lambda: True)
+    monkeypatch.setattr(ps.psutil, "pid_exists", lambda _pid: False)
+
+    ps.cleanup_dead_processes()
+
+    assert sid not in ps.RUNNING_STRATEGIES
+    assert ps.STRATEGY_CONFIGS[sid]["is_running"] is True
+    assert ps.STRATEGY_CONFIGS[sid]["pid"] == child.pid
+    assert ps.STRATEGY_CONFIGS[sid]["lifecycle_state"] == "recovery_pending"
+
+
+def test_dead_process_reaper_records_natural_exit_as_stopped(host, monkeypatch):
+    sid = "completed_at_time_exit"
+    child = FakeChild(3_200_001)
+    child.alive = False
+    ps.RUNNING_STRATEGIES[sid] = {"process": child, "pid": child.pid}
+    ps.STRATEGY_CONFIGS[sid] = {
+        "is_running": True,
+        "pid": child.pid,
+        "lifecycle_state": "running",
+        "resumed": True,
+    }
+    monkeypatch.setattr(ps, "save_configs", lambda: True)
+    monkeypatch.setattr(ps.psutil, "pid_exists", lambda _pid: False)
+
+    ps.cleanup_dead_processes()
+
+    config = ps.STRATEGY_CONFIGS[sid]
+    assert config["is_running"] is False
+    assert config["pid"] is None
+    assert config["lifecycle_state"] == "stopped"
+    assert config["resumed"] is False
+    assert config["last_stopped"]
+
+
 @pytest.fixture
 def host(monkeypatch):
     monkeypatch.setattr(ps, "_SHUTTING_DOWN", threading.Event())
     scheduler = FakeScheduler()
     monkeypatch.setattr(ps, "SCHEDULER", scheduler)
+    saved_configs = dict(ps.STRATEGY_CONFIGS)
     saved = dict(ps.RUNNING_STRATEGIES)
     ps.RUNNING_STRATEGIES.clear()
     yield scheduler
+    ps.STRATEGY_CONFIGS.clear()
+    ps.STRATEGY_CONFIGS.update(saved_configs)
     ps.RUNNING_STRATEGIES.clear()
     ps.RUNNING_STRATEGIES.update(saved)
 
