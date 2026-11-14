@@ -21,6 +21,19 @@ interface AuthStore {
   checkSession: () => boolean
 }
 
+/**
+ * The fields written to localStorage. The API key is deliberately not one of
+ * them: localStorage is readable by every script on the origin and outlives the
+ * browser session, and the key can place orders. It lives in memory only and
+ * AuthSync fetches it again from /auth/session-status on every page load.
+ */
+type PersistedAuthState = Pick<AuthStore, 'user' | 'isAuthenticated'>
+
+const persistedAuthState = (state: Partial<AuthStore> | undefined): PersistedAuthState => ({
+  user: state?.user ?? null,
+  isAuthenticated: state?.isAuthenticated ?? false,
+})
+
 export const useAuthStore = create<AuthStore>()(
   persist(
     (set, get) => ({
@@ -88,6 +101,16 @@ export const useAuthStore = create<AuthStore>()(
     }),
     {
       name: 'openalgo-auth',
+      // Version 0 persisted the whole store, API key included.
+      version: 1,
+      partialize: (state) => persistedAuthState(state),
+      // Rewrites a version 0 entry without the key on first load.
+      migrate: (persistedState) => persistedAuthState(persistedState as Partial<AuthStore>),
+      // Never take an API key from storage, whatever version wrote it.
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...persistedAuthState(persistedState as Partial<AuthStore>),
+      }),
     }
   )
 )
