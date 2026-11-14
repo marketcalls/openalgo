@@ -51,11 +51,26 @@ function sourceBounds(
       calendar.timezone
     )
     const session = calendar.sessionFrom(from)
-    if (!session || session.open >= from + DAY) return null
+    // A daily bar on a day the calendar has no session for (a Sunday Muhurat
+    // session, a year with no holiday list) still covers its calendar day.
+    if (!session || session.open >= from + DAY) return { time, from, to: from + DAY }
     return { time, from, to: session.close }
   }
   // The same exchange contract applies to native and derived clock periods.
   return timeframeBucketAt({ interval, native: false, market: { calendar } } as TimeframePlan, time)
+}
+
+/**
+ * Longest window one derived-history request asks of a native source. Broker
+ * plugins split daily history into their own chunks, so a daily or longer
+ * source can take years per call; the windows are fetched one after another
+ * inside the chart's history deadline, so 30-day daily windows made a 5-year W
+ * or 10-year M time out.
+ */
+function maxSourceSpanSeconds(interval: string): number {
+  const rule = resolveInterval(interval).bucketing
+  const daily = rule.mode === 'calendar' || (rule.mode === 'interval' && rule.seconds >= DAY)
+  return (daily ? 2000 : 30) * DAY
 }
 
 export function createTradingTimeframes(source: DataFeed, options: TradingTimeframeOptions) {
@@ -81,7 +96,7 @@ export function createTradingTimeframes(source: DataFeed, options: TradingTimefr
             ),
           // The API uses finite date windows. Split large derived requests without
           // inventing a retention date or promising that a broker has older bars.
-          maxSpanSeconds: 30 * DAY,
+          maxSpanSeconds: maxSourceSpanSeconds(interval),
         })),
     }
   }
