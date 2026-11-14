@@ -186,7 +186,9 @@ def calculate_protected_price(
         action: Order action - 'BUY' or 'SELL'
         symbol: Trading symbol (used to determine instrument type if not provided)
         instrument_type: 'EQ', 'FUT', 'CE', or 'PE' (if None, derived from symbol)
-        tick_size: Tick size for price rounding (from database)
+        tick_size: Tick size for price rounding (from database). With a tick size the
+            price is rounded away from the base price (up for BUY, down for SELL)
+            and kept at least one tick from it.
         custom_percentage: Optional custom percentage to override slab-based calculation
         exchange: Optional OpenAlgo exchange, used with symbol to derive the type
 
@@ -222,8 +224,22 @@ def calculate_protected_price(
         protected_price = price * (1 - multiplier)
         adjustment_type = "-"
 
-    # Round to tick size
-    protected_price = round_to_tick_size(protected_price, tick_size)
+    if tick_size is not None and tick_size > 0 and multiplier > 0:
+        # Round away from the base price and keep at least one tick of buffer.
+        # Nearest-tick rounding put a cheap option's buffer back on its LTP:
+        # 5% of 0.30 is 0.315, which rounds to 0.30 on a 0.05 tick.
+        if action.upper() == "BUY":
+            protected_price = _snap_to_tick(
+                max(protected_price, price + tick_size), tick_size, "ceil"
+            )
+        else:
+            protected_price = _snap_to_tick(
+                min(protected_price, price - tick_size), tick_size, "floor"
+            )
+            # A price one tick above zero has no room below it; sell at that tick.
+            protected_price = max(protected_price, tick_size)
+    else:
+        protected_price = round_to_tick_size(protected_price, tick_size)
 
     logger.info(
         f"MPP Calculation: Symbol={symbol or 'N/A'}, InstrumentType={instrument_type}, "
@@ -233,6 +249,62 @@ def calculate_protected_price(
     )
 
     return protected_price
+
+
+def _snap_to_tick(value: float, tick_size: float, direction: str) -> float:
+    """Snap ``value`` to a multiple of ``tick_size``, down for "floor" and up for "ceil"."""
+    ratio = round(value / tick_size, 6)  # tame float noise before the floor/ceil
+    steps = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    decimals = max(0, -math.floor(math.log10(tick_size))) if tick_size < 1 else 0
+    return round(steps * tick_size, decimals + 2)
+
+
+def calculate_stop_limit_price(
+    trigger_price: float,
+    action: str,
+    instrument_type: str = "EQ",
+    tick_size: float | None = None,
+) -> float:
+    """
+    Limit price for an SL-M order sent as a stop-limit (SL-LMT).
+
+    The limit is the slab percentage beyond the trigger in the fill direction
+    (SELL below it, BUY above it), snapped to the tick away from the trigger and
+    at least one tick past it, so the order stays marketable once triggered.
+    It is priced off the trigger, never the LTP: a stop fires at the trigger.
+
+    Without a tick size (no master contract row, or one without a tick) the
+    buffer cannot be snapped to a valid price, so the trigger itself is the
+    limit and the order is still sent rather than refused. The trigger is not
+    checked against a tick here, but the broker receives it as the trigger
+    price as well, so using it as the limit adds no new way to be rejected: a
+    trigger off the tick grid is refused by the broker either way.
+
+    Raises:
+        ValueError: If the trigger is not positive, or a SELL limit would not
+            be positive.
+    """
+    if not trigger_price or trigger_price <= 0:
+        raise ValueError("An SL-M order needs a trigger price above 0.")
+    if not tick_size or tick_size <= 0:
+        logger.warning(
+            f"MPP: no tick size to price SL-M off trigger {trigger_price}; "
+            "using the trigger price as the stop-limit"
+        )
+        return float(trigger_price)
+
+    multiplier = get_mpp_percentage(trigger_price, instrument_type) / 100
+    if action.upper() == "BUY":
+        raw = max(trigger_price * (1 + multiplier), trigger_price + tick_size)
+        return _snap_to_tick(raw, tick_size, "ceil")
+
+    raw = min(trigger_price * (1 - multiplier), trigger_price - tick_size)
+    limit = _snap_to_tick(raw, tick_size, "floor")
+    if limit <= 0:
+        raise ValueError(
+            f"The trigger price {trigger_price} is too low to place an SL-M sell as a stop-limit."
+        )
+    return limit
 
 
 def get_mpp_info(
