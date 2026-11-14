@@ -4,8 +4,10 @@ import {
   CheckCircle,
   Database,
   DownloadCloud,
+  ExternalLink,
   FileDown,
   HardDrive,
+  HelpCircle,
   Home,
   LineChart,
   ListPlus,
@@ -83,6 +85,11 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
@@ -355,8 +362,14 @@ export default function Historify() {
   const [uploadSymbol, setUploadSymbol] = useState('')
   const [uploadExchange, setUploadExchange] = useState('NSE')
   const [uploadInterval, setUploadInterval] = useState('D')
-  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadFiles, setUploadFiles] = useState<File[]>([])
+  const [useFilenameAsSymbol, setUseFilenameAsSymbol] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{
+    current: number
+    total: number
+    currentFileName: string
+  } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -1333,59 +1346,162 @@ export default function Historify() {
     }
   }
 
-  // CSV Upload
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      const fileName = file.name.toLowerCase()
-      if (!fileName.endsWith('.csv') && !fileName.endsWith('.parquet')) {
-        showToast.error('Please select a CSV or Parquet file', 'historify')
-        return
+  // Helper to extract symbol name from filename without extension
+  const getSymbolFromFileName = (fileName: string): string => {
+    const raw = fileName.replace(/\.(csv|parquet)$/i, '').trim()
+    // Handle option contract export format: UNDERLYING_YYYY-MM-DD_STRIKE_TYPE_...
+    const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+    const optMatch = raw.match(/^([A-Za-z0-9]+)_(\d{4})-(\d{2})-(\d{2})_(\d+(?:\.\d+)?)_([CP]E)/i)
+    if (optMatch) {
+      const [, underlyingRaw, year, month, day, strike, optType] = optMatch
+      const underlying = underlyingRaw.toUpperCase() === 'NIFTY50' ? 'NIFTY' : underlyingRaw.toUpperCase()
+      const mIdx = parseInt(month, 10) - 1
+      if (mIdx >= 0 && mIdx < 12) {
+        return `${underlying}${day}${MONTHS[mIdx]}${year.slice(-2)}${strike}${optType.toUpperCase()}`
       }
-      setUploadFile(file)
+    }
+    return raw.toUpperCase()
+  }
+
+  // CSV/Parquet Upload Handler
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || [])
+    if (selectedFiles.length === 0) return
+
+    const validFiles: File[] = []
+    const invalidNames: string[] = []
+
+    for (const file of selectedFiles) {
+      const fileName = file.name.toLowerCase()
+      if (fileName.endsWith('.csv') || fileName.endsWith('.parquet')) {
+        validFiles.push(file)
+      } else {
+        invalidNames.push(file.name)
+      }
+    }
+
+    if (invalidNames.length > 0) {
+      showToast.error(
+        `${invalidNames.length} file(s) ignored. Only CSV and Parquet files are supported.`,
+        'historify'
+      )
+    }
+
+    if (validFiles.length > 40) {
+      showToast.warning(
+        'Maximum 40 files can be uploaded at once. Keeping the first 40 files.',
+        'historify'
+      )
+      setUploadFiles(validFiles.slice(0, 40))
+    } else {
+      setUploadFiles(validFiles)
+    }
+
+    // Auto-enable "use filename as symbol" when multiple files are selected
+    if (validFiles.length > 1) {
+      setUseFilenameAsSymbol(true)
+    } else if (validFiles.length === 1 && !uploadSymbol) {
+      setUploadSymbol(getSymbolFromFileName(validFiles[0].name))
     }
   }
 
   const uploadCSVData = async () => {
-    if (!uploadFile) {
-      showToast.warning('Please select a CSV or Parquet file', 'historify')
+    if (uploadFiles.length === 0) {
+      showToast.warning('Please select at least one CSV or Parquet file', 'historify')
       return
     }
-    if (!uploadSymbol.trim()) {
+
+    if (!useFilenameAsSymbol && uploadFiles.length > 1) {
+      showToast.warning(
+        'Please enable "Use file name as symbol name" when uploading multiple files.',
+        'historify'
+      )
+      return
+    }
+
+    if (!useFilenameAsSymbol && !uploadSymbol.trim()) {
       showToast.warning('Please enter a symbol', 'historify')
       return
     }
+
     setIsUploading(true)
+    let successCount = 0
+    let failCount = 0
+    const errors: string[] = []
+
     try {
       const csrfToken = await fetchCSRFToken()
-      const formData = new FormData()
-      formData.append('file', uploadFile)
-      formData.append('symbol', uploadSymbol.trim().toUpperCase())
-      formData.append('exchange', uploadExchange)
-      formData.append('interval', uploadInterval)
 
-      const response = await fetch('/historify/api/upload', {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrfToken },
-        credentials: 'include',
-        body: formData,
-      })
-      const data = await response.json()
-      if (data.status === 'success') {
-        showToast.success(`${data.message}`, 'historify')
+      for (let i = 0; i < uploadFiles.length; i++) {
+        const file = uploadFiles[i]
+        const symbol = useFilenameAsSymbol
+          ? getSymbolFromFileName(file.name)
+          : uploadSymbol.trim().toUpperCase()
+
+        setUploadProgress({
+          current: i + 1,
+          total: uploadFiles.length,
+          currentFileName: file.name,
+        })
+
+        const formData = new FormData()
+        formData.append('file', file)
+        formData.append('symbol', symbol)
+        formData.append('exchange', uploadExchange)
+        formData.append('interval', uploadInterval)
+
+        try {
+          const response = await fetch('/historify/api/upload', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': csrfToken },
+            credentials: 'include',
+            body: formData,
+          })
+          const data = await response.json()
+          if (response.ok && data.status === 'success') {
+            successCount++
+          } else {
+            failCount++
+            errors.push(`${file.name}: ${data.message || 'Upload failed'}`)
+          }
+        } catch {
+          failCount++
+          errors.push(`${file.name}: Network error`)
+        }
+      }
+
+      if (successCount > 0 && failCount === 0) {
+        showToast.success(
+          uploadFiles.length === 1
+            ? 'File uploaded successfully'
+            : `All ${successCount} files uploaded successfully`,
+          'historify'
+        )
         setUploadDialogOpen(false)
-        setUploadFile(null)
+        setUploadFiles([])
         setUploadSymbol('')
+        setUploadProgress(null)
         if (fileInputRef.current) fileInputRef.current.value = ''
         loadCatalog()
         loadStats()
+      } else if (successCount > 0 && failCount > 0) {
+        showToast.warning(
+          `Uploaded ${successCount}/${uploadFiles.length} files. ${failCount} failed.`,
+          'historify'
+        )
+        loadCatalog()
+        loadStats()
       } else {
-        showToast.error(data.message || 'Failed to upload data', 'historify')
+        showToast.error(
+          errors.length > 0 ? errors[0] : 'Failed to upload files',
+          'historify'
+        )
       }
     } catch (_error) {
-      showToast.error('Failed to upload CSV', 'historify')
+      showToast.error('Failed to upload data', 'historify')
     } finally {
       setIsUploading(false)
+      setUploadProgress(null)
     }
   }
 
@@ -3015,26 +3131,104 @@ NIFTY24DEC25000CE,NFO"
       </Dialog>
 
       {/* Upload Dialog */}
-      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+      <Dialog
+        open={uploadDialogOpen}
+        onOpenChange={(open) => {
+          if (!isUploading) {
+            setUploadDialogOpen(open)
+            if (!open) {
+              setUploadFiles([])
+              setUploadSymbol('')
+              setUploadProgress(null)
+              if (fileInputRef.current) fileInputRef.current.value = ''
+            }
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Import Data</DialogTitle>
-            <DialogDescription>Upload a CSV or Parquet file with OHLCV data</DialogDescription>
+            <DialogDescription>
+              Upload up to 40 CSV or Parquet files with OHLCV data
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Flag: Use file name as symbol name */}
+            <div className="flex items-center justify-between rounded-lg border p-3 bg-muted/30">
+              <div className="flex items-center space-x-2.5">
+                <Checkbox
+                  id="useFilenameAsSymbol"
+                  checked={useFilenameAsSymbol}
+                  onCheckedChange={(checked) => setUseFilenameAsSymbol(!!checked)}
+                  disabled={isUploading}
+                />
+                <div className="flex items-center gap-1.5">
+                  <Label
+                    htmlFor="useFilenameAsSymbol"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Use file name as symbol name
+                  </Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex cursor-pointer text-muted-foreground hover:text-foreground">
+                        <HelpCircle className="h-4 w-4" />
+                        <span className="sr-only">Symbol format info</span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-xs space-y-1.5 p-3">
+                      <p>
+                        Automatically extracts the symbol from each file name (excluding <code>.csv</code> or <code>.parquet</code> extension).
+                      </p>
+                      <p>
+                        See{' '}
+                        <a
+                          href="https://docs.openalgo.in/symbol-format"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary underline font-medium inline-flex items-center gap-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          OpenAlgo Symbol Format Docs
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+            </div>
+
             <div>
               <Label>Symbol</Label>
               <Input
-                value={uploadSymbol}
+                value={
+                  useFilenameAsSymbol
+                    ? uploadFiles.length > 0
+                      ? `Auto (${uploadFiles.length} file${uploadFiles.length > 1 ? 's' : ''})`
+                      : 'Auto (from filename)'
+                    : uploadSymbol
+                }
                 onChange={(e) => setUploadSymbol(e.target.value.toUpperCase())}
                 placeholder="RELIANCE"
+                disabled={useFilenameAsSymbol || isUploading}
                 className="mt-1"
               />
+              {useFilenameAsSymbol && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Symbol will be automatically derived from each file name without extension.
+                </p>
+              )}
             </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Exchange</Label>
-                <Select value={uploadExchange} onValueChange={setUploadExchange}>
+                <Select
+                  value={uploadExchange}
+                  onValueChange={setUploadExchange}
+                  disabled={isUploading}
+                >
                   <SelectTrigger className="mt-1">
                     <SelectValue />
                   </SelectTrigger>
@@ -3049,7 +3243,11 @@ NIFTY24DEC25000CE,NFO"
               </div>
               <div>
                 <Label>Interval</Label>
-                <Select value={uploadInterval} onValueChange={setUploadInterval}>
+                <Select
+                  value={uploadInterval}
+                  onValueChange={setUploadInterval}
+                  disabled={isUploading}
+                >
                   <SelectTrigger className="mt-1">
                     <SelectValue />
                   </SelectTrigger>
@@ -3066,18 +3264,79 @@ NIFTY24DEC25000CE,NFO"
                 </p>
               </div>
             </div>
+
             <div>
-              <Label>Data File</Label>
+              <div className="flex items-center justify-between">
+                <Label>Data Files (Max 40)</Label>
+                {uploadFiles.length > 0 && (
+                  <span className="text-xs text-muted-foreground font-medium">
+                    {uploadFiles.length}/40 selected
+                  </span>
+                )}
+              </div>
               <Input
                 ref={fileInputRef}
                 type="file"
                 accept=".csv,.parquet"
+                multiple
+                disabled={isUploading}
                 onChange={handleFileChange}
                 className="mt-1"
               />
-              {uploadFile && (
-                <p className="text-sm text-muted-foreground mt-1">Selected: {uploadFile.name}</p>
+
+              {/* Selected Files Preview */}
+              {uploadFiles.length > 0 && (
+                <div className="mt-2 rounded-md border bg-muted/20 p-2">
+                  <div className="text-xs font-medium mb-1.5 flex items-center justify-between text-muted-foreground">
+                    <span>Selected Files ({uploadFiles.length}):</span>
+                    <span>Symbol Preview:</span>
+                  </div>
+                  <ScrollArea className="h-28">
+                    <div className="space-y-1 pr-2">
+                      {uploadFiles.map((file, idx) => (
+                        <div
+                          key={`${file.name}-${idx}`}
+                          className="flex items-center justify-between text-xs py-1 border-b border-border/40 last:border-0"
+                        >
+                          <span className="truncate max-w-[210px]" title={file.name}>
+                            {file.name}
+                          </span>
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono">
+                            {useFilenameAsSymbol
+                              ? getSymbolFromFileName(file.name)
+                              : uploadSymbol || 'REQUIRED'}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
               )}
+
+              {/* Uploading Queue Progress */}
+              {isUploading && uploadProgress && (
+                <div className="mt-3 space-y-1.5 rounded-lg border bg-muted/40 p-3">
+                  <div className="flex items-center justify-between text-xs font-medium">
+                    <span>
+                      Uploading {uploadProgress.current} of {uploadProgress.total}...
+                    </span>
+                    <span>
+                      {Math.round((uploadProgress.current / uploadProgress.total) * 100)}%
+                    </span>
+                  </div>
+                  <Progress
+                    value={(uploadProgress.current / uploadProgress.total) * 100}
+                    className="h-2"
+                  />
+                  <p
+                    className="text-xs text-muted-foreground truncate"
+                    title={uploadProgress.currentFileName}
+                  >
+                    File: {uploadProgress.currentFileName}
+                  </p>
+                </div>
+              )}
+
               <p className="text-xs text-muted-foreground mt-2">
                 Download sample:{' '}
                 <a href="/historify/api/sample/csv" className="text-primary hover:underline">
@@ -3091,12 +3350,27 @@ NIFTY24DEC25000CE,NFO"
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setUploadDialogOpen(false)}>
+            <Button
+              variant="outline"
+              disabled={isUploading}
+              onClick={() => setUploadDialogOpen(false)}
+            >
               Cancel
             </Button>
-            <Button onClick={uploadCSVData} disabled={isUploading}>
+            <Button
+              onClick={uploadCSVData}
+              disabled={
+                isUploading ||
+                uploadFiles.length === 0 ||
+                (!useFilenameAsSymbol && !uploadSymbol.trim())
+              }
+            >
               {isUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Upload
+              {isUploading
+                ? `Uploading (${uploadProgress?.current || 1}/${uploadFiles.length})...`
+                : uploadFiles.length > 1
+                  ? `Upload ${uploadFiles.length} Files`
+                  : 'Upload'}
             </Button>
           </DialogFooter>
         </DialogContent>
