@@ -29,7 +29,7 @@ export type PriceType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
 export type Segment = 'options' | 'futures' | 'cash'
 export type LegPosition = 'B' | 'S'
 export type OptionType = 'CE' | 'PE'
-export type StrikeMode = 'atm' | 'strike'
+export type StrikeMode = 'atm' | 'atm_percent' | 'strike'
 
 /**
  * Which signals a leg accepts, on a signal-mode strategy.
@@ -128,6 +128,7 @@ export interface Leg {
   option_type?: OptionType | null
   strike_mode?: StrikeMode | null
   atm_offset?: string | null
+  atm_percent?: number | null
   strike?: number | null
 
   // --- Signal-mode fields. A signal leg names its own instrument and its own
@@ -572,6 +573,9 @@ export const ATM_OFFSETS: string[] = [
   'OTM4',
   'OTM5',
 ]
+export const ATM_PERCENT_VALUES: number[] = [
+  -5, -4.5, -4, -3.5, -3, -2.5, -2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5,
+]
 
 export const STRATEGY_KIND_LABELS: Record<StrategyKind, string> = {
   batch: 'Multi-leg (batch)',
@@ -1005,6 +1009,7 @@ export function legToPayload(leg: Leg, kind: StrategyKind = 'batch'): Leg {
       clean.option_type = leg.option_type ?? 'CE'
       clean.strike_mode = leg.strike_mode ?? 'atm'
       if (clean.strike_mode === 'atm') clean.atm_offset = leg.atm_offset ?? 'ATM'
+      else if (clean.strike_mode === 'atm_percent') clean.atm_percent = leg.atm_percent ?? null
       else clean.strike = leg.strike ?? null
     }
   }
