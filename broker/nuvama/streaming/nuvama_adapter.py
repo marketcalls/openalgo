@@ -72,6 +72,12 @@ class NuvamaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "NO_AUTH_TOKEN", f"No Nuvama session found for user {user_id}"
                 )
             session = parse_token(token)
+            # The proxy re-initializes in place after a failed connect (and the
+            # pool does on an auth error). Stop the previous client first, or
+            # its socket and thread outlive this adapter's disconnect().
+            previous, self.client = self.client, None
+            if previous is not None:
+                previous.stop()
             self.client = NuvamaStreamClient(
                 app_id=session.app_id_key,
                 account_type=session.account_type or "EQ",
@@ -79,6 +85,9 @@ class NuvamaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 on_connect=self._on_connect,
                 on_disconnect=self._on_disconnect,
             )
+            # Carry the current subscriptions over to the new client.
+            if self.token_info:
+                self._push_sets()
             self.logger.info(f"Nuvama adapter initialized for user {user_id}")
             return self._create_success_response("Nuvama adapter initialized")
         except Exception as e:

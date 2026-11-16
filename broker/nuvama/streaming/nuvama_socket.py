@@ -47,6 +47,8 @@ SEND_GAP = 0.5
 BATCH_QUIET = 0.5
 BATCH_MAX_WAIT = 2.0
 READ_TIMEOUT = 0.25
+# A partial line longer than this means the stream is broken: reconnect.
+MAX_PENDING_BYTES = 1 << 20
 CONNECT_TIMEOUT = 15
 MAX_BACKOFF = 30
 
@@ -265,6 +267,8 @@ class NuvamaStreamClient:
             *lines, pending = pending.split(b"\n")
             for raw in lines:
                 self._handle_line(raw)
+            if len(pending) > MAX_PENDING_BYTES:
+                raise OSError(f"no line break in {len(pending)} bytes")
 
     def _handle_line(self, raw):
         line = raw.strip()
