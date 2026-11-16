@@ -520,6 +520,7 @@ sudo rm -rf /var/lib/docker
 | Motilal Oswal | `motilal` | No |
 | MStock | `mstock` | No |
 | Nubra | `nubra` | No |
+| Nuvama | `nuvama` | No |
 | Paytm Money | `paytm` | No |
 | Pocketful | `pocketful` | No |
 | RMoney | `rmoney` | Yes |

@@ -1227,6 +1227,18 @@ def _broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "nuvama":
+        # Nuvama's login page returns to the redirect URL with `request_id`
+        # (its User Login Flow page); the session also reports the account.
+        code = (
+            request.args.get("request_id")
+            or request.args.get("requestId")
+            or request.args.get("reqId")
+        )
+        logger.debug(f"Nuvama broker - request id present: {bool(code)}")
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "rupeezy":
         # Rupeezy Vortex SSO redirects back with the auth code in `auth`
         # (https://vortex.rupeezy.in/docs/latest/authentication/), which the
@@ -1284,7 +1296,7 @@ def _broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital"]:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital", "nuvama"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database
