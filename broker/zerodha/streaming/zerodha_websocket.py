@@ -797,7 +797,15 @@ class ZerodhaWebSocket:
 
             if len(packet) >= 184:
                 try:
-                    tick["price_change"] = struct.unpack(">i", packet[44:48])[0] / 100.0
+                    # Kite full-mode header after the quote fields (bytes 44:64): last trade time,
+                    # open interest, OI day high, OI day low, exchange timestamp. Depth starts at 64.
+                    (
+                        tick["last_trade_time"],
+                        tick["open_interest"],
+                        tick["oi_day_high"],
+                        tick["oi_day_low"],
+                        tick["exchange_timestamp"],
+                    ) = struct.unpack(">5I", packet[44:64])
 
                     depth_offset = 64
                     buy_depth = []
@@ -820,15 +828,6 @@ class ZerodhaWebSocket:
                             sell_depth.append({"quantity": qty, "price": price, "orders": orders})
 
                     tick["depth"] = {"buy": buy_depth, "sell": sell_depth}
-
-                    if len(packet) >= 184:
-                        try:
-                            tick["exchange_timestamp"] = struct.unpack(">I", packet[60:64])[0]
-                            oi_offset = 184 - 4
-                            if oi_offset + 4 <= len(packet):
-                                tick["open_interest"] = struct.unpack(">I", packet[oi_offset:oi_offset + 4])[0]
-                        except struct.error:
-                            pass
 
                 except struct.error as e:
                     self.logger.debug(f"Could not parse full mode data: {e}")

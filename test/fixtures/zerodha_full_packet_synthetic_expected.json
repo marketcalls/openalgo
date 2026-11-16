@@ -1,0 +1,79 @@
+{
+  "average_traded_price": 122.1,
+  "change": 3.0897703549060567,
+  "depth": {
+    "buy": [
+      {
+        "orders": 11,
+        "price": 123.4,
+        "quantity": 1425
+      },
+      {
+        "orders": 17,
+        "price": 123.35,
+        "quantity": 2700
+      },
+      {
+        "orders": 23,
+        "price": 123.3,
+        "quantity": 3150
+      },
+      {
+        "orders": 6,
+        "price": 123.25,
+        "quantity": 975
+      },
+      {
+        "orders": 29,
+        "price": 123.2,
+        "quantity": 4050
+      }
+    ],
+    "sell": [
+      {
+        "orders": 9,
+        "price": 123.45,
+        "quantity": 1200
+      },
+      {
+        "orders": 14,
+        "price": 123.5,
+        "quantity": 2325
+      },
+      {
+        "orders": 21,
+        "price": 123.55,
+        "quantity": 3600
+      },
+      {
+        "orders": 5,
+        "price": 123.6,
+        "quantity": 825
+      },
+      {
+        "orders": 31,
+        "price": 123.65,
+        "quantity": 5100
+      }
+    ]
+  },
+  "exchange_timestamp_epoch": 1793337308,
+  "instrument_token": 12342530,
+  "last_price": 123.45,
+  "last_trade_time_epoch": 1793337307,
+  "last_traded_quantity": 75,
+  "mode": "full",
+  "ohlc": {
+    "close": 119.75,
+    "high": 131.05,
+    "low": 114.2,
+    "open": 118.9
+  },
+  "oi": 6158475,
+  "oi_day_high": 6402150,
+  "oi_day_low": 5871300,
+  "total_buy_quantity": 301125,
+  "total_sell_quantity": 287550,
+  "tradable": true,
+  "volume_traded": 4812900
+}
