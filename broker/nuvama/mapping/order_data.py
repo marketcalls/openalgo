@@ -65,6 +65,11 @@ def normalize_status(status):
     text = (status or "").strip().lower()
     if not text:
         return ""
+    # In-flight states Nuvama streams (seen live: "put order req received",
+    # "validation pending", "open pending", "cancel pending") are still open:
+    # a cancel that is pending has not cancelled anything yet.
+    if text.endswith("pending") and "trigger" not in text:
+        return "open"
     if "reject" in text:
         return "rejected"
     if "cancel" in text:

@@ -44,12 +44,25 @@ MAX_BACKOFF = 30
 class NuvamaStreamClient:
     """Keeps the socket up and the subscriptions sent; hands each packet to on_packet."""
 
-    def __init__(self, app_id, account_type, on_packet, on_connect=None, on_disconnect=None):
+    def __init__(
+        self,
+        app_id,
+        account_type,
+        on_packet,
+        on_connect=None,
+        on_disconnect=None,
+        standing_requests=None,
+        name="nuvama-stream",
+    ):
         self.app_id = app_id
         self.account_type = account_type
         self.on_packet = on_packet
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        # Requests (JSON lines) sent on every connect, such as the order feed's
+        # one subscription, which carries no symbol set.
+        self.standing_requests = list(standing_requests or [])
+        self.name = name
 
         self._sock = None
         self._write_lock = threading.Lock()
@@ -71,7 +84,7 @@ class NuvamaStreamClient:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="nuvama-stream", daemon=True)
+        self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
         self._thread.start()
 
     def stop(self):
@@ -161,7 +174,9 @@ class NuvamaStreamClient:
             self._active = set()
             self._dirty = {k for k, v in self._wanted.items() if v}
         self._connected.set()
-        logger.info("Nuvama stream connected")
+        logger.info(f"Nuvama stream connected ({self.name})")
+        for line in self.standing_requests:
+            self._send(line)
         if self.on_connect:
             self.on_connect()
 
