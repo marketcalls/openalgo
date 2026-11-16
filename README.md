@@ -72,6 +72,7 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 - Motilal Oswal
 - Mstock
 - Nubra
+- Nuvama
 - Paytm Money
 - Pocketful
 - RMoney

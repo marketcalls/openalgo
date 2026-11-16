@@ -170,6 +170,10 @@ def login_url(keys, state):
         return (
             f"https://kite.zerodha.com/connect/login?v=3&api_key={key}&redirect_params={params}"
         )
+    if broker == "nuvama":
+        # Nuvama returns to the redirect URL registered for the API key with
+        # request_id; its sign-in address takes no state.
+        return f"https://www.nuvamawealth.com/api-connect/login?api_key={key}"
     if broker == "arrow":
         return f"https://app.arrow.trade/app/login?appID={key}"
     if broker == "rupeezy":
