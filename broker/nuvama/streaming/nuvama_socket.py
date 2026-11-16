@@ -9,12 +9,20 @@ feed/depth_feed.py):
   ..., "symbols": [{"symbol": "2885_NSE"}, ...]}, "formFactor": "P", "appID":
   ..., "response_format": "json", "request_type": "subscribe" |
   "unsubscribe"}, "echo": {}}
-- a subscribe request carries the whole symbol set of its streaming type; an
-  unsubscribe carries none and ends that type
+- a subscribe request REPLACES the symbol set of its streaming type (checked
+  live: subscribing BANKNIFTY alone after NIFTY stopped NIFTY), so the whole
+  set always goes in one request and is never split into chunks; one request
+  of 545 NFO options was accepted. An unsubscribe carries no symbols and
+  ends that type
 - requests sent back to back can be dropped by the server (seen live: a
-  quote subscribe sent milliseconds after a quote2 one was sometimes ignored),
-  so changes are queued and the socket thread sends at most one request every
-  SEND_GAP seconds, each with the latest full set of its type
+  quote subscribe sent milliseconds after a quote2 one was sometimes ignored)
+
+Subscriptions are therefore batched: set_symbols() only records the wanted
+set, and the socket thread sends it once the changes have been quiet for
+BATCH_QUIET seconds (or BATCH_MAX_WAIT after the first change, so a long
+burst still goes out), one request per streaming type, at least SEND_GAP
+apart. An option chain subscribing hundreds of symbols one call at a time
+becomes one request per type instead of a growing request every half second.
 - "{}\\n" every 30 seconds keeps the socket open
 - every answer line is {"response": {"streaming_type": ..., "data": {...}}}
 
@@ -36,6 +44,8 @@ HEARTBEAT_SECONDS = 30
 # With symbols subscribed and nothing at all received for this long, reconnect.
 STALL_SECONDS = 180
 SEND_GAP = 0.5
+BATCH_QUIET = 0.5
+BATCH_MAX_WAIT = 2.0
 READ_TIMEOUT = 0.25
 CONNECT_TIMEOUT = 15
 MAX_BACKOFF = 30
@@ -77,6 +87,9 @@ class NuvamaStreamClient:
         self._dirty = set()
         # streaming types this socket has subscribed (so an empty set unsubscribes)
         self._active = set()
+        # monotonic times of the first and the latest change still waiting to go
+        self._first_change = None
+        self._last_change = 0.0
 
     # --- lifecycle --------------------------------------------------------------
 
@@ -107,11 +120,20 @@ class NuvamaStreamClient:
                 return
             self._wanted[streaming_type] = new
             self._dirty.add(streaming_type)
+            now = time.monotonic()
+            self._last_change = now
+            if self._first_change is None:
+                self._first_change = now
 
-    def _flush_one(self):
-        """Send one queued streaming type, if any. Runs on the socket thread."""
+    def _flush_one(self, now):
+        """Send one queued streaming type once the batch has settled. Socket thread only."""
         with self._state_lock:
             if not self._dirty:
+                self._first_change = None
+                return False
+            settled = now - self._last_change >= BATCH_QUIET
+            overdue = self._first_change is not None and now - self._first_change >= BATCH_MAX_WAIT
+            if not (settled or overdue):
                 return False
             streaming_type = sorted(self._dirty)[0]
             self._dirty.discard(streaming_type)
@@ -119,6 +141,7 @@ class NuvamaStreamClient:
             if not symbols and streaming_type not in self._active:
                 return False
         self._send_type(streaming_type, symbols)
+        logger.info(f"Nuvama {streaming_type} subscription sent with {len(symbols)} symbols")
         if symbols:
             self._active.add(streaming_type)
         else:
@@ -173,6 +196,9 @@ class NuvamaStreamClient:
         with self._state_lock:
             self._active = set()
             self._dirty = {k for k, v in self._wanted.items() if v}
+            # A fresh socket sends what is wanted at once.
+            self._first_change = None
+            self._last_change = 0.0
         self._connected.set()
         logger.info(f"Nuvama stream connected ({self.name})")
         for line in self.standing_requests:
@@ -219,7 +245,7 @@ class NuvamaStreamClient:
         pending = b""
         while not self._stop.is_set():
             now = time.monotonic()
-            if now >= next_send and self._flush_one():
+            if now >= next_send and self._flush_one(now):
                 next_send = now + SEND_GAP
                 # Data starts after a subscribe; the wait before it is not a stall.
                 self._last_packet = max(self._last_packet, now)
