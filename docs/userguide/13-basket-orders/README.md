@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Basket Orders allow you to place multiple orders simultaneously with a single API call. This is essential for strategies that require executing trades across multiple symbols at once.
+Basket Orders allow you to submit multiple independent orders with a single API call. This is essential for strategies that require executing trades across multiple symbols at once.
 
 ## What is a Basket Order?
 
@@ -144,10 +144,7 @@ POST /api/v1/basketorder
       "status": "success",
       "orderid": "230125000012347"
     }
-  ],
-  "total_orders": 3,
-  "successful": 3,
-  "failed": 0
+  ]
 }
 ```
 
@@ -187,7 +184,7 @@ basket = [
 ]
 
 # Place basket order
-response = client.place_basket_order(
+response = client.basketorder(
     orders=basket,
     strategy="PortfolioRebalance"
 )
@@ -228,38 +225,13 @@ for result in response['results']:
 
 ### Mixed Order Types
 
-You can mix order types in a basket:
-
-```json
-{
-  "orders": [
-    {
-      "symbol": "SBIN",
-      "pricetype": "MARKET",
-      ...
-    },
-    {
-      "symbol": "INFY",
-      "pricetype": "LIMIT",
-      "price": "1500",
-      ...
-    }
-  ]
-}
-```
+A basket can mix MARKET and LIMIT legs. Every leg still needs its own symbol, exchange, action, quantity and product; LIMIT also needs a price. Use the complete [BasketOrder request](../../api/order-management/basketorder.md) and review each result separately.
 
 ## Basket Execution Behavior
 
-### Parallel Execution
+### Batched Submission
 
-Orders are sent to broker in parallel:
-
-```
-Time 0ms:  All orders submitted
-Time 50ms: SBIN executed
-Time 55ms: INFY executed
-Time 60ms: TCS executed
-```
+Live orders are submitted in concurrent batches of ten, with BUY orders before SELL orders and a one-second delay between batches. Broker acceptance, fills and their timing remain independent per leg.
 
 ### Partial Success
 
@@ -271,9 +243,7 @@ Some orders may succeed while others fail:
     {"symbol": "SBIN", "status": "success", "orderid": "123"},
     {"symbol": "INFY", "status": "error", "message": "Insufficient margin"},
     {"symbol": "TCS", "status": "success", "orderid": "124"}
-  ],
-  "successful": 2,
-  "failed": 1
+  ]
 }
 ```
 
@@ -284,64 +254,22 @@ Important: Basket orders are NOT atomic!
 - One failure doesn't cancel others
 - You must handle partial fills
 
-## Handling Partial Failures
+## Handling Partial Outcomes
 
-```python
-response = client.place_basket_order(orders=basket, strategy="MyStrategy")
+Inspect every entry in `results`; the top-level `status` does not prove that every leg was accepted or filled. A basket is not atomic and does not roll back earlier legs when a later leg fails.
 
-# Check for failures
-failed_orders = [r for r in response['results'] if r['status'] == 'error']
+If a request times out or a leg has no confirmed outcome, reconcile the broker's order book, trade book and positions before sending any replacement. Do not retry a whole basket or select retries only by symbol: an accepted order may already exist, and two legs can use the same symbol.
 
-if failed_orders:
-    print("Failed orders:")
-    for order in failed_orders:
-        print(f"  {order['symbol']}: {order['message']}")
+Only send a corrected or replacement leg after confirming what happened to that specific order. In Semi-Auto, a response with `pending_order_id` means the basket is queued in [Action Center](../22-action-center/README.md), not executed.
 
-    # Retry or handle as needed
-    # ...
-```
+## Limits and Execution
 
-## Limits and Best Practices
+Live baskets process BUY orders before SELL orders, in concurrent batches of ten with a one-second delay between batches. This is not a promise of simultaneous fills or a broker rate-limit allowance. Account entitlement, margin, order-rate limits and each instrument's freeze quantity still apply.
 
-### Order Limits
-
-| Limit Type | Typical Value |
-|------------|---------------|
-| Max orders per basket | 50 |
-| Max orders per second | 10 |
-| Max daily orders | Broker dependent |
-
-### Best Practices
-
-1. **Keep baskets manageable**: 10-20 orders ideal
-2. **Use market orders** for guaranteed execution
-3. **Handle partial failures** in your code
-4. **Test in Analyzer mode** first
-5. **Monitor execution** in order book
-
-### Error Handling Example
-
-```python
-def execute_basket_with_retry(basket, max_retries=3):
-    response = client.place_basket_order(orders=basket, strategy="MyStrategy")
-
-    failed = [r for r in response['results'] if r['status'] == 'error']
-
-    retries = 0
-    while failed and retries < max_retries:
-        # Extract failed orders
-        failed_symbols = [f['symbol'] for f in failed]
-        retry_basket = [o for o in basket if o['symbol'] in failed_symbols]
-
-        # Wait and retry
-        time.sleep(1)
-        response = client.place_basket_order(orders=retry_basket, strategy="MyStrategy")
-
-        failed = [r for r in response['results'] if r['status'] == 'error']
-        retries += 1
-
-    return response
-```
+- Rehearse in Analyzer mode and review each leg's symbol, product and quantity.
+- Market orders can slip, be rejected or remain unfilled; no order type guarantees execution.
+- For an option contract, quantity is units, not the number of lots. Look up its current lot size.
+- Read the [BasketOrder API reference](../../api/order-management/basketorder.md) for the request/response contract and current routing behavior.
 
 ## Options Strategy Baskets
 
@@ -353,7 +281,7 @@ def execute_basket_with_retry(basket, max_retries=3):
   "strategy": "BullCallSpread",
   "orders": [
     {
-      "symbol": "NIFTY25JAN21500CE",
+      "symbol": "NIFTY30JAN2521500CE",
       "exchange": "NFO",
       "action": "BUY",
       "quantity": "50",
@@ -361,7 +289,7 @@ def execute_basket_with_retry(basket, max_retries=3):
       "product": "NRML"
     },
     {
-      "symbol": "NIFTY25JAN21600CE",
+      "symbol": "NIFTY30JAN2521600CE",
       "exchange": "NFO",
       "action": "SELL",
       "quantity": "50",
@@ -374,17 +302,7 @@ def execute_basket_with_retry(basket, max_retries=3):
 
 ### Iron Condor
 
-```json
-{
-  "strategy": "IronCondor",
-  "orders": [
-    {"symbol": "NIFTY25JAN21500CE", "action": "SELL", ...},
-    {"symbol": "NIFTY25JAN21600CE", "action": "BUY", ...},
-    {"symbol": "NIFTY25JAN21000PE", "action": "SELL", ...},
-    {"symbol": "NIFTY25JAN20900PE", "action": "BUY", ...}
-  ]
-}
-```
+An iron condor has separate short/long call and short/long put legs. Search the actual contracts for the intended expiry, choose the current lot size and include every required field per leg. The [Strategy Builder](../31-tools/README.md#1-strategy-builder-strategybuilder) can prepare and review those legs before basket submission.
 
 ## Basket vs Individual Orders
 

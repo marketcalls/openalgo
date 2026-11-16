@@ -529,9 +529,9 @@ def _register_chatgpt_models() -> None:
     unaffected either way. See `services/agent/chatgpt_models.py`.
     """
     try:
-        import litellm
+        from services.agent import chatgpt_models, litellm_loader
 
-        from services.agent import chatgpt_models
+        litellm = litellm_loader.load()
 
         chatgpt_models.register(litellm)
         chatgpt_models.quieten_usage_warning()
@@ -606,6 +606,15 @@ def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None)
     effort = _reasoning_effort(resolved, reasoning_effort)
     if effort:
         kwargs.setdefault("request_params", {})["reasoning_effort"] = effort
+
+    # LiteLLM's own opt-out from its MCP gateway. With tools set (every agent
+    # turn) completion() otherwise imports the gateway, which needs the mcp 2
+    # SDK while OpenAlgo pins mcp 1.30, and every turn fails with "cannot import
+    # name 'CacheableResult'". The agent runs its MCP servers itself and hands
+    # LiteLLM plain function tools, so the gateway has nothing to do here. The
+    # Responses path reads this flag too late; services/agent/litellm_mcp_gateway
+    # covers it.
+    kwargs.setdefault("request_params", {})["_skip_mcp_handler"] = True
 
     kwargs["name"] = resolved.display_name
 

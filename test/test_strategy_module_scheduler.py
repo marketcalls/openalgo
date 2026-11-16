@@ -625,10 +625,10 @@ def test_periodic_reconciliation_self_heals_a_dropped_terminal_update_after_rest
 
     assert result == {"examined": 1, "pending": 0, "finalised": 1, "failed": 0}
     cancel.assert_called_once_with(
-        mode="sandbox", api_key="scheduler-key", broker_order_id="RECOVER-WORKING"
+        mode="sandbox", api_key="scheduler-key", broker_order_id="RECOVER-WORKING", binding=None
     )
     poll.assert_called_once_with(
-        mode="sandbox", api_key="scheduler-key", broker_order_id="RECOVER-WORKING"
+        mode="sandbox", api_key="scheduler-key", broker_order_id="RECOVER-WORKING", binding=None
     )
     assert store.get_run(run.id).stopped_at is not None
     assert state.get_run_state(run.id) is None
@@ -716,11 +716,13 @@ def test_pending_stop_repairs_an_accepted_entry_ack_before_cancel_and_poll():
         mode="sandbox",
         api_key="scheduler-key",
         broker_order_id="ACK-PENDING-ENTRY",
+        binding=None,
     )
     poll.assert_called_once_with(
         mode="sandbox",
         api_key="scheduler-key",
         broker_order_id="ACK-PENDING-ENTRY",
+        binding=None,
     )
     duplicate_exit.assert_not_called()
     assert store.get_order(entry.id).status == "cancelled"
@@ -811,7 +813,7 @@ def test_periodic_repair_manages_active_run_fill_after_ack_write_failure():
 
     assert result == {"examined": 0, "pending": 0, "finalised": 0, "failed": 0}
     poll.assert_called_once_with(
-        mode="sandbox", api_key="scheduler-key", broker_order_id="ACTIVE-ACK-FILL"
+        mode="sandbox", api_key="scheduler-key", broker_order_id="ACTIVE-ACK-FILL", binding=None
     )
     durable = store.get_order(entry.id)
     assert durable.broker_order_id == "ACTIVE-ACK-FILL"
@@ -988,6 +990,7 @@ def test_periodic_reconciliation_polls_a_working_exit_whose_terminal_frame_was_l
         mode="sandbox",
         api_key="scheduler-key",
         broker_order_id="LOST-EXIT-COMPLETE",
+        binding=None,
     )
     duplicate_exit.assert_not_called()
     assert store.list_orders(run_id)[1]["id"] == exit_row_id
@@ -1092,6 +1095,7 @@ def test_pending_stop_repairs_an_accepted_exit_ack_before_polling_without_duplic
         mode="sandbox",
         api_key="scheduler-key",
         broker_order_id="ACK-PENDING-EXIT",
+        binding=None,
     )
     duplicate_exit.assert_not_called()
     assert store.get_order(exit_row.id).status == "complete"

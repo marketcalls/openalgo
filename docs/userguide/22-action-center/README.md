@@ -1,402 +1,74 @@
 # 22 - Action Center
 
-## Introduction
-
-The Action Center is OpenAlgo's order approval system for managed trading environments. It allows you to review, approve, modify, or reject orders before they're sent to your broker.
-
-## When to Use Action Center
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Trading Modes in OpenAlgo                                │
-│                                                                              │
-│  AUTO MODE                              SEMI-AUTO MODE (Action Center)      │
-│  ─────────                              ─────────────────────────────       │
-│                                                                              │
-│  Signal → Order Executed                Signal → Pending Approval           │
-│  (Immediate)                                           │                    │
-│                                                        ▼                    │
-│                                              ┌─────────────────┐            │
-│                                              │  Review Order   │            │
-│                                              │  ┌───────────┐  │            │
-│                                              │  │ Approve   │  │            │
-│                                              │  │ Modify    │  │            │
-│                                              │  │ Reject    │  │            │
-│                                              │  └───────────┘  │            │
-│                                              └─────────────────┘            │
-│                                                        │                    │
-│  Best for:                                             ▼                    │
-│  • Personal trading                        Order Executed or Cancelled      │
-│  • Trusted strategies                                                       │
-│  • Fast execution                        Best for:                          │
-│                                          • Managed accounts                 │
-│                                          • New strategies                   │
-│                                          • Risk management                  │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Enabling Action Center
-
-### Step 1: Access Settings
-
-1. Go to **Settings** in OpenAlgo
-2. Find **Order Mode** section
-
-### Step 2: Select Semi-Auto Mode
-
-1. Change mode from "Auto" to "Semi-Auto"
-2. Click **Save Settings**
-
-### Step 3: Verify
-
-- All incoming orders now route to Action Center
-- No orders execute automatically
-
-## Using the Action Center
-
-### Accessing Action Center
-
-Navigate to **Action Center** in the sidebar.
-
-### Interface Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Action Center                                     [Approve All] [Clear]    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Filters: [All ▾]  [All Strategies ▾]  [All Symbols ▾]                     │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ Pending Orders (3)                                               │   │
-│  ├─────────────────────────────────────────────────────────────────────┤   │
-│  │                                                                      │   │
-│  │  #1 | SBIN | BUY 100 @ MARKET                                       │   │
-│  │  Strategy: MA_Crossover | Time: 10:30:15                            │   │
-│  │  [ Approve] [ Modify] [ Reject]                                  │   │
-│  │                                                                      │   │
-│  │  #2 | HDFCBANK | SELL 50 @ LIMIT 1650                               │   │
-│  │  Strategy: RSI_Strategy | Time: 10:31:22                            │   │
-│  │  [ Approve] [ Modify] [ Reject]                                  │   │
-│  │                                                                      │   │
-│  │  #3 | NIFTY30JAN2521500CE | BUY 50 @ MARKET                         │   │
-│  │  Strategy: Options_Strategy | Time: 10:32:45                         │   │
-│  │  [ Approve] [ Modify] [ Reject]                                  │   │
-│  │                                                                      │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Order Details
-
-Click on an order to see full details:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Order Details                                                    [Close]   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Symbol:        SBIN                                                        │
-│  Exchange:      NSE                                                         │
-│  Action:        BUY                                                         │
-│  Quantity:      100                                                         │
-│  Price Type:    MARKET                                                      │
-│  Product:       MIS                                                         │
-│  Strategy:      MA_Crossover                                                │
-│                                                                              │
-│  Received:      2025-01-21 10:30:15                                        │
-│  Source:        TradingView Webhook                                         │
-│                                                                              │
-│  Original Request:                                                          │
-│  {                                                                          │
-│    "symbol": "SBIN",                                                        │
-│    "exchange": "NSE",                                                       │
-│    "action": "BUY",                                                         │
-│    "quantity": "100"                                                        │
-│  }                                                                          │
-│                                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                      │
-│  │   Approve    │  │    Modify    │  │    Reject    │                      │
-│  └──────────────┘  └──────────────┘  └──────────────┘                      │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Order Actions
-
-### Approve Order
-
-Sends the order to broker as-is.
-
-1. Review order details
-2. Click **Approve**
-3. Order executes immediately
-4. Confirmation shown
+## Enable Semi-Auto Order Mode
 
-### Modify Order
+Open **API Key** (`/apikey`) from the profile menu and switch **Order Mode** to **Semi-Auto**. Open **Action Center** from the same menu, or visit `/action-center`. Its **Toggle Order Mode** button returns to API Key settings.
 
-Change order parameters before execution.
-
-1. Click **Modify**
-2. Edit fields:
-   - Quantity
-   - Price (for limit orders)
-   - Product type
-3. Click **Save & Approve**
-4. Modified order executes
+Auto/Semi-Auto and Live/Analyze are separate settings. Supported placements in Semi-Auto are queued for approval. Analyzer execution branches can run directly in the sandbox before live-order approval routing; use [Analyzer Mode](../15-analyzer-mode/README.md) to rehearse and verify the response's mode.
 
-### Reject Order
+Live regular, smart, basket, split, options, multi-options and GTT placements use the approval queue where their services support it. Read-only account and market-data requests are not queued. Modify, cancel and close-position operations do not become pending approvals; their live service paths can refuse them in Semi-Auto. Check the relevant [order-management API reference](../../api/README.md) before depending on an automated exit or cancellation.
 
-Cancel the order without execution.
+A queued placement responds with `mode: "semi_auto"` and a `pending_order_id`. That ID identifies an approval record, not a broker order or a completed trade.
 
-1. Click **Reject**
-2. Optionally add rejection reason
-3. Order is cancelled
-4. No trade executes
+## Review Orders
 
-## Batch Operations
+The page has **Pending**, **Approved**, **Rejected** and **All Orders** tabs. Its cards show pending approvals, buy orders, sell orders, approved orders and rejected orders.
 
-### Approve All
+Each row shows the strategy/API type, symbol, exchange, side, quantity, price, order type, product and creation time. Expand the row to inspect the original order data and, for a basket, every leg. Review the instrument, size and whether the signal is still valid before approving.
 
-Approve all pending orders at once.
+The current page offers approval and rejection; it does not have a Modify or Save & Approve form. Reject a wrong request and have its source submit a corrected request after checking that it was never sent.
 
-1. Click **Approve All** button
-2. Confirm action
-3. All orders sent to broker
+## Actions
 
-### Filter and Approve
+| Action | What it does |
+|---|---|
+| Approve (check mark) | Claims the pending request and sends it through its order service |
+| Reject (cross) | Rejects a still-pending request without sending it |
+| Approve All | Approves pending requests in a batch; review all pending rows first |
+| Refresh | Rereads the current list and statistics |
+| Delete (trash) | Removes an approved or rejected approval record after confirmation |
 
-Approve specific subset:
+Approval is distinct from a fill. A limit order can remain open, a broker can reject a submitted order, and a basket or split can have partial results. Check the broker order ID/status and the order book, trade book and positions.
 
-1. Apply filters (strategy, symbol)
-2. Click **Approve Filtered**
-3. Only filtered orders approved
+Deleting a record does not cancel a broker order or close a position. Preserve records whose outcomes you are still investigating.
 
-### Clear Old Orders
+## Sending and Status Unclear
 
-Remove expired or outdated orders:
+OpenAlgo claims each approved record for sending at most once. Two tabs approving the same record cannot intentionally send it twice. This does not deduplicate two separate requests that your integration submits.
 
-1. Click **Clear**
-2. Select age threshold (e.g., older than 5 minutes)
-3. Orders removed from queue
+An approved row whose send has begun but has no broker answer recorded shows **Sending** during the first two minutes. It then shows **Status unclear** and a notice that the order may still be sending. Split and basket requests can take longer than two minutes; elapsed time is not proof that sending stopped. An interruption can also leave this state behind.
 
-## Filters and Sorting
+When the status is unclear:
 
-### Filter Options
+1. Check the broker's own order book, trades and positions for every affected leg.
+2. Refresh Action Center and inspect the application logs.
+3. Reconcile the actual outcome before submitting any replacement. Do not place the order again while its status is unclear.
 
-| Filter | Options |
-|--------|---------|
-| Status | Pending, Approved, Rejected |
-| Strategy | List of active strategies |
-| Symbol | List of symbols |
-| Exchange | NSE, NFO, MCX, etc. |
-| Action | BUY, SELL |
+**A lost broker response still needs reconciliation even if the recorded broker status says rejected or the approval response says execution failed.** Some execution error paths record a rejection after an ambiguous upstream response; that label alone does not prove the broker received nothing.
 
-### Sort Options
+If OpenAlgo determines a request was never sent and returns it to Pending, read the refusal and correct its cause before approving again. An Approved label alone does not prove execution succeeded.
 
-| Sort By | Description |
-|---------|-------------|
-| Time (Newest) | Most recent first |
-| Time (Oldest) | Oldest first |
-| Symbol | Alphabetical |
-| Strategy | By strategy name |
+## Notifications and Monitoring
 
-## Action History
+The page uses the shared Socket.IO connection to update new requests and decisions and plays a sound for a newly queued order. Notification preferences for Action Center are in Profile. Keep the page visible while relying on manual approval, and use Refresh after a connection problem.
 
-### Viewing History
-
-1. Go to **Action Center**
-2. Click **History** tab
-3. View past decisions
-
-### History Entry
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  Action History                                                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Time         │ Symbol │ Action │ Decision │ Order ID                       │
-│  ─────────────│────────│────────│──────────│───────────                     │
-│  10:30:15     │ SBIN   │ BUY    │ Approved │ 230125000012345                │
-│  10:31:22     │ HDFC   │ SELL   │ Modified │ 230125000012346                │
-│  10:32:45     │ INFY   │ BUY    │ Rejected │ -                              │
-│  10:35:10     │ TCS    │ BUY    │ Approved │ 230125000012347                │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Notifications
-
-### Real-time Alerts
-
-When orders arrive in Action Center:
-
-1. **Browser Notification**: Desktop alert
-2. **Sound Alert**: Audio notification (configurable)
-3. **Telegram**: Optional Telegram message
-4. **Badge Count**: Shows pending count
-
-### Configuring Notifications
-
-1. Go to **Settings** → **Notifications**
-2. Enable/disable notification types
-3. Set sound preferences
-4. Configure Telegram alerts
-
-## Best Practices
-
-### 1. Set Reasonable Review Time
-
-Don't let orders wait too long:
-- Market conditions change
-- Prices move
-- Signals become stale
-
-### 2. Use Filters Effectively
-
-For high-volume scenarios:
-- Filter by strategy
-- Group similar orders
-- Batch approve when appropriate
-
-### 3. Monitor Continuously
-
-During market hours:
-- Keep Action Center visible
-- Enable notifications
-- Check regularly
-
-### 4. Document Rejections
-
-When rejecting orders:
-- Note the reason
-- Review for patterns
-- Adjust strategies if needed
-
-### 5. Test New Strategies
-
-Use Action Center to:
-- Verify new strategy signals
-- Check order parameters
-- Build confidence before auto-mode
-
-## Use Cases
-
-### Use Case 1: Managed Accounts
-
-For investment advisors managing client funds:
-
-```
-Client Strategy Signal
-        │
-        ▼
-┌─────────────────┐
-│  Action Center  │  ← Advisor reviews
-│                 │
-│ Check risk   │
-│ Verify size  │
-│ Confirm fit  │
-│                 │
-└─────────────────┘
-        │
-        ▼
-   Execute Order
-```
-
-### Use Case 2: Strategy Validation
-
-Testing new strategies:
-
-```
-Week 1: Semi-Auto Mode
-  - Review all signals
-  - Track accuracy
-  - Note improvements
-
-Week 2-4: Continued Review
-  - Build confidence
-  - Measure performance
-
-Week 5+: Switch to Auto (if satisfied)
-```
-
-### Use Case 3: Risk Management
-
-High-value trades:
-
-```
-Small trades (<₹50k): Auto Mode
-Large trades (>₹50k): Action Center
-
-Configure via:
-- Strategy-specific settings
-- Quantity thresholds
-```
-
-## API Integration
-
-### Checking Pending Orders
-
-```python
-# Get pending orders
-response = client.get_pending_actions()
-
-for order in response['data']:
-    print(f"Pending: {order['symbol']} {order['action']}")
-```
-
-### Approving via API
-
-```python
-# Approve specific order
-client.approve_action(action_id="12345")
-
-# Approve all for strategy
-client.approve_all_actions(strategy="MA_Crossover")
-```
-
-### Rejecting via API
-
-```python
-# Reject order
-client.reject_action(
-    action_id="12345",
-    reason="Price moved unfavorably"
-)
-```
+There is no separate public SDK approval API in the Python client. The page's authenticated, CSRF-protected browser routes live under `/action-center`; they use your application session rather than the public `/api/v1` API key interface.
 
 ## Troubleshooting
 
-### Orders Not Appearing
+| Symptom | Check |
+|---|---|
+| Nothing in Pending | API Key's order mode, the response's mode, and the selected status tab |
+| Approval refused as already handled | Refresh; another tab may have approved or rejected it |
+| Approved but no confirmed order | Expand the record and reconcile broker orders, trades and positions |
+| Order parameters wrong | Reject while pending, then correct the source request |
+| Cannot modify/cancel/close through API | Check Semi-Auto restrictions in that operation's reference |
+| Updates stopped | Check the connection and Refresh before acting again |
 
-| Issue | Solution |
-|-------|----------|
-| Mode not set | Enable Semi-Auto mode |
-| Wrong strategy | Check strategy name |
-| Filter active | Clear filters |
-| Browser cache | Refresh page |
-
-### Orders Expiring
-
-| Issue | Solution |
-|-------|----------|
-| Too slow to review | Approve faster |
-| Not monitoring | Enable notifications |
-| High volume | Use batch operations |
-
-### Notifications Not Working
-
-| Issue | Solution |
-|-------|----------|
-| Browser permissions | Allow notifications |
-| Telegram not configured | Set up Telegram bot |
-| Sound muted | Check browser audio |
+OpenAlgo remains a single-user, one-broker deployment. Action Center does not add multi-account management or automatic quantity/value thresholds for choosing Auto versus Semi-Auto.
 
 ---
 
-**Previous**: [21 - Flow Visual Strategy Builder](../21-flow-visual-builder/README.md)
+**Previous**: [21 - Flow Visual Builder](../21-flow-visual-builder/README.md)
 
 **Next**: [23 - Telegram Bot](../23-telegram-bot/README.md)

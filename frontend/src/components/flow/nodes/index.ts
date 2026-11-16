@@ -12,6 +12,7 @@ import { CancelAllOrdersNode } from './CancelAllOrdersNode'
 import { CancelOrderNode } from './CancelOrderNode'
 import { ClosePositionsNode } from './ClosePositionsNode'
 import { DelayNode } from './DelayNode'
+import { DiscordAlertNode } from './DiscordAlertNode'
 import { ExpiryNode } from './ExpiryNode'
 import { FundCheckNode } from './FundCheckNode'
 import { FundsNode } from './FundsNode'
@@ -49,6 +50,7 @@ import { PositionCheckNode } from './PositionCheckNode'
 import { PriceAlertNode } from './PriceAlertNode'
 import { PriceConditionNode } from './PriceConditionNode'
 import { PriorPeriodOhlcNode } from './PriorPeriodOhlcNode'
+import { SlackAlertNode } from './SlackAlertNode'
 import { SmartOrderNode } from './SmartOrderNode'
 import { SplitOrderNode } from './SplitOrderNode'
 // Trigger Nodes
@@ -138,6 +140,8 @@ export {
   // Utilities
   TelegramAlertNode,
   WhatsappAlertNode,
+  SlackAlertNode,
+  DiscordAlertNode,
   DelayNode,
   WaitUntilNode,
   GroupNode,
@@ -221,6 +225,8 @@ export const nodeTypes = {
   // Utilities
   telegramAlert: TelegramAlertNode,
   whatsappAlert: WhatsappAlertNode,
+  slackAlert: SlackAlertNode,
+  discordAlert: DiscordAlertNode,
   delay: DelayNode,
   waitUntil: WaitUntilNode,
   group: GroupNode,

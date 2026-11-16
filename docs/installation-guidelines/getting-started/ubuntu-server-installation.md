@@ -44,9 +44,9 @@ OpenAlgo runs on Ubuntu, Debian, Raspbian, RHEL, Rocky, AlmaLinux, Amazon Linux,
    * Go to SSL/TLS section
    * Set encryption mode to **Full (strict)**
 
-#### Broker Setup (Required)
+#### Broker Setup (After Installation)
 
-* Obtain your broker's API credentials per the OpenAlgo documentation:
+After installation, sign in to OpenAlgo, open **Select Broker**, and choose **Configure** to add your broker's application keys. Obtain the required credentials from your broker's developer console:
   * API Key
   * API Secret
 * Prepare the redirect URL based on your domain and broker name:
@@ -89,10 +89,9 @@ sudo ./install.sh
 The script will interactively prompt you for:
 
 * Your domain name (root domains and subdomains both supported)
-* Broker selection from the 36 installed plugins
-* Broker API credentials (Key + Secret)
-* For XTS-based brokers (5paisa XTS, Compositedge, IIFL, etc.): additional market-data API key/secret
 * **Enable Remote MCP?** (y/N) — opt-in to expose `/mcp` and `/oauth/*` for hosted AI clients (Claude.ai, ChatGPT) at the same domain. You can also enable this later from the admin UI
+
+The installer no longer asks for a broker or broker credentials. A new install leaves broker values empty in `.env`; Broker Configuration supplies the fields and callback address for each enabled broker after app sign-in. An existing `.env` is preserved, including any broker configured there. That broker continues to use its `.env` keys first. See [Broker And System Configuration](../../design/51-broker-system-config/README.md).
 
 The installer will:
 

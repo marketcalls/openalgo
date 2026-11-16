@@ -49,6 +49,7 @@ A comprehensive GitHub Actions-based pipeline that:
 | FR2.2 | Frontend Vitest unit tests | P0 |
 | FR2.3 | Frontend Playwright E2E tests | P1 |
 | FR2.4 | Coverage report generation | P1 |
+| FR2.5 | Real eventlet/gthread boot, fallback, source gates, complete migration suite and portable concurrency verification | P0 |
 
 ### FR3: Security
 
@@ -105,11 +106,13 @@ A comprehensive GitHub Actions-based pipeline that:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+The current workflow also includes `gunicorn-boot`, `eventlet-fallback`, `gthread-gates`, `gthread-migration`, `gthread-platforms`, and `chart-indicator-skill`; see the [workflows reference](ci-cd-workflows.md) for their current scope. The diagram above summarizes the original application/build lanes rather than every job.
+
 ## Quick Start
 
 ```bash
 # Install pre-commit hooks (one-time setup)
-pip install pre-commit
+uv tool install pre-commit
 pre-commit install
 
 # Run all checks locally before committing

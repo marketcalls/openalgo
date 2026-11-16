@@ -27,7 +27,7 @@
 
 ## Required Configuration
 
-`APP_KEY` must exist and contain at least 32 characters. `API_KEY_PEPPER` has its own import-time requirement. Official install paths generate unique values; placeholders are not accepted as production configuration.
+`APP_KEY` must exist and contain at least 32 characters. `API_KEY_PEPPER` has its own import-time requirement. Official install paths generate unique values. For a fresh direct checkout, startup can create a missing `.env` from `.sample.env` with new `APP_KEY`, `API_KEY_PEPPER`, and `FERNET_SALT`, owner-only permissions, and no configured broker. It refuses to invent new keys when `db/openalgo.db` already exists, because that would strand stored secrets. Public sample placeholders in an existing `.env` are replaced on first run; real existing values are preserved.
 
 Cookie security is derived from `HOST_SERVER`: HTTPS deployments use secure cookies while local HTTP development remains usable. External debug binding is refused unless explicitly allowed.
 
@@ -59,7 +59,7 @@ After each request, `app.py` removes scoped SQLAlchemy sessions from the known d
 
 ## WebSocket Startup
 
-The market-data proxy is skipped when Docker/standalone configuration owns it. Under eventlet/gunicorn it runs in a child process; direct development startup uses an OS thread. See [06 WebSockets](../06-websockets/).
+The market-data proxy is skipped when Docker/standalone configuration owns it. Under either Gunicorn worker (default eventlet or opt-in gthread) it runs in a child process; direct development startup uses a real OS thread. Both production workers require `-w 1`. The development server uses standard threading and ignores `OPENALGO_WORKER_CLASS`. See [06 WebSockets](../06-websockets/) and the [worker guide](../../gthread/README.md).
 
 ## Direct Run
 

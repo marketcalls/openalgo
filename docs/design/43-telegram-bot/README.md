@@ -9,7 +9,7 @@
 | `services/telegram_bot_service.py` | Bot initialization, polling, commands, lifecycle |
 | `services/telegram_alert_service.py` | Synchronous HTTP delivery, async executor, retry queue, formatting |
 | `database/telegram_db.py` | Encrypted config, linked users, preferences, notifications/stats |
-| `subscribers/telegram_subscriber.py` | EventBus-to-alert mapping |
+| `services/alerts/channels/telegram.py` | Telegram alert channel (EventBus alerts reach `send_order_alert()` through it) |
 
 The React pages live under `frontend/src/pages/telegram/` and use `frontend/src/api/telegram.ts`.
 
@@ -21,7 +21,7 @@ The bot configuration persists an encrypted token, polling/webhook settings, and
 
 ## EventBus Alerts
 
-Successful order-related topics are mapped through `telegram_subscriber.py` to `send_order_alert()`. Failure events and analyzer errors are deliberately not sent to chat. Batch operations produce one summary event, avoiding one notification per child order.
+Successful order-related topics raise one `alert.raised` event (`subscribers/alert_subscriber.py`), and the Telegram channel (`services/alerts/channels/telegram.py`) passes it to `send_order_alert()` when Telegram is on and the event group is routed to it on `/alerts`. Failure events and analyzer errors are deliberately not sent to chat. Batch operations produce one summary event, avoiding one notification per child order.
 
 Alerts resolve the local username from the API key, verify that a Telegram user is linked and notifications are enabled, then enqueue delivery on the shared five-worker alert executor.
 

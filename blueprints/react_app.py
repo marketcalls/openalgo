@@ -159,6 +159,12 @@ def react_broker():
     return serve_react_app()
 
 
+# Broker Configuration: the keys of each broker, reachable before any broker login.
+@react_bp.route("/broker/config", strict_slashes=False)
+def react_broker_config():
+    return serve_react_app()
+
+
 # Broker TOTP routes - serve React for broker authentication forms
 @react_bp.route("/broker/<broker>/totp")
 def react_broker_totp(broker):
@@ -268,6 +274,12 @@ def react_portfolio_backtester():
 # SIP Backtester
 @react_bp.route("/sip-backtester")
 def react_sip_backtester():
+    return serve_react_app()
+
+
+# Sector Rotation
+@react_bp.route("/sector-rotation", strict_slashes=False)
+def react_sector_rotation():
     return serve_react_app()
 
 
@@ -654,6 +666,25 @@ def react_telegram_analytics():
 # root route, so the bare path would otherwise 404.
 @react_bp.route("/whatsapp", strict_slashes=False)
 def react_whatsapp_index():
+    return serve_react_app()
+
+
+# Alerts - every alert channel on one page. alerts_bp (the chart's alert log)
+# and alert_channels_bp share the "/alerts" prefix but neither registers the
+# bare path, so the page is served here.
+@react_bp.route("/alerts", strict_slashes=False)
+def react_alerts_index():
+    return serve_react_app()
+
+
+# Slack and Discord alert setup (webhook channels).
+@react_bp.route("/slack", strict_slashes=False)
+def react_slack_alerts():
+    return serve_react_app()
+
+
+@react_bp.route("/discord", strict_slashes=False)
+def react_discord_alerts():
     return serve_react_app()
 
 

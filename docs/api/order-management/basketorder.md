@@ -146,6 +146,10 @@ curl -X POST http://127.0.0.1:5000/api/v1/basketorder \
 | orderid | string | Order ID from broker (on success) |
 | message | string | Error message (on failure) |
 
+## Child outcomes
+
+Inspect every child result, even when the batch HTTP request succeeds. If a child reports that the connection dropped after sending and the order may have been placed, reconcile that child with the broker order book before retrying it. Resending the whole batch can duplicate successful or ambiguously acknowledged orders. See [order outcomes](../README.md#order-outcomes-and-retries).
+
 ## Notes
 
 - BUY orders are processed before SELL orders. Live execution uses concurrent batches of 10 with a one-second delay between batches.

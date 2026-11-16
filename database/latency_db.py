@@ -8,6 +8,24 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
+from database.latency_groups import (
+    ALL,
+    ALL_GROUP,
+    DEFAULT_GROUP,
+    GROUPS,
+    KNOWN_TAGS,
+    ORDER_TAGS,
+    OTHER,
+    OTHER_GROUP,
+    RETENTION_DAYS,
+    canonical,
+    endpoint_order,
+    get_group,
+    group_key_of,
+    is_group,
+    label_of,
+    tags_in,
+)
 from utils.thread_safe_cache import LockedTTLCache
 
 logger = logging.getLogger(__name__)
@@ -38,8 +56,17 @@ latency_session = scoped_session(
 PERCENTILE_WINDOW_DAYS = 30
 
 # The dashboard polls stats; cache the computed result briefly so polling
-# does not re-scan the table on every request.
-_stats_cache = LockedTTLCache(maxsize=1, ttl=60)
+# does not re-scan the table on every request. One entry per group: the page
+# asks for a group at a time, and a single shared entry would answer a request
+# for market data with the figures last worked out for orders.
+_stats_cache = LockedTTLCache(maxsize=16, ttl=60)
+
+#: Upper bounds, in milliseconds, of the page's Excellent, Good and Acceptable
+#: bands. Anything slower is Slow. They describe an order confirmation, which
+#: is why only a rated group is shown against them.
+EXCELLENT_MS = 150
+GOOD_MS = 250
+ACCEPTABLE_MS = 400
 LatencyBase = declarative_base()
 LatencyBase.query = latency_session.query_property()
 
@@ -55,7 +82,10 @@ class OrderLatency(LatencyBase):
     user_id = Column(Integer)
     broker = Column(String(50))
     symbol = Column(String(50))
-    order_type = Column(String(20))  # MARKET, LIMIT, etc.
+    # Which endpoint the call was to: PLACE, HISTORY, FUNDS and so on. The
+    # column name is from when only orders were recorded. The tags and their
+    # groups are in database/latency_groups.py.
+    order_type = Column(String(20))
 
     # Round-trip time (comparable to Postman/Bruno)
     rtt_ms = Column(Float)
@@ -124,185 +154,318 @@ class OrderLatency(LatencyBase):
             return False
 
     @staticmethod
-    def get_recent_logs(limit=100):
-        """Get recent latency logs ordered by timestamp"""
+    def get_recent_logs(limit=100, group=None):
+        """The newest latency records, newest first.
+
+        Args:
+            limit: How many to return. None returns every record.
+            group: A key from ``database.latency_groups`` to return only that
+                group's records. None returns records of every kind, which is
+                what this did before groups existed.
+        """
         try:
-            return OrderLatency.query.order_by(OrderLatency.timestamp.desc()).limit(limit).all()
+            query = OrderLatency.query
+            condition = _group_condition(group) if group else None
+            if condition is not None:
+                query = query.filter(condition)
+            return query.order_by(OrderLatency.timestamp.desc()).limit(limit).all()
         except Exception as e:
             logger.exception(f"Error getting recent latency logs: {str(e)}")
             return []
 
     @staticmethod
-    def get_latency_stats():
-        """Get latency statistics - optimized with minimal database queries"""
-        cached = _stats_cache.get("stats")
+    def get_latency_stats(group=DEFAULT_GROUP):
+        """Latency figures for one group of endpoints.
+
+        Every figure describes the records of ``group`` and no others. They used
+        to describe every record together, on a page that called them orders,
+        so a few hundred history calls decided the average, the P99 and the
+        share under 150 ms that a trader read as order speed (issues #2421 and
+        #2286). The default is the orders group, which is what the page's name
+        has always said it shows.
+
+        Counts, averages and the speed bands cover everything stored for the
+        group. Percentiles need the raw values, so they cover the last
+        ``PERCENTILE_WINDOW_DAYS`` days.
+
+        Args:
+            group: A key from ``database.latency_groups``: a named group,
+                ``"other"`` for records in none of them, or ``"all"``.
+
+        Returns:
+            A dict whose shape is the same for every group, including an empty
+            one and a failed read: see ``_empty_stats``.
+        """
+        if not is_group(group):
+            group = DEFAULT_GROUP
+
+        cached = _stats_cache.get(group)
         if cached is not None:
             return cached
 
         try:
             import numpy as np
-            from sqlalchemy import case, func
 
-            percentile_cutoff = datetime.utcnow() - timedelta(days=PERCENTILE_WINDOW_DAYS)
+            by_tag = _totals_by_tag()
+            stats = _empty_stats(group, by_tag)
+            order = endpoint_order(group)
+            selected = {
+                tag: row
+                for tag, row in by_tag.items()
+                if group == ALL or group_key_of(tag) == group
+            }
+            if not selected:
+                _stats_cache[group] = stats
+                return stats
 
-            # OPTIMIZED: Single query for all overall stats using CASE statements
-            # This replaces 9 separate queries with 1
-            overall_stats = latency_session.query(
-                func.count(OrderLatency.id).label("total"),
-                func.sum(case((OrderLatency.status == "FAILED", 1), else_=0)).label("failed"),
-                func.avg(OrderLatency.rtt_ms).label("avg_rtt"),
-                func.avg(OrderLatency.overhead_ms).label("avg_overhead"),
-                func.avg(OrderLatency.total_latency_ms).label("avg_total"),
-                func.sum(case((OrderLatency.total_latency_ms < 100, 1), else_=0)).label(
-                    "under_100"
-                ),
-                func.sum(case((OrderLatency.total_latency_ms < 150, 1), else_=0)).label(
-                    "under_150"
-                ),
-                func.sum(case((OrderLatency.total_latency_ms < 200, 1), else_=0)).label(
-                    "under_200"
-                ),
-            ).first()
+            condition = _group_condition(group)
+            cutoff = datetime.utcnow() - timedelta(days=PERCENTILE_WINDOW_DAYS)
+            recent = latency_session.query(
+                OrderLatency.order_type, OrderLatency.broker, OrderLatency.total_latency_ms
+            ).filter(
+                OrderLatency.total_latency_ms.isnot(None),
+                OrderLatency.timestamp >= cutoff,
+            )
+            if condition is not None:
+                recent = recent.filter(condition)
 
-            total_orders = overall_stats.total or 0
-            failed_orders = overall_stats.failed or 0
-            avg_rtt = overall_stats.avg_rtt or 0
-            avg_overhead = overall_stats.avg_overhead or 0
-            avg_total = overall_stats.avg_total or 0
-            orders_under_100ms = overall_stats.under_100 or 0
-            orders_under_150ms = overall_stats.under_150 or 0
-            orders_under_200ms = overall_stats.under_200 or 0
+            every_value, by_tag_values, by_broker_values = [], {}, {}
+            for tag, broker, value in recent.all():
+                every_value.append(value)
+                by_tag_values.setdefault(canonical(tag), []).append(value)
+                if broker:
+                    by_broker_values.setdefault(broker, []).append(value)
 
-            # Calculate SLA percentages
-            sla_100ms = (orders_under_100ms / total_orders * 100) if total_orders else 0
-            sla_150ms = (orders_under_150ms / total_orders * 100) if total_orders else 0
-            sla_200ms = (orders_under_200ms / total_orders * 100) if total_orders else 0
+            def percentile(values, q):
+                return float(np.percentile(values, q)) if values else 0.0
 
-            # OPTIMIZED: Single query for percentiles, one column only, bounded
-            # to the recent window so the fetch cannot grow without limit
-            p50_total = p90_total = p95_total = p99_total = 0
-            if total_orders > 0:
-                total_latencies = [
-                    row[0]
-                    for row in latency_session.query(OrderLatency.total_latency_ms)
-                    .filter(
-                        OrderLatency.total_latency_ms.isnot(None),
-                        OrderLatency.timestamp >= percentile_cutoff,
-                    )
-                    .all()
-                ]
+            total = _Totals()
+            for row in selected.values():
+                total.add(row)
 
-                if total_latencies:
-                    p50_total = float(np.percentile(total_latencies, 50))
-                    p90_total = float(np.percentile(total_latencies, 90))
-                    p95_total = float(np.percentile(total_latencies, 95))
-                    p99_total = float(np.percentile(total_latencies, 99))
-
-            # OPTIMIZED: Single GROUP BY query for all broker stats
-            # This replaces N x 7 queries (where N = number of brokers) with just 1
-            broker_agg = (
-                latency_session.query(
-                    OrderLatency.broker,
-                    func.count(OrderLatency.id).label("total"),
-                    func.sum(case((OrderLatency.status == "FAILED", 1), else_=0)).label("failed"),
-                    func.avg(OrderLatency.rtt_ms).label("avg_rtt"),
-                    func.avg(OrderLatency.overhead_ms).label("avg_overhead"),
-                    func.avg(OrderLatency.total_latency_ms).label("avg_total"),
-                    func.sum(case((OrderLatency.total_latency_ms < 150, 1), else_=0)).label(
-                        "under_150"
-                    ),
-                )
-                .filter(OrderLatency.broker.isnot(None))
-                .group_by(OrderLatency.broker)
-                .all()
+            stats.update(total.figures())
+            stats.update(
+                {
+                    "p50_total": percentile(every_value, 50),
+                    "p90_total": percentile(every_value, 90),
+                    "p95_total": percentile(every_value, 95),
+                    "p99_total": percentile(every_value, 99),
+                    "sla_100ms": total.share(total.under_100),
+                    "sla_150ms": total.share(total.under_150),
+                    "sla_200ms": total.share(total.under_200),
+                    "distribution": {
+                        "excellent": int(total.under_150),
+                        "good": int(total.under_250 - total.under_150),
+                        "acceptable": int(total.under_400 - total.under_250),
+                        "slow": int(total.count - total.under_400),
+                    },
+                }
             )
 
-            # Build broker stats dict from aggregated results
-            broker_stats = {}
-
-            # For percentiles, we need per-broker latency values
-            # OPTIMIZED: Single query to get all latencies grouped by broker
-            broker_latencies = {}
-            if broker_agg:
-                broker_names = [b.broker for b in broker_agg]
-                latency_rows = (
-                    latency_session.query(OrderLatency.broker, OrderLatency.total_latency_ms)
-                    .filter(
-                        OrderLatency.broker.in_(broker_names),
-                        OrderLatency.total_latency_ms.isnot(None),
-                        OrderLatency.timestamp >= percentile_cutoff,
-                    )
-                    .all()
+            stats["endpoints"] = [
+                {
+                    "type": tag,
+                    "label": label_of(tag),
+                    **row.figures(),
+                    "p50_total": percentile(by_tag_values.get(tag), 50),
+                    "p99_total": percentile(by_tag_values.get(tag), 99),
+                }
+                for tag, row in sorted(
+                    selected.items(),
+                    # A group's own order, then anything else by name, untagged last.
+                    key=lambda item: (
+                        order.get(item[0], len(order)),
+                        item[0] is None,
+                        str(item[0]),
+                    ),
                 )
+            ]
 
-                # Group latencies by broker
-                for row in latency_rows:
-                    if row.broker not in broker_latencies:
-                        broker_latencies[row.broker] = []
-                    broker_latencies[row.broker].append(row.total_latency_ms)
-
-            # Build final broker stats
-            for broker_row in broker_agg:
-                broker = broker_row.broker
-                broker_total = broker_row.total or 0
-                broker_under_150 = broker_row.under_150 or 0
-                broker_sla = (broker_under_150 / broker_total * 100) if broker_total else 0
-
-                # Calculate percentiles for this broker
-                broker_p50 = broker_p99 = 0
-                if broker in broker_latencies and broker_latencies[broker]:
-                    broker_p50 = float(np.percentile(broker_latencies[broker], 50))
-                    broker_p99 = float(np.percentile(broker_latencies[broker], 99))
-
-                broker_stats[broker] = {
-                    "total_orders": broker_total,
-                    "failed_orders": broker_row.failed or 0,
-                    "avg_rtt": float(broker_row.avg_rtt or 0),
-                    "avg_overhead": float(broker_row.avg_overhead or 0),
-                    "avg_total": float(broker_row.avg_total or 0),
-                    "p50_total": broker_p50,
-                    "p99_total": broker_p99,
-                    "sla_150ms": broker_sla,
+            brokers = latency_session.query(OrderLatency.broker, *_Totals.columns()).filter(
+                OrderLatency.broker.isnot(None)
+            )
+            if condition is not None:
+                brokers = brokers.filter(condition)
+            for broker_row in brokers.group_by(OrderLatency.broker).all():
+                broker = broker_row[0]
+                row = _Totals.from_row(broker_row[1:])
+                stats["broker_stats"][broker] = {
+                    **row.figures(),
+                    "p50_total": percentile(by_broker_values.get(broker), 50),
+                    "p99_total": percentile(by_broker_values.get(broker), 99),
+                    "sla_150ms": row.share(row.under_150),
                 }
 
-            stats = {
-                "total_orders": total_orders,
-                "failed_orders": failed_orders,
-                "success_rate": ((total_orders - failed_orders) / total_orders * 100)
-                if total_orders
-                else 0,
-                "avg_rtt": float(avg_rtt),
-                "avg_overhead": float(avg_overhead),
-                "avg_total": float(avg_total),
-                "p50_total": float(p50_total),
-                "p90_total": float(p90_total),
-                "p95_total": float(p95_total),
-                "p99_total": float(p99_total),
-                "sla_100ms": float(sla_100ms),
-                "sla_150ms": float(sla_150ms),
-                "sla_200ms": float(sla_200ms),
-                "broker_stats": broker_stats,
-            }
-            _stats_cache["stats"] = stats
+            _stats_cache[group] = stats
             return stats
         except Exception as e:
             logger.exception(f"Error getting latency stats: {str(e)}")
-            return {
-                "total_orders": 0,
-                "failed_orders": 0,
-                "success_rate": 0,
-                "avg_rtt": 0,
-                "avg_overhead": 0,
-                "avg_total": 0,
-                "p50_rtt": 0,
-                "p90_rtt": 0,
-                "p95_rtt": 0,
-                "p99_rtt": 0,
-                "sla_100ms": 0,
-                "sla_150ms": 0,
-                "sla_200ms": 0,
-                "broker_stats": {},
+            return _empty_stats(group, {})
+
+
+class _Totals:
+    """Running totals for a set of latency records.
+
+    Sums rather than averages are read from SQL so that totals for several
+    endpoints can be added together: an average of averages is wrong whenever
+    the endpoints were not called equally often, which they never are.
+    """
+
+    __slots__ = (
+        "count",
+        "failed",
+        "rtt",
+        "overhead",
+        "total",
+        "under_100",
+        "under_150",
+        "under_200",
+        "under_250",
+        "under_400",
+    )
+
+    def __init__(self):
+        for name in self.__slots__:
+            setattr(self, name, 0)
+
+    @staticmethod
+    def columns():
+        """The SQL aggregates, in the order of ``__slots__``."""
+        from sqlalchemy import case
+
+        elapsed = OrderLatency.total_latency_ms
+
+        def under(limit):
+            return func.sum(case((elapsed < limit, 1), else_=0))
+
+        return (
+            func.count(OrderLatency.id),
+            func.sum(case((OrderLatency.status == "FAILED", 1), else_=0)),
+            func.sum(OrderLatency.rtt_ms),
+            func.sum(OrderLatency.overhead_ms),
+            func.sum(elapsed),
+            under(100),
+            under(EXCELLENT_MS),
+            under(200),
+            under(GOOD_MS),
+            under(ACCEPTABLE_MS),
+        )
+
+    @classmethod
+    def from_row(cls, values):
+        row = cls()
+        for name, value in zip(cls.__slots__, values, strict=True):
+            setattr(row, name, value or 0)
+        return row
+
+    def add(self, other):
+        for name in self.__slots__:
+            setattr(self, name, getattr(self, name) + getattr(other, name))
+
+    def share(self, part):
+        """``part`` as a percentage of the records counted."""
+        return float(part / self.count * 100) if self.count else 0.0
+
+    def figures(self):
+        count = self.count
+        return {
+            "total_orders": int(count),
+            "failed_orders": int(self.failed),
+            "success_rate": self.share(count - self.failed),
+            "avg_rtt": float(self.rtt / count) if count else 0.0,
+            "avg_overhead": float(self.overhead / count) if count else 0.0,
+            "avg_total": float(self.total / count) if count else 0.0,
+        }
+
+
+def _group_condition(group):
+    """The SQL condition that picks a group's records, or None for every record."""
+    from sqlalchemy import or_
+
+    if group == ALL or not is_group(group):
+        return None
+    if group == OTHER:
+        return or_(OrderLatency.order_type.is_(None), ~OrderLatency.order_type.in_(KNOWN_TAGS))
+    return OrderLatency.order_type.in_(tags_in(group))
+
+
+def _totals_by_tag():
+    """Totals for every endpoint, from one pass over the table.
+
+    Keyed by the tag a stored value stands for, so rows written under an older
+    spelling are counted with the endpoint they belong to. A record with no tag
+    is kept under None, which is in no group and so counts as "other".
+    """
+    by_tag = {}
+    rows = (
+        latency_session.query(OrderLatency.order_type, *_Totals.columns())
+        .group_by(OrderLatency.order_type)
+        .all()
+    )
+    for row in rows:
+        tag = canonical(row[0])
+        totals = _Totals.from_row(row[1:])
+        if tag in by_tag:
+            by_tag[tag].add(totals)
+        else:
+            by_tag[tag] = totals
+    return by_tag
+
+
+def _empty_stats(group, by_tag):
+    """The figures for a group with no records, and the list of groups.
+
+    Also what a failed read returns, so the page is handed the same keys
+    whatever happened. The fallback this replaces had its own keys, which did
+    not match the ones a successful read used.
+    """
+    counts = {}
+    for tag, row in by_tag.items():
+        key = group_key_of(tag)
+        counts[key] = counts.get(key, 0) + int(row.count)
+    counts[ALL] = sum(counts.values())
+
+    listed = [*GROUPS]
+    if counts.get(OTHER) or group == OTHER:
+        listed.append(OTHER_GROUP)
+    listed.append(ALL_GROUP)
+
+    chosen = get_group(group)
+    return {
+        "group": group,
+        "groups": [
+            {
+                "key": item.key,
+                "label": item.label,
+                "description": item.description,
+                "count": counts.get(item.key, 0),
+                "rated": item.rated,
             }
+            for item in listed
+        ],
+        "label": chosen.label,
+        "description": chosen.description,
+        "rated": chosen.rated,
+        # None when the records are kept forever.
+        "retention_days": None if chosen.kept else RETENTION_DAYS,
+        "percentile_window_days": PERCENTILE_WINDOW_DAYS,
+        "total_orders": 0,
+        "failed_orders": 0,
+        "success_rate": 0.0,
+        "avg_rtt": 0.0,
+        "avg_overhead": 0.0,
+        "avg_total": 0.0,
+        "p50_total": 0.0,
+        "p90_total": 0.0,
+        "p95_total": 0.0,
+        "p99_total": 0.0,
+        "sla_100ms": 0.0,
+        "sla_150ms": 0.0,
+        "sla_200ms": 0.0,
+        "distribution": {"excellent": 0, "good": 0, "acceptable": 0, "slow": 0},
+        "endpoints": [],
+        "broker_stats": {},
+    }
 
 
 def init_latency_db():
@@ -318,43 +481,28 @@ def init_latency_db():
     init_db_with_logging(LatencyBase, latency_engine, "Latency DB", logger)
 
 
-def purge_old_data_logs(days=7):
+def purge_old_data_logs(days=RETENTION_DAYS):
     """
     Purge non-order endpoint latency logs older than specified days.
     Order execution logs (PLACE, SMART, MODIFY, CANCEL, etc.) are kept forever.
+
+    What counts as an order is ``database.latency_groups.ORDER_TAGS``: the same
+    list the recorder tags with and the page totals as orders. This function
+    used to carry its own copy, and options orders, recorded under tags that
+    were on neither copy, were purged with the data queries.
     """
-    # Order types to keep forever. Must stay in step with the set in
-    # utils.latency_monitor: a type present there but missing here is purged
-    # after a week despite being an order.
-    ORDER_TYPES = {
-        "PLACE",
-        "SMART",
-        "MODIFY",
-        "CANCEL",
-        "CLOSE",
-        "CANCEL_ALL",
-        "BASKET",
-        "SPLIT",
-        "OPTIONS",
-        "OPTIONS_MULTI",
-        "GTT_PLACE",
-        "GTT_MODIFY",
-        "GTT_CANCEL",
-    }
-
     try:
-        from datetime import timedelta
-
         cutoff = datetime.utcnow() - timedelta(days=days)
 
         # Delete non-order logs older than cutoff
         deleted = (
             latency_session.query(OrderLatency)
-            .filter(OrderLatency.timestamp < cutoff, ~OrderLatency.order_type.in_(ORDER_TYPES))
+            .filter(OrderLatency.timestamp < cutoff, ~OrderLatency.order_type.in_(ORDER_TAGS))
             .delete(synchronize_session=False)
         )
 
         latency_session.commit()
+        _stats_cache.clear()
         logger.debug(f"Purged {deleted} old data endpoint latency logs (older than {days} days)")
         return deleted
     except Exception as e:

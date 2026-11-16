@@ -19,8 +19,8 @@ specification for the automation script; it is not the script.
 | Per-endpoint request/response shapes | `docs/api/**` |
 | Broker plugin internals and known failure modes | `.claude/skills/broker-integration/` |
 | Manual broker-agnostic test plan (predecessor) | `docs/test/BROKER_INTEGRATION_TESTING_GUIDE.md` |
-| Gap analysis of the existing harness vs this checklist | [`broker-qa-existing-harness-gap-analysis.md`](../../../prompt/broker-qa-existing-harness-gap-analysis.md) |
-| Zerodha-only addendum — MCX lot size (units vs contracts) | [`zerodha-mcx-lotsize-qa.md`](../../../prompt/zerodha-mcx-lotsize-qa.md) |
+| Gap analysis of the existing harness vs this checklist | `broker-qa-existing-harness-gap-analysis.md` (not present in this repository snapshot) |
+| Zerodha-only addendum — MCX lot size (units vs contracts) | `zerodha-mcx-lotsize-qa.md` (not present in this repository snapshot) |
 | Existing automated harness (prior art) | `test/test_broker.py` |
 
 ---

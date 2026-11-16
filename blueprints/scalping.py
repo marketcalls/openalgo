@@ -40,8 +40,10 @@ scalping_bp = Blueprint("scalping_bp", __name__, url_prefix="/")
 SCALPING_STRATEGY = "Scalping"
 
 # Chart history: IST timezone + per-interval lookback (trading days). The bar
-# time carries a +5h30m offset so lightweight-charts (which renders UTC) shows
-# IST, and the client's live forming candle aligns with the history bars.
+# time carries a +5h30m offset (IST wall-clock seconds), which the client's live
+# candle bucketing shares so the forming candle aligns with the history bars.
+# ScalpChart removes it where it hands a bar to openalgo-charts, which takes real
+# UTC and renders IST itself.
 IST = pytz.timezone("Asia/Kolkata")
 IST_OFFSET_SECONDS = 19800
 CHART_INTERVAL_TRADING_DAYS = {"1m": 1, "5m": 3, "15m": 9}
@@ -750,8 +752,8 @@ def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, brok
                 400,
             )
 
-        # Whole-lot freeze cap: floor(freeze / lotsize) * lotsize (NIFTY 3510/65 =>
-        # 54 lots = 3510). Unknown freeze (non-NFO default / cache empty) falls back
+        # Whole-lot freeze cap: floor(freeze / lotsize) * lotsize (NIFTY 1800/65 =>
+        # 27 lots = 1755). Unknown freeze (non-NFO default / cache empty) falls back
         # to a conservative MAX_LOTS-lot chunk so exits never exceed the real freeze.
         freeze = 0
         try:

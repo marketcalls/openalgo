@@ -111,12 +111,7 @@ for position in positionbook["data"]:
 |-------|---------|
 | `carry_forward_valuation` | The position was carried over from a previous day, and the broker reports the overnight leg re-valued at the previous day's settlement price rather than at what it cost. `average_price` is that settlement price and `pnl` is the move since it, i.e. the day's profit and loss, not the position's. |
 
-Only **Kotak Neo** sets this today, and only on a position carried forward from
-a previous day. The Kotak Neo Trade API does not return the entry price of an
-overnight F&O position on any endpoint: the positions payload carries the
-carried quantity and its re-valued amount and no other price, and the order,
-trade and order-history endpoints are all current-day. A position opened and
-still held within the same day is unaffected, and so is every other broker.
+Only **Kotak Neo** sets this today, when it cannot recover the cost of a carried position. OpenAlgo first uses Kotak's uploaded price (`upldPrc`), then the matching Holdings `averagePrice` for carried cash positions. Without a usable cost, it falls back to Kotak's carried amounts and marks the row. For carried F&O positions these can be settlement revaluations rather than entry cost; current-day order/trade history does not reconstruct an older entry. Same-day positions with a usable entry price are unaffected.
 
 ## Understanding Position Quantity
 
@@ -132,7 +127,7 @@ still held within the same day is unaffected, and so is every other broker.
 - Closed positions show the **realized P&L** for the day
 - **average_price** is the weighted average entry price
 - **ltp** is the current market price
-- **pnl** = (LTP - Average Price) × Quantity (for long), reverse for short
+- A simple open-position mark-to-market is `(LTP - average_price) × signed quantity`; returned `pnl` is broker-normalized and can include realized day P&L. Check `average_price_basis` before treating it as return since entry
 - For F&O positions, ensure lot size alignment
 
 ## Use Cases

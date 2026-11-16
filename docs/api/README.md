@@ -13,7 +13,7 @@ Replace the local host with the configured HTTPS/WSS domain in a remote deployme
 
 ## Authentication
 
-Most POST endpoints accept the OpenAlgo API key as `apikey` in a JSON object. GET endpoints accept it as the `apikey` query parameter. Telegram and WhatsApp management endpoints may also accept `X-API-KEY`; the Telegram webhook authenticates with `X-Telegram-Bot-Api-Secret-Token` instead of an OpenAlgo key.
+Most POST endpoints accept the OpenAlgo API key as `apikey` in a JSON object. GET endpoints accept it as the `apikey` query parameter. Telegram and WhatsApp management endpoints, and the Slack and Discord notify endpoints, may also accept `X-API-KEY`; the Telegram webhook authenticates with `X-Telegram-Bot-Api-Secret-Token` instead of an OpenAlgo key.
 
 ```json
 {
@@ -25,7 +25,7 @@ Never put broker credentials or broker access tokens in these requests. The Open
 
 ## Registered REST Inventory
 
-The current v1 surface contains **66 method/path pairs**. A resource with both GET and POST counts as two endpoints.
+The current v1 surface contains **76 method/path pairs**. A resource with both GET and POST counts as two endpoints.
 
 ### Order Management
 
@@ -84,6 +84,23 @@ The current v1 surface contains **66 method/path pairs**. A resource with both G
 | POST | `/optiongreeks` | [Option Greeks](./options-services/optiongreeks.md) |
 | POST | `/multioptiongreeks` | [Batch option Greeks](./options-services/multioptiongreeks.md) |
 
+### Portfolio, SIP, And Sector Analysis
+
+These endpoints analyze historical prices and current holdings; they do not place orders.
+
+| Method | Path | Documentation |
+|---|---|---|
+| GET | `/portfolio/benchmarks` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| POST | `/portfolio/backtest` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| POST | `/portfolio/tearsheet` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| POST | `/portfolio/holdings` | [Portfolio analysis](./analytics-services/portfolio.md) |
+| GET | `/sip/frequencies` | [SIP backtester](./analytics-services/sip.md) |
+| POST | `/sip/backtest` | [SIP backtester](./analytics-services/sip.md) |
+| GET | `/sectorrotation/options` | [Sector rotation](./analytics-services/sectorrotation.md) |
+| POST | `/sectorrotation` | [Sector rotation](./analytics-services/sectorrotation.md) |
+
+The SIP frequency and sector-rotation option lists need no API key. All analysis requests verify the key even when reading local Historify data; `source="api"` additionally needs a broker session. Portfolio holdings analysis always requires a broker session.
+
 ### Calendar, Analyzer, And Preferences
 
 | Method | Path | Documentation |
@@ -133,6 +150,8 @@ The module also exposes a public webhook at `POST /strategy/webhook/<token>`, wh
 | GET | `/telegram/stats` | [Telegram REST surface](./telegram-services/README.md) |
 | GET, POST | `/telegram/preferences` | [Telegram REST surface](./telegram-services/README.md) |
 | POST | `/whatsapp/notify` | [WhatsApp notification](./whatsapp-services/notify.md) |
+| POST | `/slack/notify` | [Slack notification](./slack-services/notify.md) |
+| POST | `/discord/notify` | [Discord notification](./discord-services/notify.md) |
 
 The Telegram resource contributes 11 method/path pairs. Its webhook acknowledges validated updates but does not yet dispatch them, and the REST broadcast handler currently returns zero delivery counts. Those limitations are documented on the Telegram page.
 
@@ -178,8 +197,17 @@ Common status codes are:
 | 401 | Missing or invalid authentication on endpoints that use 401 |
 | 403 | Invalid API key or operation blocked by mode/policy |
 | 404 | Broker module, symbol, order, or linked messaging user not found |
-| 429 | Flask-Limiter rejected the request |
+| 422 | Historical data or analysis inputs cannot support the requested calculation |
+| 429 | Request rate limit, or a broker-queue/guard refusal before sending |
 | 500 | Unhandled internal or broker error |
+| 502 | Place/smart order may have been sent but its broker response was lost; reconcile before retrying |
+| 501 | Active broker does not support the operation (for example live GTT) |
+
+### Order outcomes and retries
+
+A successful placement acknowledgement is not proof of a fill. Check the order book/status and trade book or order-update stream for execution. A transport failure after a write may mean the broker accepted the order: `/placeorder` and `/placesmartorder` return `502` with a message asking you to check the order book when the shared transport detects a lost response. Do not automatically resend that order. Basket and split calls report that message on the affected child result; inspect every child even when the batch request itself returns `200`.
+
+A gthread broker queue refusal is different: the request was refused before sending and returns `429`. The same status can also originate from a rate limiter or broker, so use the response message and endpoint context. No blanket retry guarantee or universal idempotency key is provided by this API.
 
 ## Rate Limits
 

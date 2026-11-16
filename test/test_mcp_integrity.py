@@ -86,14 +86,18 @@ from utils.mcp_tool_registry import (  # noqa: E402
 READ_SCOPES = {SCOPE_READ_MARKET, SCOPE_READ_ACCOUNT}
 
 # Tools that change something but are deliberately not write-scoped.
-# Keep this list at zero-or-one entries and justify every addition —
-# each one is a tool a read-only OAuth token can still trigger.
+# Keep this list to the alert tools and justify every addition: each one
+# is a tool a read-only OAuth token can still trigger.
 WRITE_SCOPE_EXCEPTIONS = {
-    # Delivers only to the account owner's own Telegram bot; cannot move
-    # money or place an order. Rationale recorded alongside its entry in
-    # utils/mcp_tool_registry.py.
+    # Each delivers only to a destination the account owner set up (their
+    # own Telegram bot, or the Slack or Discord webhook they saved and
+    # switched on at /alerts); none can move money or place an order.
+    # Rationale recorded alongside their entries in utils/mcp_tool_registry.py.
     "send_telegram_alert",
+    "send_slack_alert",
+    "send_discord_alert",
 }
+ALERT_TOOLS = sorted(WRITE_SCOPE_EXCEPTIONS)
 
 
 @pytest.fixture(scope="module")
@@ -200,10 +204,10 @@ def test_write_tools_require_the_write_scope(server):
     """The check that actually matters: a write tool filed under a read
     scope would be callable with a read-only OAuth token.
 
-    One documented exception, matching the rationale recorded in
-    utils/mcp_tool_registry.py: send_telegram_alert has an outward side
-    effect but delivers only to the account owner's own bot, so it is
-    account-scoped rather than write-scoped. Any *other* tool that
+    Documented exceptions, matching the rationale recorded in
+    utils/mcp_tool_registry.py: the three alert tools have an outward side
+    effect but deliver only to destinations the account owner set up, so
+    they are account-scoped rather than write-scoped. Any *other* tool that
     drifts into this state fails here.
     """
     offenders = [
@@ -249,18 +253,25 @@ def test_read_scoped_tools_are_annotated_read_only(server):
         if scope not in READ_SCOPES:
             continue
         meta = server.TOOL_META[name]
-        if name == "send_telegram_alert":
+        if name in WRITE_SCOPE_EXCEPTIONS:
             # Account-scoped but has an outward side effect, so it is
             # deliberately not read-only. Asserted explicitly below.
             continue
         assert meta.read_only, f"{name} is read-scoped but not annotated read-only"
 
 
-def test_send_telegram_alert_is_not_read_only(server):
-    """It sends something outward, so read-only mode must drop it."""
-    meta = server.TOOL_META["send_telegram_alert"]
+@pytest.mark.parametrize("name", ALERT_TOOLS)
+def test_alert_tools_are_not_read_only(server, name):
+    """Each sends something outward, so read-only mode must drop it."""
+    meta = server.TOOL_META[name]
     assert not meta.read_only
     assert not meta.destructive
+
+
+@pytest.mark.parametrize("name", ALERT_TOOLS)
+def test_alert_tools_are_account_scoped(name):
+    """Not write:orders: that scope promises orders and is off on most installs."""
+    assert TOOL_SCOPES[name] == SCOPE_READ_ACCOUNT
 
 
 # ------------------------------------------------------------ descriptions
@@ -500,7 +511,7 @@ def test_read_only_mode_drops_every_write_tool():
         "'writes': [n for n, x in m.TOOL_META.items() if x.registered and not x.read_only]}))",
     )
     assert out["writes"] == []
-    for name in ("place_order", "cancel_all_orders", "analyzer_toggle", "send_telegram_alert"):
+    for name in ("place_order", "cancel_all_orders", "analyzer_toggle", *ALERT_TOOLS):
         assert name not in out["registered"], f"{name} survived read-only mode"
     assert "get_quote" in out["registered"]
     assert "get_order_book" in out["registered"]
@@ -634,3 +645,112 @@ def test_documented_tools_exist(fastmcp_tools):
     }
     missing = sorted(documented - set(fastmcp_tools))
     assert not missing, f"documented but not registered: {missing}"
+
+
+# ------------------------------------------- exchange defaults for indices
+#
+# A model asked about SENSEX calls get_quote / get_expiry_dates with the
+# symbol alone. With fixed NSE and NFO defaults both failed: SENSEX is
+# quoted on BSE_INDEX and its options trade on BFO (NIFTY is NSE_INDEX,
+# so get_quote failed for it too). These pin what reaches the SDK.
+
+
+class _RecordingClient:
+    """Stands in for the SDK client and records each call's arguments."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def quotes(self, **kwargs):
+        self.calls.append(("quotes", kwargs))
+        return {"status": "success", "data": {"ltp": 1.0}}
+
+    def expiry(self, **kwargs):
+        self.calls.append(("expiry", kwargs))
+        return {"status": "success", "data": []}
+
+
+@pytest.fixture
+def recording_client(server, monkeypatch):
+    fake = _RecordingClient()
+    monkeypatch.setattr(server, "client", fake)
+    return fake
+
+
+@pytest.mark.parametrize(
+    "symbol, expected",
+    [
+        ("SENSEX", "BSE_INDEX"),
+        ("bankex", "BSE_INDEX"),
+        ("SENSEX50", "BSE_INDEX"),
+        ("NIFTY", "NSE_INDEX"),
+        ("BANKNIFTY", "NSE_INDEX"),
+        ("INDIAVIX", "NSE_INDEX"),
+        ("RELIANCE", "NSE"),
+        ("BSE", "NSE"),  # BSE Ltd, the NSE-listed stock, not an index
+    ],
+)
+def test_quote_without_exchange_uses_the_symbols_exchange(
+    server, recording_client, symbol, expected
+):
+    server.get_quote(symbol)
+    assert recording_client.calls == [("quotes", {"symbol": symbol.upper(), "exchange": expected})]
+
+
+def test_quote_treats_an_empty_exchange_as_omitted(server, recording_client):
+    server.get_quote("SENSEX", exchange="")
+    assert recording_client.calls[0][1]["exchange"] == "BSE_INDEX"
+
+
+@pytest.mark.parametrize(
+    "symbol, exchange, expected",
+    [("SENSEX", "nse", "NSE"), ("RELIANCE", "BSE", "BSE"), ("NIFTY", "NSE_INDEX", "NSE_INDEX")],
+)
+def test_quote_keeps_the_exchange_the_caller_named(
+    server, recording_client, symbol, exchange, expected
+):
+    server.get_quote(symbol, exchange=exchange)
+    assert recording_client.calls[0][1]["exchange"] == expected
+
+
+@pytest.mark.parametrize(
+    "symbol, expected",
+    [
+        ("SENSEX", "BFO"),
+        ("BANKEX", "BFO"),
+        ("sensex50", "BFO"),
+        ("NIFTY", "NFO"),
+        ("BANKNIFTY", "NFO"),
+        ("RELIANCE", "NFO"),
+    ],
+)
+def test_expiry_without_exchange_uses_the_underlyings_fo_exchange(
+    server, recording_client, symbol, expected
+):
+    server.get_expiry_dates(symbol)
+    assert recording_client.calls == [
+        (
+            "expiry",
+            {"symbol": symbol.upper(), "exchange": expected, "instrumenttype": "options"},
+        )
+    ]
+
+
+def test_expiry_keeps_the_exchange_the_caller_named(server, recording_client):
+    server.get_expiry_dates("CRUDEOIL", exchange="mcx", instrument_type="Futures")
+    assert recording_client.calls == [
+        ("expiry", {"symbol": "CRUDEOIL", "exchange": "MCX", "instrumenttype": "futures"})
+    ]
+
+
+@pytest.mark.parametrize(
+    "name, must_mention",
+    [("get_quote", ("BSE_INDEX", "NSE_INDEX")), ("get_expiry_dates", ("BFO", "NFO"))],
+)
+def test_exchange_is_optional_and_described(fastmcp_tools, name, must_mention):
+    """The schema and description are all a client's model sees."""
+    tool = fastmcp_tools[name]
+    assert "exchange" in tool.parameters["properties"]
+    assert "exchange" not in tool.parameters.get("required", [])
+    for code in must_mention:
+        assert code in tool.description, f"{name} description does not mention {code}"

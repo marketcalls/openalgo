@@ -109,7 +109,7 @@ function Choice({
   )
 }
 
-/** The four ways to be told, in the order the dialog draws them. */
+/** The six ways to be told, in the order the dialog draws them. */
 const DELIVERY_CHOICES: readonly {
   readonly key: keyof AlertDelivery
   readonly label: string
@@ -119,6 +119,8 @@ const DELIVERY_CHOICES: readonly {
   { key: 'notify', label: 'Desktop notification', means: 'Shown only while this tab is hidden' },
   { key: 'telegram', label: 'Telegram', means: 'Needs the bot running and your account linked' },
   { key: 'whatsapp', label: 'WhatsApp', means: 'Needs a paired device' },
+  { key: 'slack', label: 'Slack', means: 'Needs a webhook saved on the Slack page' },
+  { key: 'discord', label: 'Discord', means: 'Needs a webhook saved on the Discord page' },
 ]
 
 interface Props {
@@ -474,8 +476,8 @@ export function AlertsDialog({ handle, onClose }: Props) {
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 Sound and the desktop notification reach you with the tab behind another window and
-                never leave this machine. Telegram and WhatsApp send the message out, and each needs
-                to be set up on its own page first.
+                never leave this machine. Telegram, WhatsApp, Slack and Discord send the message
+                out, and each needs to be set up on its own page first.
               </p>
             </div>
 

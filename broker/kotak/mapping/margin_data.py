@@ -79,12 +79,27 @@ def parse_margin_response(response_data):
 
         # Check if the response status is Ok
         if response_data.get("stat") != "Ok":
-            error_message = response_data.get("errMsg", "Failed to calculate margin")
+            # Kotak's error field is "emsg" ({"stat":"Not_Ok","emsg":"Invalid
+            # session","stCode":1003}, as funds.py already reads it). Reading
+            # only "errMsg" replaced every reason with the generic text below.
+            error_message = (
+                response_data.get("emsg")
+                or response_data.get("errMsg")
+                or "Failed to calculate margin"
+            )
             return {"status": "error", "message": error_message}
 
-        # Extract margin data
-        # Kotak returns: avlMrgn, reqdMrgn, ordMrgn, mrgnUsd, rmsVldtd, etc.
-        total_margin_required = float(response_data.get("reqdMrgn", 0))
+        # check-margin (kotak-api-docs/10-portfolio-margins.md):
+        #   ordMrgn  -> margin required for this order
+        #   mrgnUsd  -> margin already used on the account
+        #   reqdMrgn -> ordMrgn + mrgnUsd (12500 + 40.4 = 12540.4 in the doc)
+        # reqdMrgn counted the account's existing usage into the order, and
+        # once per leg when a basket is summed (issue #2156). Report ordMrgn.
+        order_margin = response_data.get("ordMrgn")
+        if order_margin in (None, ""):
+            logger.warning(f"Kotak check-margin returned no ordMrgn: {response_data}")
+            return {"status": "error", "message": "Broker did not return the order margin"}
+        total_margin_required = float(order_margin)
 
         # Return standardized format matching OpenAlgo API specification
         return {
@@ -103,32 +118,30 @@ def parse_margin_response(response_data):
 
 def parse_batch_margin_response(responses):
     """
-    Parse multiple Kotak margin responses and aggregate them.
+    Sum per-leg Kotak margins into one basket figure.
 
-    Args:
-        responses: List of individual margin responses
+    Kotak's check-margin prices one order at a time, so the sum carries no
+    hedge benefit between legs (a calendar spread is quoted at the margin of
+    its legs taken separately).
 
-    Returns:
-        Aggregated margin response
+    Any failed leg fails the basket. Skipping it reported the margin of a
+    different basket, and with every leg failed it reported a "success" of 0
+    (issue #2156).
     """
-    try:
-        total_required_margin = 0
+    failures = [
+        r.get("message", "Failed to calculate margin")
+        for r in responses
+        if r.get("status") != "success"
+    ]
+    if failures:
+        return {"status": "error", "message": "; ".join(dict.fromkeys(failures))}
 
-        for response in responses:
-            if response.get("status") == "success":
-                data = response.get("data", {})
-                total_required_margin += data.get("total_margin_required", 0)
-
-        # Return standardized format matching OpenAlgo API specification
-        return {
-            "status": "success",
-            "data": {
-                "total_margin_required": total_required_margin,
-                "span_margin": 0,  # Kotak doesn't provide separate span margin
-                "exposure_margin": 0,  # Kotak doesn't provide separate exposure margin
-            },
-        }
-
-    except Exception as e:
-        logger.error(f"Error parsing batch margin response: {e}")
-        return {"status": "error", "message": f"Failed to parse batch margin response: {str(e)}"}
+    total_required_margin = sum(r["data"]["total_margin_required"] for r in responses)
+    return {
+        "status": "success",
+        "data": {
+            "total_margin_required": round(total_required_margin, 2),
+            "span_margin": 0,  # Kotak doesn't provide separate span margin
+            "exposure_margin": 0,  # Kotak doesn't provide separate exposure margin
+        },
+    }

@@ -73,7 +73,13 @@ jobs:
             test/test_requirements_parity.py \
             test/test_fyers_index_hsm_mapping.py \
             test/test_qty_freeze_unknown_default.py \
-            test/test_migrate_qty_freeze_oct_2026.py \
+            test/test_migrate_qty_freeze_nov_2026.py \
+            test/test_migrate_muhurat_2026.py \
+            test/test_migrate_market_holidays.py \
+            test/test_broker_keys.py \
+            test/test_broker_callback_logging.py \
+            test/test_flow_scheduler_resilience.py \
+            test/test_latency_groups.py \
             -v --timeout=60
 
   # The web server launcher, booted for real. install/openalgo-gunicorn.sh is
@@ -284,6 +290,7 @@ jobs:
           test/test_gthread_memory_order_updates.py
           test/test_gthread_memory_streaming.py
           test/test_gthread_memory_flow.py
+          test/test_broker_keys.py
           -o addopts="" --timeout=120 -rs
 
   # Frontend linting
@@ -414,8 +421,10 @@ jobs:
           retention-days: 7
 
   # Frontend E2E tests (Chromium only for speed)
+  # Pinned to 24.04: ubuntu-latest became 26.04, which Playwright supports only
+  # from 1.64.0, and installing its browser fails on the 1.58 this project locks.
   frontend-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend

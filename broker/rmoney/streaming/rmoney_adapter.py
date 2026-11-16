@@ -433,7 +433,7 @@ class RMoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._start_batch_timer_locked()
             # Don't log the actual token value for security, but log its type and length
             token_info = (
-                f"type={type(token_value)}, len={len(str(token_value))}, value={str(token_value)[:4]}...{str(token_value)[-4:]}"
+                f"type={type(token_value)}, len={len(str(token_value))}"
                 if token_value not in ("", None)
                 else "None"
             )

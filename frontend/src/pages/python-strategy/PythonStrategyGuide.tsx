@@ -708,13 +708,13 @@ export default function PythonStrategyGuide() {
                     </td>
                     <td className="py-2 pr-3">NSE / BSE / NFO</td>
                     <td className="py-2">
-                      SPECIAL_SESSION 18:00&ndash;19:15. Runs only inside that window, despite being
-                      Sunday
+                      SPECIAL_SESSION 14:20&ndash;15:30 (NFO to 15:40). Runs only inside that
+                      window, despite being Sunday
                     </td>
                   </tr>
                   <tr className="border-b">
                     <td className="py-2 pr-3">MCX</td>
-                    <td className="py-2">SPECIAL_SESSION 18:00&ndash;00:15 next day</td>
+                    <td className="py-2">SPECIAL_SESSION 14:20&ndash;15:30</td>
                   </tr>
                   <tr className="border-b">
                     <td className="py-2 pr-3">CRYPTO</td>
@@ -986,7 +986,7 @@ export default function PythonStrategyGuide() {
                       </li>
                       <li>
                         Add a <strong>SPECIAL_SESSION</strong> row for the date and exchange with
-                        the session timing (e.g. Muhurat: NSE 18:00&ndash;19:15)
+                        the session timing (e.g. Muhurat: NSE 14:20&ndash;15:30)
                       </li>
                       <li>
                         Ensure the relevant day (Sat/Sun) is in your strategy's{' '}
@@ -1093,9 +1093,12 @@ export default function PythonStrategyGuide() {
                   </table>
                 </div>
                 <p className="text-sm">
-                  A typical EMA/crossover strategy uses 80&ndash;120 MB of RAM and 5&ndash;10 file
-                  descriptors. The defaults are generous. For simple strategies, lower memory to
-                  256&ndash;512 MB and run more strategies concurrently.
+                  A typical EMA/crossover strategy uses about 130 MB of RAM and a handful of file
+                  descriptors. The memory limit counts reserved address space, which is several
+                  times the RAM in use, so do not set it below 512 MB: a strategy that imports the
+                  OpenAlgo SDK does not start under 256 MB. The CPU limit is counted per run and a
+                  strategy that reaches it is ended with nothing written to its log. See{' '}
+                  <code>strategies/RESOURCE_LIMITS.md</code> for the measurements.
                 </p>
               </AccordionContent>
             </AccordionItem>

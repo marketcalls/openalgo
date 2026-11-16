@@ -8,6 +8,687 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Added
+
+- **Alerts page (`/alerts`)**: Telegram, WhatsApp, Slack and Discord on one
+  page. Each channel has a card with how it stands, an on/off switch, a test
+  button and a link to its own setup page, and a grid chooses which orders
+  each channel hears about: orders placed, modified, cancelled, positions
+  closed, basket/split/options orders and GTT orders. The profile menu's
+  Telegram Bot and WhatsApp Bot entries are replaced by one Alerts entry; both
+  pages are a click away from it.
+- **Slack and Discord alerts** through an incoming webhook, set up on `/slack`
+  and `/discord`. Nothing to host and no bot token. The webhook URL is stored
+  encrypted, never shown again, kept out of the logs, and only Slack's or
+  Discord's own webhook URLs are accepted. Alerts can never ping a whole
+  channel (`<!channel>`, `@everyone` and other mentions are shown as text).
+- **`POST /api/v1/slack/notify` and `POST /api/v1/discord/notify`** post a
+  message to the saved webhook, like the Telegram and WhatsApp notify
+  endpoints. Both are in the API Playground. The API can only post; it can
+  never read or replace a webhook.
+- **Chart alerts on `/trading` can go to Slack and Discord** too, chosen per
+  alert next to Telegram and WhatsApp. Both are off for a new alert, and
+  alerts saved before read them as off.
+- **Flow Slack and Discord nodes** (`slackAlert`, `discordAlert`), under
+  Utility next to Telegram and WhatsApp. Each posts its message, with workflow
+  variables filled in, to the webhook saved on `/slack` or `/discord`, under
+  the notify endpoint's rules: nothing is posted unless the channel is
+  switched on at `/alerts`. The post is queued so the workflow never waits on
+  the provider, and a message over the channel's limit (Slack 4000
+  characters, Discord 2000) is shortened to fit rather than lost.
+- **MCP tools `send_slack_alert` and `send_discord_alert`**, beside
+  `send_telegram_alert`, on the local and the remote MCP server. They call the
+  notify endpoints, so the same rules and the 30-a-minute limit apply, and
+  read-only mode drops them. The Python SDK has no Slack or Discord method
+  yet; call the endpoints directly until it does.
+
+### Changed
+
+- Remote MCP: the `read:account` scope also allows the two new alert tools,
+  as it already allowed `send_telegram_alert`, and the consent screen now
+  says so ("Send alerts to your own Telegram, and to the Slack and Discord
+  channels you switched on"). A client you approved for `read:account` can
+  post to a Slack or Discord channel you have switched on, which other people
+  may read. They still need no `write:orders`, which stays about orders.
+
+- Alerts are event driven end to end: one subscriber raises an alert per order
+  event, only when a channel wants it, and hands it to each routed channel.
+  Every channel queues its send on its own pool, so a slow or failing channel
+  never delays another. Telegram and WhatsApp alerts are unchanged for an
+  install that never opens `/alerts`: both stay on with every order type, the
+  messages are word for word the same, and their own rules (bot running,
+  device paired) still apply.
+- GTT alerts on WhatsApp now say what happened: the symbol, the trigger
+  prices, the trigger id and, when a GTT fires, the order it placed. They
+  used to show only "Order Update" and the time. Slack and Discord get the
+  same; Telegram's GTT alerts are unchanged.
+- Upgrade: one migration, `migrate_alert_channels.py`, adds the
+  `alert_channels` table (no rows are written). `migrate_all.py` runs it, and
+  the app also creates the table at startup. It and
+  `migrate_password_reset_grants.py` are now required migrations: if either
+  fails, `migrate_all.py` reports the failure and exits non-zero instead of
+  calling it a warning.
+
+- **The Latency Monitor (`/logs/latency`) shows one group of endpoints at a
+  time.** Buttons at the top choose between Orders, Account and books,
+  Market data, Options, Symbols and settings, Tools and alerts, and All
+  calls, each with how many calls it holds. The page opens on Orders, and
+  every figure, the broker table, the recent list and the CSV export are for
+  the chosen group only. A new By Endpoint table lists each endpoint of the
+  group on its own, so history is no longer averaged into quotes, or either
+  into orders. What changes for you:
+  - The numbers under Orders will differ from what the page showed before,
+    usually lower in count. They were not order figures before.
+  - The Excellent, Good, Acceptable and Slow ratings and the under 150 ms
+    figure are shown for Orders only. A history call that takes a second is
+    not rated as a slow order.
+  - The latency distribution now counts every recorded order. It used to
+    count the 100 most recent calls of any kind.
+  - Orders are kept for all time and other calls for 7 days, so the groups
+    cover different spans. Each group says which on its first card.
+  - Not measured, as before: the time to an exchange fill, and anything
+    outside the OpenAlgo API such as signing in.
+- `/trading`, Historify and every other chart now use openalgo-charts 2.7.2
+  (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
+  each one shows its drawing the way the chart shows it when selected, with an
+  open ring at every point you place, so a trend line has a ring at each end
+  and the channels, patterns, positions, Fibonacci and Gann tools show their
+  anchors too. The brush, highlighter, measure, text, note and arrow tools
+  get icons of their own. Indicators, chart types and existing custom
+  indicators work as before.
+- **Elliott waves on `/trading`.** The Patterns group of the drawing rail has
+  an Elliott waves section with five counts: impulse, correction, and three
+  new ones, triangle, double combination and triple combination. Each count
+  starts at its origin, point 0, where the first wave starts: click the origin
+  first, then the end of each wave. The origin has no label, and the waves
+  are numbered from the second point, as a count is read: (1) to (5) on an
+  impulse, (A) to (C) on a correction, (A) to (E) on a triangle, (W) (X) (Y)
+  and (W) (X) (Y) (X) (Z) on the combinations. Each label is centred over its
+  point, above a peak and below a trough, and a count is drawn as you place
+  it, so the second click already shows wave (1). Each count's icon names its
+  first and last wave. An impulse or correction you drew before this upgrade
+  loads with its waves labelled (1) to (5) or (A) to (C) and its origin on the
+  end of the first wave, so that wave is not drawn; drag that point away to
+  draw it. Counts are labelled in the Intermediate degree, in parentheses;
+  the terminal has no control yet for choosing another degree or a plain or
+  circled label style.
+
+### Fixed
+
+- **MCP `get_quote` and `get_expiry_dates` for SENSEX, BANKEX and NIFTY.**
+  Asked for an index without naming an exchange, `get_quote` looked on NSE
+  and failed ("Symbol 'SENSEX' not found for exchange 'NSE'"; NIFTY failed
+  the same way), and `get_expiry_dates` looked on NFO and found no SENSEX
+  expiries. An index now uses its index exchange (`BSE_INDEX` or
+  `NSE_INDEX`) and the BSE indices' expiries come from `BFO`. An exchange
+  the assistant names is still used as given, and every other symbol keeps
+  the NSE and NFO defaults.
+- **Latency Monitor counting every API call as an order** (#2421, #2286). The
+  page at `/logs/latency` put every recorded call into one set of figures and
+  called them orders. A chart or a scanner makes hundreds of history calls
+  for each order, so those decided the average, the P99 and the share under
+  150 ms: an install that had never placed an order through the API could
+  read "2,607 orders tracked". See **Changed** for what the page does now.
+- **Latency of options orders deleted after a week.** Order latency is kept
+  for good and everything else for 7 days. Options orders and options
+  multi-leg orders were recorded under names the keep list did not have, so
+  their records went with the data calls. They are kept now, and records
+  from the last week that are still there are counted as the orders they are.
+  Records already deleted cannot be brought back.
+- **Scheduled Flow workflows stopping until OpenAlgo was restarted** (#2355,
+  #2326). Every scheduled workflow could stop at the same moment and stay
+  stopped: the Flow page still showed them Active, switching one off and on
+  again logged "Added job", and nothing ran until a restart. An exit workflow
+  that should have closed an open position was among the ones that did not
+  run. Two faults made it:
+  - A workflow run kept the database locked for writing for as long as it ran.
+    A run that took more than 15 seconds, or a workflow running every few
+    seconds, made every other write to `openalgo.db` fail with "database is
+    locked", including other workflows recording their own runs. A run now
+    holds nothing while it works.
+  - One of the writes that failed was the scheduler saving a workflow's next
+    run time, and that single failure ended the scheduler. It now keeps the
+    schedule in memory, keeps running every workflow on time, each run once,
+    and saves when the database allows. A stopped scheduler is also started
+    again the next time a workflow is activated.
+  The Historify download scheduler had the same weakness and has the same
+  protection. Nothing to configure. If you restarted OpenAlgo to work around
+  this, you no longer need to. One thing is unchanged: a run that cannot
+  record itself because the database is busy is still skipped and logged, not
+  run without a record.
+- **`upgrade/rotate_pepper.py` on an install with its own `FERNET_SALT`.**
+  It derived the encryption key with the legacy static salt, so on any
+  install that has a per-install salt (every install started since that salt
+  was introduced) it could decrypt none of the broker tokens, API keys, TOTP
+  secrets, broker keys or webhooks. It still wrote the new pepper to `.env`,
+  leaving them all unreadable, and encrypted a TOTP secret a second time. It
+  now uses the install's own salt, the same rule as the app. If you ran it on
+  such an install, the database backup it made
+  (`db/backups/openalgo.db.before-rotate-pepper-<time>`) still holds the data
+  under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
+  in `.env`.
+
+### Dependencies
+
+- `dnspython` 2.9.0 to 2.9.2 (GHSA-vvf4-9x63-8xvv, high): a crafted zone file
+  could use up memory and CPU. Nothing in OpenAlgo imports dnspython or reads
+  zone files; it comes with the email-validator package and, on the eventlet
+  web server, looks up the broker hosts. Both were checked on 2.9.2.
+- `tornado` 6.6 to 6.6.1 (GHSA-5cjw-f85j-cv6r, low): an open redirect through
+  a path starting with three slashes. OpenAlgo does not import tornado or
+  serve HTTP with it; it is installed for the Jupyter kernel packages. A
+  kernel was started and ran code on 6.6.1.
+- `soupsieve` to 4.1 (GHSA-mmhr-3c5m-f64f and GHSA-6655-6qjp-jx7x, high;
+  GHSA-7g44-g9rc-x53w and GHSA-4j63-6c4x-wfg4, medium): a crafted CSS selector
+  or page could take a very long time to match. Nothing in OpenAlgo imports
+  it; it comes with the portfolio statistics library, through yfinance and
+  beautifulsoup4. It was 2.9.1 in `uv.lock` and not listed in the
+  requirements files at all, so an Ubuntu server updated with `update.sh`
+  kept whichever version it already had. It is now pinned in both, and the
+  next update installs 4.1.
+- No behaviour change is expected from any of the three.
+
+## [2.0.3.3] - 2026-11-06
+
+### Broker Keys and Live Data Release
+
+20 commits since 2.0.3.2, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.3-released.md](releases/version-2.0.3.3-released.md).
+This release adds one migration, `migrate_broker_keys.py`, and extends
+`migrate_strategy_module.py`. Run `migrate_all.py` and restart.
+
+### Highlights
+
+- Save broker keys in OpenAlgo, on OpenAlgo Desktop's screens, and log in to
+  one broker at a time (#2337).
+- Broker logins that only OpenAlgo can start, and sign-outs that reach every
+  device.
+- A Live strategy run trades only at the broker it started on.
+- Live data fixes for fifteen broker feeds.
+- Corrected Shoonya day-end candles (#2343) and Historify older history
+  (#2310).
+- The AI agent works again on LiteLLM 1.106.6.
+
+### Broker keys, one broker at a time
+
+- **Select Broker (`/broker`)** shows a card for each broker, with search,
+  status and the buttons Login with, Configure, Edit keys and Open Dashboard.
+  **Broker Configuration (`/broker/config`)** takes each broker's keys, names
+  each field the way that broker does, and masks what is saved. These are the
+  same screens as OpenAlgo Desktop.
+- **`.env` comes first.** The broker named in `.env` always logs in with the
+  `.env` keys, and saving its keys on Broker Configuration writes `.env`. Keys
+  for every other broker are stored encrypted in OpenAlgo. Installs that log
+  in from `.env` need to do nothing.
+- **One broker at a time.** Logging in to another broker asks first, and the
+  old session ends on every device only when the new login is stored. A
+  failed or abandoned login leaves the old broker connected. The switch is
+  refused while the current or last broker still runs Live automation: a Live
+  strategy module run, a Live OpenScript run, or outside analyzer mode a
+  Python strategy or scalping protection.
+- **A Live strategy run trades only at its own broker.** It records the broker
+  and, where the broker names one, the account it started on, and sends every
+  order, cancel and status check there. Before, an exit could go to whichever
+  broker was logged in when it fired.
+- **New installs.** A fresh download runs with `uv run app.py` alone: the
+  first start writes `.env` with fresh security keys and no broker. The
+  installers no longer ask for a broker, keys or redirect URL, and offer
+  fail2ban for SSH (default No). Docker Compose refuses to start without
+  `.env` instead of creating a folder named `.env`.
+
+### Security
+
+- A broker's answer completes a login only if this OpenAlgo started it, once,
+  within ten minutes. Before, any broker request token that reached OpenAlgo
+  while you were signed in completed a login.
+- An answer posted to the CompositEdge or RMoney login page could sign the
+  poster in to OpenAlgo with no password. It now completes nothing unless
+  OpenAlgo started that login.
+- Zerodha, Upstox and Paytm Money now send and require a login check, as
+  Fyers, Pocketful, CompositEdge, RMoney and IIFL Capital already did.
+- The account comes only from the broker's own answer. A Dhan login is refused
+  for another account than the configured client ID, or when Dhan does not
+  report the account. An RMoney or CompositEdge login is refused when the
+  account is not your market data keys' account.
+- Logging out, changing or resetting your password, and switching broker end
+  the sign-in on your other devices too, and a copied login cookie stops
+  working.
+- `follow-redirects` 1.16.2 in the frontend, for advisory
+  GHSA-mrwp-f3q8-3g9p.
+
+### Live data
+
+A field a broker's feed does not carry is now left out instead of being sent
+as 0. A client that computed change against a previous close of 0 showed the
+whole price as the change. **A script that reads every field from every
+WebSocket message should now handle a missing one.**
+
+- **Zerodha** (#2347): index quotes and depth carry OHLC and change.
+- **Groww**: index subscriptions receive ticks; MCX, NCDEX, NCO, CDS and BCD
+  are refused with a plain message.
+- **Dhan**: the previous close is no longer 0 all session.
+- **Angel One**: depth OHLC is no longer 0, and currency prices use the
+  divisor Angel's docs give.
+- **Upstox**: the previous close is the real previous close, not today's
+  candle, and depth carries the full quote.
+- **Fyers**: a quote on a symbol with depth open is no longer blank; 50-level
+  depth carries the quote; LTP and Quote on one symbol no longer replace each
+  other.
+- **Kotak**: quotes and depth carry the full quote with the exchange's trade
+  time; index ticks reach NIFTY and NIFTY50.
+- **Sahi**: fields the stream does not carry are left out.
+- **Definedge**: a Quote subscriber receives ticks when Depth was subscribed
+  first.
+- **mStock**: a token on two exchanges no longer publishes one exchange's
+  prices under both symbols.
+- **Tradejini**: quote totals are no longer 0, the master contract download
+  no longer fails on the new ETF group, and the feed no longer leaks sockets.
+- **Flattrade** (#2324): the feed keeps reconnecting after a long outage
+  instead of giving up for the day.
+- **Samco**: the exchange's trade time, average price and totals.
+- **5paisa**: depth no longer sends volume 0 to quote subscribers.
+- **HDFC Sky**: partial packets no longer publish a price of 0, and one
+  unsubscribe no longer drops every mode.
+
+### Fixed
+
+- **Shoonya intraday history** (#2343): on 3m to 4h requests spanning more
+  than one day, each day's last candle took the next morning's pre-open price
+  as its high and close. It is now rebuilt from 1-minute bars.
+- **Historify older history** (#2310): scrolling back past a session's opening
+  candle on 3m, 5m, 15m and 1h no longer fails with "Could not load older
+  history".
+- **Kotak holdings and margins** (#2365): holdings show the OpenAlgo symbol,
+  margin errors give Kotak's reason, the position average uses Kotak's
+  precision, and carried NSE and BSE cash delivery is valued at its holdings
+  average price.
+- **The AI agent works again.** Since LiteLLM 1.106.6, every agent turn failed
+  with "cannot import name 'CacheableResult' from 'mcp.types'". Opening
+  `/agent/config` also no longer leaves model tests failing until a restart.
+
+### Added
+
+- The download page lists OpenAlgo Desktop 1.0.5, FastScalper Desktop 0.1.0,
+  the Chrome Plugin 1.0 and the Excel Add-in 1.0.7 (Windows only).
+- API references for Portfolio, SIP and Sector Rotation, and documentation
+  updated for recent platform changes.
+- A `python-strategy` skill for building, backtesting and rehearsing `/python`
+  strategies with Claude Code.
+
+### Not yet covered
+
+- The RMoney and CompositEdge account checks, and the new login check for
+  IIFL Capital, Upstox and Paytm Money, had not been tried against real
+  accounts when they were merged. Report a refused login on the issue tracker.
+- The broker switch check does not cover Flow workflows, queued Action Center
+  orders or delayed external alerts. Finish or stop them before logging in to
+  another broker.
+
+### Dependencies
+
+- `joserfc` 1.7.4 to 1.7.7.
+- `follow-redirects` 1.16.1 to 1.16.2 (frontend).
+- `litellm` stays at 1.106.6. The pinned `openalgo` Python SDK remains 2.0.5.
+
+### Contributors
+
+- **@marketcalls** - broker keys, one broker at a time and the server-started
+  broker login (#2337), the agent fix, the download page, `follow-redirects`
+  1.16.2, the `python-strategy` skill, the documentation updates and the
+  release.
+- **@Kalaiviswa** - live data fixes for fifteen broker feeds (#2341, #2359,
+  #2376, #2377, #2383, #2396), Flattrade's among them (#2324), Shoonya
+  day-end candles (#2343, #2360), Zerodha index packets (#2347, #2361),
+  Historify older history (#2310, #2358) and Kotak holdings and margins
+  (#2365, #2367).
+
+## [2.0.3.2] - 2026-10-31
+
+### Freeze Limits and Muhurat Session Release
+
+6 commits since 2.0.3.1, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.2-released.md](releases/version-2.0.3.2-released.md).
+This release adds two data migrations and no schema change. Upgrade and
+restart before Monday 2 November's open.
+
+### Highlights
+
+- NSE's lower index freeze limits from Monday 2 November 2026.
+- The published Diwali Muhurat session on Sunday 8 November 2026.
+- An upgrade no longer erases the holidays you set.
+- WhatsApp alerts stay connected (#2332).
+- LiteLLM 1.106.6 brings newer models to the agent.
+
+### NSE index freeze limits from 2 November 2026
+
+NSE circular NSE/FAOP/77189 (30 October 2026) lowers every index freeze limit
+from Monday 2 November 2026, returning to NSE's computation method, which the
+October circular had set aside:
+
+| Index | Until 1 Nov | From 2 Nov | Largest single order |
+| --- | --- | --- | --- |
+| NIFTY | 3,510 | 1,800 | 27 lots of 65 (1,755) |
+| BANKNIFTY | 1,440 | 900 | 30 lots of 30 |
+| FINNIFTY | 3,240 | 1,800 | 30 lots of 60 |
+| MIDCPNIFTY | 5,760 | 2,800 | 23 lots of 120 (2,760) |
+| NIFTYNXT50 | 1,125 | 600 | 24 lots of 25 |
+| NIFTYFPI | 53,900 | 8,500 | 7 lots of 1,100 (7,700) |
+
+- **Upgrade before Monday's open.** The exchange rejects any order above the
+  new limit. On the October limits, the `/trading` terminal would let a NIFTY
+  order of 28 to 54 lots go in one piece, the scalping terminal would close a
+  position in pieces of up to 54 lots, and tools reading `freeze_qty` from the
+  symbol and search APIs would split at 3,510. Each of those orders would be
+  rejected.
+- **New installs** get the limits from `data/qtyfreeze.csv`. **Existing
+  installs** get them from `upgrade/migrate_qty_freeze_nov_2026.py`, which
+  `migrate_all.py` runs; restart OpenAlgo afterwards. A limit you set yourself
+  on the Freeze Quantities page is left as it is and listed in the output.
+- **The stored limit is NSE's figure, 1,800 for NIFTY,** not a whole number of
+  lots. OpenAlgo rounds down to whole lots when it splits an order, which gives
+  the last column above (at the lot sizes in force in October).
+- `migrate_qty_freeze_oct_2026.py` is replaced, not kept beside the new script.
+  It treated 1,800 as an old NIFTY limit and raised it, so running both would
+  undo this change each time the migrations ran. The new script handles every
+  value the old one did.
+
+### Diwali Muhurat trading on Sunday 8 November 2026
+
+NSE, BSE and MCX published the Muhurat session on 19 October 2026. The 2026
+calendar OpenAlgo shipped carried a guess of 18:00 to 19:15, with MCX running
+to 00:15, so a `/python` strategy scheduled for that Sunday would have been
+held back during the real session and let run after the market had shut. The
+calendar now carries the published session:
+
+| Segment | Pre-open | Trading |
+| --- | --- | --- |
+| Equity (NSE, BSE) | 14:05 to 14:15 | 14:20 to 15:30 |
+| Equity derivatives (NFO, BFO) | 14:05 to 14:15 | 14:20 to 15:40 |
+| Commodities (MCX, and NSE commodities on Zerodha) | 14:05 to 14:20 | 14:20 to 15:30 |
+| Currency (CDS, BCD) | none | 14:20 to 15:30 |
+
+- **New installs** are seeded with these timings. **Existing installs** are
+  updated when OpenAlgo next starts, and by
+  `upgrade/migrate_muhurat_2026.py`, which `migrate_all.py` runs. An exchange
+  whose session you set or removed on the Holidays page is left as it is.
+- NSE commodities (NCO) is now open for the session; it was missing before.
+- The `/python` guide shows these timings instead of the guess.
+
+### An upgrade no longer erases the holidays you set
+
+- Every upgrade ran `upgrade/migrate_market_holidays.py`, which deleted the
+  whole holiday calendar and reloaded the one OpenAlgo ships. A holiday you
+  added or edited on the Holidays page was undone each time, and one you
+  deleted came back. OpenAlgo did the same at startup whenever no special
+  session was stored, which happens only once you have deleted them all.
+- Both now change only rows OpenAlgo shipped and nobody edited. An install
+  still on the first 2026 calendar (December 2025, with Holi on 10 March and
+  Muhurat on 20 October) is moved to the corrected one; any other calendar is
+  left exactly as it is.
+- A holiday an earlier upgrade erased is not restored. Add it again on the
+  Holidays page, and it now stays.
+
+### Agent: LiteLLM 1.106.6 and newer models
+
+The Agent's provider and model lists at `/agent/config` come from LiteLLM, which
+moves from 1.104.0 to 1.106.6. Nothing to configure: models you have already
+added keep working as they are. A server that reaches GitHub was already
+fetching LiteLLM's online model list, so most of what follows is new only to a
+server without internet access.
+
+- **Newer models in the picker**, among them Claude Sonnet 5.5 and Claude
+  Haiku 5.5, GPT-6.1 Sol, Gemini 4 Argon and Mistral Large 4, with their
+  context window and price as before.
+- **ChatGPT Plus or Pro**: `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and
+  `gpt-rosalind-discovery` join the plan models, and `gpt-6-astra` now comes
+  from LiteLLM itself, so OpenAlgo adds no plan model of its own any more.
+  `gpt-rosalind-discovery` shows "tool support unknown" because LiteLLM records
+  nothing about what it can do, and the agent works only through tools, so run
+  the model test on the config page before relying on it. Which of these your
+  plan may use is decided by OpenAI, not by this list.
+- **OpenRouter lists no models.** LiteLLM removed its OpenRouter model list,
+  both from the package and online, so the OpenRouter picker is empty: add an
+  OpenRouter model by name with Model not listed. OpenRouter models you have
+  already added keep working, but their usage shows tokens without a cost,
+  because LiteLLM no longer carries OpenRouter prices.
+- **Example model names** in the Add Model dialog are current: `gpt-6.1-sol`
+  for OpenAI and `claude-sonnet-5-5` for Anthropic.
+
+### Fixed
+
+- **WhatsApp alerts stay connected** (#2332). The WhatsApp bot could miss an
+  alert and then disconnect within an hour of starting, most often on Docker.
+  Its periodic session save removed files the live connection was still using.
+  The save now runs in a separate process, so the connection keeps its files.
+
+### Dependencies
+
+- `litellm` 1.104.0 to 1.106.6, and with it `boto3` and `botocore` 1.43.87 to
+  1.43.122, the oldest LiteLLM 1.106.6 accepts being 1.43.117. LiteLLM still
+  caps `filelock` below 4.0, so the `filelock>=4.2.1` override stays.
+- LiteLLM 1.106.6 was published on 28 October 2026. A server whose uv is set
+  to install only packages older than a number of days (`exclude-newer`)
+  refuses it until it is old enough; `uv run --frozen app.py` installs from
+  the lockfile and is not affected.
+
+### Contributors
+
+- **@marketcalls** - the November freeze limits, the Muhurat session, the
+  holiday calendar fix, LiteLLM 1.106.6 and the release.
+- **@Kalaiviswa** - WhatsApp alerts that stay connected (#2332).
+
+## [2.0.3.1] - 2026-10-30
+
+### Security Fixes and Fyers Live Data Release
+
+6 commits since 2.0.3.0, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.1-released.md](releases/version-2.0.3.1-released.md).
+This release adds no database migration.
+
+### Highlights
+
+- An expired login can no longer read your OpenAlgo API key.
+- Email checks the mail server's certificate before sending your mail password
+  or a password reset link.
+- Fyers live data arrives complete and on time (#2323).
+- `tornado` 6.6 for three advisories.
+
+### Security
+
+- A login cookie from before the daily 3 AM IST session expiry could still
+  read your OpenAlgo API key. Every page turned such a cookie away, but the
+  connections the trading terminal, the charts and the WebSocket test pages use
+  to fetch the API key and the live data settings accepted it, and kept it
+  alive each time it was used. They now require a current login, like every
+  other page. Someone who had copied an old cookie, from a shared browser
+  profile or a saved network log, could have used it to read the key.
+- Between midnight and 3 AM IST, a login of any age counted as current. A login
+  now counts only if it was made after the most recent 3 AM expiry.
+- Nothing changes while you are logged in. After 3 AM, a tab still open from
+  the day before has to log in again before it can fetch the API key or the
+  live data settings, as every other page already required.
+- **If you think an old login cookie of yours may have been copied,** generate
+  a new key with Regenerate on the API Key page. The old key stops working.
+- Email now checks the mail server's security certificate before logging in.
+  Before, OpenAlgo accepted any certificate, so someone able to intercept the
+  connection between your OpenAlgo server and your mail server could read your
+  mail password and the password reset links OpenAlgo sends. This covers
+  password reset emails, the test email, the SMTP connection check and the
+  SMTP debug tool.
+- **Check after upgrading:** if your SMTP host is entered as an IP address, or
+  your own mail server uses a self-signed certificate, email now stops with
+  "The mail server's security certificate could not be verified". Enter the
+  host by its name, for example `smtp.gmail.com`, and give a private mail
+  server a certificate from a recognised authority. Gmail, Outlook, Zoho and
+  the other public providers need no change.
+- The SMTP debug tool no longer prints the mail server conversation to the
+  server log. That output included the login line, which carries the mail
+  password.
+
+### Fixed
+
+- When Google Workspace's SMTP relay refused an email, OpenAlgo told you to
+  allow one fixed IP address in the Google Admin console. That address belonged
+  to a single machine, so the advice could not work on yours. The message now
+  asks you to allow the public IP address of your own OpenAlgo server, or to use
+  smtp.gmail.com on port 587 with an app password.
+- Fyers: live prices showed LTP on time but volume, bid and ask one update
+  behind, and an update that moved only bid, ask or volume was dropped. Each
+  update is now published whole. Change and change percent are filled from the
+  previous close instead of reading 0, a depth update no longer reports the
+  bid and ask midpoint as the LTP, and an index shows no made-up depth levels
+  (#2323).
+
+### Dependencies
+
+- `tornado` 6.5.10 to 6.6 (GHSA-pcg2-g6cj-q92c and GHSA-r4j5-9xpp-3985,
+  medium; GHSA-pw9p-v7r6-gx4p, low): slow parsing of folded HTTP headers,
+  memory and event-loop use from bodies sent in many small chunks, and an
+  open redirect. OpenAlgo does not import tornado or serve HTTP with it; it is
+  installed for the Jupyter kernel packages. A kernel was started and ran code
+  on 6.6. No behaviour change is expected.
+- The pinned `openalgo` Python SDK remains 2.0.5.
+
+### Contributors
+
+- **@marketcalls** - the expired-login fix, mail server certificate
+  verification, the SMTP debug log fix, the Gmail relay message, the tornado
+  security update and the release.
+- **@Kalaiviswa** - complete and timely Fyers live data (#2323).
+- **@carfeii** - reported that an expired login could still read the API key.
+- **@ParzivalHack** - reported the mail server certificate issue.
+
+## [2.0.3.0] - 2026-10-29
+
+### One Chart Engine, Sector Rotation and Strike Profile Release
+
+36 commits since 2.0.2.9, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.0-released.md](releases/version-2.0.3.0-released.md).
+This release adds no database migration.
+
+### Highlights
+
+- Every chart in OpenAlgo now draws with openalgo-charts, the engine behind
+  `/trading`, upgraded to 2.6.9. lightweight-charts is removed.
+- Sector Rotation (`/sector-rotation`): a relative rotation map of sectors,
+  stocks and indices against a benchmark, from Historify or the broker.
+- Strike Profile (`/strikeprofile`): GEX and DEX by strike and expiry, with
+  the gamma flip and the call and put walls.
+- Sahi joins the supported brokers (#2320).
+- An order the broker accepted is no longer reported as failed when its reply
+  is lost (#2305).
+- Sandbox orders get unique ids, and a failed sandbox order never keeps its
+  margin blocked.
+
+### Added
+
+- **Sector Rotation** at `/sector-rotation` places every NSE sector index, or
+  any stocks and indices you add, on four quadrants (Leading, Weakening,
+  Lagging, Improving) against a benchmark, with a trail of daily or weekly
+  bars. Prices come from Historify or your broker. A symbol needs 44 daily
+  sessions or 20 weeks of shared history to appear. Consumer Durables,
+  Healthcare, India Defence and Oil & Gas are off the default map, because
+  many brokers do not publish them, and can be added from search. Settings
+  are saved across visits, and the map can be saved as an image.
+- **Strike Profile** at `/strikeprofile` shows gamma exposure (GEX) and delta
+  exposure (DEX) in rupees crore for every strike of up to twenty expiries at
+  once, as a strike by expiry heatmap. Each expiry's peaks are marked, and the
+  page shows the gamma flip level and the call and put walls. Each expiry
+  costs one option chain request.
+- **Sahi broker.** Sign in with the API key and secret from Sahi; the key must
+  be approved once per trading day in Sahi's API Dashboard. Orders, smart
+  orders, books, funds, margin, quotes, depth, history and live streaming on
+  NSE, BSE, NFO and BFO. MCX is not loaded, because Sahi does not yet allow
+  trading it.
+
+### Changed
+
+- `/trading`, Historify and every other chart now use openalgo-charts 2.6.9
+  (from 2.6.7). Volume studies such as On-Balance Volume and VWAP now work on
+  Renko, range bar, line break and point and figure charts, where before they
+  drew a flat line or nothing, and a custom study reading volume sees it
+  there too. On a Kagi chart, set a volume study's **Compute on** to
+  **Underlying bars**, as before. A study on a higher timeframe (a 15 minute
+  EMA on a 5 minute chart) no longer shows "Insufficient confirmed history"
+  when the loaded history starts just after a weekend or a holiday. OHLC and
+  high-low bars get thicker as you zoom in instead of staying one pixel wide;
+  at the default zoom they look as before. 2.6.9 itself only carries security
+  updates to the library's own build tools and website, so nothing else in
+  the chart changes. Existing custom indicators keep working unchanged.
+- The Scalping Terminal charts are now drawn by openalgo-charts, the engine
+  behind the /trading chart, in place of the separate library they used
+  before. They look and read like /trading: the same candle and volume
+  colours in light, dark and analyzer mode, the same legend (symbol, interval,
+  exchange, then open, high, low, close, volume and the candle's change), and
+  times shown in IST.
+- The charts now count down to the close of the forming candle, directly
+  under the last price, as /trading does. The countdown reads your computer's
+  clock, so a clock a few seconds out shows a countdown out by the same
+  amount, and it keeps counting after the market closes.
+- Hovering an earlier candle now holds it in the legend while live prices keep
+  arriving, instead of jumping back to the latest candle on every tick.
+- Index charts (NIFTY, SENSEX and other index symbols) no longer draw an empty
+  volume strip or a "Volume 0" readout, since indices trade no volume.
+- The arrow keys and F6/F7 still place, close and cancel orders as before when
+  a chart has focus. The chart's own keyboard shortcuts are switched off on
+  the scalper so it never takes a key meant as an order.
+- Charts are still off until you turn them on, and the charting engine is now
+  only downloaded at that point, so opening the Scalping Terminal with charts
+  off loads nothing extra.
+- The Option Greeks charts (`/ivchart`) are now drawn by the same charting
+  engine as the trading terminal. They follow the light, dark and analyzer
+  themes, with the call in the theme's green and the put in its red. Hovering
+  a chart now shows the date and time of the reading under the pointer, and on
+  a multi-day range the time axis marks each new day with its date. Times are
+  in IST, as before. The large faint OpenAlgo text behind each chart is
+  replaced by a small mark in its corner.
+- The PnL Tracker chart (`/pnl-tracker`) is now drawn by the same charting
+  engine as the trading terminal. It follows the light, dark and analyzer
+  themes: the MTM curve is green above break-even and red below it in the
+  theme's own profit and loss colours, and the drawdown stays amber in its pane
+  underneath. The current MTM tag on the price axis is green or red by whether
+  the day is up or down, and the current drawdown has an amber tag of its own.
+  Hovering the chart now shows the date and time under the pointer, in IST as
+  before. Switching theme no longer reloads the day's P&L. The Screenshot
+  button saves the same picture as before, the cards and the chart together;
+  the large faint OpenAlgo text behind the chart is replaced by a small mark in
+  its corner.
+- The Straddle Chart (`/straddle`) is now drawn by the same charting engine as
+  the trading terminal. The time axis reads in IST and marks each new day, and
+  hovering shows the date and time of the bar under the pointer as well as the
+  straddle tooltip. Switching between light, dark and analyzer mode, or showing
+  and hiding Straddle, Spot and Synthetic Fut, now keeps your zoom instead of
+  redrawing the chart from scratch. The large OpenAlgo watermark in the middle
+  of the chart is replaced by a small mark in its corner, and the series names
+  are shown in the legend under the chart rather than beside the price tags.
+  The data, the tooltip and the toggles are unchanged.
+- The Straddle PnL Simulator (`/straddlepnl`) chart is now drawn by the same
+  charting engine as the trading terminal. Profit and loss are drawn in the
+  same green and red as the trading terminal's charts, in light, dark and
+  analyzer mode. The time axis reads in IST and marks each new day,
+  and hovering shows the date and time of the bar under the pointer as well as
+  the P&L tooltip. Switching theme, or showing and hiding P&L, Spot and
+  Synthetic Fut, now keeps your zoom instead of redrawing the chart from
+  scratch. The large OpenAlgo watermark in the middle of the chart is replaced
+  by a small mark in its corner, and the series names are shown in the legend
+  under the chart rather than beside the price tags. The simulation, the
+  tooltip, the summary and the trade log are unchanged.
+- The File Descriptors and Memory Usage charts on the Health Monitor page
+  (`/health`) are now drawn by the same charting engine as the trading
+  terminal. Times on the axis and under the crosshair still read in IST. The
+  charts now follow a switch between light, dark and analyzer mode straight
+  away; before, their axis text and crosshair kept the colours of the theme the
+  page was opened in until it was reloaded. The crosshair's time label also shows the weekday, for
+  example `Tue 27 Oct '26 13:47:10`, and each chart's current value is still
+  tagged on its axis in the line's own colour.
+- The developer chart test page (`/chart/test`) now draws its candles with the
+  trading terminal's charting engine and colours, and follows the light, dark
+  and analyzer themes.
+
 ### Fixed
 
 - Sandbox orders could occasionally fail to place with an error, and when
@@ -20,6 +701,53 @@ fix, live in [docs/releases](releases/).
   saved. The margin is now taken together with the order: either both are
   recorded or neither is, so a failed order never reduces your available
   funds.
+- An order the broker had accepted could be reported as failed when the
+  connection dropped before the reply arrived, most often on Windows, so a
+  caller that retried placed it twice (#2067, #2293). Place order, smart
+  order, basket order and split order now answer "The connection to the
+  broker dropped after the order was sent, so it may have been placed. Check
+  the order book before placing it again." with HTTP status 502. An order is
+  never sent twice automatically; only reads are retried once (#2305).
+- Angel: modifying an SL or SL-M order now moves its trigger at the broker;
+  before, the modify answered success and the trigger stayed unchanged
+  (#2279). Daily candles are dated on their own session instead of the
+  evening before, and quotes carry bid and ask quantities, so the option
+  chain shows what is on offer (#2290).
+- RMoney: smart exits on F&O positions find the open position again; before,
+  every one was refused with "No OpenPosition Found" (#2292).
+- Groww: the live feed no longer falls into an endless reconnect loop, and
+  reconnects no longer leak threads or memory (#2312).
+- Dhan: index charts on 30 minutes no longer fail after the close, because
+  the extra bar Dhan appends to index history after the close is dropped
+  (#2308).
+- Flattrade: an empty order, trade or position book no longer prints a
+  warning every five seconds, and an expired session is now logged as one
+  (#2249).
+- Seven XTS brokers and Samco no longer write any part of a session token to
+  the log, and a test refuses any new log line that would (#2313, #1853).
+
+### Symbol master changes
+
+Update any strategy, alert or watchlist that uses an old name below.
+
+- Fyers: NSE debt, warrant and InvIT series now load (#2280). The 44
+  sovereign gold bonds Fyers already loaded are renamed to match Zerodha:
+  `SGBAPR28I` becomes `SGBAPR28I-GB` (#2290).
+- Dhan: every NSE and BSE index now uses the standard OpenAlgo name, so
+  "Nifty100 Alpha 30" becomes `NIFTY100ALPHA30`; headline indices are
+  unchanged. Equity and index rows carry no expiry (#2306).
+- Dhan and Angel: index rows are typed `EQ`, as Zerodha types them; the
+  `NSE_INDEX` or `BSE_INDEX` exchange is what marks an index. Angel drops 101
+  non-tradable CDS bond and NCDEX index rows (#2290, #2306).
+
+### Removed
+
+- The lightweight-charts library is no longer part of OpenAlgo. Every chart
+  in the app (the trading terminal, the Scalping Terminal, the straddle, IV,
+  P&L and health monitor charts) now draws with OpenAlgo Charts, so all of
+  them follow the same light, dark and analyzer looks and improve together
+  when the charting engine is upgraded. Nothing to do on your side: the
+  frontend build that ships with an update already contains the change.
 
 ### Dependencies
 
@@ -71,9 +799,36 @@ are explained below.
   4.1.12, for two advisories in its mock handling. The 8.0 line has no patched
   release. Both run only when a developer builds or tests the frontend, never
   on an installed server.
+- `GitPython` 3.1.62 to 3.2.1 in the optional `analysis` group
+  (GHSA-83vg-56qc-22m7, high): creating a submodule could plant a git hook,
+  which then runs code on the next checkout. OpenAlgo never uses GitPython
+  itself, and it is not part of a server install.
+- `dnspython` 2.8.0 to 2.9.0 and `msgpack` 1.2.2 to 1.2.3 (high). Nothing in
+  OpenAlgo imports either directly; eventlet's DNS resolving of broker hosts
+  was checked on the new version (#2315).
+- `setuptools` 83.0.0 to 84.1.0, and `filelock` to 4.2.4 through a uv
+  override, because LiteLLM still caps it below 4. `zod` 4.6.7 in the
+  frontend, with an override for the copy a frontend dependency nested
+  (#2294).
+- The pinned `openalgo` Python SDK remains 2.0.5.
 - **Not fixed:** `braces`, used only by the frontend test tools, still has no
   patched release for GHSA-vfj7-8cjw-p6xm. It never reaches a browser or the
   server.
+
+### Contributors
+
+- **@marketcalls** - every chart moved to openalgo-charts (#2297 to #2304) and
+  the 2.6.9 upgrade, Sector Rotation, Strike Profile, sandbox order id and
+  margin fixes, credential logging follow-up, Flattrade log noise (#2249),
+  security dependency updates, CI and the release.
+- **@Kalaiviswa** - Sahi broker integration (#2320), lost-reply order safety
+  (#2305), Groww feed reconnects (#2312), Dhan index history and master
+  (#2306, #2308), Fyers and Angel master, history and quote fixes (#2290),
+  and Dependabot fixes (#2294, #2315).
+- **@dmchandru (Chandru Dhanasekar)** - Angel SL order modify trigger (#2279).
+- **@SatriaBagusNurhadianto (Chavaaa)** - XTS token values kept out of logs
+  (#2313).
+- **@dvygo (Deshik Narasimha)** - RMoney smart exit position lookup (#2292).
 
 ## [2.0.2.9] - 2026-10-17
 

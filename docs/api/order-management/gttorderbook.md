@@ -141,12 +141,13 @@ curl -X POST http://127.0.0.1:5000/api/v1/gttorderbook \
 ## Notes
 
 - **Active-only by default.** Without `status`, or with `"status": "active"`, triggered, cancelled, expired, rejected, disabled and deleted GTTs never appear in `data`, the shape every existing consumer relies on.
-- **`"status": "all"` returns the history too.** Rows are ordered active first, then the rest, each group newest first. The sandbox and Zerodha carry the full history; the other brokers' mappers still return active triggers only until their status vocabularies are mapped.
+- **`"status": "all"` returns the history too.** Rows are ordered active first, then the rest, each group newest first. The sandbox, Zerodha and Rupeezy mappers support history; the other current broker mappers still return active triggers only. Broker-retained history can be shorter than the full lifetime of a trigger.
 - **Analyzer (sandbox) mode** reads the sandbox book and answers with `"mode": "analyze"`. Sandbox entries also carry `strategy` (the identifier sent at placement) and `margin_blocked` (the reservation held while the trigger is active, `0` once it fires or is cancelled).
-- A fired GTT's child order is an ordinary order: it appears in the regular [OrderBook](../order-information/orderbook.md) in both modes, as it does at the broker. The GTT row with `"status": "triggered"` (and `triggered_order_id` in analyzer mode) is how the two are tied together.
+- A fired GTT's child order is an ordinary order: it appears in the regular [OrderBook](../account-services/orderbook.md) in both modes, as it does at the broker. The GTT row with `"status": "triggered"` (and `triggered_order_id` in analyzer mode) is how the two are tied together.
 - **Field semantics by trigger type**:
   - SINGLE → `trigger_prices` has one element; `legs` has one entry.
   - OCO → `trigger_prices` has two elements (sl first, tg second); `legs` has two entries in matching order.
+- Angel OCO placement returns a composite ID, but its book shows two independent SINGLE rules. The book does not reconstruct a native OCO pair or establish mutual cancellation
 - Some fields (`last_price`, `created_at`, `updated_at`, `expires_at`) depend on what the broker exposes — they may be `0` or empty for brokers that don't return them.
 
 ## Error Scenarios

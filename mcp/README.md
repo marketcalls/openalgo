@@ -281,6 +281,8 @@ The MCP server provides the following categories of tools:
 - `get_openalgo_version` - Check OpenAlgo version
 - `validate_order_constants` - Display valid order parameters
 - `send_telegram_alert` - Send Telegram notifications
+- `send_slack_alert` - Post to the Slack channel saved on the /slack page
+- `send_discord_alert` - Post to the Discord channel saved on the /discord page
 - `get_holidays` - Get trading holidays for a year (year is optional — defaults to current year)
 - `get_timings` - Get exchange trading timings for a date (date is optional — defaults to today)
 - `check_holiday` - Quick pre-trade check: is a given date a holiday on a specific exchange?

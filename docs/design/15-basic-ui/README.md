@@ -19,7 +19,7 @@ Account pages combine TanStack Query with Socket.IO-triggered refreshes. The act
 
 ## Analytics And Trading Tools
 
-Current routed tools include:
+The `/tools` page and home page derive the current 20-tool list from `frontend/src/lib/tools.ts`. Routed analytics surfaces include:
 
 | Route | Purpose | Backend source |
 |---|---|---|
@@ -28,6 +28,11 @@ Current routed tools include:
 | `/ivchart` | Historical IV/Greeks charts | `iv_chart_service.py` |
 | `/ivsmile` | Call/put IV smile and skew | `iv_smile_service.py` |
 | `/volsurface` | 3D volatility surface | `vol_surface_service.py` |
+| `/strikeprofile` | GEX/DEX grid across strikes and expiries | `strike_profile_service.py` |
+| `/sector-rotation` | Relative rotation map against a benchmark | `sector_rotation_service.py` |
+| `/portfolio-backtester` | Weighted portfolio backtest and tearsheet | `portfolio/`, REST portfolio API |
+| `/sip-backtester` | Periodic-investment simulation | REST SIP API |
+| `/portfolio-analyzer` | Holdings concentration, co-movement and resilience | REST portfolio API |
 | `/gex` | Gamma exposure by strike | `gex_service.py` |
 | `/gammadensity` | Gamma-times-OI and convexity zones | `gamma_density_service.py` |
 | `/oitracker` | OI bars and PCR | `oi_tracker_service.py` |
@@ -39,7 +44,7 @@ Current routed tools include:
 | `/arbitrage` | Futures calendar-spread scanner | `arbitrage_service.py` |
 | `/scalping` | Keyboard execution and server-side stop risk | `scalping.py`, risk monitor |
 
-The tool list is not fixed at twelve; navigation and routes are the current source of truth.
+The registry controls tool discovery; `frontend/src/App.tsx` and backend route decorators control supported routes. The Strategy Module at `/strategy` and the tools Strategy Builder at `/strategybuilder` are separate surfaces.
 
 ## Live Data
 

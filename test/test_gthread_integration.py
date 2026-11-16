@@ -48,6 +48,17 @@ def telegram(monkeypatch):
     monkeypatch.setattr(tg, "get_bot_config", lambda: {"bot_token": "1:a", "is_active": False})
     monkeypatch.setattr(tg, "update_bot_config", lambda values: True)
     monkeypatch.setattr(tg, "log_command", lambda *args, **kwargs: None)
+    # The mode buttons act on this server, so the presser has to be a chat
+    # linked with this instance's API key. The one these tests press as (101)
+    # is; test_telegram_link_ownership.py covers the ones that are not.
+    monkeypatch.setattr(
+        tg,
+        "get_user_credentials",
+        lambda telegram_id: {"api_key": "owner-key"} if telegram_id == 101 else None,
+    )
+    monkeypatch.setattr(
+        tg, "get_username_by_apikey", lambda key: "trader" if key == "owner-key" else None
+    )
     emits: list[tuple] = []
     monkeypatch.setattr(
         extensions, "emit_from_any_thread", lambda *args, **kwargs: emits.append(args)

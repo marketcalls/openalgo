@@ -101,7 +101,7 @@ installed package disagree, test against the package (section 18).
 Tech stack (README): Flask 3, SQLAlchemy 2, Flask-SocketIO, ZeroMQ,
 Argon2-CFFI, cryptography, Agno and LiteLLM (agent); React 19, TypeScript,
 Vite, Tailwind 4, shadcn/ui, TanStack Query, Zustand, CodeMirror, xyflow,
-Lightweight Charts and Plotly. Diagram: `docs/architecture-diagram.png`.
+openalgo-charts and Plotly. Diagram: `docs/architecture-diagram.png`.
 
 ## 4. Product surfaces
 
@@ -111,7 +111,7 @@ Lightweight Charts and Plotly. Diagram: `docs/architecture-diagram.png`.
 | Python Strategy Host | `/python` | In-browser editor; IST start and stop schedules; each script an isolated subprocess with live logs |
 | Flow | `/flow` | No-code node graph (xyflow): market data -> indicators -> conditions -> orders; webhook triggers; JSON import and export (section 14). Node count: 61 on docs.openalgo.in, 53 on openalgo.in |
 | Strategy Module and RMS | `/strategy` | Multi-leg options strategies with risk rules from `services/risk/`; kinds `batch` (all legs together) and `signal` (one leg per alert); created only in the browser wizard; driven over `/api/v1/strategy/*` or a webhook token |
-| Options and Portfolio tools | `/tools` | 18 tools (registry `frontend/src/lib/tools.ts`): Option Chain, Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Straddle, Arbitrage, Strategy Builder, Portfolio and SIP Backtesters, Portfolio Analyzer and more. README says 12 |
+| Options and Portfolio tools | `/tools` | 20 tools (registry `frontend/src/lib/tools.ts`): Option Chain, Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Straddle, Arbitrage, Strategy Builder, Portfolio and SIP Backtesters, Portfolio Analyzer, Sector Rotation and more |
 | Charting Terminal | `/trading` | Built on `openalgo-charts`; line-based chart trading, order dock; up to 7 saved layouts, grids up to 4x2; Scripts, Backtest and Strategies panels for OpenScript; custom JS indicators load at runtime |
 | Scalping Terminal | `/scalping` | Keyboard-driven index options scalping; NRML/MIS only, never CNC; server-side stop, target, trail |
 | AI Agent | `/agent` | Chat over market data, charts, payoffs and `ta` indicators; every order waits for explicit approval; LiteLLM providers, ChatGPT subscription OAuth, or Ollama |
@@ -119,7 +119,7 @@ Lightweight Charts and Plotly. Diagram: `docs/architecture-diagram.png`.
 | Action Center | `/action-center` | Semi-Auto mode queue: review, approve, modify, reject; bulk approve; audit trail in IST |
 | Historify | `/historify` | DuckDB market-data warehouse; SDK `history(..., source='db')` reads it; CSV and Parquet export |
 | Monitors | `/logs/latency`, `/logs/traffic`, `/logs/live`, `/pnl-tracker`, `/health` | Latency, traffic and live logs, P&L tracker, health (thresholds in `.env`) |
-| Settings and tools | `/apikey`, `/broker`, `/logs/security`, `/telegram`, `/whatsapp`, `/playground`, `/platforms`, `/master-contract`, `/search` | API key, broker connect, security log and IP ban (README calls it `/security`), alerts, API playground, platform guides, master contract status, symbol search |
+| Settings and tools | `/apikey`, `/broker`, `/logs/security`, `/alerts`, `/telegram`, `/whatsapp`, `/slack`, `/discord`, `/playground`, `/platforms`, `/master-contract`, `/search` | API key, broker connect, security log and IP ban (README calls it `/security`), alerts, API playground, platform guides, master contract status, symbol search |
 
 A new page needs three registrations (CLAUDE.md): route in `App.tsx`,
 `blueprints/react_app.py` view, `frontend/src/config/navigation.ts` entry.
@@ -162,7 +162,7 @@ All under `/api/v1`. JSON body with `apikey` (or `X-API-KEY` header). Responses
 | Chart prefs | GET/POST `chart` | |
 | Utility | `ping` | returns `pong` and broker; 403 without broker session |
 | Strategy module | `strategy/list, status, start, stop, close_all, close_leg, runs, orders, events` | `start` needs `mode` sandbox or live (never defaulted; live 409 unless enabled in UI); `stop_pending` does not mean flat |
-| Messaging | `telegram/*` (config, start, stop, webhook, users, broadcast, notify, stats, preferences), `whatsapp/notify` | |
+| Messaging | `telegram/*` (config, start, stop, webhook, users, broadcast, notify, stats, preferences), `whatsapp/notify`, `slack/notify`, `discord/notify` | Slack and Discord post to the webhook saved on `/slack` or `/discord`, only while the channel is on at `/alerts`; not in the SDK yet |
 
 ## 7. Python SDK quick reference
 
@@ -418,8 +418,8 @@ Use the `openscript` skill to write, validate and install scripts.
   orderBook, tradeBook, positionBook, holdings, funds, margin, symbol,
   optionSymbol, expiry, intervals, optionChain, syntheticFuture, holidays,
   timings, calendar`; Streaming `subscribeLtp, subscribeQuote, subscribeDepth,
-  unsubscribe`; Utility `log, telegramAlert, whatsappAlert, variable,
-  mathExpression, httpRequest, delay, waitUntil, group`.
+  unsubscribe`; Utility `log, telegramAlert, whatsappAlert, slackAlert,
+  discordAlert, variable, mathExpression, httpRequest, delay, waitUntil, group`.
 - Variables `{{name.field}}`, webhook values `{{webhook.*}}`; condition nodes
   branch by `sourceHandle`; AND/OR gates need `targetHandle: "input-N"`.
 - Pitfalls: indicator `params` is a JSON string; history nodes capped at 200
@@ -444,6 +444,12 @@ Use the `openscript` skill to write, validate and install scripts.
   `/orders`, `/pnl`, `/status`, `/help`; SDK `client.telegram(username=...,
   message=...)`.
 - **WhatsApp**: pair the device at `/whatsapp`; SDK `client.whatsapp(...)`.
+- **Slack and Discord**: save an incoming webhook at `/slack` or `/discord`
+  and switch the channel on at `/alerts`, which routes order alerts to every
+  channel. Send your own text with `POST /api/v1/slack/notify` or
+  `/api/v1/discord/notify`, the Flow `slackAlert` and `discordAlert` nodes,
+  or the MCP tools `send_slack_alert` and `send_discord_alert`. No SDK
+  method yet. Guide: `docs/alerts.md`.
 - Other clients: Excel, Google Sheets, N8N, MetaTrader, Node, Go, Java, .NET,
   Rust SDKs; OpenAlgo CLI (Go).
 
@@ -496,7 +502,7 @@ Use the `openscript` skill to write, validate and install scripts.
 | `API_RATE_LIMIT` default | `docs/api/README.md`: 50 per second | `.sample.env`: 100 per second | Read the user's `.env` |
 | NCO symbols | DDMMMYY rule | examples `ALUMINI26MAYFUT` have no day | Confirm with `search`/`symbol` |
 | Crypto perpetual suffix | some comments `BTCUSD.P` | served form `BTCUSDFUT` | Use `...FUT` |
-| `/tools` count | README 12 | CLAUDE.md, docs site 18 | 18 (registry) |
+| `/tools` count | docs site may lag | README, CLAUDE.md 20 | 20 (registry) |
 | Flow node count | docs.openalgo.in 61 | openalgo.in 53 | Use the type list in section 14 |
 | Broker count | README 35 + Delta | docs 34 + Dhan sandbox + Delta; `VALID_BROKERS` 37 codes | Use [brokers.md](brokers.md) |
 | Login type labels | `BrokerSelect.tsx` marks Groww, AliceBlue, Zebu, Shoonya as `totp` | backend flow differs | Follow [brokers.md](brokers.md) |

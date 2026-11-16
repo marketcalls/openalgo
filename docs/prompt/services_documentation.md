@@ -12,8 +12,8 @@ classes, and singleton accessors directly instead of making HTTP calls back into
 the same OpenAlgo process. The document does not replace request schemas in
 [`docs/api`](../api/README.md) when a service also has a public endpoint.
 
-The current tree contains 80 direct `services/*.py` modules and 103 Python
-modules recursively under `services/`. The direct count is the inventory used
+The tree audited on November 6, 2026 contains 89 direct `services/*.py` modules and 174 Python
+modules recursively under `services/` (including package initializers). The direct count is the inventory used
 by this page; subpackages such as `services/strategy_module/` have their own
 reference. Some services back REST endpoints, while others run internal
 workflows, schedulers, streaming, analytics, alerts, or risk management. Do not
@@ -135,7 +135,7 @@ Action Center's approved-order executor currently dispatches `placeorder`,
 `optionsmultiorder`, and `placegttorder`. Multi-order results are tracked from
 their child order IDs. GTT results are tracked by `trigger_id`; the existing
 broker capability gate returns `501` when the active broker has no GTT module.
-Only Dhan and Zerodha currently provide `broker/<broker>/api/gtt_api.py`.
+Angel, Dhan, Fyers, Rupeezy, Upstox and Zerodha currently provide `broker/<broker>/api/gtt_api.py`. Sandbox GTT routing precedes the live broker capability gate. GTT behavior is not identical across these modules: Angel represents OCO as independent rules; Upstox OCO opens an entry before its exits. See [broker-specific behavior](../api/order-management/placegttorder.md#broker-specific-behaviour).
 
 The pending database row is authoritative. `queue_order(...)` returns success
 after the row commits even if the best-effort Socket.IO notification fails; the
@@ -144,6 +144,14 @@ notification error is logged without creating a false 500 response.
 Order services publish typed EventBus events for asynchronous logging,
 Socket.IO updates, and configured alert delivery. A successful return does not
 mean every asynchronous subscriber has completed.
+
+### Busy refusals and uncertain order outcomes
+
+Under the opt-in gthread worker, broker pacing/guard helpers can refuse a request before sending rather than occupy a fixed worker thread through a long queue wait. Preserve `utils.broker_backpressure.BrokerBusyError`; read services use `services/broker_busy.py:broker_busy_result(...)` to return `(False, {"status":"error","message":...}, 429)`. Do not catch that refusal and turn it into an empty position book, zero funds or a successful order. Eventlet and development keep their original wait behavior.
+
+A lost response after an order write is different from a refusal before sending. The shared transport's `watch_for_unanswered_writes()` lets place/smart order services return `502` with a possible-placement message; basket/split services record it on the affected child. That error does not prove that the broker rejected the order. Reconcile with broker books before retrying, and never resend an entire multi-order request merely because one acknowledgement was ambiguous.
+
+Smart-order position reads must fail closed: a failed or malformed read is unknown, not flat. Shared position locks and caches are managed by `utils/smart_order_guard.py`; use those helpers instead of a new lock/cache around a caller. Account-wide `cancel_all_orders` and `close_position` do not filter by the `strategy` tracking label. Use the strategy module's scoped lifecycle functions when managing a module strategy.
 
 ### Internal integration rules
 
@@ -168,8 +176,8 @@ mean every asynchronous subscriber has completed.
 These are the main stateless or request-scoped functions used by OpenAlgo
 features. Import the function from the listed `services` module. The REST path
 column identifies an existing caller when one exists; it does not mean internal
-code should make an HTTP request. The active API currently contains 57
-method/path pairs.
+code should make an HTTP request. The active API currently contains 74
+method/path pairs; the [REST inventory](../api/README.md) includes the analysis and messaging routes.
 
 ### Orders and GTT
 
@@ -190,8 +198,8 @@ method/path pairs.
 | `POST /api/v1/cancelgttorder` | `cancel_gtt_order(...)` | `services/cancel_gtt_order_service.py` |
 | `POST /api/v1/gttorderbook` | `get_gtt_orderbook(...)` | `services/gtt_orderbook_service.py` |
 
-GTT support is broker-dependent. The GTT services return `501` when a broker
-does not provide the required `gtt_api` capability.
+Live GTT support is broker-dependent. The GTT services return `501` when a broker
+does not provide the required `gtt_api` capability; analyzer/sandbox mode uses the sandbox engine before this gate.
 
 ### Order and account information
 
@@ -234,6 +242,21 @@ history or `source="db"` for DuckDB/Historify history.
 | `POST /api/v1/optiongreeks` | `get_option_greeks(...)` | `services/option_greeks_service.py` |
 | `POST /api/v1/multioptiongreeks` | `get_multi_option_greeks(...)` | `services/option_greeks_service.py` |
 | `POST /api/v1/syntheticfuture` | `calculate_synthetic_future(...)` | `services/synthetic_future_service.py` |
+
+### Portfolio, SIP, and sector analytics
+
+| REST surface | Service entry point | File |
+|---|---|---|
+| `GET /api/v1/portfolio/benchmarks` | `list_benchmarks()` | `services/portfolio_service.py` |
+| `POST /api/v1/portfolio/backtest` | `run_portfolio_backtest(...)` | `services/portfolio_service.py` |
+| `POST /api/v1/portfolio/tearsheet` | `generate_tearsheet(...)` | `services/portfolio_service.py` |
+| `POST /api/v1/portfolio/holdings` | `analyse_live_holdings(...)` | `services/portfolio_service.py` |
+| `GET /api/v1/sip/frequencies` | `list_frequencies()` | `services/sip_service.py` |
+| `POST /api/v1/sip/backtest` | `run_sip_backtest(...)` | `services/sip_service.py` |
+| `GET /api/v1/sectorrotation/options` | `list_options()` | `services/sector_rotation_service.py` |
+| `POST /api/v1/sectorrotation` | `compute_sector_rotation(...)` | `services/sector_rotation_service.py` |
+
+These functions return the service tuple, but have analysis-specific parameters rather than the ordinary order/data facade signature. The REST layer verifies API keys for every analysis, including local Historify reads, and resolves broker credentials for `source="api"`; internal callers own that authentication boundary. Live-holdings analysis always requires broker access. `generate_tearsheet()` returns HTML on success; do not treat its payload as a JSON dictionary. See the [portfolio](../api/analytics-services/portfolio.md), [SIP](../api/analytics-services/sip.md), and [sector rotation](../api/analytics-services/sectorrotation.md) references for request fields and limits.
 
 ### Calendar, analyzer, and chart preferences
 
@@ -614,8 +637,8 @@ claim returns 409 rather than overwriting a completed job with `cancelled`.
 | `websocket_service.py` | Per-user broker WebSocket subscriptions and cached data access. |
 | `websocket_client.py` | Client for the OpenAlgo WebSocket proxy. |
 
-The WebSocket client and server interfaces do not use the standard REST service
-tuple. Subscription mode and symbol validation must match the WebSocket
+The WebSocket client and raw server interfaces do not use the standard REST service
+tuple. The per-user facade functions in `websocket_service.py` do return the tuple, including some disconnected-state responses with HTTP 200; inspect their success flag and payload. Subscription mode and symbol validation must match the WebSocket
 protocol documentation.
 
 Process-wide market-data access:
@@ -635,7 +658,7 @@ get_health_status()
 ```
 
 Use `subscribe_critical(...)` for risk-management callbacks. Store the returned
-subscriber ID and unsubscribe it during feature shutdown.
+subscriber ID and unsubscribe it during feature shutdown. Registering a local callback does not subscribe its symbol on the broker feed: pair it with the existing per-user subscription service. Health/freshness checks remain the caller's responsibility; validator stale/large-move warnings do not automatically block every callback.
 
 Per-user WebSocket service access:
 
@@ -661,6 +684,38 @@ client.unsubscribe(symbols, mode="Quote")
 client.disconnect()
 close_all_clients()
 ```
+
+### OpenScript services
+
+OpenScript is separate from chart JavaScript indicators and Python SDK `ta`. The [OpenScript guide](../openscript.md) documents its save, compile, deployment, backtest and run surfaces. These internal modules are not public `/api/v1` resources and do not share one return shape:
+
+| File | Responsibility |
+|---|---|
+| `openscript_store.py` | Saved scripts, normalization/hashes, staged writes and conflict detection |
+| `openscript_deployment.py` | Deployment identities and webhook tokens |
+| `openscript_run_config.py` | Validated per-deployment instrument/product/mode configuration |
+| `openscript_runner_service.py` | Process ownership, start/stop/adoption, status, logs, recovery and shutdown |
+| `openscript_running.py` | Durable running/stopped markers |
+| `openscript_commands.py` | Locked control commands and confirmed-close records |
+| `openscript_books.py` | Deployment-tagged order/trade/position views |
+| `openscript_instrument_service.py` | Cached instrument facts for compiler, chart and runner |
+
+Use the deployment ID rather than a script name for a deployed run: one compiled strategy can run on several instruments. A stop command is a request until the runner records close confirmation; process exit alone does not prove the broker position is flat. Follow the existing store/command locks across threads and processes; do not write their files directly.
+
+### Shared Flow and analysis helpers
+
+| File | Entry points / responsibility |
+|---|---|
+| `flow_node_contracts.py` | `default_product_for_exchange`, expiry parsing/selection, status and underlying normalization |
+| `flow_workflow_validator.py` | `validate_workflow`, `assert_valid_workflow`, legacy node-data migration and trigger configuration |
+| `flow_order_update_monitor_service.py` | `get_flow_order_update_monitor`, account-scoped order-event watches and `restore_order_update_watches` |
+| `indicator_service.py` | Cached history, bounded history windows, input resolution and `compute_indicator` for chart/Flow callers |
+| `strategy_builder_reference_service.py` | `resolve_strategy_builder_reference` and quote-exchange selection |
+| `strategy_pnl_service.py` | `pnl_from_book` / `get_strategy_pnl`; realized/cost basis from the persisted strategy book, open marks from positions |
+| `strike_profile_service.py` | `get_strike_profile` / `find_gamma_flip`; GEX and DEX by strike/expiry |
+| `broker_busy.py` | Read-service `429` normalization described above |
+
+Workflow validation belongs before activation/execution; use [Flow import contracts](flow-import-format.md) for the caller-visible payload and strict/legacy behavior. Order-update watches require a resolvable owner and are not unscoped global event listeners. Strategy P&L read failures must remain errors rather than a zero P&L signal. Strike Profile reports exposures in rupees crore and a gamma flip only when a sign change exists inside the loaded range; it is a model calculation from option-chain data.
 
 ### Options and chart analytics
 

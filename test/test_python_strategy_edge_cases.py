@@ -127,7 +127,18 @@ def test_nse_user_within_market_and_user_window(ps_module):
 
 
 def test_mcx_muhurat_session_inside_window(calendar_db, ps_module):
-    """8-Nov-2026 22:00 (during Muhurat 18:00-00:15 next day): MCX in window."""
+    """8-Nov-2026 22:00 (during Muhurat 18:00-00:15 next day): MCX in window.
+
+    The published 2026 session ends at 15:30, so the overnight window is set
+    here, as an admin could on the Holidays page."""
+    holiday = calendar_db.Holiday.query.filter_by(holiday_date=date(2026, 11, 8)).one()
+    row = calendar_db.HolidayExchange.query.filter_by(
+        holiday_id=holiday.id, exchange_code="MCX"
+    ).one()
+    row.start_time, row.end_time = 1794141000000, 1794163500000  # 18:00, 00:15 IST
+    calendar_db.db_session.commit()
+    calendar_db.clear_market_calendar_cache()
+
     win = calendar_db.get_effective_session_window(date(2026, 11, 8), "MCX")
     assert win is not None and win["is_special"] is True
 

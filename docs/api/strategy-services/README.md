@@ -175,7 +175,8 @@ important to an operator:
 
 - **`run_stop_requested`** (`info`) - the request is durable and new signal
   entries are gated. It is not proof that the broker is flat; wait for
-  `run_stopped` or inspect the pending outcomes.
+  `run_stopped` or inspect the pending outcomes. Written once per stop, not on
+  each retry of a pending one.
 
 - **`run_stop_failed`** (`critical`) - the broker refused the exit orders of a
   stop. The run is still open and **still holding those positions**. It is the

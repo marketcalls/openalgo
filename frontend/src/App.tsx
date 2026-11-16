@@ -14,6 +14,7 @@ const Home = lazy(() => import('@/pages/Home'))
 const PortfolioBacktester = lazy(() => import('@/pages/PortfolioBacktester'))
 const PortfolioBacktesterResults = lazy(() => import('@/pages/PortfolioBacktesterResults'))
 const SipBacktester = lazy(() => import('@/pages/SipBacktester'))
+const SectorRotation = lazy(() => import('@/pages/SectorRotation'))
 const SipBacktesterResults = lazy(() => import('@/pages/SipBacktesterResults'))
 const PortfolioAnalyzer = lazy(() => import('@/pages/PortfolioAnalyzer'))
 const Faq = lazy(() => import('@/pages/Faq'))
@@ -27,6 +28,7 @@ const NotFound = lazy(() => import('@/pages/NotFound'))
 
 // Broker auth
 const BrokerSelect = lazy(() => import('@/pages/BrokerSelect'))
+const BrokerConfig = lazy(() => import('@/pages/BrokerConfig'))
 const BrokerTOTP = lazy(() => import('@/pages/BrokerTOTP'))
 const SamcoAuth = lazy(() => import('@/pages/SamcoAuth'))
 
@@ -146,6 +148,10 @@ const TelegramAnalytics = lazy(() => import('@/pages/telegram/TelegramAnalytics'
 // WhatsApp pages
 const WhatsAppIndex = lazy(() => import('@/pages/whatsapp/WhatsAppIndex'))
 
+// Alert channels: every channel on /alerts, Slack and Discord setup
+const AlertsIndex = lazy(() => import('@/pages/alerts/AlertsIndex'))
+const WebhookChannelSetup = lazy(() => import('@/pages/alerts/WebhookChannelSetup'))
+
 // Logs & Monitoring pages
 const LogsIndex = lazy(() => import('@/pages/LogsIndex'))
 const LiveLogs = lazy(() => import('@/pages/Logs'))
@@ -179,6 +185,7 @@ function App() {
 
               {/* Broker auth routes */}
               <Route path="/broker" element={<BrokerSelect />} />
+              <Route path="/broker/config" element={<BrokerConfig />} />
               <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
               <Route path="/broker/samco/auth" element={<SamcoAuth />} />
               {/* Dynamic broker TOTP routes for all supported brokers */}
@@ -213,6 +220,7 @@ function App() {
                 <Route path="/sip-backtester" element={<SipBacktester />} />
                 <Route path="/sip-backtester/results" element={<SipBacktesterResults />} />
                 <Route path="/portfolio-analyzer" element={<PortfolioAnalyzer />} />
+                <Route path="/sector-rotation" element={<SectorRotation />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
                 {/* Phase 4: Sandbox & Analyzer */}
@@ -292,6 +300,9 @@ function App() {
                 <Route path="/telegram/users" element={<TelegramUsers />} />
                 <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
                 <Route path="/whatsapp" element={<WhatsAppIndex />} />
+                <Route path="/alerts" element={<AlertsIndex />} />
+                <Route path="/slack" element={<WebhookChannelSetup channel="slack" />} />
+                <Route path="/discord" element={<WebhookChannelSetup channel="discord" />} />
                 {/* Phase 7: Logs & Monitoring */}
                 <Route path="/logs" element={<LogsIndex />} />
                 <Route path="/logs/live" element={<LiveLogs />} />

@@ -496,6 +496,12 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Find ALL subscriptions that match this symbol and have compatible modes
             matching_subscriptions = []
+            # Samco names a stock as scripCode_segment ("2885_NSE"); only index
+            # ids ("-23") come bare. A bare stock scrip code does not say which
+            # segment it belongs to, so it is accepted only when it resolves to
+            # subscriptions in a single segment.
+            bare_stock_code = "_" not in symbol_key and not symbol_key.startswith("-")
+            bare_matches = []
             with self.lock:
                 for sub in self.subscriptions.values():
                     # Check if mode is compatible
@@ -504,21 +510,32 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                     # Match by token (may be "11536_NSE" or "11536")
                     if sub["token"] == symbol_key or sub["symbol"] == symbol_key:
-                        matching_subscriptions.append(sub)
-                        continue
-
-                    # Try matching with exchange suffix (if token doesn't have it)
-                    token_with_exchange = f"{sub['token']}_{sub['brexchange']}"
-                    if symbol_key == token_with_exchange:
-                        matching_subscriptions.append(sub)
-                        continue
-
-                    # Try matching by extracting scripCode from symbol_key (handle "11536_NSE" -> "11536")
-                    if "_" in symbol_key:
-                        scripcode = symbol_key.split("_")[0]
-                        if sub["token"] == scripcode:
+                        if bare_stock_code:
+                            bare_matches.append(sub)
+                        else:
                             matching_subscriptions.append(sub)
-                            continue
+                        continue
+
+                    # Try matching with exchange suffix (if token doesn't have it).
+                    # The scrip code alone is not unique across segments, so the
+                    # suffix must be the one this subscription was sent with.
+                    token_with_exchange = f"{sub['token']}_{sub['brexchange']}"
+                    token_with_segment = (
+                        f"{sub['token']}_{SamcoExchangeMapper.get_exchange_type(sub['brexchange'])}"
+                    )
+                    if symbol_key in (token_with_exchange, token_with_segment):
+                        matching_subscriptions.append(sub)
+                        continue
+
+            if bare_matches:
+                segments = {sub["brexchange"] for sub in bare_matches}
+                if len(segments) == 1:
+                    matching_subscriptions.extend(bare_matches)
+                else:
+                    self.logger.debug(
+                        f"Dropping tick for bare scrip code {symbol_key}: it matches "
+                        f"subscriptions in {sorted(segments)}"
+                    )
 
             if not matching_subscriptions:
                 self.logger.debug(
@@ -574,15 +591,29 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Market data for publishing
         """
+        # Exchange last-trade time (lTrdT / ltt / lttUTC), omitted when Samco
+        # did not send one: the local clock is not the trade time.
+        trade_time = {}
+        if message.get("last_trade_time_ms"):
+            trade_time = {
+                "ltt": message["last_trade_time_ms"],
+                "last_trade_time": message["last_trade_time_ms"],
+            }
+        optional = {
+            key: message[key]
+            for key in ("average_price", "total_buy_quantity", "total_sell_quantity")
+            if key in message
+        }
+
         if mode == 1:  # LTP mode
             return {
                 "ltp": message.get("last_traded_price", 0),
-                "ltt": message.get("exchange_timestamp", 0),
+                **trade_time,
             }
         elif mode == 2:  # Quote mode
             return {
                 "ltp": message.get("last_traded_price", 0),
-                "ltt": message.get("exchange_timestamp", 0),
+                **trade_time,
                 "volume": message.get("volume_trade_for_the_day", 0),
                 "open": message.get("open_price_of_the_day", 0),
                 "high": message.get("high_price_of_the_day", 0),
@@ -595,11 +626,13 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "best_bid_quantity": message.get("best_bid_quantity", 0),
                 "best_ask_price": message.get("best_ask_price", 0),
                 "best_ask_quantity": message.get("best_ask_quantity", 0),
+                "last_quantity": message.get("last_traded_quantity", 0),
+                **optional,
             }
         elif mode == 3:  # Snap Quote mode (includes depth data)
             result = {
                 "ltp": message.get("last_traded_price", 0),
-                "ltt": message.get("exchange_timestamp", 0),
+                **trade_time,
                 "volume": message.get("volume_trade_for_the_day", 0),
                 "open": message.get("open_price_of_the_day", 0),
                 "high": message.get("high_price_of_the_day", 0),
@@ -608,6 +641,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "last_quantity": message.get("last_traded_quantity", 0),
                 "change": message.get("change", 0),
                 "change_percentage": message.get("change_percentage", 0),
+                **optional,
             }
 
             # Pass through depth data from samcoWebSocket normalization

@@ -98,17 +98,27 @@ def calculate_margin_api(positions, auth):
     Returns:
         Tuple of (response, response_data)
     """
-    # Transform all positions
+    # Transform all positions. A leg that cannot be resolved fails the
+    # basket: pricing the rest without it reported the margin of a different
+    # basket as "success" (issue #2156).
     transformed_positions = []
+    unresolved = []
     for position in positions:
         transformed = transform_margin_position(position)
         if transformed:
             transformed_positions.append(transformed)
+        else:
+            unresolved.append(f"{position.get('symbol')} ({position.get('exchange')})")
 
-    if not transformed_positions:
+    if unresolved or not transformed_positions:
         error_response = {
             "status": "error",
-            "message": "No valid positions to calculate margin. Check if symbols are valid.",
+            "message": (
+                f"Could not prepare these legs for the margin check: {', '.join(unresolved)}. "
+                "Check the symbol, exchange and expiry date."
+                if unresolved
+                else "No valid positions to calculate margin. Check if symbols are valid."
+            ),
         }
 
         class MockResponse:
@@ -126,12 +136,13 @@ def calculate_margin_api(positions, auth):
         last_response = response
         margin_responses.append(parsed_response)
 
-        # If any single margin calculation fails, we might want to continue
-        # but log the error
+        # One failed leg fails the basket (parse_batch_margin_response), so
+        # stop instead of spending calls on the remaining legs.
         if parsed_response.get("status") == "error":
             logger.warning(
                 f"Margin calculation failed for position: {position_data}, Error: {parsed_response.get('message')}"
             )
+            break
 
     # Aggregate the responses
     if len(margin_responses) == 1:
@@ -140,6 +151,20 @@ def calculate_margin_api(positions, auth):
     else:
         # Multiple positions - aggregate
         final_response = parse_batch_margin_response(margin_responses)
+
+    # margin_service reports any HTTP 200 as a successful calculation, and
+    # Kotak answers a rejected order with HTTP 200 and stat Not_Ok, so an
+    # error result must not ride on the broker's 200.
+    if (
+        final_response.get("status") != "success"
+        and getattr(last_response, "status_code", 500) == 200
+    ):
+
+        class MockResponse:
+            status_code = 500
+            status = 500
+
+        return MockResponse(), final_response
 
     # Return the last HTTP response object and the aggregated data
     return last_response, final_response

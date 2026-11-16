@@ -3,7 +3,7 @@
  *
  * **An alert is a message to somebody who is not looking at the chart**, so the
  * question a trader is really answering when they set one is "how do you want to
- * be told". The four answers here are the ones the platform can already deliver,
+ * be told". The six answers here are the ones the platform can already deliver,
  * and each is chosen per alert rather than once for the whole terminal: a price
  * you are waiting on all week and a level you are watching for the next ten
  * minutes do not deserve the same interruption.
@@ -11,9 +11,9 @@
  * The defaults say which of them is the ordinary case. Sound and a desktop
  * notification are on, because between them they reach somebody with the tab
  * behind another window, and neither costs anything or leaves the machine.
- * Telegram and WhatsApp are off, because both send a message out of the building
- * to an account somebody configured for order flow, and a chart alert silently
- * joining that stream is not a thing to decide on a trader's behalf.
+ * Telegram, WhatsApp, Slack and Discord are off, because each sends a message out
+ * of the building to an account somebody configured for order flow, and a chart
+ * alert silently joining that stream is not a thing to decide on a trader's behalf.
  *
  * **A delivery that fails is reported once and never retried.** These run on a
  * price being reached, and a retry loop behind a fired alert is a queue that
@@ -37,6 +37,10 @@ export interface AlertDelivery {
   readonly notify: boolean
   readonly telegram: boolean
   readonly whatsapp: boolean
+  /** Posted to the Slack webhook saved on /slack. */
+  readonly slack: boolean
+  /** Posted to the Discord webhook saved on /discord. */
+  readonly discord: boolean
 }
 
 /**
@@ -50,6 +54,8 @@ export const DEFAULT_DELIVERY: AlertDelivery = {
   notify: true,
   telegram: false,
   whatsapp: false,
+  slack: false,
+  discord: false,
 }
 
 /** The delivery an alert carries, or the default where it carries none. */
@@ -63,6 +69,8 @@ export function deliveryOf(payload: unknown): AlertDelivery {
     notify: flag('notify'),
     telegram: flag('telegram'),
     whatsapp: flag('whatsapp'),
+    slack: flag('slack'),
+    discord: flag('discord'),
   }
 }
 
@@ -165,6 +173,20 @@ export interface DeliveryContext {
  */
 type SendFailure = string | null
 
+/** The channels that send a message out of the building. */
+type OutwardChannel = 'telegram' | 'whatsapp' | 'slack' | 'discord'
+
+/** Every outward channel, in the order they are attempted and listed. */
+const OUTWARD: readonly OutwardChannel[] = ['telegram', 'whatsapp', 'slack', 'discord']
+
+/** The name a trader reads for each outward channel. */
+const CHANNEL_NAME: Record<OutwardChannel, string> = {
+  telegram: 'Telegram',
+  whatsapp: 'WhatsApp',
+  slack: 'Slack',
+  discord: 'Discord',
+}
+
 async function post(path: string, body: Record<string, unknown>): Promise<SendFailure> {
   // A relative URL, because this application is served from a port, a domain, a
   // subdomain and a container, and an absolute one works for whoever wrote it.
@@ -173,9 +195,10 @@ async function post(path: string, body: Record<string, unknown>): Promise<SendFa
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const answer = (await res.json().catch(() => null)) as
-    | { status?: string; message?: string }
-    | null
+  const answer = (await res.json().catch(() => null)) as {
+    status?: string
+    message?: string
+  } | null
   const said = typeof answer?.message === 'string' ? answer.message.trim() : ''
   if (!res.ok) return said || 'The message was not accepted.'
   // A 200 carrying an error status is still a refusal, and it carries a reason
@@ -217,25 +240,25 @@ export async function deliverAlert(
    * throws out of here: a channel that cannot be reached is a toast, not a
    * lost alert, and the alert has already fired by the time any of this runs.
    */
-  const sendTo = async (channel: 'telegram' | 'whatsapp'): Promise<string | null> => {
+  const sendTo = async (channel: OutwardChannel): Promise<string | null> => {
+    // Telegram and WhatsApp find the recipient by username; Slack and
+    // Discord post to the one webhook saved for them, so they take none.
+    const body =
+      channel === 'telegram' || channel === 'whatsapp'
+        ? { apikey: context.apiKey, username: context.username, message }
+        : { apikey: context.apiKey, message }
     try {
-      const failure = await post(`/api/v1/${channel}/notify`, {
-        apikey: context.apiKey,
-        username: context.username,
-        message,
-      })
+      const failure = await post(`/api/v1/${channel}/notify`, body)
       if (failure === null) return channel
-      const where = channel === 'telegram' ? 'Telegram' : 'WhatsApp'
-      context.onProblem(`The alert fired, but ${where} did not take it. ${failure}`)
+      context.onProblem(`The alert fired, but ${CHANNEL_NAME[channel]} did not take it. ${failure}`)
     } catch {
-      const where = channel === 'telegram' ? 'Telegram' : 'WhatsApp'
-      context.onProblem(`The alert fired, but ${where} could not be reached.`)
+      context.onProblem(`The alert fired, but ${CHANNEL_NAME[channel]} could not be reached.`)
     }
     return null
   }
 
   /**
-   * **Both channels go at once, not one after the other.**
+   * **Every outward channel goes at once, not one after the other.**
    *
    * They were sequential, and WhatsApp's own endpoint defaults
    * `wait_for_delivery` to true, so an alert asking for both waited for the
@@ -249,9 +272,7 @@ export async function deliverAlert(
    * failures, and a rejection that slipped past it must not drop the channel
    * beside it.
    */
-  const outward: ('telegram' | 'whatsapp')[] = []
-  if (delivery.telegram) outward.push('telegram')
-  if (delivery.whatsapp) outward.push('whatsapp')
+  const outward = OUTWARD.filter((channel) => delivery[channel])
 
   if (outward.length > 0) {
     const settled = await Promise.allSettled(outward.map(sendTo))

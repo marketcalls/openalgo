@@ -30,6 +30,8 @@ The React configuration UI is the SMTP tab in `frontend/src/pages/Profile.tsx`.
 - Return password presence only, never ciphertext or plaintext.
 - Do not include credentials in SMTP errors or logs.
 - Prefer provider app passwords and TLS/SSL.
+- Verify the mail server's certificate and host name on every TLS path, through `mail_tls_context()` in `utils/email_utils.py`. Never set `check_hostname = False` or `CERT_NONE`: the login and password-reset links travel over that connection. A host entered as an IP address fails verification by design.
+- Never turn on smtplib's `set_debuglevel()`: it prints the AUTH line, which carries the password, to stderr.
 - Treat debug output as authenticated operational data.
 
 ## Key Files

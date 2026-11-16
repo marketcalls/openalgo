@@ -353,6 +353,12 @@ not a period of time. Set to Underlying bars, the study computes on the time
 bars under them and the flag is absent, as it is on every plain chart. Read it
 to warn or to skip a time-based reading, never to change what a value means.
 
+Since 2.6.8 a Renko brick, range bar, line break element or point and figure
+column carries the volume traded while it formed, so a volume study works on
+Chart bars. A Kagi element does not: its `volume` is the line's thickness (1
+or 0), and a study reading it as traded volume is wrong without warning. A
+volume study that must also be right on Kagi asks for Underlying bars.
+
 ---
 
 ## 21. Do not ask the user for the tick size

@@ -494,6 +494,18 @@ def prune_workflow_executions(workflow_id, max_count=None, max_age_days=None):
     reuses a rowid once the highest one is removed, and a stale instance left in
     the identity map then collides with the next insert that takes that id.
 
+    This runs at the start of every run, so it must leave nothing held. A
+    DELETE takes the database write lock even when it matches no row, and the
+    lock stays with this thread's session until that session commits. The trim
+    used to issue its DELETE every time and commit only when it had removed
+    something, so on the usual run, with nothing to trim, the workflow kept the
+    write lock for as long as it ran: every other writer on openalgo.db waited,
+    and after 15 seconds gave up with "database is locked". One of them was the
+    scheduler saving a job's next run time, which is how one slow run stopped
+    every scheduled workflow (issues #2355 and #2326). So each pass looks
+    first, deletes only when there is a row to delete, and the transaction is
+    ended on every path.
+
     Returns the number of rows deleted.
     """
     max_count = EXECUTION_RETENTION_COUNT if max_count is None else max_count
@@ -503,14 +515,13 @@ def prune_workflow_executions(workflow_id, max_count=None, max_age_days=None):
     try:
         if max_age_days and max_age_days > 0:
             cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
-            deleted += (
-                FlowWorkflowExecution.query.filter(
-                    FlowWorkflowExecution.workflow_id == workflow_id,
-                    FlowWorkflowExecution.started_at.isnot(None),
-                    FlowWorkflowExecution.started_at < cutoff,
-                ).delete(synchronize_session="fetch")
-                or 0
+            stale = FlowWorkflowExecution.query.filter(
+                FlowWorkflowExecution.workflow_id == workflow_id,
+                FlowWorkflowExecution.started_at.isnot(None),
+                FlowWorkflowExecution.started_at < cutoff,
             )
+            if stale.with_entities(FlowWorkflowExecution.id).first() is not None:
+                deleted += stale.delete(synchronize_session="fetch") or 0
 
         if max_count and max_count > 0:
             # Keep the newest max_count by id. Ordering by id rather than
@@ -527,16 +538,16 @@ def prune_workflow_executions(workflow_id, max_count=None, max_age_days=None):
                 .all()
             ]
             if len(keep) >= max_count:
-                deleted += (
-                    FlowWorkflowExecution.query.filter(
-                        FlowWorkflowExecution.workflow_id == workflow_id,
-                        FlowWorkflowExecution.id < min(keep),
-                    ).delete(synchronize_session="fetch")
-                    or 0
+                surplus = FlowWorkflowExecution.query.filter(
+                    FlowWorkflowExecution.workflow_id == workflow_id,
+                    FlowWorkflowExecution.id < min(keep),
                 )
+                if surplus.with_entities(FlowWorkflowExecution.id).first() is not None:
+                    deleted += surplus.delete(synchronize_session="fetch") or 0
 
+        # Always, not only after a delete: this is what gives the lock back.
+        db_session.commit()
         if deleted:
-            db_session.commit()
             logger.info(
                 f"Pruned {deleted} execution(s) for workflow {workflow_id} "
                 f"(keep newest {max_count}, max age {max_age_days}d)"

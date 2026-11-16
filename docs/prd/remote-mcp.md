@@ -42,7 +42,7 @@ Authorization-code grants require a registered redirect URI and PKCE verificatio
 | Scope | Capability |
 |---|---|
 | `read:market` | Market data and research tools |
-| `read:account` | Orders, trades, positions, holdings, and funds reads |
+| `read:account` | Orders, trades, positions, holdings, and funds reads, plus the three alert tools (`send_telegram_alert`, `send_slack_alert`, `send_discord_alert`), which deliver only to destinations the owner set up |
 | `write:orders` | Place, modify, cancel, and close actions |
 
 The dispatcher must reject a tool call when the token lacks the tool's registered scope. `write:orders` is controlled by `MCP_OAUTH_WRITE_SCOPE_ENABLED`; client approval is controlled by `MCP_OAUTH_REQUIRE_APPROVAL`.

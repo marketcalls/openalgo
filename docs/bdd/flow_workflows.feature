@@ -35,3 +35,12 @@ Feature: Flow workflows
     When monitor status is requested
     Then current monitor state is returned
     And price conditions are polled by the monitor service
+
+  # Source: services/flow_executor_service.py:workflow_runs_in_background, services/flow_executor_service.py:start_workflow_in_background, blueprints/flow.py
+  Scenario: gthread HTTP triggers move long waits to bounded background pools
+    Given a webhook or Run Now workflow can wait longer than ten seconds
+    When the gthread worker handles its trigger
+    Then the workflow lock is claimed before background submission
+    And Delay and long Wait Until runs use separate bounded pools
+    And a full pool refuses the trigger before any order and records the refusal in execution history
+    And the caller of an admitted run reads its final result in execution history

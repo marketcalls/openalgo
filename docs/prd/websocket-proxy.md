@@ -48,10 +48,10 @@ The bind/connect direction is deliberate: one proxy subscriber binds while multi
 | Environment | Proxy lifecycle |
 |---|---|
 | Docker or `APP_MODE=standalone` | Started separately by the container startup path |
-| Gunicorn with eventlet | Spawned as a child Python process to isolate asyncio from the eventlet hub |
-| Development server without eventlet | Runs in a real OS thread with its own asyncio event loop |
+| Gunicorn with eventlet (default) or gthread (opt-in) | Spawned as a child Python process; gthread also supervises and restarts it |
+| Development server (`uv run app.py`) | Runs in a real OS thread with its own asyncio event loop; ignores `OPENALGO_WORKER_CLASS` |
 
-The old same-process daemon-thread and single-Gunicorn-worker description is not the current production model.
+Both production modes require a single Gunicorn worker process (`-w 1`); opt-in gthread uses 64 request threads inside that worker. The proxy is a separate process, not an in-process production daemon thread. See the [worker guide](../gthread/README.md).
 
 ## Operational Requirements
 

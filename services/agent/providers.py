@@ -466,8 +466,9 @@ def _litellm_opinion(litellm_id: str, probe: str) -> bool | None:
         the build has no such predicate, or when the lookup raised.
     """
     try:
-        import litellm
+        from services.agent import litellm_loader
 
+        litellm = litellm_loader.load()
         table = litellm.model_cost
         bare = litellm_id.split("/", 1)[-1]
         entry = table.get(litellm_id)

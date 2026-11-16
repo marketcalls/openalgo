@@ -11,21 +11,24 @@ Checks, in order:
 1. The app answers ``/auth/check-setup`` (waits up to ``--ready-timeout``).
 2. ``/`` answers 200.
 3. The Socket.IO polling handshake returns a session id.
-4. A Socket.IO client connects over polling (the frontend's transport), and
-   another over websocket and reports the websocket transport.
-5. An SSE stream (``/python/api/events``) sends its first event within 5 s,
-   using a session cookie signed with the instance's ``APP_KEY``.
-6. While several streams and polling clients are held open, an ordinary
+4. A Socket.IO client with no session is refused: every server broadcast
+   goes to the default namespace, so it admits only a signed-in session.
+5. A Socket.IO client carrying a session cookie signed with the instance's
+   ``APP_KEY`` connects over polling (the frontend's transport), and another
+   over websocket and reports the websocket transport.
+6. An SSE stream (``/python/api/events``) sends its first event within 5 s,
+   using the same cookie.
+7. While several streams and polling clients are held open, an ordinary
    request still answers within 2 s.
-7. ``/admin/api/system`` reports the expected web server, thread budget and
+8. ``/admin/api/system`` reports the expected web server, thread budget and
    launcher.
-8. The market data proxy listens on ``--proxy-port`` with the expected
+9. The market data proxy listens on ``--proxy-port`` with the expected
    topology: ``child`` (a child process of the worker), ``thread`` (inside the
    worker), ``external`` (not under gunicorn at all) or ``any``.
-9. With ``--pid`` and ``--stop-within``: SIGTERM to the gunicorn arbiter while
-   a polling client, a stream and an idle keep-alive connection are open ends
-   the process within that many seconds, and the proxy port is released.
-10. With ``--log``: the gunicorn log has no traceback and no greenlet error.
+10. With ``--pid`` and ``--stop-within``: SIGTERM to the gunicorn arbiter while
+    a polling client, a stream and an idle keep-alive connection are open ends
+    the process within that many seconds, and the proxy port is released.
+11. With ``--log``: the gunicorn log has no traceback and no greenlet error.
 
 Usage:
     .venv/bin/python scripts/gthread_smoke.py --base-url http://127.0.0.1:5099 \\
@@ -151,11 +154,18 @@ def open_sse(base: str, cookie: tuple[str, str], first_event_within: float = 5.0
     raise RuntimeError("no event received")
 
 
-def socketio_client(base: str, transports: list[str]):
+def socketio_client(base: str, transports: list[str], cookie: tuple[str, str] | None = None):
+    """Connect a Socket.IO client, signed in when ``cookie`` is given.
+
+    The default namespace refuses a connection with no valid session
+    (``extensions.require_signed_in_session``), so every client this smoke
+    holds open carries the cookie the SSE check uses.
+    """
     import socketio
 
     client = socketio.Client(reconnection=False)
-    client.connect(base, transports=transports, wait_timeout=10)
+    headers = {"Cookie": f"{cookie[0]}={cookie[1]}"} if cookie else {}
+    client.connect(base, transports=transports, headers=headers, wait_timeout=10)
     return client
 
 
@@ -241,26 +251,17 @@ def main(argv: list[str] | None = None) -> int:
 
     smoke.check("socket.io polling handshake", handshake)
 
-    def polling_client() -> str:
-        client = socketio_client(base, ["polling"])
+    def no_session_refused() -> str:
+        import socketio
+
         try:
-            return f"connected over {client.transport()}"
-        finally:
-            client.disconnect()
+            client = socketio_client(base, ["polling"])
+        except socketio.exceptions.ConnectionError:
+            return "refused"
+        client.disconnect()
+        raise RuntimeError("a client with no session connected to the default namespace")
 
-    smoke.check("socket.io client (polling)", polling_client)
-
-    def websocket_client() -> str:
-        client = socketio_client(base, ["websocket"])
-        try:
-            transport = client.transport()
-            if transport != "websocket":
-                raise RuntimeError(f"transport is {transport}")
-            return "connected over websocket"
-        finally:
-            client.disconnect()
-
-    smoke.check("socket.io client (websocket)", websocket_client)
+    smoke.check("socket.io refuses no session", no_session_refused)
 
     cookie = None
 
@@ -270,6 +271,27 @@ def main(argv: list[str] | None = None) -> int:
         return f"cookie {cookie[0]}"
 
     smoke.check("signed session cookie", make_cookie)
+
+    def polling_client() -> str:
+        client = socketio_client(base, ["polling"], cookie)
+        try:
+            return f"connected over {client.transport()}"
+        finally:
+            client.disconnect()
+
+    def websocket_client() -> str:
+        client = socketio_client(base, ["websocket"], cookie)
+        try:
+            transport = client.transport()
+            if transport != "websocket":
+                raise RuntimeError(f"transport is {transport}")
+            return "connected over websocket"
+        finally:
+            client.disconnect()
+
+    if cookie:
+        smoke.check("socket.io client (polling)", polling_client)
+        smoke.check("socket.io client (websocket)", websocket_client)
 
     def sse() -> str:
         response, line = open_sse(base, cookie)
@@ -286,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     def hold_and_probe() -> str:
         for _ in range(args.hold):
             held.append(open_sse(base, cookie)[0])
-            held.append(socketio_client(base, ["polling"]))
+            held.append(socketio_client(base, ["polling"], cookie))
         started = time.monotonic()
         response = requests.get(f"{base}/auth/check-setup", timeout=10)
         elapsed = time.monotonic() - started
@@ -369,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
 
             open_items: list = []
             try:
-                open_items.append(socketio_client(base, ["polling"]))
+                open_items.append(socketio_client(base, ["polling"], cookie))
             except Exception:
                 pass
             if cookie:

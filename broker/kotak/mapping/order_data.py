@@ -319,11 +319,15 @@ def _carry_forward_amounts(position, factor):
     it is kept because it costs nothing and is the only field that could ever
     carry the number, on any account or any future version of the API.
 
-    Falling back to cfBuyAmt/cfSellAmt is not a workaround for a missing
-    lookup, it is the end of the road: a carried row holds seventeen fields
-    and upldPrc is the only price among them, and Kotak's other endpoints are
-    all current-day (orders, trades, order history by order number), so the
-    cost basis of an overnight leg is not reachable through this API at all.
+    For a cash-segment leg the cost is in Holdings: Kotak's Positions docs
+    say the Neo app takes it from Holdings' averagePrice, matched on
+    positions.tok == holdings.exchangeIdentifier, and get_positions() stamps
+    it on the row as "_holding_avg" (order_api._backfill_carry_cost).
+
+    For an F&O leg falling back to cfBuyAmt/cfSellAmt is the end of the road:
+    Holdings covers cash segments only, and Kotak's other endpoints are all
+    current-day (orders, trades, order history by order number), so its cost
+    basis is not reachable through this API (Kotak's SDK says the same, #2271).
     The caller says so on the row rather than leaving the number to be read
     as an entry price.
 
@@ -341,7 +345,11 @@ def _carry_forward_amounts(position, factor):
     if not (cf_buy_qty or cf_sell_qty):
         return 0.0, 0.0, False
 
-    carried_price = _number(position, "upldPrc")
+    # upldPrc first, then the Holdings averagePrice get_positions() stamps on a
+    # carried cash-segment row (order_api._backfill_carry_cost): Kotak's docs
+    # say the Neo app values such a leg from Holdings, matched on tok ==
+    # exchangeIdentifier, and so does its SDK's P&L code.
+    carried_price = _number(position, "upldPrc") or _number(position, "_holding_avg")
     if carried_price > 0:
         return (
             cf_buy_qty * carried_price * factor,
@@ -401,6 +409,10 @@ def transform_positions_data(positions_data):
         cf_buy_amt, cf_sell_amt, carried_valuation = _carry_forward_amounts(position, factor)
         total_buy_amt = cf_buy_amt + _number(position, "buyAmt")
         total_sell_amt = cf_sell_amt + _number(position, "sellAmt")
+        # Kotak's docs: "calculate the average price to a specific number of
+        # decimal places that is decided by precision field". 2 when the row
+        # does not say, which is what its SDK falls back to as well.
+        precision = int(_number(position, "precision")) or 2
         buy_qty = _number(position, "flBuyQty") + _number(position, "cfBuyQty")
         sell_qty = _number(position, "flSellQty") + _number(position, "cfSellQty")
 
@@ -412,9 +424,13 @@ def transform_positions_data(positions_data):
         # same factor. Without it a row with a multiplier of 2 reported an
         # average that no longer reproduced its own P&L.
         if transformed_position["quantity"] > 0 and buy_qty > 0:
-            transformed_position["average_price"] = round(total_buy_amt / (buy_qty * factor), 2)
+            transformed_position["average_price"] = round(
+                total_buy_amt / (buy_qty * factor), precision
+            )
         elif transformed_position["quantity"] < 0 and sell_qty > 0:
-            transformed_position["average_price"] = round(total_sell_amt / (sell_qty * factor), 2)
+            transformed_position["average_price"] = round(
+                total_sell_amt / (sell_qty * factor), precision
+            )
         elif transformed_position["quantity"] != 0:
             transformed_position["average_price"] = 0.0
 
@@ -495,7 +511,7 @@ def transform_holdings_data(holdings_data):
     logger.debug(f"{holdings_data}")
     for holding in holdings_data:
         transformed_position = {
-            "symbol": holding.get("displaySymbol", ""),
+            "symbol": holding.get("_openalgo_symbol") or holding.get("displaySymbol", ""),
             "exchange": holding.get("exchangeSegment", ""),
             "quantity": holding.get("quantity", 0),
             "product": holding.get("instrumentType", ""),
@@ -548,15 +564,23 @@ def map_portfolio_data(portfolio_data):
     # Modify 'product' field for each holding if applicable
 
     for portfolio in holdings:
-        token = portfolio["instrumentToken"]
+        # exchangeIdentifier is the exchange token, the one the master contract
+        # stores (pSymbol) and the one positions carry as "tok": Kotak's docs
+        # match holdings to positions on it. instrumentToken is Kotak's own id
+        # and is not in the master at all (ITBEES: instrumentToken 18974,
+        # exchangeIdentifier and pSymbol 19084), so looking it up never found
+        # the holding, or found a different scrip that happened to have that
+        # exchange token.
+        token = str(portfolio.get("exchangeIdentifier") or "").strip()
 
         exchange = map_exchange(portfolio["exchangeSegment"])
         portfolio["exchangeSegment"] = exchange
-        symbol_from_db = get_symbol(token, exchange)
+        symbol_from_db = get_symbol(token, exchange) if token and exchange else None
 
-        # Check if a symbol was found; if so, update the trading_symbol in the current order
+        # transform_holdings_data reports this, falling back to Kotak's
+        # displaySymbol when the master has no row for the token.
         if symbol_from_db:
-            portfolio["symbol"] = symbol_from_db
+            portfolio["_openalgo_symbol"] = symbol_from_db
         if portfolio["instrumentType"] == "Equity":
             portfolio["instrumentType"] = "CNC"  # Modify 'product' field
         else:

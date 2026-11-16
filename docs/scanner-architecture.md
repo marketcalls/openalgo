@@ -1,4 +1,16 @@
-# OpenAlgo Real-Time Scanner Service — Architecture & Implementation Guide
+# OpenAlgo Real-Time Scanner Service — Design Proposal
+
+**Status:** Proposed external service, not a shipped OpenAlgo feature. This
+repository does not contain the `scanner-service/` implementation, Redis
+configuration or `run_all.sh` described below. The sample code, directory tree,
+capacity estimates and latency budgets are a design to implement and validate,
+not installation instructions or measured guarantees. OpenAlgo itself uses
+ZeroMQ for its market-data bus and does not require Redis.
+
+For current workflows, use the [Python strategy host](userguide/20-python-strategies/README.md),
+[Flow](userguide/21-flow-visual-builder/README.md), or the
+[MCP research tools](mcp-tool-reference.md). Broker subscription and market-data
+limits still apply; a WebSocket connection is not an unlimited-data entitlement.
 
 ## Overview
 
@@ -42,7 +54,7 @@ Most Indian brokers restrict historical data API calls to 1-10 requests per seco
 │  └── Authenticate with API key                                     │
 │  └── Subscribe to 500+ symbols in LTP or Quote mode                │
 │  └── Receive ~500-2000 ticks/second                                │
-│  └── No rate limits — broker WebSocket is unlimited                 │
+│  └── Broker subscription limits and feed entitlements apply                 │
 │                                                                     │
 │  Tick Receiver Process                                              │
 │  └── Single async WebSocket client                                  │
@@ -901,7 +913,7 @@ No Kafka, no QuestDB, no heavy dependencies. Six lightweight Python processes an
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Data source for real-time | WebSocket ticks (not REST API) | Zero rate limits, true real-time |
+| Data source for real-time | WebSocket ticks (not REST API) | Push data; broker subscription limits still apply |
 | Message bus | Redis Streams | Consumer groups + persistence + minimal ops for single-machine |
 | Candle storage granularity | 1-minute only | Any timeframe derivable from 1m; daily cannot produce intraday |
 | Bootstrap source | Historify (DuckDB) 1m candles | Local, instant, zero rate limits, zero warm-up |

@@ -20,6 +20,7 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -140,6 +141,100 @@ def _backfill_ltp(response, auth_token):
         logger.warning(f"Could not backfill LTP for positions: {e}")
 
 
+# Holdings averagePrice by exchangeIdentifier, per session, for valuing an
+# overnight cash-segment position at its cost (_backfill_carry_cost). Holdings
+# are re-read at most every five minutes: the positions book is polled by the
+# page and by every smart order, and a carried leg's cost does not move intraday.
+_HOLDING_COST_TTL_SECONDS = 300
+_holding_cost_cache = LockedTTLCache(maxsize=8, ttl=_HOLDING_COST_TTL_SECONDS)
+
+# Cash segments, the only ones Holdings covers. A carried F&O leg has no cost
+# basis anywhere in Kotak's API (its SDK says so: "F&O: no Holdings
+# averagePrice exists -- previous close (cfBuyAmt/cfSellAmt) is the only cost
+# basis the API exposes"), so it keeps the carry-forward valuation (#2271).
+_HOLDING_SEGMENTS = ("nse_cm", "bse_cm")
+
+
+def _holding_costs(auth_token):
+    """Holdings averagePrice keyed by exchangeIdentifier, cached per session.
+
+    Returns:
+        dict[str, float]: Average price per exchange token. Empty when the
+        holdings call fails or returns nothing usable; a failure is not cached,
+        so the next positions read tries again.
+    """
+    session_key = auth_token.split(":::")[1] if ":::" in auth_token else auth_token
+    cached = _holding_cost_cache.get(session_key)
+    if cached is not None:
+        return cached
+
+    holdings = get_holdings(auth_token)
+    rows = holdings.get("data") if isinstance(holdings, dict) else None
+    if not isinstance(rows, list):
+        return {}
+
+    costs = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        token = str(row.get("exchangeIdentifier") or "").strip()
+        try:
+            price = float(row.get("averagePrice") or 0)
+        except (TypeError, ValueError):
+            continue
+        if token and price > 0:
+            costs[token] = price
+    _holding_cost_cache[session_key] = costs
+    return costs
+
+
+def _backfill_carry_cost(response, auth_token):
+    """Stamp a carried cash-segment position with what it actually cost.
+
+    Kotak values every overnight leg at the previous day's settlement price
+    (cfBuyAmt/cfSellAmt), so without its cost the average and P&L of a
+    delivery position carried overnight measure from yesterday's close. The
+    cost is in Holdings: Kotak's Positions docs say the Neo app "sources that
+    from Holdings' averagePrice instead, matched on positions.tok ==
+    holdings.exchangeIdentifier", and its SDK's P&L code does the same.
+
+    Stamps a "_holding_avg" scratch field for transform_positions_data, which
+    prefers upldPrc when Kotak sends one. Holdings is read only when a carried
+    cash row needs it, and best-effort: any failure leaves the rows on the
+    carry-forward valuation, flagged as such, exactly as before.
+    """
+    try:
+        positions = response.get("data")
+        if not positions:
+            return
+
+        def needs_cost(position):
+            if position.get("exSeg") not in _HOLDING_SEGMENTS:
+                return False
+            if not str(position.get("tok") or "").strip():
+                return False
+            try:
+                carried = float(position.get("cfBuyQty") or 0) or float(
+                    position.get("cfSellQty") or 0
+                )
+                uploaded = float(position.get("upldPrc") or 0)
+            except (TypeError, ValueError):
+                return False
+            return bool(carried) and uploaded <= 0
+
+        carried = [p for p in positions if isinstance(p, dict) and needs_cost(p)]
+        if not carried:
+            return
+
+        costs = _holding_costs(auth_token)
+        for position in carried:
+            cost = costs.get(str(position.get("tok")).strip())
+            if cost:
+                position["_holding_avg"] = cost
+    except Exception as e:
+        logger.warning(f"Could not read holdings cost for carried positions: {e}")
+
+
 def get_positions(auth_token):
     response = get_api_response("/quick/user/positions", auth_token)
     if not isinstance(response, dict):
@@ -159,6 +254,7 @@ def get_positions(auth_token):
             f"Kotak returned a positions payload that is not an object: {type(response).__name__}"
         )
     _backfill_ltp(response, auth_token)
+    _backfill_carry_cost(response, auth_token)
     return response
 
 

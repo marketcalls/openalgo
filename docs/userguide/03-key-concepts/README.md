@@ -1,4 +1,4 @@
-# 02 - Key Concepts
+# 03 - Key Concepts
 
 ## Introduction
 
@@ -22,7 +22,7 @@ TradingView → "Place BUY order for SBIN" → OpenAlgo API → Broker
 
 **Example**:
 ```
-API Key: a1b2c3d4e5f6g7h8i9j0
+API Key: <your-64-character-hexadecimal-OpenAlgo-key>
 ```
 
 **Important**:
@@ -55,9 +55,9 @@ http://your-server:5000/api/v1/placeorder
 **Simple Explanation**: When you log into your broker through OpenAlgo, you get a temporary pass (token) that lets OpenAlgo place orders on your behalf.
 
 **Characteristics**:
-- Valid for one trading day
-- Expires at end of day
-- Must re-login daily (for most brokers)
+- Lifetime is controlled by the broker and adapter
+- Indian broker sessions normally require daily reauthentication; OpenAlgo's default daily expiry is 03:00 IST
+- Reconnect from Select Broker when the token expires; a crypto broker can have different session rules
 
 ### 5. Symbol Format
 
@@ -69,8 +69,8 @@ http://your-server:5000/api/v1/placeorder
 | Reliance on NSE | RELIANCE |
 | SBIN on NSE | SBIN |
 | Nifty 50 Index | NIFTY |
-| Nifty Jan 21500 Call | NIFTY25JAN21500CE |
-| Bank Nifty Future | BANKNIFTY25JANFUT |
+| Nifty Jan 21500 Call | NIFTY30JAN2521500CE |
+| Bank Nifty Future | BANKNIFTY30JAN25FUT |
 
 ### 6. Exchange Codes
 
@@ -89,7 +89,7 @@ http://your-server:5000/api/v1/placeorder
 ### 7. Order Types
 
 **Market Order**: Buy/sell immediately at current price
-- Pros: Guaranteed execution
+- Pros: Requests execution at available market prices; fills still depend on liquidity and acceptance
 - Cons: Price may vary
 
 **Limit Order**: Buy/sell only at your specified price or better

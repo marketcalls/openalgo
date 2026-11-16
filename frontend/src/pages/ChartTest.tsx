@@ -8,19 +8,14 @@
  *     (/chart/test/api/history), and
  *   - streams the forming 1-minute candle live via the shared useMarketData hook.
  *
- * Only the 1-minute interval is supported. lightweight-charts is the bundled
- * v5 library (no CDN), and no CSP changes are required.
+ * The charts are drawn by openalgo-charts, the engine /trading uses, driven the
+ * way the scalper's chart drives it: `createChart` on a host div and the app's
+ * theme tokens through `buildChartTheme`, applied again with `setTheme` when
+ * the theme or the app mode changes. Keyboard shortcuts and the hover zoom
+ * rail are off, as on the other read-only charts.
  */
 
-import {
-  CandlestickSeries,
-  ColorType,
-  CrosshairMode,
-  createChart,
-  type IChartApi,
-  type ISeriesApi,
-  type UTCTimestamp,
-} from 'lightweight-charts'
+import { type Chart, createChart, type SeriesApi } from 'openalgo-charts'
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -33,11 +28,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useMarketData } from '@/hooks/useMarketData'
-import { useThemeStore } from '@/stores/themeStore'
+import { buildChartTheme, resolveCssColor } from '@/lib/trading/chartTheme'
+import { type AppMode, type ThemeMode, useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 // Matches the IST shift baked into the backend candle times so live bars line
-// up with history bars on the time axis. 5h30m = 19800s.
+// up with history bars. 5h30m = 19800s.
+//
+// The bucket model below keeps that shifted base. The engine wants real UTC
+// seconds and shows them in IST itself (its default zone), so the shift comes
+// off at the one place a bar is handed to the chart (`toBar`). Handing it
+// shifted times would label every candle 5h30m late.
 const IST_OFFSET = 19800
 
 const EXCHANGES = ['NSE', 'NFO', 'BFO', 'BSE', 'MCX', 'CDS', 'NSE_INDEX', 'BSE_INDEX']
@@ -65,6 +66,16 @@ interface Candle {
   low: number
   close: number
   volume?: number
+}
+
+/** The app's chart theme on the card's ground, since each chart sits in a card. */
+function cardChartTheme(mode: ThemeMode, appMode: AppMode) {
+  return { ...buildChartTheme(mode, appMode), background: resolveCssColor('var(--card)') }
+}
+
+/** A model candle as the engine takes it: real UTC seconds, no IST shift. */
+function toBar(k: Candle) {
+  return { time: k.time - IST_OFFSET, open: k.open, high: k.high, low: k.low, close: k.close }
 }
 
 interface ChartItem {
@@ -245,11 +256,11 @@ function LiveChart({
   interval: string
   onRemove: () => void
 }) {
-  const { mode } = useThemeStore()
-  const isDark = mode === 'dark'
+  const mode = useThemeStore((s) => s.mode)
+  const appMode = useThemeStore((s) => s.appMode)
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const chartRef = useRef<IChartApi | null>(null)
-  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const chartRef = useRef<Chart | null>(null)
+  const seriesRef = useRef<SeriesApi | null>(null)
   // Authoritative model: bucket time -> candle. Completed bars are reconciled
   // from broker history; the current bucket is built live from ticks.
   const candlesRef = useRef<Map<number, Candle>>(new Map())
@@ -272,48 +283,32 @@ function LiveChart({
   // Create the chart once per symbol/exchange. Data (and timeframe changes) are
   // handled by the separate effect below, so switching timeframe reloads data
   // without destroying/recreating the chart.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: isDark used only for initial colors; theme updates handled by the applyOptions effect
+  // biome-ignore lint/correctness/useExhaustiveDependencies: theme used only for initial colors; theme updates handled by the setTheme effect
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
+    // The candle colours are the theme's, as on /trading. The engine tracks
+    // its container's size itself, so there is no ResizeObserver here.
     const chart = createChart(container, {
-      width: container.clientWidth,
-      height: 340,
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: isDark ? '#a6adbb' : '#333',
-      },
-      grid: {
-        vertLines: { color: isDark ? 'rgba(166,173,187,0.1)' : 'rgba(0,0,0,0.06)' },
-        horzLines: { color: isDark ? 'rgba(166,173,187,0.1)' : 'rgba(0,0,0,0.06)' },
-      },
-      rightPriceScale: { borderColor: isDark ? 'rgba(166,173,187,0.2)' : 'rgba(0,0,0,0.1)' },
-      timeScale: {
-        borderColor: isDark ? 'rgba(166,173,187,0.2)' : 'rgba(0,0,0,0.1)',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      crosshair: { mode: CrosshairMode.Normal },
+      theme: cardChartTheme(mode, appMode),
+      ariaLabel: `${symbol} ${exchange} price chart`,
+      // A read-only test chart: the keyboard belongs to the page, and the hover
+      // zoom rail is chrome a 340px chart has no room for.
+      shortcuts: false,
+      timeNavigator: false,
+      // The corner mark sits on the oldest candles in a chart this size.
+      branding: false,
     })
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e',
-      downColor: '#ef4444',
-      borderVisible: false,
-      wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444',
-    })
+    const series = chart.addSeries('candlestick', { style: { borderVisible: false } })
     chartRef.current = chart
     seriesRef.current = series
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
-    })
-    ro.observe(container)
-
     return () => {
-      ro.disconnect()
-      chart.remove()
+      chart.destroy()
+      // `destroy` releases the engine's listeners; clearing the host is what
+      // guarantees the next symbol starts on an empty div.
+      container.innerHTML = ''
       chartRef.current = null
       seriesRef.current = null
     }
@@ -340,27 +335,20 @@ function LiveChart({
     // Push the in-memory model to the chart. On reconcile we preserve the
     // user's current zoom/scroll; on first load we fit the range.
     const applyModel = (preserveRange: boolean) => {
-      const ts = chart.timeScale()
-      const range = preserveRange ? ts.getVisibleLogicalRange() : null
+      const range = preserveRange ? chart.getVisibleLogicalRange() : null
       series.setData(
         Array.from(candlesRef.current.values())
           .sort((a, b) => a.time - b.time)
-          .map((k) => ({
-            time: k.time as UTCTimestamp,
-            open: k.open,
-            high: k.high,
-            low: k.low,
-            close: k.close,
-          }))
+          .map(toBar)
       )
       if (range) {
         try {
-          ts.setVisibleLogicalRange(range)
+          chart.setVisibleLogicalRange(range)
         } catch {
           /* range no longer valid after data change */
         }
       } else {
-        ts.fitContent()
+        chart.fitContent()
       }
     }
 
@@ -460,21 +448,10 @@ function LiveChart({
     }
   }, [symbol, exchange, interval])
 
-  // Re-apply theme colors without re-creating the chart.
+  // Re-theme the chart without re-creating it: light, dark and analyzer.
   useEffect(() => {
-    const chart = chartRef.current
-    if (!chart) return
-    chart.applyOptions({
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: isDark ? '#a6adbb' : '#333',
-      },
-      grid: {
-        vertLines: { color: isDark ? 'rgba(166,173,187,0.1)' : 'rgba(0,0,0,0.06)' },
-        horzLines: { color: isDark ? 'rgba(166,173,187,0.1)' : 'rgba(0,0,0,0.06)' },
-      },
-    })
-  }, [isDark])
+    chartRef.current?.setTheme(cardChartTheme(mode, appMode))
+  }, [mode, appMode])
 
   // Update the forming candle from each live tick, bucketed at the active
   // interval. The 5h30m IST offset is a whole multiple of 60/300/900s, so a
@@ -513,20 +490,15 @@ function LiveChart({
       return // stale tick older than the current bar
     }
     candlesRef.current.set(bucket, bar)
-    series.update({
-      time: bar.time as UTCTimestamp,
-      open: bar.open,
-      high: bar.high,
-      low: bar.low,
-      close: bar.close,
-    })
+    series.update(toBar(bar))
     setLast(ltp)
   }, [ltp, ts])
 
   const up = last != null && refPrice != null ? last >= refPrice : true
 
   return (
-    <div className="rounded-lg border bg-card">
+    // overflow-hidden keeps the chart's square canvas inside the card's rounded corners.
+    <div className="overflow-hidden rounded-lg border bg-card">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <span
           className={`h-2 w-2 rounded-full ${isAuthenticated ? 'bg-green-500' : 'bg-zinc-400'}`}

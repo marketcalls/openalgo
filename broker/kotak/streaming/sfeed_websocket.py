@@ -564,6 +564,33 @@ class KotakSFeedWebSocket:
         with self._lock:
             return self._symbols.get(key, "")
 
+    @staticmethod
+    def _trade_fields(decoded):
+        """Last-trade and session fields shared by the scrip packet shapes.
+
+        Only what the packet carries is returned. last_trade_time is Unix
+        seconds on the wire (the same convention as HSM's ltt, and the reason
+        an untouched instrument reads 0 or a negative 1900 placeholder), so a
+        non-positive value means "no trade yet" and is left out rather than
+        published as a time.
+        """
+        out = {}
+        ltt = decoded.get("last_trade_time")
+        if isinstance(ltt, (int, float)) and ltt > 0:
+            out["ltt"] = int(ltt)
+        for src, dst in (
+            ("last_trade_qty", "ltq"),
+            ("average_trade_price", "ap"),
+            ("net_change", "cng"),
+            ("net_change_percent", "nc"),
+            ("total_buy_quantity", "totalbuyqty"),
+            ("total_sell_quantity", "totalsellqty"),
+            ("open_interest", "oi"),
+        ):
+            if src in decoded:
+                out[dst] = decoded[src]
+        return out
+
     def _to_quote(self, decoded):
         """Market picture at touch-line level -> OpenAlgo's quote dict.
 
@@ -572,7 +599,7 @@ class KotakSFeedWebSocket:
         """
         buy = decoded.get("buy") or []
         sell = decoded.get("sell") or []
-        return {
+        quote = {
             "bid": buy[0]["price"] if buy else 0.0,
             "ask": sell[0]["price"] if sell else 0.0,
             "open": decoded.get("open_price", 0.0),
@@ -585,30 +612,34 @@ class KotakSFeedWebSocket:
             "tk": decoded.get("instrument_token", ""),
             "e": decoded.get("exchange_segment", ""),
         }
+        quote.update(self._trade_fields(decoded))
+        return quote
 
     def _to_quote_lite(self, decoded):
-        """Mini touch line. Carries no OHLC or book, only a traded price.
+        """Mini touch line. Carries a traded price, no OHLC, volume or book.
 
-        The absent fields are sent as 0.0 rather than omitted: the adapter
-        treats a zero price field as "no update" and merges the last known
-        value over it, so zeros are how you say "unchanged" in this contract.
+        The fields the packet does not carry are omitted rather than sent as
+        zero. The adapter merges a packet over the last full state it holds
+        for the instrument, so an absent key keeps the last known open, high,
+        low, volume and book, while a zero would publish as a real zero (the
+        adapter treats any packet with a price and a symbol as complete).
         """
-        return {
-            "bid": 0.0,
-            "ask": 0.0,
-            "open": 0.0,
-            "high": 0.0,
-            "low": 0.0,
+        quote = {
             "ltp": decoded.get("last_traded_price", 0.0),
             "prev_close": decoded.get("close_price", 0.0),
-            "volume": 0,
             "ts": self._symbol_for(decoded),
             "tk": decoded.get("instrument_token", ""),
             "e": decoded.get("exchange_segment", ""),
         }
+        quote.update(self._trade_fields(decoded))
+        return quote
 
     def _to_depth(self, decoded):
-        """Depth levels, padded to the 5 rows the adapter expects."""
+        """Depth levels, padded to the 5 rows the adapter expects.
+
+        A depth packet is the whole book as the exchange sees it now. The
+        padding rows are empty levels, not "unchanged" ones.
+        """
         quote = self._to_quote(decoded)
         quote["bids"] = self._depth_rows(decoded.get("buy") or [])
         quote["asks"] = self._depth_rows(decoded.get("sell") or [])
@@ -629,7 +660,7 @@ class KotakSFeedWebSocket:
         return out
 
     def _to_index(self, decoded):
-        return {
+        quote = {
             "bid": 0.0,
             "ask": 0.0,
             "open": decoded.get("open_price", 0.0),
@@ -642,3 +673,5 @@ class KotakSFeedWebSocket:
             "tk": decoded.get("instrument_token", ""),
             "e": decoded.get("exchange_segment", ""),
         }
+        quote.update(self._trade_fields(decoded))
+        return quote

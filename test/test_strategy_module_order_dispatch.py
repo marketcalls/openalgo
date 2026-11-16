@@ -52,6 +52,10 @@ def test_an_exit_refuses_to_guess_a_side():
 # ---------------------------------------------------------------------------
 
 
+#: The broker the live run in these tests started on, and is logged in to.
+ZERODHA = od.BrokerBinding(broker="zerodha")
+
+
 def _order():
     return od.build_order(
         symbol="NIFTY28MAY2624000CE",
@@ -96,7 +100,7 @@ def test_a_live_run_goes_to_the_broker_pipe_with_resolved_auth():
     ):
         live.return_value = (True, {"status": "success", "orderid": "250101000123"}, 200)
 
-        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+        result = od.dispatch_order(mode="live", api_key="k", order=_order(), binding=ZERODHA)
 
     assert result.ok is True
     assert result.broker_order_id == "250101000123"
@@ -117,6 +121,7 @@ def test_a_live_retry_cancel_calls_the_resolved_broker_directly():
             mode="live",
             api_key="k",
             broker_order_id="LIVE-RETRY",
+            binding=ZERODHA,
         )
 
     assert result.ok is True
@@ -162,6 +167,7 @@ def test_a_live_status_poll_uses_resolved_auth_and_the_shared_orderbook_path():
             mode="live",
             api_key="k",
             broker_order_id="LIVE-WORKING",
+            binding=ZERODHA,
         )
 
     assert result.ok is True
@@ -189,7 +195,7 @@ def test_a_live_order_is_not_attempted_when_the_broker_session_is_gone():
         patch("database.auth_db.get_auth_token_broker", return_value=(None, None)),
         patch("services.place_order_service.place_order_with_auth") as live,
     ):
-        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+        result = od.dispatch_order(mode="live", api_key="k", order=_order(), binding=ZERODHA)
 
     assert result.ok is False
     assert "expired" in result.error or "not available" in result.error
@@ -207,7 +213,7 @@ def test_dispatch_does_not_go_through_the_semi_automatic_approval_queue():
     ):
         live.return_value = (True, {"status": "success", "orderid": "1"}, 200)
 
-        od.dispatch_order(mode="live", api_key="k", order=_order())
+        od.dispatch_order(mode="live", api_key="k", order=_order(), binding=ZERODHA)
 
     assert live.call_count == 1
     assert queued.call_count == 0
@@ -311,7 +317,7 @@ def test_a_live_order_is_not_diverted_by_the_platform_analyzer_toggle():
             "BROKER-1",
         )
 
-        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+        result = od.dispatch_order(mode="live", api_key="k", order=_order(), binding=ZERODHA)
 
     # The broker was called and the sandbox was not, despite the toggle.
     assert sandbox.call_count == 0, "a live run must not be diverted into the sandbox"

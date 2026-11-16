@@ -632,7 +632,9 @@ def _log_in(monkeypatch, should_download):
         auth_utils, "should_download_master_contract", lambda broker: (should_download, "test")
     )
     monkeypatch.setattr(auth_utils, "set_session_login_time", lambda: None)
-    monkeypatch.setattr(auth_utils, "get_session_expiry_time", lambda: timedelta(hours=1))
+    monkeypatch.setattr(
+        auth_utils, "get_session_expiry_time", lambda broker=None: timedelta(hours=1)
+    )
     monkeypatch.setattr(auth_utils, "get_real_ip", lambda: "127.0.0.1")
     monkeypatch.setattr(auth_db, "register_session", lambda **kwargs: None)
     monkeypatch.setattr(auth_db, "get_active_sessions", lambda username: [])

@@ -18,9 +18,11 @@ them is wrong even if it passes tests.
    setting live in the database. `.env` is not read by this module.
 2. **Services, not HTTP.** Tools import from `services/*` and call the function.
    No tool makes an HTTP request back into this process.
-3. **Nothing blocks the eventlet hub.** Production is
-   `gunicorn --worker-class eventlet -w 1`. The agent runs on a real OS thread
-   and communicates through a real queue.
+3. **Nothing blocks the eventlet hub.** Default production is
+   `gunicorn --worker-class eventlet -w 1`; opt-in gthread uses one worker
+   with 64 request threads. The agent runs on a real OS thread and
+   communicates through a real queue in both modes. The development server
+   uses standard threading. See [worker selection](../../gthread/README.md).
 4. **Python 3.12+.**
 5. **Modular by construction.** Adding a tool is one file plus one registry
    line. Adding a provider is a database row.
@@ -731,7 +733,7 @@ call the backend streams the arguments as `function_call_arguments.delta`
 events. For a batch of parallel calls it frequently sends no deltas at all:
 each call's complete arguments arrive once in
 `response.function_call_arguments.done` and again in
-`response.output_item.done`. LiteLLM 1.104.0 builds the chat stream from the
+`response.output_item.done`. LiteLLM 1.104.0, and still 1.106.6, builds the chat stream from the
 `output_item.added` event (id and name, empty arguments) plus the deltas, and
 ignores both `done` events, so agno assembles `arguments: ""` and pydantic
 refuses the call before the tool body runs.
