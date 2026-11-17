@@ -1,140 +1,132 @@
-# api/funds.py
+"""Pocketful funds mapped onto OpenAlgo's funds response.
 
-import json
-import os
+GET /api/v2/funds/view?client_id=<client_id>&type=all (Pocketful docs,
+"Funds"; the SDK's ``api.funds`` route) answers a label and value table:
 
-import httpx
-from flask import session
+    {"data": {"client_id": "...", "headers": ["Description", ""],
+              "values": [["Available", "39.99"], ["Cash Deposit", "39.99"],
+                         ...]},
+     "message": "", "status": "success"}
 
-from utils.httpx_client import get_httpx_client
+The rows read, by the label the docs give them:
+
+    availablecash   "Available": funds currently available in the account
+    collateral      "DP Pledge Collateral" + "Pool Pledge Collateral": funds
+                    obtained against pledged securities, which is what
+                    OpenAlgo's collateral means (margin from pledged holdings).
+                    The "... Collateral Benefit" rows describe the same pledge
+                    from another angle, so they are not added on top.
+    utiliseddebits  "Net Margin": the docs define it as the balance required
+                    after accounting for all open positions, the margin in use.
+
+The answer carries no M2M figure. Realised and unrealised M2M come from the
+position book, through the same functions the position book service calls
+(``order_api.get_positions``, ``order_data.map_position_data`` and
+``transform_positions_data``), so the dashboard and the position book agree:
+closed rows (quantity 0) are realised, open rows unrealised. A position book
+that cannot be read leaves both at 0.00 and the funds figures still stand.
+
+Every value is a 2 decimal string. Any failure to read funds returns {}, which
+is what the dashboard and the session resume read as a dead session.
+"""
+
+from broker.pocketful.api.baseurl import client_id, pocketful_request
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+FUNDS_PATH = "/api/v2/funds/view"
+
+AVAILABLE = "Available"
+COLLATERAL_ROWS = ("DP Pledge Collateral", "Pool Pledge Collateral")
+USED = "Net Margin"
+
+
+def _to_float(value):
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rows(values):
+    """{label: amount} from the ``values`` table of [label, amount] pairs."""
+    table = {}
+    for row in values:
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            table[str(row[0]).strip()] = _to_float(row[1])
+    return table
+
+
+def _position_m2m(auth_token):
+    """(realised, unrealised) across the position book; (0.0, 0.0) if unreadable."""
+    try:
+        from broker.pocketful.api.order_api import get_positions
+        from broker.pocketful.mapping.order_data import map_position_data, position_pnl_split
+
+        book = get_positions(auth_token)
+        if isinstance(book, dict) and book.get("status") == "error":
+            logger.warning("Pocketful position book could not be read for M2M")
+            return 0.0, 0.0
+        rows = map_position_data(book) or []
+    except Exception:
+        logger.exception("Could not read the Pocketful position book for M2M")
+        return 0.0, 0.0
+
+    # Split within each row: a position closed in part has booked profit on
+    # the matched quantity and open profit on the rest.
+    realised = 0.0
+    unrealised = 0.0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        booked, open_pnl = position_pnl_split(row)
+        realised += booked
+        unrealised += open_pnl
+    return realised, unrealised
+
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Pocketful's API using the provided auth token.
-
-    The client_id is retrieved from the session where it was stored during authentication.
-    """
-    # For Pocketful, we need the client_id which is stored in the session after authentication
-    client_id = session.get("USER_ID")
-    # Pocketful's base URL and endpoint for funds
-    base_url = "https://trade.pocketful.in"
-    endpoint = "/api/v2/funds/view"
-
-    # Set up headers with authorization token
-    headers = {"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"}
-
-    # If no client_id is provided, we need to get it first
-    if not client_id:
-        try:
-            # Get the shared httpx client
-            client = get_httpx_client()
-
-            # Make a request to the trading_info endpoint to get client_id
-            trading_info_url = f"{base_url}/api/v1/user/trading_info"
-            info_response = client.get(trading_info_url, headers=headers)
-            info_response.status = (
-                info_response.status_code
-            )  # Add status attribute for compatibility
-            info_response.raise_for_status()  # Raise exception for non-200 status codes
-
-            # Parse the response JSON
-            info_data = info_response.json()
-
-            if info_data.get("status") == "success":
-                client_id = info_data.get("data", {}).get("client_id")
-                logger.debug(f"Retrieved client_id: {client_id}")
-            else:
-                logger.info(
-                    f"Error fetching client_id: {info_data.get('message', 'Unknown error')}"
-                )
-                return {}
-        except Exception as e:
-            logger.error(f"Error retrieving client_id: {e}")
-            return {}
-
-    # Required query parameters including client_id
-    params = {"client_id": client_id, "type": "all"}
+    """OpenAlgo funds dict (2 decimal strings), or {} when Pocketful cannot be read."""
+    account = client_id(auth_token)
+    if not account:
+        logger.error("Pocketful funds not requested: the session carries no client id")
+        return {}
 
     try:
-        # Construct the full URL
-        url = f"{base_url}{endpoint}"
-
-        # Get the shared httpx client
-        client = get_httpx_client()
-
-        # Make the API request with query parameters
-        response = client.get(url, headers=headers, params=params)
-        response.status = response.status_code  # Add status attribute for compatibility
-        response.raise_for_status()  # Raise exception for non-200 status codes
-
-        # Parse the response JSON
-        margin_data = response.json()
-
-        logger.info(f"Funds Details: {margin_data}")
-
-        # Check if the response was successful
-        if margin_data.get("status") != "success":
-            logger.info(f"Error fetching margin data: {margin_data.get('message')}")
-            return {}
-
-        # Client ID is already used in the query parameters
-        # We'll include it in the processed data for reference
-
-        # Initialize values
-        available_cash = 0.0
-        collateral = 0.0
-        net_margin = 0.0
-        utilized_margin = 0.0
-        span_margin = 0.0
-        var_margin = 0.0
-        ext_loss_margin = 0.0
-        option_premium = 0.0
-
-        # Extract values from Pocketful's response format
-        # The values are in a list of [description, value] pairs
-        values = margin_data.get("data", {}).get("values", [])
-
-        # Map to find values by description
-        value_map = {item[0]: float(item[1]) for item in values}
-
-        # Extract specific values based on their descriptions
-        available_cash = value_map.get("Available Margin", 0.0)
-        collateral = (
-            value_map.get("DP Collateral Benefit", 0.0)
-            + value_map.get("Manual Collateral", 0.0)
-            + value_map.get("Pool Collateral Benefit", 0.0)
-            + value_map.get("Sar Collateral Benefit", 0.0)
+        response = pocketful_request(
+            "GET", FUNDS_PATH, auth_token, params={"client_id": account, "type": "all"}
         )
-        net_margin = value_map.get("Margin Used", 0.0)
-        # span_margin = value_map.get('Span Margin', 0.0)
-        # var_margin = value_map.get('Var Margin', 0.0)
-        # ext_loss_margin = value_map.get('Extreme Loss Margin', 0.0)
-        # option_premium = value_map.get('Option Credit For Sell', 0.0) + value_map.get('Premium', 0.0)
-        collateral = value_map.get("Total Pledge Collateral", 0.0)
-        # Calculate utilized margin from components
-        utilized_margin = net_margin
-        m2munrealized = value_map.get("unrealized_mtm", 0.0)
-        m2mrealized = value_map.get("realized_mtm", 0.0)
-
-        # Unrealized and realized M2M are not directly available in Pocketful's response
-        # Use 0.0 as default or calculate from other values if needed
-
-        # Construct and return the processed margin data to match expected format
-        processed_margin_data = {
-            "availablecash": f"{available_cash:.2f}",
-            "collateral": f"{collateral:.2f}",
-            "m2munrealized": f"{m2munrealized:.2f}",
-            "m2mrealized": f"{m2mrealized:.2f}",
-            "utiliseddebits": f"{utilized_margin:.2f}",
-        }
-        return processed_margin_data
-
-    except httpx.HTTPError as e:
-        logger.error(f"API request error: {e}")
+    except Exception:
+        logger.exception("Pocketful funds request failed")
         return {}
-    except (ValueError, KeyError, TypeError) as e:
-        logger.error(f"Error processing margin data: {e}")
+
+    if not response.ok:
+        logger.error(
+            f"Pocketful funds answered {response.status_code}: {response.message or 'no message'}"
+        )
         return {}
+
+    payload = response.payload
+    values = payload.get("values") if isinstance(payload, dict) else None
+    if not isinstance(values, list):
+        logger.error("Pocketful funds answer has no values table")
+        return {}
+
+    table = _rows(values)
+    expected = (AVAILABLE, USED, *COLLATERAL_ROWS)
+    missing = [label for label in expected if label not in table]
+    if missing:
+        # Labels only, never amounts: this is what a first live run needs to
+        # see if Pocketful's labels differ from its documentation.
+        logger.warning(f"Pocketful funds rows missing {missing}; rows received: {sorted(table)}")
+
+    realised, unrealised = _position_m2m(auth_token)
+
+    return {
+        "availablecash": f"{table.get(AVAILABLE, 0.0):.2f}",
+        "collateral": f"{sum(table.get(label, 0.0) for label in COLLATERAL_ROWS):.2f}",
+        "m2munrealized": f"{unrealised:.2f}",
+        "m2mrealized": f"{realised:.2f}",
+        "utiliseddebits": f"{table.get(USED, 0.0):.2f}",
+    }

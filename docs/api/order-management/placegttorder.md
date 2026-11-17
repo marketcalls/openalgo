@@ -195,7 +195,7 @@ A fired trigger creates an ordinary child order. Triggering or acknowledgement d
 
 ## Broker-Specific Behaviour
 
-This checkout includes live GTT modules for **Angel, Dhan, Fyers, Rupeezy, Upstox and Zerodha**. Other brokers return `501` in live mode. Sandbox GTT is routed before that live capability gate. Supported exchanges, products, child-order types and history differ by broker.
+This checkout includes live GTT modules for **Angel, Dhan, Fyers, Pocketful, Rupeezy, Upstox and Zerodha**. Other brokers return `501` in live mode. Sandbox GTT is routed before that live capability gate. Supported exchanges, products, child-order types and history differ by broker.
 
 ### Angel — two independent rules
 
@@ -205,6 +205,10 @@ Angel has no native two-leg OCO. OpenAlgo creates two independent single rules a
 
 Rupeezy's Vortex integration supports SINGLE/OCO and history. Modification reads the current book to obtain the leg IDs; a failed book read prevents modification. Its trigger engine uses broker LTP, so it does not require the same `last_price` snapshot as Kite.
 
+
+### Pocketful: single rules only
+
+Pocketful's GTT API documents a single trigger only, so `trigger_type=OCO` is refused before anything is sent. A `MARKET` leg goes out as a `LIMIT` priced with Market Price Protection from the trigger price, so a sell stop below the market still fills once it triggers. Pocketful needs an expiry on every rule: OpenAlgo sends `expires_at` when you give one, otherwise a derivative's rule expires with its contract and any other rule after 365 days. A modify reads the GTT book first and refuses a rule that is no longer active, or a change of symbol or side. A create, modify or cancel that gets no clear answer is never retried: check the GTT book before trying again.
 
 ### Upstox — OCO opens a position
 
