@@ -286,6 +286,28 @@ def _position_pnl(position):
     return net_amount + net_quantity * _float(position.get("ltp")) * multiplier
 
 
+def position_pnl_split(position):
+    """(realised, unrealised) for one position row; they add up to its P&L.
+
+    Realised is the matched quantity, the smaller of what was bought and what
+    was sold, at the row's own average sell less its average buy. The rest is
+    the open quantity at the LTP. A position closed in part carries both, so
+    deciding by whether any quantity is still open misreports each half.
+    ``realized_mtm`` is not used: the docs' own example shows 0 on a closed,
+    profitable position.
+    """
+    total = _position_pnl(position)
+    bought = _float(position.get("buy_quantity"))
+    sold = _float(position.get("sell_quantity"))
+    matched = min(bought, sold)
+    if matched <= 0:
+        return 0.0, total
+    average_sell = _float(position.get("sell_amount")) / sold
+    average_buy = _float(position.get("buy_amount")) / bought
+    realised = matched * (average_sell - average_buy)
+    return realised, total - realised
+
+
 def transform_positions_data(positions_data):
     if isinstance(positions_data, dict):
         positions_data = _rows(positions_data)

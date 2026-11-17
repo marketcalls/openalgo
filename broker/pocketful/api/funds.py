@@ -62,30 +62,27 @@ def _position_m2m(auth_token):
     """(realised, unrealised) across the position book; (0.0, 0.0) if unreadable."""
     try:
         from broker.pocketful.api.order_api import get_positions
-        from broker.pocketful.mapping.order_data import (
-            map_position_data,
-            transform_positions_data,
-        )
+        from broker.pocketful.mapping.order_data import map_position_data, position_pnl_split
 
         book = get_positions(auth_token)
         if isinstance(book, dict) and book.get("status") == "error":
             logger.warning("Pocketful position book could not be read for M2M")
             return 0.0, 0.0
-        rows = transform_positions_data(map_position_data(book)) or []
+        rows = map_position_data(book) or []
     except Exception:
         logger.exception("Could not read the Pocketful position book for M2M")
         return 0.0, 0.0
 
+    # Split within each row: a position closed in part has booked profit on
+    # the matched quantity and open profit on the rest.
     realised = 0.0
     unrealised = 0.0
     for row in rows:
         if not isinstance(row, dict):
             continue
-        pnl = _to_float(row.get("pnl"))
-        if _to_float(row.get("quantity")) == 0:
-            realised += pnl
-        else:
-            unrealised += pnl
+        booked, open_pnl = position_pnl_split(row)
+        realised += booked
+        unrealised += open_pnl
     return realised, unrealised
 
 

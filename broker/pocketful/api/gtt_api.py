@@ -229,7 +229,14 @@ def modify_gtt_order(data, auth):
     held = current.get("order") if isinstance(current.get("order"), dict) else {}
     held_token = str(held.get("token") or held.get("instrument_token") or "")
     held_side = str(held.get("order_side") or "").upper()
-    if held_token != order["instrument_token"] or held_side != order["order_side"]:
+    held_exchange = str(held.get("exchange") or "").upper()
+    # Tokens are per exchange (MCX and NFO share some), so the token alone does
+    # not name the instrument: a modify must not move a rule to another contract.
+    if (
+        held_token != order["instrument_token"]
+        or held_side != order["order_side"]
+        or held_exchange != str(order.get("exchange") or "").upper()
+    ):
         return {
             "status": "error",
             "message": "A GTT's symbol, exchange and side cannot be changed. Cancel it "

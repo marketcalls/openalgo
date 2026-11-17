@@ -264,11 +264,26 @@ def positions(monkeypatch):
     import broker.pocketful.api.order_api as order_api
     import broker.pocketful.mapping.order_data as order_data
 
-    state = {"book": {"status": "success", "data": []}, "rows": []}
+    state = {"book": {"status": "success", "data": []}}
     monkeypatch.setattr(order_api, "get_positions", lambda auth: state["book"])
-    monkeypatch.setattr(order_data, "map_position_data", lambda data: data)
-    monkeypatch.setattr(order_data, "transform_positions_data", lambda data: state["rows"])
+    # Rows as the netwise book carries them; symbol mapping is not under test.
+    monkeypatch.setattr(order_data, "map_position_data", lambda data: data["data"])
     return state
+
+
+def netwise(symbol, bought=0, buy_amount=0, sold=0, sell_amount=0, ltp=0, multiplier=1):
+    """One netwise position row (fetch-position-netwise.md), amounts in one unit."""
+    return {
+        "trading_symbol": symbol,
+        "buy_quantity": bought,
+        "buy_amount": buy_amount,
+        "sell_quantity": sold,
+        "sell_amount": sell_amount,
+        "net_quantity": bought - sold,
+        "net_amount": sell_amount - buy_amount,
+        "ltp": ltp,
+        "multiplier": multiplier,
+    }
 
 
 def test_funds_read_the_documented_answer(monkeypatch, positions):
@@ -311,22 +326,40 @@ def test_funds_take_pledges_as_collateral_and_net_margin_as_used(monkeypatch, po
 
 
 def test_funds_m2m_comes_from_the_position_book(monkeypatch, positions):
-    positions["rows"] = [
-        {"symbol": "IDEA", "quantity": 0, "pnl": 18.0},
-        {"symbol": "TCS", "quantity": "5", "pnl": -0.1},
-        {"symbol": "NIFTY24NOV2624000CE", "quantity": -75, "pnl": 300.4},
-    ]
+    positions["book"] = {
+        "status": "success",
+        "data": [
+            # The docs' example: bought and sold one, closed for 18.
+            netwise("IDEA", bought=1, buy_amount=40520, sold=1, sell_amount=40538, ltp=40520),
+            # Bought 100 at 100, sold 50 at 110, 50 still held at an LTP of 100:
+            # 500 booked on the 50 sold, nothing open.
+            netwise("TCS", bought=100, buy_amount=10000, sold=50, sell_amount=5500, ltp=100),
+            # Sold 75 at 10, still short at an LTP of 6: 300 open, nothing booked.
+            netwise("NIFTY24NOV2624000CE", sold=75, sell_amount=750, ltp=6),
+        ],
+    }
     monkeypatch.setattr(funds, "pocketful_request", Broker(answer(FUNDS_DOC)))
 
     result = funds.get_margin_data(TOKEN)
 
-    assert result["m2mrealized"] == "18.00"
-    assert result["m2munrealized"] == "300.30"
+    assert result["m2mrealized"] == "518.00"
+    assert result["m2munrealized"] == "300.00"
+
+
+def test_a_short_closed_in_part_books_its_matched_quantity():
+    from broker.pocketful.mapping.order_data import _position_pnl, position_pnl_split
+
+    # Sold 100 at 100, bought 50 back at 90, short 50 at an LTP of 100.
+    row = netwise("SBIN", bought=50, buy_amount=4500, sold=100, sell_amount=10000, ltp=100)
+
+    realised, unrealised = position_pnl_split(row)
+
+    assert (realised, unrealised) == (500.0, 0.0)
+    assert realised + unrealised == _position_pnl(row)
 
 
 def test_funds_stand_when_the_position_book_cannot_be_read(monkeypatch, positions):
     positions["book"] = {"status": "error", "message": "unreachable"}
-    positions["rows"] = [{"quantity": 0, "pnl": 999.0}]
     monkeypatch.setattr(funds, "pocketful_request", Broker(answer(FUNDS_DOC)))
 
     result = funds.get_margin_data(TOKEN)
@@ -731,6 +764,12 @@ def test_a_modify_keeps_the_rules_expiry_and_sends_its_id(monkeypatch, master):
         ([dict(GTT_ROW_DOC, order=dict(GTT_ROW_DOC["order"], status="Triggered"))], {}, "active"),
         ([GTT_ROW_DOC], {"symbol": "IDEA"}, "cannot be changed"),
         ([GTT_ROW_DOC], {"action": "SELL"}, "cannot be changed"),
+        # Same token and side on another exchange: tokens are per exchange.
+        (
+            [dict(GTT_ROW_DOC, order=dict(GTT_ROW_DOC["order"], exchange="BSE"))],
+            {},
+            "cannot be changed",
+        ),
         ([dict(GTT_ROW_DOC, action_type="oco_order")], {}, "not a single trigger"),
     ],
 )
