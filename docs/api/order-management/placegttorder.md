@@ -7,11 +7,11 @@ Place a new GTT (Good Till Triggered) order — a price-trigger that sits with t
 | Type | Use when… | Triggers | Orders fired |
 |------|-----------|----------|--------------|
 | **SINGLE** | You want **one** entry or exit at a level. Example: *"Buy IDEA if it dips to 9.55"* or *"Sell RELIANCE if it crosses 1450"*. | 1 | 1 |
-| **OCO** (One-Cancels-Other) | You're already in a position and want **both a stoploss and a target**, whichever hits first. Example: *"I'm short INFY @ 1550. Stop me out at 1480, take profit at 1620."* | 2 | 1 of 2 (the other is auto-cancelled) |
+| **OCO** (One-Cancels-Other) | You're already in a position and want **both a stoploss and a target**, whichever hits first. Example: *"I hold INFY @ 1550. Stop me out at 1480, take profit at 1620."* | 2 | Broker-dependent; native OCO cancels the other leg |
 
 > **In SINGLE there is no second leg and no automatic cancel** — once your one trigger fires and the order is placed, the GTT is finished.
 
-> **Upstox users:** the OCO row above does **not** describe Upstox. There, an OCO opens a position at market before arming the two legs — see [Upstox — OCO opens a position](#upstox--oco-opens-a-position). Use SINGLE to protect an existing holding.
+> **Upstox users:** the OCO row above does **not** describe Upstox. There, an OCO opens a position at market before activating the two exit rules — see [Upstox — OCO opens a position](#upstox--oco-opens-a-position). Use SINGLE to protect an existing holding.
 
 ## How to Choose `triggerprice_sl` vs `triggerprice_tg` (SINGLE only)
 
@@ -113,7 +113,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/placegttorder \
 
 LTP is currently below 1450 → trigger sits **above** LTP → use `triggerprice_tg`. `price=0` because pricetype is MARKET.
 
-## Sample API Request — OCO: "Bracket my INFY short — stop at 1480 / take profit at 1620"
+## Sample API Request — OCO: "Protect my INFY holding — stop at 1480 / take profit at 1620"
 
 ```json
 {
@@ -185,18 +185,30 @@ LTP is currently below 1450 → trigger sits **above** LTP → use `triggerprice
 - **`last_price` is fetched server-side** from the broker's quotes endpoint. You don't need to send it.
 - **MARKET handling**: some brokers' GTT APIs only accept LIMIT child orders. When that's the case, OpenAlgo automatically converts a MARKET request into a Market-Price-Protected LIMIT (a slab-based buffer around LTP for SINGLE, or around each leg's trigger for OCO) so the submitted `pricetype=MARKET` works uniformly across brokers.
 - **OCO direction**: stoploss-leg trigger must be **below** target-leg trigger (`triggerprice_sl < triggerprice_tg`). The `action` (BUY or SELL) applies to both legs.
-- **Analyzer (sandbox) mode** places the GTT in the sandbox instead of at the broker: the response carries `"mode": "analyze"` and a `GTT-...` trigger id, margin is reserved at placement, and the trigger fires against live LTP exactly as it would at the broker, placing a sandbox order. See [GTTOrderBook](./gttorderbook.md) for how to read what fired.
-- **Analyzer (sandbox) mode** places the GTT in the sandbox instead of at the broker: the response carries `"mode": "analyze"` and a `GTT-...` trigger id, margin is reserved at placement, and the trigger fires against live LTP exactly as it would at the broker, placing a sandbox order. See [GTTOrderBook](./gttorderbook.md) for how to read what fired.
+- **Analyzer (sandbox) mode** places the GTT in the sandbox instead of at the broker: the response carries `"mode": "analyze"` and a `GTT-...` trigger id, margin is reserved at placement, and the trigger is evaluated against available live LTP to place a sandbox order. See [GTTOrderBook](./gttorderbook.md) for how to read what fired.
 - **Symbol format**:
   - Equity: `RELIANCE`
   - Futures: `NIFTY25AUG26FUT`
   - Options: `NIFTY25AUG2625000CE`
 
+A fired trigger creates an ordinary child order. Triggering or acknowledgement does not guarantee that child fills, especially when MARKET is converted to a protected LIMIT. Sandbox triggering is a simulation against available live prices; it does not reproduce broker queueing, exchange liquidity or outage behavior.
+
 ## Broker-Specific Behaviour
+
+This checkout includes live GTT modules for **Angel, Dhan, Fyers, Rupeezy, Upstox and Zerodha**. Other brokers return `501` in live mode. Sandbox GTT is routed before that live capability gate. Supported exchanges, products, child-order types and history differ by broker.
+
+### Angel — two independent rules
+
+Angel has no native two-leg OCO. OpenAlgo creates two independent single rules and returns a composite trigger ID such as `1234567-1234568`. Keep that entire ID for modify/cancel. The book exposes two separate SINGLE rows, because the broker does not store their pairing. **Do not rely on one rule automatically cancelling the other** when it fires. Modify and cancel operate sequentially and can fail after only one rule was changed; reconcile both rules before retrying. A failed second placement attempts to cancel the first rule, but a transport failure can still require broker-book verification.
+
+### Rupeezy — per-leg modification and history
+
+Rupeezy's Vortex integration supports SINGLE/OCO and history. Modification reads the current book to obtain the leg IDs; a failed book read prevents modification. Its trigger engine uses broker LTP, so it does not require the same `last_price` snapshot as Kite.
+
 
 ### Upstox — OCO opens a position
 
-> **Warning.** On Upstox, `trigger_type=OCO` does **not** behave like it does on Zerodha or Dhan. It will **open a position at market** before arming your two legs. If you meant to protect something you already hold, use `SINGLE` instead.
+> **Warning.** On Upstox, `trigger_type=OCO` does **not** behave like it does on Zerodha or Dhan. It will **open a position at market** before activating its two exit rules. If you meant to protect something you already hold, use `SINGLE` instead.
 
 Upstox has no exit-only two-leg GTT. Every Upstox GTT must carry an `ENTRY` rule (error `UDAPI1141`), and a multi-rule GTT needs 2–3 rules (`UDAPI1137`) — so there is no combination that omits the entry. What Upstox calls a multi-leg GTT is a **bracket**: an entry, with a target and stop-loss attached that stay dormant until the entry fills. Upstox Pro's own GTT ticket builds exactly this ("Place order if price is below X", plus optional *Add stop loss* / *Add target*).
 
@@ -204,8 +216,8 @@ OpenAlgo's OCO describes only exits on a position assumed to already exist, so i
 
 | You send | Upstox does |
 |----------|-------------|
-| `action: "SELL"` | **BUYs** at market now, then arms target/stop |
-| `action: "BUY"` | **SELLs** at market now, then arms target/stop |
+| `action: "SELL"` | **BUYs** at market now, then activates target/stop |
+| `action: "BUY"` | **SELLs** at market now, then activates target/stop |
 
 The entry side is the inverse of `action`, because OpenAlgo's OCO `action` is the side of both *exit* legs. Every OCO placement logs a warning naming the position that will open.
 

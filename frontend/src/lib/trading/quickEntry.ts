@@ -65,7 +65,7 @@ export type QuickInterval =
   | { code?: undefined; error: string }
 
 /** How a typed unit reads, keyed by what may be typed for it. */
-const UNITS: Record<string, 's' | 'm' | 'h' | 'D' | 'W' | 'M'> = {
+const UNITS: Record<string, 's' | 'm' | 'h' | 'D' | 'W' | 'M' | 'Q' | 'Y'> = {
   s: 's',
   sec: 's',
   secs: 's',
@@ -81,6 +81,8 @@ const UNITS: Record<string, 's' | 'm' | 'h' | 'D' | 'W' | 'M'> = {
   wk: 'W',
   mo: 'M',
   mn: 'M',
+  q: 'Q',
+  y: 'Y',
 }
 
 /**
@@ -94,7 +96,11 @@ const UNITS: Record<string, 's' | 'm' | 'h' | 'D' | 'W' | 'M'> = {
  * Only an interval the broker serves is accepted. One it does not is refused
  * with the reason, rather than quietly swapped for the nearest one.
  */
-export function parseQuickInterval(text: string, available: readonly string[]): QuickInterval {
+export function parseQuickInterval(
+  text: string,
+  available: readonly string[],
+  canSelect?: (code: string) => boolean
+): QuickInterval {
   const typed = text.trim().replace(/\s+/g, '')
   if (typed === '') return { error: 'Type an interval, such as 5, 15, 1h or D' }
   if (available.includes(typed)) return { code: typed }
@@ -102,22 +108,24 @@ export function parseQuickInterval(text: string, available: readonly string[]): 
   if (!match) return { error: 'Type a number of minutes, or a value such as 1h, D or W' }
   const count = match[1] === '' ? 1 : Number(match[1])
   const word = match[2]
-  if (!Number.isSafeInteger(count) || count < 1)
+  if (!Number.isSafeInteger(count) || count < 1 || count > 100_000)
     return { error: 'Type a number of minutes, or a value such as 1h, D or W' }
-  let unit: 's' | 'm' | 'h' | 'D' | 'W' | 'M' | undefined
+  let unit: 's' | 'm' | 'h' | 'D' | 'W' | 'M' | 'Q' | 'Y' | undefined
   if (word === '') unit = match[1] === '' ? undefined : 'm'
   else if (word === 'M') unit = 'M'
   else unit = UNITS[word.toLowerCase()]
   if (unit === undefined)
     return { error: 'Type a number of minutes, or a value such as 1h, D or W' }
   const candidates =
-    unit === 'D' || unit === 'W' || unit === 'M'
+    unit === 'D' || unit === 'W' || unit === 'M' || unit === 'Q' || unit === 'Y'
       ? count === 1
         ? [unit, `1${unit}`]
         : [`${count}${unit}`]
       : [`${count}${unit}`]
   const found = candidates.find((code) => available.includes(code))
   if (found) return { code: found }
+  const derived = candidates.find((code) => canSelect?.(code))
+  if (derived) return { code: derived }
   return {
     error: `Your broker does not offer ${candidates[0]}. Choose one from the interval menu.`,
   }

@@ -1,17 +1,23 @@
 /**
- * Vertical drawing-tool rail, overlaid on the left edge of a chart pane.
+ * Vertical drawing-tool rail, on the left edge of the chart grid.
  *
  * Purely additive: the pane's existing trading controls (symbol, timeframe,
  * chart type, product, qty, right-click order entry) are untouched. A group
- * button opens a flyout of its tools; a plain click re-arms the last tool used
- * in that group, and shows it, so the button reads as the tool it will pick.
+ * button re-arms the last tool used in that group, and shows it, so the button
+ * reads as the tool it will pick; the caret in its corner opens the group's
+ * list.
  *
  * The chart is the priority on this page, so the rail never grows a column:
  * the eraser lives in the cursor's flyout, the magnet modes in the magnet's,
  * and the actions on the selection (hide, lock, delete, select all, remove
- * all) in the trash button's. Each of those is the same 32px slot it was.
+ * all) in the trash button's. The one addition is the fold at the foot, which
+ * gives the rail's width back to the chart.
+ *
+ * Presentation follows the engine's reference host: tool glyphs at the 20px
+ * they are drawn for, chrome glyphs at 16px, 32 by 30 buttons, a soft accent
+ * fill for the selected one, and the controls held at the bottom with the tools
+ * fading out under them. The stylesheet is `.oa-rail` in index.css.
  */
-import { EyeOff, Lock, SquareDashedMousePointer, Trash2 } from 'lucide-react'
 import type { MagnetMode } from 'openalgo-charts/draw'
 import { type ReactNode, useEffect, useState } from 'react'
 import {
@@ -19,21 +25,28 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ERASER_TOOL } from '@/lib/trading/drawingActions'
 import { chartMayTakeKey, MOD_KEY } from '@/lib/trading/drawingKeys'
 import { DRAW_GROUPS, drawToolIcon } from '@/lib/trading/drawTools'
+import { ChromeIcon } from '@/lib/trading/glyphs'
 import type { DrawStats } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
-import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE } from './railStyles'
+import { RAIL_BTN } from './railStyles'
 import { Tip } from './Tip'
 
 interface Props {
   stats: DrawStats
   /** The armed tool is held after each placement until Escape (a double-click). */
   latched?: boolean
+  /**
+   * Folded: the rail is not drawn and the chart takes its width. It stays
+   * mounted, so the tool, the drawings and the keyboard chords carry on.
+   */
+  folded?: boolean
+  /** Fold the rail away. Without it the rail offers no fold. */
+  onFold?(): void
   /** Arm a tool, the eraser, or the cursor (null). `latch` holds it until Escape. */
   onPick(toolId: string | null, latch?: boolean): void
   onUndo(): void
@@ -47,14 +60,14 @@ interface Props {
   onStay(on: boolean): void
   /**
    * Where to portal the flyouts. Menus default to `document.body`, which is
-   * invisible while the pane is in the Fullscreen API's top layer — so in full
+   * invisible while the pane is in the Fullscreen API's top layer, so in full
    * screen no tool could be picked at all.
    */
   portalHost?: HTMLElement | null
   /**
    * Arm the tool bound to a key event; returns true if one matched, so the rail
    * can swallow the key. The chord table ships with the draw tier, which the
-   * terminal loads lazily — the rail must not import it and undo that.
+   * terminal loads lazily; the rail must not import it and undo that.
    */
   onShortcut?(e: KeyboardEvent): boolean
 }
@@ -110,54 +123,45 @@ const MAGNET_HINT: Record<MagnetMode, string> = {
 }
 
 /**
- * The caret that opens a button's flyout without pressing the button. A filled
- * corner wedge rather than a chevron in a box: at 8px a chevron's strokes blur.
- * It shows on hover, focus or while the button is active, so a column of
- * resting buttons stays quiet.
+ * The caret that opens a button's list without pressing the button: a small
+ * chevron laid over the button's bottom right corner. It shows on hover, on
+ * focus and while its list is open, so a column of resting buttons stays
+ * quiet. A button of its own, beside the tool rather than inside it, because
+ * a button cannot hold another.
  */
-function Caret({ label, shown, accent }: { label: string; shown: boolean; accent: boolean }) {
+function Caret({ label }: { label: string }) {
   return (
     <DropdownMenuTrigger asChild>
-      <button
-        type="button"
-        aria-label={label}
-        className={cn(
-          'absolute bottom-0 right-0 h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100',
-          shown && 'opacity-100'
-        )}
-      >
-        <svg viewBox="0 0 10 10" className="h-2.5 w-2.5" aria-hidden="true">
-          <path
-            d="M10 2 10 10 2 10 Z"
-            fill="currentColor"
-            className={cn('text-muted-foreground/70', accent && 'text-primary')}
-          />
-        </svg>
+      <button type="button" aria-label={label} className="oa-rail__chev">
+        <ChromeIcon id="chevron-right" size={9} />
       </button>
     </DropdownMenuTrigger>
   )
 }
 
-const ERASER_GLYPH = (
-  <svg
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.5}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d="M3 15 12 6l7 7-6 6H8zM8 11l7 7M13 19h8" />
-  </svg>
-)
+/** A chrome glyph in a rail button, at the 16px the chrome set is drawn for. */
+const chrome = (id: string) => <ChromeIcon id={id} />
 
-const iconBox = 'h-[18px] w-[18px]'
-const rowIcon = 'h-4 w-4 shrink-0 text-muted-foreground'
+/** A list row's glyph. The size class keeps the menu's own 16px rule off it. */
+const rowTool = (id: string) => drawToolIcon(id, 20, 'size-5 text-current')
+const rowChrome = (id: string) => <ChromeIcon id={id} className="size-4 text-current" />
+
+/** The flyout's rows, after the reference host's: glyph, name, chord. */
+const ROW =
+  'min-h-8 gap-2 rounded-[7px] py-1 pl-2 pr-1.5 text-[13px] text-foreground focus:bg-[var(--oa-rail-elev-2)] focus:text-foreground'
+const ROW_ON =
+  'bg-[var(--oa-rail-on-bg)] text-[var(--oa-rail-acc)] focus:bg-[var(--oa-rail-on-bg)] focus:text-[var(--oa-rail-acc)]'
+const HEAD =
+  'px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.07em] text-muted-foreground/80'
+const NOTE = 'px-2 pb-1 pt-1.5 text-[11px] leading-snug text-muted-foreground'
+const CHORD =
+  'min-w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground/80'
 
 export function DrawingRail({
   stats,
   latched = false,
+  folded = false,
+  onFold,
   onPick,
   onUndo,
   onRedo,
@@ -201,9 +205,15 @@ export function DrawingRail({
     if (stats.magnetMode !== 'off') setMagnetOn(stats.magnetMode)
   }, [stats.magnetMode])
 
+  // A folded rail has no flyout to show.
+  useEffect(() => {
+    if (folded) setOpen(null)
+  }, [folded])
+
   // Esc returns to the cursor; Alt+<key> arms a tool; Ctrl+C, X and V move
   // drawings. The chord tables live in the draw tier, so `onShortcut` forwards
-  // the event and reports whether the chart claimed it.
+  // the event and reports whether the chart claimed it. This listens while the
+  // rail is folded too: folding hides the tools, it does not switch them off.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && stats.tool) {
@@ -218,29 +228,27 @@ export function DrawingRail({
     return () => window.removeEventListener('keydown', onKey)
   }, [stats.tool, onPick, onShortcut])
 
-  // Shared with RightRail so the two edges of the workspace cannot drift.
   const btn = RAIL_BTN
-  const on = RAIL_BTN_ON
   const menu = (key: string) => ({
     open: open === key,
     onOpenChange: (o: boolean) => setOpen(o ? key : null),
   })
-  const menuContent = (children: ReactNode, width = 'w-64') => (
+  const menuContent = (children: ReactNode, width = 'min-w-[244px] max-w-[320px]') => (
     <DropdownMenuContent
       container={portalHost}
       side="right"
       align="start"
-      className={cn(width, 'p-1')}
+      sideOffset={6}
+      className={cn(width, 'rounded-[10px] p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.4)]')}
     >
       {children}
     </DropdownMenuContent>
   )
-  const row = 'h-8 gap-2.5 rounded px-2 text-[13px]'
 
   return (
     // A flush column with a divider, not a floating card: the plot starts to
     // its right, so nothing the chart draws in that corner can sit under it.
-    <div className="flex w-10 shrink-0 flex-col items-center gap-0.5 no-scrollbar overflow-y-auto border-r bg-background/40 py-1">
+    <div className={cn('oa-rail border-r', folded && 'hidden')} data-drawing-rail>
       {/* Cursor, with the eraser in its flyout */}
       <DropdownMenu {...menu('cursor')}>
         <Tip
@@ -254,7 +262,7 @@ export function DrawingRail({
               : 'Select and move drawings. Right-click for the eraser.',
           }}
         >
-          <div className="group relative">
+          <div className="oa-rail__slot">
             <button
               type="button"
               aria-label={erasing ? 'Eraser' : 'Cursor'}
@@ -264,31 +272,33 @@ export function DrawingRail({
                 e.preventDefault()
                 setOpen('cursor')
               }}
-              className={cn(btn, (erasing || !stats.tool) && on)}
+              className={btn}
             >
-              <span className={iconBox}>{erasing ? ERASER_GLYPH : drawToolIcon('cursor')}</span>
+              <span className="oa-rail__glyph">
+                {erasing ? chrome('eraser') : drawToolIcon('cursor')}
+              </span>
             </button>
-            <Caret label="Cursor menu" shown={erasing || open === 'cursor'} accent={erasing} />
+            <Caret label="Cursor menu" />
           </div>
         </Tip>
         {menuContent(
           <>
             <DropdownMenuItem
               onSelect={() => onPick(null)}
-              className={cn(row, !stats.tool && 'text-primary')}
+              className={cn(ROW, !stats.tool && ROW_ON)}
             >
-              <span className={rowIcon}>{drawToolIcon('cursor')}</span>
+              {rowTool('cursor')}
               <span className="flex-1">Cursor</span>
-              <DropdownMenuShortcut>Esc</DropdownMenuShortcut>
+              <span className={CHORD}>Esc</span>
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => onPick(ERASER_TOOL)}
-              className={cn(row, erasing && 'text-primary')}
+              className={cn(ROW, erasing && ROW_ON)}
             >
-              <span className={rowIcon}>{ERASER_GLYPH}</span>
+              <span className="grid size-5 shrink-0 place-items-center">{rowChrome('eraser')}</span>
               <span className="flex-1">Eraser</span>
             </DropdownMenuItem>
-            <p className="px-2 pb-1 pt-1.5 text-[11px] leading-snug text-muted-foreground">
+            <p className={NOTE}>
               Click a drawing, or drag across several, to delete them. {MOD_KEY} + Z brings them
               back.
             </p>
@@ -297,7 +307,7 @@ export function DrawingRail({
         )}
       </DropdownMenu>
 
-      <div className="my-0.5 h-px w-5 bg-border" />
+      <div className="oa-rail__sep" aria-hidden="true" />
 
       {DRAW_GROUPS.map((g) => {
         const lastTool = last[g.key]
@@ -314,11 +324,11 @@ export function DrawingRail({
                 sub: lastTool
                   ? held
                     ? 'Held until Esc'
-                    : 'Double-click to keep it for several drawings. Right-click for the list.'
+                    : 'Double-click to keep it for several drawings. The corner caret lists the rest.'
                   : 'Choose a tool from the list',
               }}
             >
-              <div className="group relative">
+              <div className="oa-rail__slot">
                 <button
                   type="button"
                   aria-label={g.label}
@@ -336,50 +346,31 @@ export function DrawingRail({
                     e.preventDefault()
                     setOpen(g.key)
                   }}
-                  className={cn(btn, active && on)}
+                  className={cn(btn, held && 'is-held')}
                 >
-                  <span className={iconBox}>{drawToolIcon(lastTool ?? g.iconKey)}</span>
+                  <span className="oa-rail__glyph">{drawToolIcon(lastTool ?? g.iconKey)}</span>
                 </button>
-                {held && (
-                  <span
-                    aria-hidden="true"
-                    className="pointer-events-none absolute left-1 top-1 h-1.5 w-1.5 rounded-full bg-primary"
-                  />
-                )}
-                <Caret label={`${g.label} menu`} shown={active || open === g.key} accent={active} />
+                <Caret label={`${g.label} menu`} />
               </div>
             </Tip>
 
             {menuContent(
               g.sections.map((sec, si) => (
                 <div key={sec.head ?? `s${si}`}>
-                  {sec.head && (
-                    <div
-                      className={cn(
-                        'px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground',
-                        si === 0 ? 'pt-1.5' : 'mt-1.5 border-t pt-2.5'
-                      )}
-                    >
-                      {sec.head}
-                    </div>
-                  )}
+                  {sec.head && <div className={cn(HEAD, si > 0 && 'mt-1')}>{sec.head}</div>}
                   {sec.tools.map((t) => {
                     const chord = t.id ? stats.shortcuts[t.id] : undefined
                     return (
                       <DropdownMenuItem
                         key={t.id ?? 'cursor'}
                         onSelect={() => onPick(t.id)}
-                        className={cn(row, t.id === stats.tool && 'text-primary')}
+                        className={cn(ROW, t.id === stats.tool && ROW_ON)}
                       >
-                        <span className={rowIcon}>{drawToolIcon(t.iconKey)}</span>
+                        {rowTool(t.iconKey)}
                         <span className="flex-1 truncate">{t.label}</span>
                         {/* Right-aligned and dimmed: discoverable, never competing
                             with the name it belongs to. */}
-                        {chord && (
-                          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
-                            {chord.replace('+', ' + ')}
-                          </span>
-                        )}
+                        {chord && <span className={CHORD}>{chord.replace('+', ' + ')}</span>}
                       </DropdownMenuItem>
                     )
                   })}
@@ -390,232 +381,247 @@ export function DrawingRail({
         )
       })}
 
-      <div className="my-0.5 h-px w-5 bg-border" />
+      {/* The controls, held at the foot while the tools above scroll under them. */}
+      <div className="oa-rail__ctl">
+        {/* Magnet: the button turns it on and off, the flyout picks how hard */}
+        <DropdownMenu {...menu('magnet')}>
+          <Tip
+            side="right"
+            disabled={open === 'magnet'}
+            tip={{
+              title: MAGNET_LABEL[stats.magnetMode],
+              chord: `Hold ${MOD_KEY}`,
+              sub: `${MAGNET_HINT[stats.magnetMode]}. Hold ${MOD_KEY} to snap with it off.`,
+            }}
+          >
+            <div className="oa-rail__slot">
+              <button
+                type="button"
+                aria-label="Magnet"
+                aria-pressed={stats.magnetMode !== 'off'}
+                // The dot in the corner: solid for strong, a ring for weak.
+                data-mode={stats.magnetMode === 'off' ? undefined : stats.magnetMode}
+                onClick={() => onMagnet(stats.magnetMode === 'off' ? magnetOn : 'off')}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setOpen('magnet')
+                }}
+                className={btn}
+              >
+                {chrome('magnet')}
+              </button>
+              <Caret label="Magnet menu" />
+            </div>
+          </Tip>
+          {menuContent(
+            <>
+              {(['off', 'weak', 'strong'] as const).map((mode) => (
+                <DropdownMenuItem
+                  key={mode}
+                  onSelect={() => onMagnet(mode)}
+                  className={cn(
+                    ROW,
+                    'flex-col items-start gap-0 py-1.5',
+                    stats.magnetMode === mode && ROW_ON
+                  )}
+                >
+                  <span className="text-[13px]">{MAGNET_LABEL[mode]}</span>
+                  <span className="text-[11px] text-muted-foreground">{MAGNET_HINT[mode]}</span>
+                </DropdownMenuItem>
+              ))}
+              <p className={NOTE}>
+                Hold {MOD_KEY} while placing or dragging an anchor to snap with the magnet off.
+              </p>
+            </>
+          )}
+        </DropdownMenu>
 
-      {/* Magnet: the button turns it on and off, the flyout picks how hard */}
-      <DropdownMenu {...menu('magnet')}>
+        {/*
+          The tier disarms a tool once it has drawn, so three trend lines are
+          three trips to the rail. This latches the armed tool instead, and the
+          cursor button is still one press away. A link, as the reference host
+          draws it: the padlock means locking a drawing, which is another thing.
+        */}
         <Tip
           side="right"
-          disabled={open === 'magnet'}
           tip={{
-            title: MAGNET_LABEL[stats.magnetMode],
-            chord: `Hold ${MOD_KEY}`,
-            sub: `${MAGNET_HINT[stats.magnetMode]}. Hold ${MOD_KEY} to snap with it off.`,
+            title: 'Keep tool selected',
+            sub: 'The tool stays picked after each drawing, until Esc',
           }}
         >
-          <div className="group relative">
+          <div className="oa-rail__slot">
             <button
               type="button"
-              aria-label="Magnet"
-              aria-pressed={stats.magnetMode !== 'off'}
-              onClick={() => onMagnet(stats.magnetMode === 'off' ? magnetOn : 'off')}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                setOpen('magnet')
-              }}
-              className={cn(btn, stats.magnetMode !== 'off' && on)}
-            >
-              <span className={iconBox}>{drawToolIcon('magnet')}</span>
-            </button>
-            {stats.magnetMode !== 'off' && (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute right-0.5 top-0 text-[9px] font-bold leading-none text-primary"
-              >
-                {stats.magnetMode === 'weak' ? 'W' : 'S'}
-              </span>
-            )}
-            <Caret
-              label="Magnet menu"
-              shown={open === 'magnet'}
-              accent={stats.magnetMode !== 'off'}
-            />
-          </div>
-        </Tip>
-        {menuContent(
-          <>
-            {(['off', 'weak', 'strong'] as const).map((mode) => (
-              <DropdownMenuItem
-                key={mode}
-                onSelect={() => onMagnet(mode)}
-                className={cn(
-                  'flex-col items-start gap-0 rounded px-2 py-1.5',
-                  stats.magnetMode === mode && 'text-primary'
-                )}
-              >
-                <span className="text-[13px]">{MAGNET_LABEL[mode]}</span>
-                <span className="text-[11px] text-muted-foreground">{MAGNET_HINT[mode]}</span>
-              </DropdownMenuItem>
-            ))}
-            <p className="px-2 pb-1 pt-1.5 text-[11px] leading-snug text-muted-foreground">
-              Hold {MOD_KEY} while placing or dragging an anchor to snap with the magnet off.
-            </p>
-          </>
-        )}
-      </DropdownMenu>
-
-      {/*
-        The tier disarms a tool once it has drawn, so three trend lines are
-        three trips to the rail. This latches the armed tool instead, and the
-        cursor button is still one press away.
-      */}
-      <Tip
-        side="right"
-        tip={{
-          title: 'Keep tool selected',
-          sub: 'The tool stays picked after each drawing, until Esc',
-        }}
-      >
-        <div className="group relative">
-          <button
-            type="button"
-            aria-label="Keep tool selected"
-            aria-pressed={stats.stay}
-            onClick={() => onStay(!stats.stay)}
-            className={cn(btn, stats.stay && on)}
-          >
-            <span className={iconBox}>{drawToolIcon('lock')}</span>
-          </button>
-        </div>
-      </Tip>
-      <Tip side="right" tip={{ title: 'Undo chart change', chord: `${MOD_KEY} + Z`, sub: 'Orders are never undone' }}>
-        <div className="group relative">
-          <button
-            type="button"
-            aria-label="Undo chart change"
-            disabled={!stats.canUndo}
-            onClick={onUndo}
-            className={btn}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className={iconBox}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.6}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M4 10a7 7 0 1 1 2.5 5.3" />
-              <path d="M3 5v5h5" />
-            </svg>
-          </button>
-        </div>
-      </Tip>
-      <Tip side="right" tip={{ title: 'Redo chart change', chord: `${MOD_KEY} + Y` }}>
-        <div className="group relative">
-          <button
-            type="button"
-            aria-label="Redo chart change"
-            disabled={!stats.canRedo}
-            onClick={onRedo}
-            className={btn}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              className={iconBox}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.6}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M20 10a7 7 0 1 0-2.5 5.3" />
-              <path d="M21 5v5h-5" />
-            </svg>
-          </button>
-        </div>
-      </Tip>
-
-      {/* Trash: deletes the selection, and holds every other drawing action */}
-      <DropdownMenu {...menu('trash')}>
-        <Tip
-          side="right"
-          disabled={open === 'trash'}
-          tip={
-            stats.hasSelection
-              ? {
-                  title: 'Delete selected',
-                  chord: 'Del',
-                  sub: 'Right-click to hide or lock them instead',
-                }
-              : {
-                  title: 'Drawing actions',
-                  sub: 'Select all drawings, or remove every drawing on this chart',
-                }
-          }
-        >
-          <div className="group relative">
-            <button
-              type="button"
-              aria-label={stats.hasSelection ? 'Delete selected drawings' : 'Drawing actions'}
-              disabled={stats.count === 0}
-              onClick={() => (stats.hasSelection ? onDeleteSelected() : setOpen('trash'))}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                setOpen('trash')
-              }}
+              aria-label="Keep tool selected"
+              aria-pressed={stats.stay}
+              onClick={() => onStay(!stats.stay)}
               className={btn}
             >
-              <svg
-                viewBox="0 0 24 24"
-                className={iconBox}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.6}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M3.5 6.5h17M9.5 6.5v-3h5v3M6 6.5l1 14h10l1-14" />
-              </svg>
+              {chrome('link')}
             </button>
-            {stats.count > 0 && (
-              <Caret label="Drawing actions menu" shown={open === 'trash'} accent={false} />
-            )}
           </div>
         </Tip>
-        {menuContent(
+
+        <div className="oa-rail__sep" aria-hidden="true" />
+
+        {/* Trash: deletes the selection, and holds every other drawing action */}
+        <DropdownMenu {...menu('trash')}>
+          <Tip
+            side="right"
+            disabled={open === 'trash'}
+            tip={
+              stats.hasSelection
+                ? {
+                    title: 'Delete selected',
+                    chord: 'Del',
+                    sub: 'Right-click to hide or lock them instead',
+                  }
+                : {
+                    title: 'Drawing actions',
+                    sub: 'Select all drawings, or remove every drawing on this chart',
+                  }
+            }
+          >
+            <div className="oa-rail__slot">
+              <button
+                type="button"
+                aria-label={stats.hasSelection ? 'Delete selected drawings' : 'Drawing actions'}
+                disabled={stats.count === 0}
+                onClick={() => (stats.hasSelection ? onDeleteSelected() : setOpen('trash'))}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setOpen('trash')
+                }}
+                className={cn(btn, 'oa-rail__btn--danger')}
+              >
+                {chrome('trash')}
+              </button>
+              {stats.count > 0 && <Caret label="Drawing actions menu" />}
+            </div>
+          </Tip>
+          {menuContent(
+            <>
+              {stats.hasSelection && (
+                <>
+                  <DropdownMenuItem onSelect={onHideSelected} className={ROW}>
+                    {rowChrome('eye-off')}
+                    <span className="flex-1">Hide selected</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={onLockSelected} className={ROW}>
+                    {rowChrome('lock')}
+                    <span className="flex-1">Lock selected</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={onDeleteSelected} className={ROW}>
+                    {rowChrome('trash')}
+                    <span className="flex-1">Delete selected</span>
+                    <span className={CHORD}>Del</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem
+                disabled={stats.selectable === 0}
+                onSelect={onSelectAll}
+                className={ROW}
+              >
+                {rowChrome('cursor')}
+                <span className="flex-1">Select all drawings ({stats.selectable})</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={stats.removable === 0}
+                onSelect={onRemoveAll}
+                className={cn(ROW, 'text-destructive focus:text-destructive')}
+              >
+                {rowChrome('trash')}
+                <span className="flex-1">Remove all drawings ({stats.removable})</span>
+              </DropdownMenuItem>
+            </>,
+            'w-64'
+          )}
+        </DropdownMenu>
+
+        <div className="oa-rail__sep" aria-hidden="true" />
+
+        <Tip
+          side="right"
+          tip={{
+            title: 'Undo chart change',
+            chord: `${MOD_KEY} + Z`,
+            sub: 'Orders are never undone',
+          }}
+        >
+          <div className="oa-rail__slot">
+            <button
+              type="button"
+              aria-label="Undo chart change"
+              disabled={!stats.canUndo}
+              onClick={onUndo}
+              className={btn}
+            >
+              {chrome('undo')}
+            </button>
+          </div>
+        </Tip>
+        <Tip side="right" tip={{ title: 'Redo chart change', chord: `${MOD_KEY} + Y` }}>
+          <div className="oa-rail__slot">
+            <button
+              type="button"
+              aria-label="Redo chart change"
+              disabled={!stats.canRedo}
+              onClick={onRedo}
+              className={btn}
+            >
+              {chrome('redo')}
+            </button>
+          </div>
+        </Tip>
+
+        {onFold && (
           <>
-            {stats.hasSelection && (
-              <>
-                <DropdownMenuItem onSelect={onHideSelected} className={row}>
-                  <EyeOff className={rowIcon} strokeWidth={RAIL_ICON_STROKE} />
-                  <span className="flex-1">Hide selected</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={onLockSelected} className={row}>
-                  <Lock className={rowIcon} strokeWidth={RAIL_ICON_STROKE} />
-                  <span className="flex-1">Lock selected</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={onDeleteSelected} className={row}>
-                  <Trash2 className={rowIcon} strokeWidth={RAIL_ICON_STROKE} />
-                  <span className="flex-1">Delete selected</span>
-                  <DropdownMenuShortcut>Del</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-              </>
-            )}
-            <DropdownMenuItem
-              disabled={stats.selectable === 0}
-              onSelect={onSelectAll}
-              className={row}
+            <div className="oa-rail__sep" aria-hidden="true" />
+            <Tip
+              side="right"
+              tip={{
+                title: 'Hide drawing tools',
+                sub: 'The chart takes the width. The tab at its lower left brings the tools back.',
+              }}
             >
-              <SquareDashedMousePointer className={rowIcon} strokeWidth={RAIL_ICON_STROKE} />
-              <span className="flex-1">Select all drawings ({stats.selectable})</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={stats.removable === 0}
-              onSelect={onRemoveAll}
-              className={cn(row, 'text-destructive focus:text-destructive')}
-            >
-              <Trash2 className="h-4 w-4 shrink-0" strokeWidth={RAIL_ICON_STROKE} />
-              <span className="flex-1">Remove all drawings ({stats.removable})</span>
-            </DropdownMenuItem>
+              <div className="oa-rail__slot">
+                <button
+                  type="button"
+                  aria-label="Hide drawing tools"
+                  onClick={onFold}
+                  className={btn}
+                >
+                  {chrome('chevrons-left')}
+                </button>
+              </div>
+            </Tip>
           </>
         )}
-      </DropdownMenu>
+      </div>
     </div>
+  )
+}
+
+/**
+ * The tab a folded rail leaves at the chart's lower left, just above the time
+ * axis, that brings the rail back. It stops the press, because the chart under
+ * it captures the pointer and would otherwise take the click for itself.
+ */
+export function DrawingRailTab({ onUnfold, bottom }: { onUnfold(): void; bottom: number }) {
+  return (
+    <Tip side="right" tip={{ title: 'Show drawing tools' }}>
+      <button
+        type="button"
+        aria-label="Show drawing tools"
+        className="oa-rail-tab"
+        style={{ bottom }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={onUnfold}
+      >
+        <ChromeIcon id="chevrons-right" size={12} />
+      </button>
+    </Tip>
   )
 }

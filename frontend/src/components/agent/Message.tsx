@@ -351,6 +351,16 @@ function PendingConfirm({
     [onConfirm, pending.requirements]
   )
 
+  // A call missing a required argument would be approved as an order with no
+  // symbol or quantity, and refused by the tool only after the approval. The
+  // server names what is missing from the tool's own signature, so a tool that
+  // takes no arguments at all (cancel every order, close every position) is
+  // not mistaken for one whose details were lost.
+  const missing = pending.requirements.flatMap(
+    (requirement: ConfirmRequirement) => requirement.missing ?? []
+  )
+  const incomplete = missing.length > 0
+
   return (
     <div className="space-y-2 rounded-lg border border-amber-500/60 bg-amber-50 p-3 dark:border-amber-600/60 dark:bg-amber-950/40">
       <p className="text-xs font-medium text-amber-900 dark:text-amber-200">
@@ -369,8 +379,14 @@ function PendingConfirm({
           </li>
         ))}
       </ul>
+      {incomplete && (
+        <p className="text-xs text-amber-900 dark:text-amber-200">
+          Some details did not arrive ({missing.join(', ')}), so this cannot be approved. Reject it
+          and ask again.
+        </p>
+      )}
       <div className="flex gap-2">
-        <Button type="button" size="sm" onClick={() => decide(true)}>
+        <Button type="button" size="sm" onClick={() => decide(true)} disabled={incomplete}>
           Approve
         </Button>
         <Button type="button" size="sm" variant="outline" onClick={() => decide(false)}>

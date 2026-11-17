@@ -104,6 +104,35 @@ BSE_INDEX_SYMBOLS = [
     "BSESMALLCAP", "BSESMALLCAPSELECTINDEX", "BSESMEIPO",
     "BSETECK", "BSETELECOM",
 ]
+_NSE_INDEX_SET = frozenset(NSE_INDEX_SYMBOLS)
+_BSE_INDEX_SET = frozenset(BSE_INDEX_SYMBOLS)
+
+
+def _default_quote_exchange(symbol: str) -> str:
+    """Exchange to quote ``symbol`` on when the caller named none.
+
+    An index is quoted on its index exchange, never the equity one: SENSEX
+    lives on BSE_INDEX and NIFTY on NSE_INDEX, and asking NSE for either is
+    refused as an unknown symbol. No name in either list is also an NSE or
+    BSE equity, so routing on them cannot send a stock to the wrong place.
+    Everything else keeps the NSE default.
+    """
+    s = symbol.upper()
+    if s in _BSE_INDEX_SET:
+        return "BSE_INDEX"
+    if s in _NSE_INDEX_SET:
+        return "NSE_INDEX"
+    return "NSE"
+
+
+def _default_derivatives_exchange(symbol: str) -> str:
+    """F&O exchange for underlying ``symbol`` when the caller named none.
+
+    BSE indices (SENSEX, BANKEX, SENSEX50) trade on BFO, so looking for
+    their expiries on NFO finds nothing. Everything else keeps NFO.
+    """
+    return "BFO" if symbol.upper() in _BSE_INDEX_SET else "NFO"
+
 
 # Create MCP server
 mcp = FastMCP("openalgo")
@@ -133,7 +162,7 @@ def _to_json(payload: Any) -> str:
 #     order" before asking the user to approve the call.
 #   * Toolset membership, so an operator can boot a narrower server
 #     (OPENALGO_MCP_TOOLSETS / OPENALGO_MCP_READ_ONLY) instead of
-#     exposing all 49 tools to every client.
+#     exposing every tool to every client.
 #   * Output risk, which selects the trust-boundary warning wrapped
 #     around the response.
 #
@@ -473,6 +502,25 @@ def _write_result(
             )
 
     return json.dumps(response, indent=2, default=str)
+
+
+def _post_openalgo(path: str, payload: dict[str, Any]) -> Any:
+    """POST ``payload`` to ``/api/v1/<path>``, for an endpoint the SDK lacks.
+
+    Through the SDK's own HTTP client, like every other tool. Under the
+    gthread worker the remote MCP server points that client at this process
+    (no second request thread is needed); a private client made a real HTTP
+    call back to the server, and with the request pool nearly full the tool
+    waited 30 seconds for a thread and failed. Everywhere else the SDK's
+    client is the same HTTP loopback as before.
+    """
+    url = f"{host.rstrip('/')}/api/v1/{path}"
+    headers = {"Content-Type": "application/json"}
+    sdk_http = getattr(client, "client", None)
+    if isinstance(sdk_http, httpx.Client):
+        return sdk_http.post(url, json=payload, headers=headers, timeout=30.0)
+    with httpx.Client(timeout=30.0) as http:
+        return http.post(url, json=payload, headers=headers)
 
 
 # ORDER MANAGEMENT TOOLS
@@ -1056,15 +1104,20 @@ def calculate_margin(positions: list[dict[str, Any]]) -> str:
 
 
 @openalgo_tool('marketdata', title="Get Quote")
-def get_quote(symbol: str, exchange: str = "NSE") -> str:
+def get_quote(symbol: str, exchange: str | None = None) -> str:
     """
     Get current quote for a symbol.
 
     Args:
-        symbol: Stock symbol
-        exchange: Exchange name
+        symbol: OpenAlgo symbol, e.g. RELIANCE, NIFTY, SENSEX, NIFTY28MAR2420800CE
+        exchange: NSE, BSE, NFO, BFO, MCX, CDS, BCD, NSE_INDEX or BSE_INDEX.
+            Optional. When omitted, an index uses its index exchange (SENSEX,
+            BANKEX and SENSEX50 use BSE_INDEX; NIFTY, BANKNIFTY and the other
+            NSE indices use NSE_INDEX) and any other symbol uses NSE. Pass it
+            for BSE equities and for every derivative contract.
     """
     try:
+        exchange = exchange or _default_quote_exchange(symbol)
         response = client.quotes(symbol=symbol.upper(), exchange=exchange.upper())
         return json.dumps(response, indent=2)
     except Exception as e:
@@ -1318,16 +1371,22 @@ def get_index_symbols(exchange: str = "NSE") -> str:
 
 
 @openalgo_tool('marketdata', title="Get Expiry Dates")
-def get_expiry_dates(symbol: str, exchange: str = "NFO", instrument_type: str = "options") -> str:
+def get_expiry_dates(
+    symbol: str, exchange: str | None = None, instrument_type: str = "options"
+) -> str:
     """
     Get expiry dates for derivatives.
 
     Args:
-        symbol: Underlying symbol
-        exchange: Exchange name (typically NFO for F&O)
+        symbol: Underlying symbol, e.g. NIFTY, BANKNIFTY, SENSEX, RELIANCE
+        exchange: Derivatives exchange: NFO, BFO, MCX or CDS. Optional. When
+            omitted, SENSEX, BANKEX and SENSEX50 use BFO and any other
+            underlying uses NFO. Pass MCX or CDS for commodity and currency
+            underlyings.
         instrument_type: 'options' or 'futures'
     """
     try:
+        exchange = exchange or _default_derivatives_exchange(symbol)
         response = client.expiry(
             symbol=symbol.upper(), exchange=exchange.upper(), instrumenttype=instrument_type.lower()
         )
@@ -1533,6 +1592,79 @@ def send_telegram_alert(username: str, message: str, priority: int = 5) -> str:
         )
 
 
+def _send_webhook_alert(channel: str, label: str, message: str, wait_for_delivery: bool) -> str:
+    """Post through OpenAlgo's /api/v1/<channel>/notify endpoint.
+
+    Called directly rather than through the SDK, which has no Slack or
+    Discord method yet. The endpoint holds every rule (channel switched on,
+    webhook saved, length limit), so the tool adds none of its own.
+    """
+    action = f"sending {label} alert"
+    verify_with = f"the {label} channel itself (the message may already have been posted)"
+    try:
+        response = _post_openalgo(
+            f"{channel}/notify",
+            {"apikey": api_key, "message": message, "wait_for_delivery": wait_for_delivery},
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            return _error(
+                f"OpenAlgo gave no readable answer while {action}.",
+                error_type="http",
+                status_code=getattr(response, "status_code", None),
+                retry_safe=False,
+                verify_with=verify_with,
+            )
+        return json.dumps(body, indent=2, default=str)
+    except Exception as e:
+        return _fail(action, e, write=True, verify_with=verify_with)
+
+
+@openalgo_tool('utility', title="Send Slack Alert", write=True)
+def send_slack_alert(message: str, wait_for_delivery: bool = False) -> str:
+    """
+    Post a message to the trader's Slack channel through its saved webhook.
+
+    The webhook is set up on OpenAlgo's /slack page, and Slack must be turned
+    on from the /alerts page; otherwise the call is refused with a message
+    saying which step is missing. The message goes to the channel the trader
+    chose, which other people may read.
+
+    Args:
+        message: Text to post, at most 4000 characters. Slack's &, < and > are
+                 escaped, so no one is mentioned or pinged.
+        wait_for_delivery: False (default) queues the message and returns at
+                 once. True posts it first and reports whether Slack accepted it.
+
+    Returns:
+        JSON with status ('success' or 'error') and message.
+    """
+    return _send_webhook_alert("slack", "Slack", message, wait_for_delivery)
+
+
+@openalgo_tool('utility', title="Send Discord Alert", write=True)
+def send_discord_alert(message: str, wait_for_delivery: bool = False) -> str:
+    """
+    Post a message to the trader's Discord channel through its saved webhook.
+
+    The webhook is set up on OpenAlgo's /discord page, and Discord must be
+    turned on from the /alerts page; otherwise the call is refused with a
+    message saying which step is missing. The message goes to the channel the
+    trader chose, which other people may read.
+
+    Args:
+        message: Text to post, at most 2000 characters. Mentions are never
+                 resolved, so no one is pinged.
+        wait_for_delivery: False (default) queues the message and returns at
+                 once. True posts it first and reports whether Discord accepted it.
+
+    Returns:
+        JSON with status ('success' or 'error') and message.
+    """
+    return _send_webhook_alert("discord", "Discord", message, wait_for_delivery)
+
+
 @openalgo_tool('marketdata', title="Get Market Holidays")
 def get_holidays(year: int | None = None) -> str:
     """
@@ -1612,23 +1744,10 @@ def check_holiday(date: str, exchange: str | None = None) -> str:
         check_holiday("2026-01-27")
     """
     try:
-        url = f"{host.rstrip('/')}/api/v1/checkholiday"
         payload: dict[str, Any] = {"apikey": api_key, "date": date}
         if exchange:
             payload["exchange"] = exchange.upper()
-        headers = {"Content-Type": "application/json"}
-        # Through the SDK's own HTTP client, like every other tool. Under the
-        # gthread worker the remote MCP server points that client at this
-        # process (no second request thread is needed); a private client here
-        # made a real HTTP call back to the server, and with the request pool
-        # nearly full the tool waited 30 seconds for a thread and failed.
-        # Everywhere else the SDK's client is the same HTTP loopback as before.
-        sdk_http = getattr(client, "client", None)
-        if isinstance(sdk_http, httpx.Client):
-            r = sdk_http.post(url, json=payload, headers=headers, timeout=30.0)
-        else:
-            with httpx.Client(timeout=30.0) as http:
-                r = http.post(url, json=payload, headers=headers)
+        r = _post_openalgo("checkholiday", payload)
         return json.dumps(r.json(), indent=2, default=str)
     except Exception as e:
         return _fail("checking holiday", e)

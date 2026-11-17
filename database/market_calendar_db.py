@@ -142,8 +142,13 @@ def init_db():
 
 
 def seed_holidays_2025():
+    """Seed the 2025 calendar OpenAlgo ships into an empty table."""
+    _seed_holidays(shipped_holidays_2025(), 2025)
+
+
+def shipped_holidays_2025() -> list[dict]:
     """
-    Seed 2025 market holidays based on NSE/BSE/MCX official calendar
+    2025 market holidays based on NSE/BSE/MCX official calendar
     Includes Muhurat Trading session for Diwali
     """
     holidays_2025 = [
@@ -296,12 +301,49 @@ def seed_holidays_2025():
         },
     ]
 
-    _seed_holidays(holidays_2025, 2025)
+    return holidays_2025
+
+
+#: Diwali Muhurat 2026: Sunday 8 November, as NSE, BSE and MCX published it on
+#: 19 October (MCX circular MCX/TRD/590/2026). Trading runs 14:20 to 15:30 IST
+#: after a pre-open from 14:05, and equity derivatives run to 15:40, as on any
+#: day since the Closing Auction Session. NCO is NSE's commodity segment, which
+#: the NSE schedule lists with the rest. Epoch milliseconds, like every window
+#: in the holiday tables.
+MUHURAT_2026_DATE = date(2026, 11, 8)
+MUHURAT_2026_SESSION = {
+    "NSE": (1794127800000, 1794132000000),  # 14:20 - 15:30
+    "BSE": (1794127800000, 1794132000000),
+    "NFO": (1794127800000, 1794132600000),  # 14:20 - 15:40
+    "BFO": (1794127800000, 1794132600000),
+    "CDS": (1794127800000, 1794132000000),
+    "BCD": (1794127800000, 1794132000000),
+    "MCX": (1794127800000, 1794132000000),
+    "NCO": (1794127800000, 1794132000000),
+}
+
+#: What the 2026 seed carried before the exchanges published the timings: a
+#: guess of 18:00 to 19:15, with MCX running to 00:15 the next morning and no
+#: NCO row. A row still holding it is moved to the published session.
+_MUHURAT_2026_GUESS = {
+    "NSE": (1794141000000, 1794145500000),
+    "BSE": (1794141000000, 1794145500000),
+    "NFO": (1794141000000, 1794145500000),
+    "BFO": (1794141000000, 1794145500000),
+    "CDS": (1794141000000, 1794145500000),
+    "BCD": (1794141000000, 1794145500000),
+    "MCX": (1794141000000, 1794163500000),
+}
 
 
 def seed_holidays_2026():
+    """Seed the 2026 calendar OpenAlgo ships into an empty table."""
+    _seed_holidays(shipped_holidays_2026(), 2026)
+
+
+def shipped_holidays_2026() -> list[dict]:
     """
-    Seed 2026 market holidays based on official NSE and MCX calendars.
+    2026 market holidays based on official NSE and MCX calendars.
     Source: NSE Circular & MCX Circular for Calendar Year 2026.
 
     Includes:
@@ -436,16 +478,10 @@ def seed_holidays_2026():
             "description": "Diwali Laxmi Pujan (Muhurat Trading)",
             "holiday_type": "SPECIAL_SESSION",
             "closed": [],
+            # The published session; see MUHURAT_2026_SESSION.
             "open": [
-                # Muhurat Trading session — default 18:00 to 19:15 IST (exact timings via circular)
-                {"exchange": "NSE", "start_time": 1794141000000, "end_time": 1794145500000},
-                {"exchange": "BSE", "start_time": 1794141000000, "end_time": 1794145500000},
-                {"exchange": "NFO", "start_time": 1794141000000, "end_time": 1794145500000},
-                {"exchange": "BFO", "start_time": 1794141000000, "end_time": 1794145500000},
-                {"exchange": "CDS", "start_time": 1794141000000, "end_time": 1794145500000},
-                {"exchange": "BCD", "start_time": 1794141000000, "end_time": 1794145500000},
-                # MCX Muhurat — 18:00 to 00:15 (next day)
-                {"exchange": "MCX", "start_time": 1794141000000, "end_time": 1794163500000},
+                {"exchange": exchange, "start_time": start, "end_time": end}
+                for exchange, (start, end) in MUHURAT_2026_SESSION.items()
             ],
         },
         {
@@ -476,46 +512,51 @@ def seed_holidays_2026():
         },
     ]
 
-    _seed_holidays(holidays_2026, 2026)
+    return holidays_2026
+
+
+def _add_holiday(holiday_info: dict, year: int) -> None:
+    """Add one calendar entry and its exchanges to the session, uncommitted."""
+    holiday_date = datetime.strptime(holiday_info["date"], "%Y-%m-%d").date()
+
+    # Create holiday record
+    holiday = Holiday(
+        holiday_date=holiday_date,
+        description=holiday_info["description"],
+        holiday_type=holiday_info.get("holiday_type", "TRADING_HOLIDAY"),
+        year=year,
+    )
+    db_session.add(holiday)
+    db_session.flush()  # Get the holiday.id
+
+    # Add closed exchanges
+    for exchange in holiday_info["closed"]:
+        exchange_entry = HolidayExchange(
+            holiday_id=holiday.id,
+            exchange_code=exchange,
+            is_open=False,
+            start_time=None,
+            end_time=None,
+        )
+        db_session.add(exchange_entry)
+
+    # Add open exchanges with special timings
+    for open_exchange in holiday_info["open"]:
+        exchange_entry = HolidayExchange(
+            holiday_id=holiday.id,
+            exchange_code=open_exchange["exchange"],
+            is_open=True,
+            start_time=open_exchange["start_time"],
+            end_time=open_exchange["end_time"],
+        )
+        db_session.add(exchange_entry)
 
 
 def _seed_holidays(holidays_data: list[dict], year: int):
     """Internal function to seed holidays for a specific year"""
     try:
         for holiday_info in holidays_data:
-            holiday_date = datetime.strptime(holiday_info["date"], "%Y-%m-%d").date()
-
-            # Create holiday record
-            holiday = Holiday(
-                holiday_date=holiday_date,
-                description=holiday_info["description"],
-                holiday_type=holiday_info.get("holiday_type", "TRADING_HOLIDAY"),
-                year=year,
-            )
-            db_session.add(holiday)
-            db_session.flush()  # Get the holiday.id
-
-            # Add closed exchanges
-            for exchange in holiday_info["closed"]:
-                exchange_entry = HolidayExchange(
-                    holiday_id=holiday.id,
-                    exchange_code=exchange,
-                    is_open=False,
-                    start_time=None,
-                    end_time=None,
-                )
-                db_session.add(exchange_entry)
-
-            # Add open exchanges with special timings
-            for open_exchange in holiday_info["open"]:
-                exchange_entry = HolidayExchange(
-                    holiday_id=holiday.id,
-                    exchange_code=open_exchange["exchange"],
-                    is_open=True,
-                    start_time=open_exchange["start_time"],
-                    end_time=open_exchange["end_time"],
-                )
-                db_session.add(exchange_entry)
+            _add_holiday(holiday_info, year)
 
         db_session.commit()
     except Exception as e:
@@ -982,60 +1023,244 @@ def clear_market_calendar_cache():
     logger.info("Market calendar cache cleared")
 
 
-def reset_holiday_data():
+#: The 2026 entries in the first calendar OpenAlgo shipped (December 2025) that
+#: the corrected one (March 2026) changed or dropped, by date, as
+#: (description, holiday_type, closed exchanges, open (exchange, start, end)).
+#: Generated from that release's seed. A stored row equal to one of these is
+#: OpenAlgo's own and was never edited, and it is wrong: Holi on 10 March,
+#: Muhurat on 20 October, Guru Nanak on 8 November, settlement holidays nothing
+#: trades on, and MCX evening windows stamped with 2025's dates.
+_V1_ONLY_ENTRIES = {
+    "2026-02-19": (
+        "Chhatrapati Shivaji Maharaj Jayanti",
+        "SETTLEMENT_HOLIDAY",
+        (),
+        (),
+    ),
+    "2026-03-10": (
+        "Holi",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1741624200000, 1741677900000),),
+    ),
+    "2026-03-20": (
+        "Id-Ul-Fitr (Ramadan)",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1742488200000, 1742541900000),),
+    ),
+    "2026-03-25": (
+        "Holi (Dhuleti)",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1742920200000, 1742973900000),),
+    ),
+    "2026-04-01": (
+        "Annual Bank Closing",
+        "SETTLEMENT_HOLIDAY",
+        (),
+        (),
+    ),
+    "2026-04-02": (
+        "Ram Navami",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1743611400000, 1743665100000),),
+    ),
+    "2026-04-06": (
+        "Mahavir Jayanti",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1743957000000, 1744010700000),),
+    ),
+    "2026-04-14": (
+        "Dr. Baba Saheb Ambedkar Jayanti",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1744648200000, 1744701900000),),
+    ),
+    "2026-05-01": (
+        "Maharashtra Day",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1746117000000, 1746170700000),),
+    ),
+    "2026-05-27": (
+        "Bakri Id (Eid ul-Adha)",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1748363400000, 1748417100000),),
+    ),
+    "2026-06-25": (
+        "Muharram",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1750868400000, 1750922100000),),
+    ),
+    "2026-08-15": (
+        "Independence Day",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "MCX", "NFO", "NSE"),
+        (),
+    ),
+    "2026-08-27": (
+        "Id-E-Milad",
+        "SETTLEMENT_HOLIDAY",
+        (),
+        (),
+    ),
+    "2026-09-04": (
+        "Milad-un-Nabi (Birthday of Prophet Mohammad)",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1756997400000, 1757051100000),),
+    ),
+    "2026-10-20": (
+        "Diwali Laxmi Pujan (Muhurat Trading)",
+        "SPECIAL_SESSION",
+        (),
+        (
+            ("BCD", 1761052200000, 1761056700000),
+            ("BFO", 1761052200000, 1761056700000),
+            ("BSE", 1761052200000, 1761056700000),
+            ("CDS", 1761052200000, 1761056700000),
+            ("MCX", 1761052200000, 1761074700000),
+            ("NFO", 1761052200000, 1761056700000),
+            ("NSE", 1761052200000, 1761056700000),
+        ),
+    ),
+    "2026-10-21": (
+        "Diwali Balipratipada",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1761138600000, 1761192300000),),
+    ),
+    "2026-11-08": (
+        "Guru Nanak Jayanti",
+        "TRADING_HOLIDAY",
+        ("BCD", "BFO", "BSE", "CDS", "NFO", "NSE"),
+        (("MCX", 1762693800000, 1762747500000),),
+    ),
+}
+
+_CORRECTED_DATES = frozenset(
+    {
+        "2026-01-15",
+        "2026-03-03",
+        "2026-03-26",
+        "2026-03-31",
+        "2026-04-14",
+        "2026-05-01",
+        "2026-05-28",
+        "2026-06-26",
+        "2026-09-14",
+        "2026-10-20",
+        "2026-11-08",
+        "2026-11-10",
+        "2026-11-24",
+    }
+)
+
+
+def _stored_entry(holiday: "Holiday") -> tuple:
+    """A stored holiday in the shape of _V1_ONLY_ENTRIES."""
+    rows = HolidayExchange.query.filter(HolidayExchange.holiday_id == holiday.id).all()
+    closed = tuple(sorted(row.exchange_code for row in rows if not row.is_open))
+    opened = tuple(
+        sorted((row.exchange_code, row.start_time, row.end_time) for row in rows if row.is_open)
+    )
+    return (holiday.description, holiday.holiday_type, closed, opened)
+
+
+def _is_first_calendar_row(holiday: "Holiday") -> bool:
+    shipped = _V1_ONLY_ENTRIES.get(holiday.holiday_date.isoformat())
+    return shipped is not None and shipped == _stored_entry(holiday)
+
+
+def plan_2026_calendar_correction() -> list[tuple[str, str, str]] | None:
+    """What moving an install off the first 2026 calendar would do.
+
+    Only an install that still holds a row exactly as the first calendar
+    shipped it is touched. One that has the corrected calendar, or a calendar
+    its admin has curated, is left exactly as it is, so a holiday an admin
+    added stays and one an admin deleted stays deleted.
+
+    Returns:
+        None when no calendar is stored, which the seed handles. Otherwise one
+        (action, date, description) per change: "remove" for a first-calendar
+        row, "add" for a corrected entry whose date is free once those rows
+        are gone. Empty when there is nothing to correct.
     """
-    Reset and re-seed all holiday data.
-    Use this when holiday data structure changes or needs to be refreshed.
+    holidays = Holiday.query.all()
+    if not holidays:
+        return None
+    stale = [holiday for holiday in holidays if _is_first_calendar_row(holiday)]
+    if not stale:
+        return []
+    stale_ids = {holiday.id for holiday in stale}
+    taken = {
+        holiday.holiday_date.isoformat() for holiday in holidays if holiday.id not in stale_ids
+    }
+    steps = [
+        ("remove", holiday.holiday_date.isoformat(), holiday.description)
+        for holiday in sorted(stale, key=lambda holiday: holiday.holiday_date)
+    ]
+    for entry in shipped_holidays_2025() + shipped_holidays_2026():
+        if entry["date"] in _CORRECTED_DATES and entry["date"] not in taken:
+            steps.append(("add", entry["date"], entry["description"]))
+    return steps
+
+
+def correct_2026_calendar() -> list[tuple[str, str, str]] | None:
+    """Move an install off the first 2026 calendar, keeping what an admin set.
+
+    This replaces a reset that deleted every holiday and reseeded from code. It
+    ran on every upgrade (upgrade/migrate_market_holidays.py) and at startup
+    whenever no special session was stored, and each time it took every
+    holiday an admin had added or edited on the Holidays page. Runs at startup
+    and from that upgrade script.
+
+    Returns:
+        The plan it applied, as plan_2026_calendar_correction describes it, or
+        None when no calendar is stored or the change could not be made.
     """
     try:
-        # Clear existing data
-        HolidayExchange.query.delete()
-        Holiday.query.delete()
+        steps = plan_2026_calendar_correction()
+        if not steps:
+            return steps
+        adding = {day for action, day, _description in steps if action == "add"}
+        for holiday in Holiday.query.all():
+            if _is_first_calendar_row(holiday):
+                HolidayExchange.query.filter(HolidayExchange.holiday_id == holiday.id).delete(
+                    synchronize_session=False
+                )
+                db_session.delete(holiday)
+        db_session.flush()
+        for entry in shipped_holidays_2025() + shipped_holidays_2026():
+            if entry["date"] in adding:
+                _add_holiday(entry, int(entry["date"][:4]))
         db_session.commit()
-
-        # Clear cache
         clear_market_calendar_cache()
-
-        # Re-seed
-        seed_holidays_2025()
-        seed_holidays_2026()
-
-        logger.info("Market Calendar DB: Holiday data reset and re-seeded successfully")
-        return True
+        logger.info(
+            f"Market Calendar DB: moved {len(steps) - len(adding)} holiday(s) from the first "
+            f"2026 calendar to the corrected one and added {len(adding)}"
+        )
+        return steps
     except Exception as e:
         db_session.rollback()
-        logger.exception(f"Failed to reset holiday data: {e}")
-        return False
-
-
-def check_and_update_holidays():
-    """
-    Check if holiday data needs updating (e.g., missing Muhurat trading entries)
-    and update accordingly.
-    """
-    try:
-        # Check if SPECIAL_SESSION type exists (indicates new schema)
-        special_sessions = Holiday.query.filter(Holiday.holiday_type == "SPECIAL_SESSION").count()
-
-        if special_sessions == 0:
-            # Old data without Muhurat trading - need to reset
-            logger.info("Market Calendar DB: Updating to new schema with Muhurat trading support")
-            return reset_holiday_data()
-
-        return True
-    except Exception as e:
-        logger.exception(f"Error checking holiday data: {e}")
-        return False
+        logger.exception(f"Market Calendar DB: could not correct the 2026 calendar: {e}")
+        return None
 
 
 def ensure_market_calendar_tables_exists():
     """Wrapper function for parallel initialization"""
     init_db()
-    # Check and update if needed
-    check_and_update_holidays()
+    # An install still on the first 2026 calendar gets the corrected one
+    correct_2026_calendar()
     # Seed market timings if not present
     seed_market_timings()
     migrate_fo_close_for_cas()
+    migrate_muhurat_2026()
 
 
 #: Exchanges whose close moved with the Closing Auction Session, and the value
@@ -1075,6 +1300,105 @@ def migrate_fo_close_for_cas():
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Market Calendar DB: could not migrate the F&O close: {e}")
+
+
+def plan_muhurat_2026() -> list[tuple[str, str]] | None:
+    """What moving 2026's Muhurat to the published session would do.
+
+    The seed loads only into an empty table, so an existing install keeps
+    whatever 2026 row it was seeded with.
+
+    Returns:
+        One (exchange, action) per exchange in the published session, where
+        action is "update" (the row holds the shipped guess), "insert" (the
+        row was never shipped), "current" (already published) or "custom" (set
+        or removed by an admin, left alone). None when 8 November 2026 is not
+        stored as a special session, which is left to the admin who changed it.
+    """
+    holiday = (
+        Holiday.query.filter(Holiday.holiday_date == MUHURAT_2026_DATE)
+        .filter(Holiday.holiday_type == "SPECIAL_SESSION")
+        .first()
+    )
+    if holiday is None:
+        return None
+    rows = {
+        row.exchange_code: row
+        for row in HolidayExchange.query.filter(HolidayExchange.holiday_id == holiday.id)
+    }
+    steps = []
+    for exchange, published in MUHURAT_2026_SESSION.items():
+        row = rows.get(exchange)
+        if row is None:
+            action = "custom" if exchange in _MUHURAT_2026_GUESS else "insert"
+        else:
+            window = (row.start_time, row.end_time) if row.is_open else None
+            if window == published:
+                action = "current"
+            elif window is not None and window == _MUHURAT_2026_GUESS.get(exchange):
+                action = "update"
+            else:
+                action = "custom"
+        steps.append((exchange, action))
+    return steps
+
+
+def migrate_muhurat_2026() -> list[tuple[str, str]] | None:
+    """Move 2026's Muhurat session from the shipped guess to the published one.
+
+    Guarded on the guess, as `migrate_fo_close_for_cas` is on the old close, so
+    a session an admin has already set on the Holidays page stays as it is.
+    Runs at startup and from upgrade/migrate_muhurat_2026.py.
+
+    Returns:
+        The plan it applied, as `plan_muhurat_2026` describes it.
+    """
+    try:
+        steps = plan_muhurat_2026()
+        if not steps:
+            return steps
+        holiday = (
+            Holiday.query.filter(Holiday.holiday_date == MUHURAT_2026_DATE)
+            .filter(Holiday.holiday_type == "SPECIAL_SESSION")
+            .first()
+        )
+        changed = 0
+        for exchange, action in steps:
+            start, end = MUHURAT_2026_SESSION[exchange]
+            if action == "insert":
+                db_session.add(
+                    HolidayExchange(
+                        holiday_id=holiday.id,
+                        exchange_code=exchange,
+                        is_open=True,
+                        start_time=start,
+                        end_time=end,
+                    )
+                )
+                changed += 1
+            elif action == "update":
+                guess_start, guess_end = _MUHURAT_2026_GUESS[exchange]
+                changed += HolidayExchange.query.filter(
+                    HolidayExchange.holiday_id == holiday.id,
+                    HolidayExchange.exchange_code == exchange,
+                    HolidayExchange.start_time == guess_start,
+                    HolidayExchange.end_time == guess_end,
+                ).update(
+                    {HolidayExchange.start_time: start, HolidayExchange.end_time: end},
+                    synchronize_session=False,
+                )
+        if changed:
+            db_session.commit()
+            clear_market_calendar_cache()
+            logger.info(
+                f"Market Calendar DB: set the 8 November 2026 Muhurat session to the "
+                f"published timings for {changed} exchange(s)"
+            )
+        return steps
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Market Calendar DB: could not update the 2026 Muhurat session: {e}")
+        return None
 
 
 def seed_market_timings():

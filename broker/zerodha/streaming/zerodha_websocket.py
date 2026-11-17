@@ -719,8 +719,10 @@ class ZerodhaWebSocket:
 
             if len(packet) == 8:
                 mode = self.MODE_LTP
-            elif len(packet) == 44:
+            elif len(packet) in (28, 44):
                 mode = self.MODE_QUOTE
+            elif len(packet) == 32:
+                mode = self.MODE_FULL
             elif len(packet) >= 184:
                 mode = self.MODE_FULL
             else:
@@ -740,6 +742,29 @@ class ZerodhaWebSocket:
 
             if exchange:
                 tick["source_exchange"] = exchange
+
+            if len(packet) in (28, 32):
+                # Index packet (Kite docs "Index packet structure"): token, ltp,
+                # high, low, open, close, change; full mode adds the exchange
+                # timestamp. The field order differs from the 44/184-byte
+                # packets, so it must not go through the quote/full parser.
+                fields = struct.unpack(">7i", packet[0:28])
+                tick.update({
+                    "open_price": fields[4] / 100.0,
+                    "high_price": fields[2] / 100.0,
+                    "low_price": fields[3] / 100.0,
+                    "close_price": fields[5] / 100.0,
+                    "price_change": fields[6] / 100.0,
+                })
+                tick["ohlc"] = {
+                    "open": fields[4] / 100.0,
+                    "high": fields[2] / 100.0,
+                    "low": fields[3] / 100.0,
+                    "close": fields[5] / 100.0,
+                }
+                if len(packet) == 32:
+                    tick["exchange_timestamp"] = struct.unpack(">I", packet[28:32])[0]
+                return tick
 
             if len(packet) >= 44:
                 try:

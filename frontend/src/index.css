@@ -841,6 +841,276 @@
   height: 0;
 }
 
+/* The charting terminal's chrome: the toolbar band and both rails.
+   ---------------------------------------------------------------------------
+   The band is a step off the page background toward its text colour, so the
+   row reads as one surface laid over the chart in light, dark and analyzer
+   alike. A dark ground needs the larger step: three percent of white on
+   near-black is invisible. Mixed from the two tokens rather than named, so an
+   accent theme or the analyzer palette moves it with them.
+
+   The rail tokens below are the rail's whole palette, resolved per mode on the
+   root (where the mode classes live) so a flyout portalled to the body reads
+   them too. The accent is the app's primary: near-white in live dark,
+   near-black in live light, the violet in analyzer. */
+:root {
+  --oa-band: color-mix(in oklab, var(--background) 97.5%, var(--foreground));
+  --oa-rail-mut: var(--muted-foreground);
+  --oa-rail-tx: var(--foreground);
+  --oa-rail-faint: color-mix(in oklab, var(--muted-foreground) 50%, var(--background));
+  --oa-rail-elev: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --oa-rail-elev-2: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --oa-rail-on-bg: color-mix(in oklab, var(--primary) 10%, transparent);
+  --oa-rail-on-bd: transparent;
+  --oa-rail-acc: var(--primary);
+  --oa-rail-bd-soft: var(--border);
+  --oa-rail-danger: var(--destructive);
+}
+.dark,
+.analyzer {
+  --oa-band: color-mix(in oklab, var(--background) 95.5%, var(--foreground));
+  --oa-rail-faint: color-mix(in oklab, var(--muted-foreground) 55%, var(--background));
+  --oa-rail-elev: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --oa-rail-elev-2: color-mix(in oklab, var(--foreground) 14%, transparent);
+  --oa-rail-on-bg: color-mix(in oklab, var(--primary) 13%, transparent);
+}
+/* The violet is a hue, not a grey, so the selected tool can carry it at more
+   strength and with an edge, where the neutral modes keep a quiet fill. */
+.analyzer {
+  --oa-rail-on-bg: color-mix(in oklab, var(--primary) 20%, transparent);
+  --oa-rail-on-bd: color-mix(in oklab, var(--primary) 45%, transparent);
+}
+.oa-terminal-band {
+  background-color: var(--oa-band);
+}
+
+/* In the components layer, so a utility on the same element (a dock button
+   sized smaller) still wins. */
+@layer components {
+  .oa-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 42px;
+    flex-shrink: 0;
+    padding-top: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    background: var(--oa-band);
+  }
+  .oa-rail::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  .oa-rail__btn {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--oa-rail-mut);
+    cursor: pointer;
+    transition:
+      background-color 0.09s,
+      color 0.09s,
+      border-color 0.09s;
+  }
+  .oa-rail__btn:hover {
+    background: var(--oa-rail-elev);
+    color: var(--oa-rail-tx);
+  }
+  .oa-rail__btn:focus-visible {
+    outline: 2px solid var(--oa-rail-acc);
+    outline-offset: -2px;
+  }
+  .oa-rail__btn.is-on,
+  .oa-rail__btn[aria-pressed='true'],
+  .oa-rail__btn[aria-expanded='true'][aria-controls] {
+    background: var(--oa-rail-on-bg);
+    border-color: var(--oa-rail-on-bd);
+    color: var(--oa-rail-acc);
+  }
+  .oa-rail__btn:disabled,
+  .oa-rail__btn:disabled:hover {
+    background: transparent;
+    color: var(--oa-rail-faint);
+    cursor: default;
+  }
+  .oa-rail__btn--danger:not(:disabled):hover {
+    color: var(--oa-rail-danger);
+  }
+  .oa-rail__btn > svg,
+  .oa-rail__glyph > svg {
+    display: block;
+  }
+  .oa-rail__glyph {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    line-height: 0;
+  }
+  /* The held tool and the magnet's strength: a dot in the top right corner,
+     a ring for weak. */
+  .oa-rail__btn.is-held::after,
+  .oa-rail__btn[data-mode='weak']::after,
+  .oa-rail__btn[data-mode='strong']::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+  }
+  .oa-rail__btn.is-held::after,
+  .oa-rail__btn[data-mode='strong']::after {
+    background: var(--oa-rail-acc);
+  }
+  .oa-rail__btn[data-mode='weak']::after {
+    width: 4px;
+    height: 4px;
+    border: 1.5px solid var(--oa-rail-acc);
+  }
+  /* The caret that opens a group's list: a separate button laid over the
+     tool's bottom right corner, quiet until the tool is hovered or focused or
+     its list is open. */
+  .oa-rail__slot {
+    position: relative;
+    flex: none;
+  }
+  .oa-rail__chev {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    place-items: center;
+    width: 13px;
+    height: 13px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px 0 6px 0;
+    background: transparent;
+    color: var(--oa-rail-mut);
+    opacity: 0;
+    cursor: pointer;
+    transition:
+      opacity 0.1s,
+      background-color 0.1s;
+  }
+  .oa-rail__chev > svg {
+    width: 9px;
+    height: 9px;
+    stroke-width: 2.2;
+  }
+  .oa-rail__slot:hover .oa-rail__chev,
+  .oa-rail__slot:focus-within .oa-rail__chev,
+  .oa-rail__chev[data-state='open'],
+  .oa-rail__chev.is-shown {
+    opacity: 1;
+  }
+  /* No hover on a touch screen: the caret would be invisible yet still take the
+     tap on the button's corner, so it stays shown there. */
+  @media (hover: none) {
+    .oa-rail__chev {
+      opacity: 1;
+    }
+  }
+  .oa-rail__chev:hover {
+    background: var(--oa-rail-elev-2);
+    color: var(--oa-rail-tx);
+  }
+  .oa-rail__chev:focus-visible {
+    outline: 2px solid var(--oa-rail-acc);
+    outline-offset: -2px;
+    opacity: 1;
+  }
+  .oa-rail__sep {
+    flex: none;
+    width: 22px;
+    height: 1px;
+    margin: 4px 0;
+    background: var(--oa-rail-bd-soft);
+  }
+  /* The controls at the foot: held at the bottom, with tools that scroll
+     under them fading out rather than being cut through. */
+  .oa-rail__ctl {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 100%;
+    margin-top: auto;
+    padding: 4px 0 6px;
+    background: var(--oa-band);
+    border-top: 1px solid var(--oa-rail-bd-soft);
+  }
+  .oa-rail__ctl::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 100%;
+    height: 14px;
+    background: linear-gradient(to bottom, transparent, var(--oa-band));
+    pointer-events: none;
+  }
+  .oa-rail__ctl .oa-rail__sep {
+    margin: 3px 0;
+  }
+  /* Folded, the rail leaves this tab at the chart's bottom left. */
+  .oa-rail-tab {
+    position: absolute;
+    left: 0;
+    z-index: 21;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--oa-rail-bd-soft);
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+    background: var(--oa-band);
+    color: var(--oa-rail-mut);
+    cursor: pointer;
+    transition:
+      background-color 0.09s,
+      color 0.09s,
+      width 0.09s;
+  }
+  .oa-rail-tab:hover {
+    width: 20px;
+    background: color-mix(in oklab, var(--oa-band), var(--foreground) 8%);
+    color: var(--oa-rail-tx);
+  }
+  .oa-rail-tab:focus-visible {
+    outline: 2px solid var(--oa-rail-acc);
+    outline-offset: -2px;
+  }
+  .oa-rail-tab > svg {
+    width: 12px;
+    height: 12px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .oa-rail__btn,
+    .oa-rail__chev,
+    .oa-rail-tab {
+      transition: none;
+    }
+  }
+}
+
 /* Thin scrollbar utility class */
 .scrollbar-thin {
   scrollbar-width: thin;

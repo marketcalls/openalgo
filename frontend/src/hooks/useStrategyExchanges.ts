@@ -12,6 +12,10 @@ import { CRYPTO_EXCHANGE_VALUE, FALLBACK_STRATEGY_EXCHANGES } from '@/types/pyth
  * (SEBI's Closing Auction Session moved the NFO/BFO close to 15:40, or an
  * admin edits one under /admin/timings), the dropdown labels and the schedule
  * defaults follow it without a frontend change.
+ *
+ * The list is the broker's own, from its plugin.json: a crypto broker offers
+ * CRYPTO alone and a stock broker never offers it. `defaultExchange` is the
+ * one a new strategy should start on.
  */
 export function useStrategyExchanges() {
   const { data, isLoading } = useQuery({
@@ -21,7 +25,12 @@ export function useStrategyExchanges() {
     staleTime: 30 * 60 * 1000,
   })
 
-  const exchanges: StrategyExchange[] = data && data.length > 0 ? data : FALLBACK_STRATEGY_EXCHANGES
+  const exchanges: StrategyExchange[] =
+    data && data.exchanges.length > 0 ? data.exchanges : FALLBACK_STRATEGY_EXCHANGES
+  const defaultExchange =
+    data?.default && exchanges.some((e) => e.value === data.default)
+      ? data.default
+      : exchanges[0].value
 
   /** The session window for an exchange, or null while the list is loading. */
   const getWindow = useCallback(
@@ -36,5 +45,5 @@ export function useStrategyExchanges() {
     [exchanges]
   )
 
-  return { exchanges, getWindow, isLoading }
+  return { exchanges, defaultExchange, getWindow, isLoading }
 }

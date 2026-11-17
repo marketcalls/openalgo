@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, order_events
+from services.strategy_module import broker_binding, order_dispatch, order_events
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -219,6 +219,14 @@ def reconcile_open_runs(
         if run is None or strategy is None or not api_key:
             failed += 1
             continue
+        run_mode = str(run.mode)
+        # The run's own broker answers for its orders. A fact read from another
+        # broker about the same order id would be folded into this run.
+        binding = (
+            broker_binding.for_run(run_id, api_key=api_key, user_id=str(strategy.user_id))
+            if run_mode == "live"
+            else None
+        )
 
         for broker_order_id in repair.working_broker_ids:
             if polled >= bounded_polls:
@@ -226,9 +234,10 @@ def reconcile_open_runs(
             polled += 1
             try:
                 status = order_dispatch.fetch_order_status(
-                    mode=str(run.mode),
+                    mode=run_mode,
                     api_key=api_key,
                     broker_order_id=broker_order_id,
+                    binding=binding,
                 )
                 if status.ok and status.order is not None:
                     order_events.apply_order_snapshot(broker_order_id, status.order)

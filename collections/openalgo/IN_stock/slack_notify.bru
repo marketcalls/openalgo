@@ -1,0 +1,35 @@
+meta {
+  name: Slack Notify
+  type: http
+  seq: 69
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/slack/notify
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "apikey": "",
+    "message": "Test alert from OpenAlgo API",
+    "wait_for_delivery": false
+  }
+}
+
+docs {
+  Post a message to the Slack channel whose incoming webhook is saved on the
+  /slack page. Slack alerts must be switched on at /alerts.
+
+    "message":            the text, at most 4000 characters
+    "wait_for_delivery":  false (default) queues the message and returns at once;
+                          true posts it first and reports whether Slack took it
+
+  Slack's control characters & < > are escaped, so a message cannot mention a
+  whole channel or hide a link behind other text. Bold with *single asterisks*
+  still works.
+
+  The webhook URL itself is never sent or returned by the API. Saving,
+  replacing and removing it is done on the session-authenticated /slack page.
+}

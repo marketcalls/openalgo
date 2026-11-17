@@ -116,6 +116,22 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _first_mark(path: Path) -> float | None:
+    """The monotonic time of the first complete line in a mark file, or None.
+
+    A hook creates its mark file before it writes the timestamp. In the
+    control case the arbiter SIGKILLs the worker when the window runs out, and
+    on a slow runner that kill can land between the two, leaving an empty
+    file. The hook started but never finished, so the mark was not reached.
+    """
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines(keepends=True):
+        if line.endswith("\n") and line.strip():
+            return float(line)
+    return None
+
+
 class Server:
     def __init__(self, tmp_path: Path, worker: str, config: Path, **env):
         self.app_dir = tmp_path / "app"
@@ -222,10 +238,8 @@ class Server:
         VM, a machine catching up with NTP) the arbiter can give up early. The
         worker's own timeline is what these tests compare.
         """
-        path = self.marks / name
-        if not path.exists():
-            return None
-        return float(path.read_text().split()[0]) - self.stopped_at
+        first = _first_mark(self.marks / name)
+        return None if first is None else first - self.stopped_at
 
 
 def _release(held):
@@ -252,6 +266,21 @@ def test_the_drain_lets_a_gthread_stop_finish_and_clean_up(tmp_path):
     assert cleanup < 3, f"the worker drained in {cleanup:.1f}s\n{log}"
     assert elapsed < GRACEFUL - 3, f"stop took {elapsed:.1f}s\n{log}"
     assert "Closed 3 browser session" in log
+
+
+def test_a_mark_the_kill_cut_off_counts_as_not_reached(tmp_path):
+    # main CI 38516186020: the control's shutdown mark existed but was empty,
+    # and reading its first field raised IndexError instead of reporting "no cleanup".
+    empty = tmp_path / "shutdown"
+    empty.write_text("")
+    assert _first_mark(empty) is None
+    cut = tmp_path / "cut"
+    cut.write_text("12.5")
+    assert _first_mark(cut) is None
+    full = tmp_path / "drain"
+    full.write_text("12.5\n13.0\n")
+    assert _first_mark(full) == 12.5
+    assert _first_mark(tmp_path / "missing") is None
 
 
 def test_without_the_drain_the_same_stop_waits_out_the_window(tmp_path):

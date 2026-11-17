@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { ChartSymbolLink } from '@/components/trading/ChartSymbolLink'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -40,6 +41,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -59,7 +61,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
 
@@ -874,10 +875,12 @@ export default function Positions() {
               icon={ChartCandlestick}
               title="No positions match your filters"
               description="Try adjusting or clearing your filters to see results."
-              action={hasActiveFilters ?
-                <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Clear Filters
-                </Button> : undefined
+              action={
+                hasActiveFilters ? (
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -966,7 +969,10 @@ export default function Positions() {
                             return (
                               <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
                                 <TableCell className="w-[140px] font-medium">
-                                  {position.symbol}
+                                  <ChartSymbolLink
+                                    symbol={position.symbol}
+                                    exchange={position.exchange}
+                                  />
                                 </TableCell>
                                 <TableCell className="w-[80px]">
                                   <Badge

@@ -23,7 +23,10 @@ const STATS: DrawStats = {
   shortcuts: { 'trend-line': 'Alt+T' },
 }
 
-function rail(stats: Partial<DrawStats> = {}, extra: { latched?: boolean } = {}) {
+function rail(
+  stats: Partial<DrawStats> = {},
+  extra: { latched?: boolean; folded?: boolean; onFold?(): void } = {}
+) {
   const handlers = {
     onPick: vi.fn(),
     onUndo: vi.fn(),
@@ -94,7 +97,8 @@ describe('magnet', () => {
   it('turns on to the last mode used and off again', () => {
     const { onMagnet, view } = rail({ magnetMode: 'weak', magnet: true })
     expect(screen.getByRole('button', { name: 'Magnet' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByText('W')).toBeInTheDocument()
+    // The corner dot: a ring for weak, solid for strong.
+    expect(screen.getByRole('button', { name: 'Magnet' })).toHaveAttribute('data-mode', 'weak')
     fireEvent.click(screen.getByRole('button', { name: 'Magnet' }))
     expect(onMagnet).toHaveBeenLastCalledWith('off')
 
@@ -207,6 +211,30 @@ describe('keys', () => {
     dialog.appendChild(document.createElement('button'))
     document.body.appendChild(dialog)
     fireEvent.keyDown(dialog.firstElementChild as Element, { key: 'c', ctrlKey: true })
+    expect(onShortcut).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('fold', () => {
+  it('is the last control when the page offers it, and folds on a click', () => {
+    const onFold = vi.fn()
+    rail({}, { onFold })
+    const buttons = screen.getAllByRole('button')
+    const fold = screen.getByRole('button', { name: 'Hide drawing tools' })
+    expect(buttons.at(-1)).toBe(fold)
+    fireEvent.click(fold)
+    expect(onFold).toHaveBeenCalledTimes(1)
+  })
+
+  it('is absent without a handler, so the rail never shows a control with nothing behind it', () => {
+    rail()
+    expect(screen.queryByRole('button', { name: 'Hide drawing tools' })).toBeNull()
+  })
+
+  it('hides the rail when folded but keeps passing keys to the chart', () => {
+    const { onShortcut, view } = rail({}, { folded: true, onFold: vi.fn() })
+    expect(view.container.querySelector('[data-drawing-rail]')).toHaveClass('hidden')
+    fireEvent.keyDown(document.body, { key: 't', altKey: true })
     expect(onShortcut).toHaveBeenCalledTimes(1)
   })
 })

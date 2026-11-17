@@ -18,11 +18,25 @@ _URL_CREDENTIAL = re.compile(
 # parameters. Keep this URL-specific so an ordinary application line such as
 # ``HTTP status code=200`` remains untouched while callback ``code=...`` is
 # masked. The names cover the aliases accepted by ``blueprints/brlogin.py``.
+# The OAuth state is one too: it completes the pending broker login it was
+# issued for (utils/broker_login.py), and Zerodha carries it in
+# ``redirect_params``.
 _QUERY_CREDENTIAL = re.compile(
     r"(?P<prefix>[?&](?:"
     r"api[_-]?session|token(?:[_-]?id)?|request[_-]?token|auth[_-]?code|"
-    r"access[_-]?token|session|code"
+    r"access[_-]?token|session|code|state|redirect[_-]?params"
     r")=)[^&#\s'\"<>]+",
+    flags=re.IGNORECASE,
+)
+
+# Slack and Discord incoming webhooks (alert channels). The whole path after
+# the fixed prefix is the credential: anybody holding it can post into the
+# trader's channel. OpenAlgo never logs one on purpose; this catches the ones a
+# library puts in an exception or a debug line.
+_ALERT_WEBHOOK = re.compile(
+    r"(?P<prefix>hooks\.slack\.com(?::\d+)?/services/|"
+    r"(?:ptb\.|canary\.)?discord(?:app)?\.com(?::\d+)?/api(?:/v\d{1,2})?/webhooks/)"
+    r"[^\s?#'\"<>]+",
     flags=re.IGNORECASE,
 )
 
@@ -30,4 +44,5 @@ _QUERY_CREDENTIAL = re.compile(
 def redact_url_credentials(value: Any) -> str:
     """Return ``value`` with shipped path and query credentials masked."""
     redacted = _URL_CREDENTIAL.sub(r"\g<prefix><redacted>", str(value))
+    redacted = _ALERT_WEBHOOK.sub(r"\g<prefix><redacted>", redacted)
     return _QUERY_CREDENTIAL.sub(r"\g<prefix>[REDACTED]", redacted)

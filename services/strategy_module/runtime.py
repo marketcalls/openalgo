@@ -50,7 +50,7 @@ def start_strategy_module() -> dict[str, bool]:
     result["checkpoint"] = _guard("checkpointing", _start_checkpoint)
     result["scheduler"] = _guard("scheduler", _start_scheduler)
 
-    logger.info("Strategy module started: %s", result)
+    logger.debug("Strategy module started: %s", result)
     return result
 
 

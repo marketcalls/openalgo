@@ -40,7 +40,7 @@ class _GrowwMarketCache:
     Keyed by (groww_exchange, segment, token).
     """
 
-    _LTP_FIELDS = ("ltp", "open", "high", "low", "close", "volume", "ltt")
+    _LTP_FIELDS = ("ltp", "open", "high", "low", "close", "volume", "value", "ltt")
 
     def __init__(self):
         self._cache: dict[tuple[str, str, str], dict] = {}
@@ -332,6 +332,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_client = None
             self.subscriptions.clear()
             self.subscription_keys.clear()
+            # Quotes are published from this cache, so a session's last values
+            # must not reappear on the first ticks after a reconnect.
+            self.market_cache.clear()
 
             # Clean up ZeroMQ resources
             self.cleanup_zmq()
@@ -372,6 +375,19 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 3 and depth_level != 5:
             self.logger.info(f"Groww only supports depth level 5, using 5 instead of {depth_level}")
             depth_level = 5
+
+        # Groww's live feed (growwapi FeedConstants) only publishes NSE/BSE
+        # cash, F&O and indices. There is no commodity or currency topic; the
+        # server answers /ld/comm/... with a NATS "Permissions Violation".
+        # Allow-list rather than block-list, so commodity codes (MCX, NCO,
+        # NCDEX), currency (CDS, BCD) and any exchange added later are refused
+        # here instead of reaching an invalid topic.
+        if exchange not in ("NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"):
+            return self._create_error_response(
+                "EXCHANGE_NOT_SUPPORTED",
+                f"Groww does not provide live streaming for {exchange}. "
+                "Live prices are available for NSE, BSE, NFO, BFO and indices.",
+            )
 
         # Map symbol to token using symbol mapper
         token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
@@ -416,7 +432,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         groww_exchange, segment = GrowwExchangeMapper.get_exchange_segment(exchange)
 
         if exchange in ["NFO", "BFO"]:
-            self.logger.debug(f"F&O Subscription: {symbol}, exchange={exchange}->{groww_exchange}, segment={segment}, token={token}")
+            self.logger.debug(
+                f"F&O Subscription: {symbol}, exchange={exchange}->{groww_exchange}, segment={segment}, token={token}"
+            )
 
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -527,9 +545,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._process_batch_subscriptions()
 
             mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
-            self.logger.info(
-                f"Queued subscription for {symbol}.{exchange} in {mode_name} mode"
-            )
+            self.logger.info(f"Queued subscription for {symbol}.{exchange} in {mode_name} mode")
 
         mode_name = {1: "LTP", 2: "Quote", 3: "Depth"}.get(mode, str(mode))
         return self._create_success_response(
@@ -602,13 +618,9 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if shadow_sub_key is not None and self.connected and self.ws_client:
             try:
                 self.ws_client.unsubscribe(shadow_sub_key)
-                self.logger.debug(
-                    f"Unsubscribed shadow LTP for {symbol}.{exchange}"
-                )
+                self.logger.debug(f"Unsubscribed shadow LTP for {symbol}.{exchange}")
             except Exception as e:
-                self.logger.error(
-                    f"Error unsubscribing shadow LTP for {symbol}.{exchange}: {e}"
-                )
+                self.logger.error(f"Error unsubscribing shadow LTP for {symbol}.{exchange}: {e}")
 
         # Clear the cache entry — only if no other sub still uses this token.
         if sub_info_for_cache:
@@ -719,9 +731,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.subscription_keys[item["correlation_id"]] = sub_key
 
                     if item["exchange"] in ["NFO", "BFO"]:
-                        self.logger.debug(
-                            f"F&O subscription key created: {sub_key}"
-                        )
+                        self.logger.debug(f"F&O subscription key created: {sub_key}")
             except Exception as e:
                 self.logger.error(f"Batch subscription failed: {e}", exc_info=True)
 
@@ -761,9 +771,7 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return
 
         try:
-            self.logger.info(
-                f"Reconnect: batch resubscribing {len(batch_specs)} symbols"
-            )
+            self.logger.info(f"Reconnect: batch resubscribing {len(batch_specs)} symbols")
             with self.batch_lock:
                 sub_keys = self.ws_client.subscribe_batch(batch_specs)
                 for cid, sub_key in zip(correlation_ids, sub_keys):
@@ -957,7 +965,14 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # depth ticks (they don't add anything for these subs).
                     if tick_kind == 3:
                         continue
-                    market_data = dict(normalized)
+                    if sub_mode == 2:
+                        # Quote user — publish the merged snapshot. Groww ticks
+                        # omit fields that did not change (and index ticks carry
+                        # only a value), so the per-tick payload would drop the
+                        # OHLC/volume a previous tick delivered.
+                        market_data = {k: v for k, v in merged.items() if k != "depth"}
+                    else:
+                        market_data = dict(normalized)
                     actual_mode = sub_mode
                 else:
                     continue
@@ -986,10 +1001,8 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         f"LTP MODE: {sub_exchange}:{sub_symbol} = {market_data.get('ltp')} at {market_data.get('ltt')}"
                     )
                 elif actual_mode == 2:
-                    quote_fields = ["open", "high", "low", "close", "volume", "ltp"]
-                    for field in quote_fields:
-                        if field not in market_data:
-                            market_data[field] = 0.0 if field != "volume" else 0
+                    # Fields Groww has not sent stay out of the payload: a 0
+                    # placeholder would overwrite the last good value downstream.
                     self.logger.debug(
                         f"QUOTE MODE: {sub_exchange}:{sub_symbol} = {market_data.get('ltp')} (Vol: {market_data.get('volume', 0)})"
                     )

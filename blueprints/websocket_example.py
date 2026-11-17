@@ -25,7 +25,7 @@ from services.websocket_service import (
     unsubscribe_from_symbols,
 )
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, is_session_valid
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -38,9 +38,23 @@ socketio_subscribers = {}
 
 
 def get_username_from_session():
-    """Get username from current session"""
+    """The signed-in user, or None when the session is missing or has expired.
+
+    Every /api/websocket/* route and every /market Socket.IO handler
+    authenticates through this, and the app-wide expiry check in app.py skips
+    /api/. A username alone is not enough: a cookie from before the daily
+    rollover still carries one, and GET /api/websocket/apikey handed the live
+    API key to such a cookie. is_session_valid() applies the same rollover the
+    page routes do.
+
+    Nothing is revoked here. Open tabs poll these routes, and a stale tab left
+    overnight must not tear down the broker token another device is using;
+    the page routes clear the session and revoke on the next navigation.
+    """
     username = session.get("user")
-    return username if username else None
+    if not username or not is_session_valid():
+        return None
+    return username
 
 
 @websocket_bp.route("/websocket/dashboard")
@@ -337,7 +351,9 @@ def handle_connect(auth):
 @socketio.on("disconnect", namespace="/market")
 def handle_disconnect():
     """Handle client disconnection"""
-    username = get_username_from_session()
+    # Cleanup, not authorization: a socket opened before the rollover still
+    # releases what it holds, so this reads the name without the expiry check.
+    username = session.get("user")
     if username:
         leave_room(f"user_{username}")
 

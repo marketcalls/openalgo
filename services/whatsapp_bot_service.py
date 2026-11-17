@@ -85,6 +85,8 @@ import collections
 import math
 import queue
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -134,6 +136,19 @@ SESSION_SAVE_INTERVAL_SECONDS = 300.0
 _COMMAND_POOL = "whatsapp_commands"
 #: The first bytes of every SQLite database file.
 _SQLITE_MAGIC = b"SQLite format 3\x00"
+#: Seconds the helper process copying the live session is given to finish.
+SESSION_DUMP_TIMEOUT_SECONDS = 30.0
+#: Run by that helper: copy the session file named first into the one named second.
+_SESSION_DUMP_SCRIPT = (
+    "import sqlite3, sys\n"
+    "src = sqlite3.connect(sys.argv[1])\n"
+    "dst = sqlite3.connect(sys.argv[2])\n"
+    "try:\n"
+    "    src.backup(dst)\n"
+    "finally:\n"
+    "    dst.close()\n"
+    "    src.close()\n"
+)
 
 
 def _is_rust_panic(exc: BaseException) -> bool:
@@ -167,6 +182,50 @@ def _is_session_snapshot(blob: Any) -> bool:
     if page_size == 1:  # how the header writes 65536
         page_size = 65536
     return page_size > 0 and len(blob) >= 2 * page_size
+
+
+def _export_live_session(wa) -> bytes:
+    """Snapshot the session of a client that keeps running afterwards.
+
+    Bot thread only. wars 0.1.4's ``export_session()`` copies the session file
+    with Python's own sqlite3 while the client holds it open through the SQLite
+    built into wars. Two SQLite libraries in one process share its file locks,
+    so when the Python connection closes it finds no other user, folds the
+    write-ahead log into the file and deletes the log and its index while the
+    client is still writing to them. The client's writes then go to deleted
+    files, every later snapshot misses them, and within the hour its saves and
+    sends fail with "disk I/O error". A separate process has locks of its own,
+    so the copy is made there and SQLite sees the client as the user it is.
+
+    A client with no session file (the in-memory default, or a test double)
+    exports itself. Remove this once wars exports through its own connection.
+    """
+    db_path = getattr(wa, "_db_path", None)
+    inner = getattr(wa, "_inner", None)
+    if not isinstance(db_path, str) or inner is None or "mode=memory" in db_path:
+        return wa.export_session()
+    # The client saves to disk every 30 s; land its pending writes first.
+    inner.flush()
+    fd, dump_path = tempfile.mkstemp(suffix=".db", prefix="openalgo_wa_dump_")
+    os.close(fd)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", _SESSION_DUMP_SCRIPT, db_path, dump_path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=SESSION_DUMP_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"session copy exited with code {result.returncode}")
+        with open(dump_path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(dump_path)
+        except OSError:
+            pass
 
 
 class _BotGeneration:
@@ -1009,7 +1068,7 @@ class WhatsAppBotService:
         try:
             if not wa.is_connected():
                 return
-            blob = wa.export_session()
+            blob = _export_live_session(wa)
             if not _is_session_snapshot(blob):
                 raise RuntimeError("WhatsApp returned an empty session snapshot")
             blob = bytes(blob)

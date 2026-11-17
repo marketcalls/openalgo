@@ -68,9 +68,9 @@ def _heartbeats():
     return [t for t in threading.enumerate() if t.name == "pocketful-hb" and t.is_alive()]
 
 
-def test_a_reconnect_leaves_exactly_one_heartbeat(monkeypatch):
+def test_a_reconnect_leaves_exactly_one_heartbeat(monkeypatch, module_sleep):
     real_sleep = time.sleep
-    monkeypatch.setattr(feed.time, "sleep", lambda seconds: real_sleep(0.005))
+    module_sleep(feed, lambda seconds: real_sleep(0.005))
     monkeypatch.setattr(feed, "ws_connected", True)
     first, second = FakeSocket(), FakeSocket()
     try:
@@ -94,9 +94,9 @@ def test_a_reconnect_leaves_exactly_one_heartbeat(monkeypatch):
     assert _heartbeats() == [], "a heartbeat outlived its socket"
 
 
-def test_a_heartbeat_stops_when_its_socket_stops_running(monkeypatch):
+def test_a_heartbeat_stops_when_its_socket_stops_running(monkeypatch, module_sleep):
     real_sleep = time.sleep
-    monkeypatch.setattr(feed.time, "sleep", lambda seconds: real_sleep(0.005))
+    module_sleep(feed, lambda seconds: real_sleep(0.005))
     monkeypatch.setattr(feed, "ws_connected", True)
     only = FakeSocket()
     monkeypatch.setattr(feed, "websock", only)

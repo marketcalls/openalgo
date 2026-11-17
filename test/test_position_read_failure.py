@@ -330,7 +330,6 @@ SPECS = {
         path="/v1/positions/user",
         book=_groww_book,
         error={"status": "FAILURE", "error": {"code": "GA005", "message": "Invalid token"}},
-        reads_flat=True,
     ),
     "hdfcsecurities": Spec(
         path="cumulative-positions",
@@ -466,6 +465,37 @@ SPECS = {
         error={"error": "Invalid session"},
         patches={"resolve_position": lambda position: ("SBIN", "NSE")},
     ),
+    "nuvama": Spec(
+        path="/positions/net/",
+        br_symbol="INE062A01020",
+        auth="AUTH:::SOURCE:::APPID:::ACC01:::EQ:::KEY01",
+        # Nuvama answers an empty book with an error object (HTTP 222 in
+        # production) whose code says there are no positions.
+        book=lambda q: (
+            {
+                "error": {
+                    "actCd": "54",
+                    "errCd": "ETRD0004",
+                    "errMsg": "Seems like there are no positions in your account currently",
+                }
+            }
+            if q is None
+            else {
+                "data": {
+                    "pos": [
+                        {
+                            "sym": TOKEN,
+                            "trdSym": "INE062A01020",
+                            "exc": "NSE",
+                            "prdCode": "MIS",
+                            "ntQty": str(q),
+                        }
+                    ]
+                }
+            }
+        ),
+        error={"error": {"actCd": "52", "errCd": "EGN0011", "errMsg": "Session Expired"}},
+    ),
     "paytm": Spec(
         path="/orders/v1/position",
         book=lambda q: {
@@ -499,6 +529,28 @@ SPECS = {
         patches={"get_client_id": lambda auth: "CLIENT01"},
     ),
     "rmoney": Spec(path="/portfolio/positions", book=_xts_book, error=XTS_ERROR),
+    "rupeezy": Spec(
+        path="/trading/portfolio/positions",
+        book=lambda q: {
+            "status": "success",
+            "data": {
+                "net": []
+                if q is None
+                else [
+                    {
+                        "ticker": "NSE:SBIN",
+                        "exchange": "NSE_EQ",
+                        "product": "INTRADAY",
+                        "quantity": q,
+                        "lot_size": 1,
+                    }
+                ],
+                "day": [],
+            },
+        },
+        error={"status": "error", "code": "e-101", "message": "Invalid session"},
+        patches={"resolve_instrument": lambda symbol, exchange: ("NSE:SBIN", "NSE_EQ", 1)},
+    ),
     "samco": Spec(
         path="/position/getPositions",
         br_symbol="SBIN-EQ",
@@ -804,7 +856,7 @@ def test_held_position_gives_the_same_order_as_before(harness, broker):
     reason=(
         "Pre-existing, not changed by this fix: the plugin reads every position as "
         "flat even when the read works (XTS brokers match on keys the XTS book does "
-        "not carry; Groww's get_open_position never unwraps get_positions' tuple)."
+        "not carry)."
     ),
 )
 def test_held_position_is_read(harness, broker):

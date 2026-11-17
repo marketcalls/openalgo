@@ -9,7 +9,6 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Optional
 
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -23,6 +22,7 @@ from database.apscheduler_jobstore_db import (
 from database.engine_factory import create_db_engine
 from utils.env_config import env_int
 from utils.logging import get_logger
+from utils.resilient_scheduler import LockTolerantJobStore, ResilientBackgroundScheduler
 
 logger = get_logger(__name__)
 
@@ -107,12 +107,18 @@ class FlowScheduler:
                 # NullPool policy instead of SQLAlchemy's default QueuePool,
                 # which would hold connections open for the life of the
                 # process. See database/engine_factory.py.
+                #
+                # These two classes, not APScheduler's own: with those, one
+                # "database is locked" while saving a job's next run time ended
+                # the scheduler's thread, and every scheduled workflow stopped
+                # until the application was restarted (issues #2355, #2326).
+                # See utils/resilient_scheduler.py.
                 jobstores = {
-                    "default": SQLAlchemyJobStore(
+                    "default": LockTolerantJobStore(
                         engine=create_db_engine(db_url), tablename=FLOW_JOBSTORE_TABLE
                     )
                 }
-                self._scheduler = BackgroundScheduler(
+                self._scheduler = ResilientBackgroundScheduler(
                     jobstores=jobstores,
                     job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60},
                 )
@@ -139,6 +145,27 @@ class FlowScheduler:
         """Get the API key for workflow execution"""
         return self._api_key
 
+    def ensure_running(self) -> bool:
+        """Start the scheduler's loop again if it has stopped. True if it had.
+
+        The loop no longer ends on a failed pass, so this should never find
+        anything to do. It is here because the alternative is the failure of
+        #2326: a scheduler that takes a job, says "Added job", and never fires
+        it. Called when a job is added or looked up, so activating a workflow,
+        which is what a trader does when a schedule seems stuck, brings a
+        stopped loop back.
+        """
+        scheduler = self._scheduler
+        revive = getattr(scheduler, "revive", None)
+        if revive is None or not revive():
+            return False
+        logger.error(
+            "The Flow scheduler had stopped and has been started again. Scheduled "
+            "workflows run from now on. Runs that were due while it was stopped "
+            "were not made."
+        )
+        return True
+
     def add_workflow_job(
         self,
         workflow_id: int,
@@ -164,6 +191,10 @@ class FlowScheduler:
             func: Function to execute (defaults to execute_workflow_scheduled)
         """
         job_id = f"flow_workflow_{workflow_id}"
+
+        # A job handed to a scheduler whose loop has stopped is stored and never
+        # fires. Checked before the job goes in.
+        self.ensure_running()
 
         # Clear any previous job for this workflow. A brand-new workflow has
         # none, which remove_job treats as a normal no-op.
@@ -304,6 +335,7 @@ class FlowScheduler:
 
     def get_job(self, job_id: str):
         """Get a job by ID"""
+        self.ensure_running()
         return self.scheduler.get_job(job_id)
 
     def get_workflow_job(self, workflow_id: int):
@@ -320,6 +352,7 @@ class FlowScheduler:
 
     def get_all_jobs(self) -> list:
         """Get all scheduled jobs"""
+        self.ensure_running()
         return self.scheduler.get_jobs()
 
     def pause_job(self, job_id: str) -> bool:

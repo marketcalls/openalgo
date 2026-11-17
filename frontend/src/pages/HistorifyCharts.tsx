@@ -23,7 +23,13 @@ import { Button } from '@/components/ui/button'
 import { createHistorifyFeed } from '@/lib/chart/feeds/historifyFeed'
 import { layoutById } from '@/lib/chart/layouts'
 import { findCatalogSymbol, toCatalogSymbols } from '@/lib/historify/catalog'
-import { availableIntervals } from '@/lib/historify/intervals'
+import { availableIntervals, isIntervalAvailable } from '@/lib/historify/intervals'
+import { createHistorifyTimeframes } from '@/lib/historify/timeframes'
+import {
+  prepareSessionHours,
+  sessionCalendar,
+  sessionCalendarRevision,
+} from '@/lib/trading/sessionHours'
 import { showToast } from '@/utils/toast'
 
 const LAYOUT_KEY = 'historify-charts-layout'
@@ -101,7 +107,7 @@ export default function HistorifyCharts() {
    * source changed; a new object each render would rebuild all of them and
    * throw away the viewport, drawings and studies on every keystroke.
    */
-  const feed = useMemo(() => createHistorifyFeed(), [])
+  const rawFeed = useMemo(() => createHistorifyFeed(), [])
 
   const catalog = useQuery({
     queryKey: ['historify', 'catalog-metadata'],
@@ -113,6 +119,42 @@ export default function HistorifyCharts() {
   })
 
   const symbols = useMemo(() => toCatalogSymbols(catalog.data ?? []), [catalog.data])
+  const calendarKey = useQuery({
+    queryKey: ['historify', 'calendar-key'],
+    queryFn: async ({ signal }) => {
+      const response = await fetch('/api/websocket/apikey', { signal })
+      const result = (await response.json()) as { status?: string; api_key?: string }
+      if (result.status !== 'success' || !result.api_key) return null
+      await prepareSessionHours(result.api_key, {
+        symbol: '',
+        exchange: 'NSE',
+        interval: 'D',
+        signal,
+      })
+      return result.api_key
+    },
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
+  const [timeframes, setTimeframes] = useState<ReturnType<typeof createHistorifyTimeframes> | null>(
+    null
+  )
+  useEffect(() => {
+    if (!calendarKey.data) {
+      setTimeframes(null)
+      return
+    }
+    const key = calendarKey.data
+    const service = createHistorifyTimeframes(rawFeed, {
+      symbols,
+      calendar: sessionCalendar,
+      calendarRevision: sessionCalendarRevision,
+      prepare: (request) => prepareSessionHours(key, request),
+    })
+    setTimeframes(service)
+    return () => service.destroy()
+  }, [rawFeed, symbols, calendarKey.data])
+  const feed = timeframes?.feed ?? rawFeed
 
   // The current page reported a catalog failure by doing nothing at all, which
   // left an empty picker and no way to tell "nothing downloaded" from "the
@@ -181,7 +223,7 @@ export default function HistorifyCharts() {
     updatePane(0, {
       symbol: row.symbol,
       exchange: row.exchange,
-      interval: options.includes(wanted) ? wanted : (options[0] ?? wanted),
+      interval: isIntervalAvailable(wanted, row.sources) ? wanted : (options[0] ?? wanted),
     })
   }, [linkApplied, urlSymbol, searchParams, symbols, updatePane])
 
@@ -241,6 +283,12 @@ export default function HistorifyCharts() {
             <HistorifyChartPane
               paneId={paneId}
               feed={feed}
+              provider={timeframes?.provider}
+              canSelectInterval={
+                timeframes
+                  ? (code, symbol, exchange) => timeframes.supports(code, { symbol, exchange })
+                  : undefined
+              }
               symbols={symbols}
               state={paneAt(index)}
               onChange={(next) => updatePane(index, next)}

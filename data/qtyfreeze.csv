@@ -1,6 +1,6 @@
 S.No.,SYMBOL    ,VOL_FRZ_QTY    
-1    ,BANKNIFTY ,600            
-2    ,FINNIFTY  ,1200           
+1    ,BANKNIFTY ,900            
+2    ,FINNIFTY  ,1800           
 3    ,MIDCPNIFTY,2800           
 4    ,NIFTY     ,1800           
 5    ,NIFTYNXT50,600            
@@ -212,3 +212,4 @@ S.No.,SYMBOL    ,VOL_FRZ_QTY
 211  ,WIPRO     ,90000          
 212  ,YESBANK   ,933000         
 213  ,ZYDUSLIFE ,27000          
+214  ,NIFTYFPI  ,8500           

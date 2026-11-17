@@ -38,6 +38,7 @@ import services.openscript_run_config as run_config
 import services.openscript_runner_service as service
 import services.openscript_running as running
 import utils.session
+from services import openscript_store
 from services.openscript_deployment import deployment_id
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -588,7 +589,7 @@ def _pair(text):
 
 def test_two_saves_of_one_script_leave_a_matching_pair(tmp_path, monkeypatch):
     monkeypatch.setattr(utils.session, "is_session_valid", lambda: True)
-    monkeypatch.setattr(openscript, "SCRIPTS_DIR", tmp_path)
+    monkeypatch.setattr(openscript_store, "SCRIPTS_DIR", tmp_path)
     real_replace = os.replace
 
     def slow_replace(src, dst):

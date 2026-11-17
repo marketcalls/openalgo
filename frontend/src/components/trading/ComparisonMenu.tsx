@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { COMPARISON_SCALES, type ComparisonScale } from '@/lib/trading/comparisonScale'
+import { ChromeIcon } from '@/lib/trading/glyphs'
 import type { SearchRow, TerminalComparisonState } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 import { Tip } from './Tip'
+import { MenuChevron, TB_BTN, TB_COUNT, TB_LABEL_WIDE } from './toolbarStyles'
 
 interface Props {
   state: TerminalComparisonState
@@ -89,24 +90,16 @@ export function ComparisonMenu({
           }}
         >
           <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 shrink-0 gap-1 px-2.5 text-xs"
-              disabled={disabled}
-              aria-label="Comparisons"
-            >
-              Compare
+            <button type="button" className={TB_BTN} disabled={disabled} aria-label="Comparisons">
+              <ChromeIcon id="compare" />
+              <span className={TB_LABEL_WIDE}>Compare</span>
               {/* The same count chip Indicators wears, because it says the same
                 thing. `Compare (2)` beside `Indicators 2` was two spellings of
                 one idea in one row, and the parenthesised one reads as part of
                 the word rather than as a tally. */}
-              {state.items.length > 0 && (
-                <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-                  {state.items.length}
-                </span>
-              )}
-            </Button>
+              {state.items.length > 0 && <span className={TB_COUNT}>{state.items.length}</span>}
+              <MenuChevron />
+            </button>
           </PopoverTrigger>
         </Tip>
         <PopoverContent align="start" container={container} className="w-80 space-y-3 p-3">

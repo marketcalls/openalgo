@@ -152,10 +152,14 @@ class TestTheLanguageIsTaught:
         body = prompts.OPENUI_LANG_SECTION.body
         assert body.index("does not\ndescribe your reply") < body.index("ENTIRE response")
 
-    def test_it_is_on_chat_and_absent_from_the_chart_panel(self):
+    def test_it_is_taught_wherever_render_ui_is_offered_and_nowhere_else(self):
+        # Voice is offered render_ui, and its description points at this
+        # section, so voice is taught it; the chart panel has no render_ui.
         chat = prompts.build_system_prompt(surface=SURFACE_CHAT)
+        voice = prompts.build_system_prompt(surface=SURFACE_VOICE)
         chart = prompts.build_system_prompt(surface=SURFACE_CHART)
         assert prompts.OPENUI_LANG_SECTION.title in chat
+        assert prompts.OPENUI_LANG_SECTION.title in voice
         assert prompts.OPENUI_LANG_SECTION.title not in chart
 
     def test_the_prompt_forbids_drawing_a_chart_out_of_characters(self):
@@ -164,7 +168,7 @@ class TestTheLanguageIsTaught:
         prompt = prompts.build_system_prompt(surface=SURFACE_CHAT)
         assert "Never draw a chart out of characters" in prompt
 
-    @pytest.mark.parametrize("surface", [SURFACE_CHAT, SURFACE_CHART])
+    @pytest.mark.parametrize("surface", [SURFACE_CHAT, SURFACE_CHART, SURFACE_VOICE])
     @pytest.mark.parametrize("trading", [False, True])
     @pytest.mark.parametrize("analyzer", [False, True])
     def test_every_surface_renders_whole_inside_the_budget(self, surface, trading, analyzer):

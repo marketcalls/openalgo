@@ -1,5 +1,7 @@
 # Docker Fix for Numba/LLVMLITE/SciPy Errors
 
+This is a historical January 2026 implementation/troubleshooting record. For current setup, writable `.env` mounts, resource defaults and worker selection, use [Docker Deployment](docker.md) and [Docker Build Guide](DOCKER_BUILD_GUIDE.md).
+
 ## Problem Summary
 
 When running OpenAlgo strategies in Docker that use numba/llvmlite (for indicators like Supertrend, EMA, TEMA), you may encounter these errors:
@@ -115,7 +117,7 @@ docker run -d \
   -v openalgo_log:/app/log \
   -v openalgo_strategies:/app/strategies \
   -v openalgo_keys:/app/keys \
-  -v "$(pwd)/.env:/app/.env:ro" \
+  -v "$(pwd)/.env:/app/.env" \
   --tmpfs /app/tmp:size=1g,mode=1777 \
   openalgo:latest
 ```

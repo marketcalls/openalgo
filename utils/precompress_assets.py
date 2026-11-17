@@ -214,14 +214,15 @@ def ensure_precompressed_assets(dist_root: Path) -> None:
 
         removed = _remove_orphans(dist_root) + removed_stale
 
-        if written or removed or failed:
-            logger.info(
-                f"Frontend asset compression: {written} written, "
-                f"{skipped} already current, {removed} stale removed, "
-                f"{failed} failed"
-            )
+        summary = (
+            f"Frontend asset compression: {written} written, "
+            f"{skipped} already current, {removed} stale removed, "
+            f"{failed} failed"
+        )
+        if failed:
+            logger.warning(summary)
         else:
-            logger.debug(f"Frontend asset compression: {skipped} variants already current")
+            logger.debug(summary)
     except Exception:
         # Deliberately broad: every failure mode here (read-only dist, partial
         # build, permissions) degrades to serving raw assets, which is correct.

@@ -97,7 +97,7 @@ class FlowGenToolkit(OpenAlgoToolkit):
 
     # -- tools ---------------------------------------------------------------
 
-    def validate_flow(self, workflow_json: str) -> str:
+    def validate_flow(self, workflow_json: str | dict) -> str:
         """Check Flow workflow JSON against the real Flow validator, saving nothing.
 
         Use this while you are still writing the graph. It runs exactly the
@@ -113,8 +113,9 @@ class FlowGenToolkit(OpenAlgoToolkit):
         matching node type, say so to the user in prose.
 
         Args:
-            workflow_json: The complete workflow as a JSON object string, of the
-                form ``{"name": ..., "nodes": [...], "edges": [...]}``. Node
+            workflow_json: The complete workflow as a JSON object string (or
+                the object itself), of the form
+                ``{"name": ..., "nodes": [...], "edges": [...]}``. Node
                 types, node data fields, edge shapes and the handle vocabulary
                 are defined in docs/prompt/flow-import-format.md; copy type
                 names from it verbatim.
@@ -147,7 +148,7 @@ class FlowGenToolkit(OpenAlgoToolkit):
             },
         )
 
-    def save_flow(self, name: str, workflow_json: str) -> str:
+    def save_flow(self, name: str, workflow_json: str | dict) -> str:
         """Validate Flow workflow JSON and import it as a new INACTIVE workflow.
 
         The workflow is validated first, with the same validator and the same
@@ -166,8 +167,9 @@ class FlowGenToolkit(OpenAlgoToolkit):
                 stored with " (imported)" appended, the same way the /flow
                 import screen stores one, and it overrides any name inside the
                 JSON.
-            workflow_json: The complete workflow as a JSON object string, of the
-                form ``{"name": ..., "nodes": [...], "edges": [...]}``. Node
+            workflow_json: The complete workflow as a JSON object string (or
+                the object itself), of the form
+                ``{"name": ..., "nodes": [...], "edges": [...]}``. Node
                 types, node data fields, edge shapes and the handle vocabulary
                 are defined in docs/prompt/flow-import-format.md; copy type
                 names from it verbatim and never invent one.

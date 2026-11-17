@@ -272,7 +272,7 @@ def recover_all() -> dict[int, set[tuple[str, str]]]:
         return resumed
 
     if not run_ids:
-        logger.info("Strategy recovery: no open run to recover")
+        logger.debug("Strategy recovery: no open run to recover")
         return resumed
 
     failed = 0

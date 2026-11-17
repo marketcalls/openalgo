@@ -254,6 +254,28 @@ def catch_up_daily_pnl_reset():
         logger.exception(f"Error in catch-up daily PnL reset: {e}")
 
 
+def is_pnl_snapshot_day(day) -> bool:
+    """Whether a dated P&L snapshot should be written for `day`.
+
+    Indian markets: only trading days, from the market calendar, so a weekend
+    or holiday does not clone the previous session's numbers into a new row
+    (issue #876). A special session such as Muhurat trading still counts.
+
+    A 24/7 crypto instance (session expiry disabled, as the installer sets for
+    a crypto broker) trades every day, weekends included, so every day gets
+    its own row. Skipping them would fold Saturday's and Sunday's P&L into
+    Monday's.
+    """
+    from utils.session import is_session_expiry_disabled
+
+    if is_session_expiry_disabled():
+        return True
+
+    from database.market_calendar_db import is_market_holiday
+
+    return not is_market_holiday(day)
+
+
 def catch_up_daily_pnl_snapshot():
     """
     Check and create daily P&L snapshots for missed days
@@ -276,10 +298,8 @@ def catch_up_daily_pnl_snapshot():
         # Skip non-trading days (issue #876): without this, an app started on
         # Monday backfills a Sunday snapshot, and one started on Sunday
         # backfills Saturday -- manufacturing the same weekend duplication the
-        # 23:59 cron gate now prevents.
-        from database.market_calendar_db import is_market_holiday
-
-        if is_market_holiday(yesterday):
+        # 23:59 cron gate now prevents. A 24/7 crypto instance trades every day.
+        if not is_pnl_snapshot_day(yesterday):
             logger.debug(
                 f"Catch-up: Skipping P&L snapshot backfill for {yesterday}: not a trading day"
             )

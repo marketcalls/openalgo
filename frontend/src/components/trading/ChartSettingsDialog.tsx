@@ -304,7 +304,7 @@ function FieldGroup({
  * behind it. A candle body is always painted, so a checkbox there would be a
  * control that does nothing.
  */
-function ColorPairRow({
+export function ColorPairRow({
   field,
   values,
   onChange,

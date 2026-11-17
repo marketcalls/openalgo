@@ -77,10 +77,16 @@ TOOL_SCOPES: dict[str, str] = {
     "get_funds": SCOPE_READ_ACCOUNT,
     "calculate_margin": SCOPE_READ_ACCOUNT,
     "analyzer_status": SCOPE_READ_ACCOUNT,
-    # send_telegram_alert is account-scoped because the receiving channel
-    # is the account owner's bot. No order placement, but it has a real
-    # external side effect.
+    # The alert tools are account-scoped because each delivers only to a
+    # destination the account owner set up: their own Telegram bot, or the
+    # Slack or Discord webhook they saved and switched on at /alerts. No
+    # order placement, but each has a real external side effect, which the
+    # read:account consent text names. The Slack and Discord channels may
+    # have other readers, which is why both refuse unless the owner has
+    # switched them on, and why the notify endpoint caps them at 30 a minute.
     "send_telegram_alert": SCOPE_READ_ACCOUNT,
+    "send_slack_alert": SCOPE_READ_ACCOUNT,
+    "send_discord_alert": SCOPE_READ_ACCOUNT,
     # ---- Market data ----
     "get_quote": SCOPE_READ_MARKET,
     "get_multi_quotes": SCOPE_READ_MARKET,
@@ -121,7 +127,7 @@ TOOL_SCOPES: dict[str, str] = {
 # Tools that change something but are deliberately not write-scoped.
 # Every entry is a tool a read-only token can still trigger, so each one
 # needs a justification next to its TOOL_SCOPES entry above.
-WRITE_SCOPE_EXCEPTIONS = {"send_telegram_alert"}
+WRITE_SCOPE_EXCEPTIONS = {"send_telegram_alert", "send_slack_alert", "send_discord_alert"}
 
 
 def required_scope(tool_name: str) -> str | None:

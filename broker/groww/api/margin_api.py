@@ -1,6 +1,6 @@
-import json
-
+from broker.groww.api.rate_limiter import groww_request
 from broker.groww.mapping.margin_data import parse_margin_response, transform_margin_positions
+from utils.broker_backpressure import BrokerBusyError
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -11,93 +11,84 @@ GROWW_BASE_URL = "https://api.groww.in"
 GROWW_MARGIN_URL = f"{GROWW_BASE_URL}/v1/margins/detail/orders"
 
 
+class _Status:
+    """The HTTP status the margin service reads from a broker response."""
+
+    def __init__(self, status):
+        self.status = status
+        self.status_code = status
+
+
+def _request_margin(segment, items, auth):
+    """One POST /v1/margins/detail/orders call, parsed into OpenAlgo's format."""
+    headers = {
+        "Authorization": f"Bearer {auth}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-API-VERSION": "1.0",
+    }
+    response = groww_request(
+        get_httpx_client(),
+        "POST",
+        GROWW_MARGIN_URL,
+        "non_trading",
+        headers=headers,
+        params={"segment": segment},
+        json=items,
+        timeout=30,
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    return response.status_code, parse_margin_response(body)
+
+
 def calculate_margin_api(positions, auth):
     """
-    Calculate margin requirement for a basket of positions using Groww API.
+    Margin required for a basket of positions (07-margin).
 
-    Note: Groww basket margin is supported only for FNO segment.
-    For CASH segment, only single position is supported.
+    Groww calculates a basket only for FNO; a CASH request carries one order.
+    So the FNO positions go as one basket, each CASH position as its own
+    request, and the results are added. Cash and F&O margins are not offset
+    against each other, so the sum is the margin the basket needs.
 
     Args:
         positions: List of positions in OpenAlgo format
         auth: Authentication token for Groww
 
     Returns:
-        Tuple of (response, response_data)
+        tuple: (response with .status, OpenAlgo margin response)
     """
-    AUTH_TOKEN = auth
+    try:
+        groups = transform_margin_positions(positions)
+    except ValueError as e:
+        return _Status(400), {"status": "error", "message": str(e)}
+    if not groups:
+        return _Status(400), {"status": "error", "message": "No positions to calculate margin for"}
 
-    # Transform positions to Groww format
-    segment, transformed_positions = transform_margin_positions(positions)
+    requests_to_send = []
+    if groups.get("FNO"):
+        requests_to_send.append(("FNO", groups["FNO"]))
+    requests_to_send += [("CASH", [item]) for item in groups.get("CASH", [])]
 
-    if not transformed_positions:
-        error_response = {
+    totals = {"total_margin_required": 0.0, "span_margin": 0.0, "exposure_margin": 0.0}
+    try:
+        for segment, items in requests_to_send:
+            status, result = _request_margin(segment, items, auth)
+            if result.get("status") != "success":
+                # A partial total would understate the margin; report the failure
+                logger.warning(f"Groww margin refused for {segment}: {result.get('message')}")
+                return _Status(status if status >= 400 else 400), result
+            for key in totals:
+                totals[key] += result["data"][key]
+    except BrokerBusyError:
+        raise  # the margin service answers this one itself
+    except Exception:
+        logger.exception("Error calling Groww margin API")
+        return _Status(500), {
             "status": "error",
-            "message": "No valid positions to calculate margin. Check if symbols are valid.",
+            "message": "Could not reach Groww to calculate the margin. Try again shortly.",
         }
 
-        # Create a mock response object
-        class MockResponse:
-            status_code = 400
-            status = 400
-
-        return MockResponse(), error_response
-
-    # Groww supports basket orders only for FNO segment
-    if segment == "CASH" and len(transformed_positions) > 1:
-        logger.warning(
-            "Groww supports basket margin calculation only for FNO segment. For CASH, calculating only first position."
-        )
-        transformed_positions = [transformed_positions[0]]
-
-    # Prepare headers
-    headers = {
-        "Authorization": f"Bearer {AUTH_TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "X-API-VERSION": "1.0",
-    }
-
-    # Prepare query parameters
-    params = {"segment": segment}
-
-    logger.debug(f"Groww margin calculation for segment: {segment}")
-    logger.debug(f"Margin calculation payload: {json.dumps(transformed_positions)}")
-
-    # Get the shared httpx client with connection pooling
-    client = get_httpx_client()
-
-    try:
-        # Make the request using the Groww margin API
-        response = client.post(
-            GROWW_MARGIN_URL, headers=headers, params=params, json=transformed_positions
-        )
-
-        # Add status attribute for compatibility with the existing codebase
-        response.status = response.status_code
-
-        # Parse the JSON response
-        try:
-            response_data = response.json()
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON response: {response.text}")
-            error_response = {"status": "error", "message": "Invalid response from broker API"}
-            return response, error_response
-
-        logger.info(f"Groww margin calculation response: {response_data}")
-
-        # Parse and standardize the response
-        standardized_response = parse_margin_response(response_data)
-
-        return response, standardized_response
-
-    except Exception as e:
-        logger.error(f"Error calling Groww margin API: {e}")
-        error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
-
-        # Create a mock response object
-        class MockResponse:
-            status_code = 500
-            status = 500
-
-        return MockResponse(), error_response
+    return _Status(200), {"status": "success", "data": totals}

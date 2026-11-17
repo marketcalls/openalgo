@@ -1,6 +1,6 @@
 # CancelGTTOrder
 
-Cancel an active GTT trigger by its `trigger_id`. Cancelling an OCO removes both legs atomically.
+Cancel an active GTT trigger by its `trigger_id`. A multi-leg cancellation is broker-dependent and can partially fail; verify remaining rules in the broker book.
 
 ## Endpoint URL
 
@@ -60,10 +60,9 @@ curl -X POST http://127.0.0.1:5000/api/v1/cancelgttorder \
 ## Notes
 
 - Only **active** GTTs can be cancelled. Already-triggered, expired, or previously cancelled GTTs cannot be cancelled again.
-- Cancelling an **OCO** removes both legs (stoploss + target) atomically — there is no per-leg cancel.
-- Cancellation is broker-side; once acknowledged, the trigger is removed and won't appear in subsequent default `GTTOrderBook` calls, which list active triggers only; send `status: all` to see it in the history as `cancelled`.
+- Cancelling an **OCO** requests cancellation of its legs, but is not atomic across all brokers. Angel decodes its composite ID and cancels independent rules sequentially; a failure can leave one active. Verify the book before considering both cancelled. See [broker-specific behavior](placegttorder.md#broker-specific-behaviour).
+- Cancellation is broker-side; once acknowledged, the trigger is removed and won't appear in subsequent default `GTTOrderBook` calls, which list active triggers only; history is visible with `status: all` only where the broker mapper supplies it.
 - **Idempotency**: cancelling an already-cancelled trigger returns the broker's native response, which may be either `success` or an error like "Trigger not found" depending on the broker.
-- **Analyzer (sandbox) mode** cancels the sandbox trigger, releases its reserved margin and answers with `"mode": "analyze"`. Cancelling a trigger that is no longer active is a 404: `No active GTT with trigger_id '...'`.
 - **Analyzer (sandbox) mode** cancels the sandbox trigger, releases its reserved margin and answers with `"mode": "analyze"`. Cancelling a trigger that is no longer active is a 404: `No active GTT with trigger_id '...'`.
 
 ## Error Scenarios

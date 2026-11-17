@@ -108,9 +108,11 @@ PlaceSmartOrder API function allows traders to build intelligent trading systems
 - The **position_size** represents the absolute target position:
   - Positive values = Long position
   - Negative values = Short position
-  - Zero = Flat (no position)
-- If current position already matches target, no order is placed
-- Works across all exchanges and product types
+  - Zero = Exit an existing position; when already flat, broker smart-order implementations can open the supplied BUY/SELL quantity
+- For a nonzero target already matched by the current position, no order is placed. `position_size=0` also supports signal-style behavior: when already flat, BUY/SELL can place the supplied `quantity`, as shown in the table above
+- Support depends on the active broker's exchanges and products
+- A failed position-book read is an error, not proof of a flat position; the smart order must not proceed using a fabricated zero position
+- A detected lost broker response returns `502` and means the order may have been placed. Reconcile the order/position books before retrying; see [order outcomes](../README.md#order-outcomes-and-retries)
 - Fractional quantities are accepted only for `CRYPTO`; non-crypto quantities must be whole numbers.
 - **Rate limit**: `SMART_ORDER_RATE_LIMIT`, default 10 requests per second
 

@@ -51,7 +51,8 @@ export interface EnvironmentVariables {
 
 export interface ScheduleConfig {
   start_time: string
-  stop_time: string
+  /** Null for a crypto strategy that runs 24/7 and is never stopped. */
+  stop_time: string | null
   days: string[]
   exchange?: string
 }
@@ -74,6 +75,12 @@ export interface StrategyExchange {
   /** Human-readable window, e.g. '09:15-15:40' or '24/7'. */
   window: string | null
   is_24x7: boolean
+}
+
+/** The exchanges the broker trades, and the one a new strategy starts on. */
+export interface StrategyExchangeList {
+  exchanges: StrategyExchange[]
+  default: string
 }
 
 // Shown only until /python/api/exchanges responds. Deliberately carries no

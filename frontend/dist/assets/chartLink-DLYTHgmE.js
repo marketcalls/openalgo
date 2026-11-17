@@ -1,0 +1,1 @@
+var e=`symbol`,t=`exchange`;function n(n,r){return`/trading?${new URLSearchParams({[e]:n,[t]:r}).toString()}`}function r(n){let r=n.get(e)?.trim()??``,i=n.get(t)?.trim().toUpperCase()??``;return!r||!i?null:{symbol:r,exchange:i}}function i(n){return n.has(e)||n.has(t)}function a(n){let r=new URLSearchParams(n);return r.delete(e),r.delete(t),r}export{a as i,i as n,r,n as t};

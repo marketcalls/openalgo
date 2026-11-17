@@ -58,6 +58,7 @@ import services.openscript_runner_service as service
 import utils.session
 from blueprints.openscript import openscript_bp
 from blueprints.openscript_runner import openscript_runner_bp
+from services import openscript_store
 
 SOURCE = 'version 1\nstudy("Range", overlay = true)\nplot(close, "C", aqua)\n'
 
@@ -293,7 +294,7 @@ def scripts(tmp_path, monkeypatch):
     """
     directory = tmp_path / "strategies" / "openscript"
     directory.mkdir(parents=True)
-    monkeypatch.setattr(openscript, "SCRIPTS_DIR", directory)
+    monkeypatch.setattr(openscript_store, "SCRIPTS_DIR", directory)
 
     (directory / "range.oscript").write_text(SOURCE, encoding="utf-8")
     (directory / "range.oscript.program.json").write_text(PROGRAM, encoding="utf-8")

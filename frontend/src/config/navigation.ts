@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Bell,
+  BellRing,
   BookOpen,
   Bot,
   Boxes,
@@ -17,8 +18,6 @@ import {
   Layers,
   LayoutDashboard,
   type LucideIcon,
-  MessageCircle,
-  MessageSquare,
   Search,
   Settings,
   TrendingUp,
@@ -34,19 +33,24 @@ export interface NavItem {
   icon: LucideIcon
   /** Served by Flask (not a React route): render as a full-page link. */
   external?: boolean
+  /**
+   * Desktop navbar only: below this Tailwind breakpoint the item leaves the
+   * bar and is listed under More instead. Items without it always stay.
+   */
+  collapseBelow?: 'lg' | 'xl'
 }
 
 // Main navigation items shown in desktop navbar
 export const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
-  { href: '/tradebook', label: 'Tradebook', icon: FileText },
+  { href: '/tradebook', label: 'Tradebook', icon: FileText, collapseBelow: 'lg' },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
-  { href: '/trading', label: 'Trading', icon: CandlestickChart },
-  { href: '/platforms', label: 'Platforms', icon: Layers },
-  { href: '/strategy', label: 'Strategies', icon: Boxes },
-  { href: '/logs', label: 'Logs', icon: FileBarChart },
-  { href: '/tools', label: 'Tools', icon: Wrench },
+  { href: '/trading', label: 'Trading', icon: CandlestickChart, collapseBelow: 'lg' },
+  { href: '/platforms', label: 'Platforms', icon: Layers, collapseBelow: 'xl' },
+  { href: '/strategy', label: 'Strategies', icon: Boxes, collapseBelow: 'xl' },
+  { href: '/logs', label: 'Logs', icon: FileBarChart, collapseBelow: 'xl' },
+  { href: '/tools', label: 'Tools', icon: Wrench, collapseBelow: 'xl' },
 ]
 
 // Items shown in mobile bottom navigation
@@ -77,8 +81,9 @@ export const profileMenuItems: NavItem[] = [
   // menu holding one.
   { href: '/agent', label: 'Agent', icon: Bot },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
-  { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
-  { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },
+  // One entry for every alert channel. /alerts links to the Telegram,
+  // WhatsApp, Slack and Discord pages, so none needs an entry of its own.
+  { href: '/alerts', label: 'Alerts', icon: BellRing },
   { href: '/holdings', label: 'Holdings', icon: ClipboardList },
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
   { href: '/scalping', label: 'Scalping', icon: Zap },

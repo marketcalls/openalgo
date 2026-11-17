@@ -22,6 +22,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 from services.iv_chart_service import calculate_time_to_expiry_at  # noqa: E402
 from services.option_greeks_service import (  # noqa: E402
@@ -38,6 +39,31 @@ def test_parse_option_symbol_returns_naive_expiry():
     _, expiry, _, _ = parse_option_symbol(SYMBOL, "NFO")
     assert expiry.tzinfo is None, "callers compare this against naive datetimes"
     assert expiry == datetime(2026, 8, 11, 15, 30)
+
+
+def test_parse_option_symbols_with_punctuation_and_digits_in_underlying():
+    cases = [
+        ("M&M27OCT262800CE", "M&M", datetime(2026, 10, 27), 2800.0, "CE"),
+        ("GVT&D27OCT264200PE", "GVT&D", datetime(2026, 10, 27), 4200.0, "PE"),
+        ("NAM-INDIA27OCT261040CE", "NAM-INDIA", datetime(2026, 10, 27), 1040.0, "CE"),
+        ("BAJAJ-AUTO27OCT2610000CE", "BAJAJ-AUTO", datetime(2026, 10, 27), 10000.0, "CE"),
+        ("360ONE27OCT261040CE", "360ONE", datetime(2026, 10, 27), 1040.0, "CE"),
+        ("NIFTY28NOV2424000CE", "NIFTY", datetime(2024, 11, 28), 24000.0, "CE"),
+        ("SENSEX28NOV24100000PE", "SENSEX", datetime(2024, 11, 28), 100000.0, "PE"),
+        ("USDINR28NOV2483.50CE", "USDINR", datetime(2024, 11, 28), 83.5, "CE"),
+    ]
+
+    for symbol, expected_underlying, expected_expiry, expected_strike, expected_type in cases:
+        underlying, expiry, strike, option_type = parse_option_symbol(symbol, "NFO")
+        assert underlying == expected_underlying
+        assert expiry.date() == expected_expiry.date()
+        assert strike == expected_strike
+        assert option_type == expected_type
+
+
+def test_parse_option_symbol_rejects_trailing_newline():
+    with pytest.raises(ValueError, match="Invalid option symbol format"):
+        parse_option_symbol(f"{SYMBOL}\n", "NFO")
 
 
 def test_expiry_compares_against_a_naive_datetime():

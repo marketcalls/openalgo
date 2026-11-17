@@ -9,8 +9,8 @@
  * books and Escape can find the dock by where focus is.
  */
 
-import { ChevronDown } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { ChromeIcon } from '@/lib/trading/glyphs'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN } from '../railStyles'
 import { Tip } from '../Tip'
@@ -222,7 +222,7 @@ export function DockShell({ tab, onTabChange, counts, header, children }: Props)
                 className={cn(RAIL_BTN, 'h-7 w-7')}
                 aria-label="Collapse trading dock"
               >
-                <ChevronDown className="h-4 w-4" />
+                <ChromeIcon id="chevron-down" />
               </button>
             </Tip>
           </>

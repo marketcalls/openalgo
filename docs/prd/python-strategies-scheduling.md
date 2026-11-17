@@ -1,5 +1,7 @@
 # Python Strategies Scheduling
 
+Current scheduling contract: the logged-in broker's `plugin.json` controls the offered exchanges. Crypto brokers use `CRYPTO`; stock brokers use Indian exchanges. A CRYPTO schedule may omit `stop_time` (or use empty/null) for continuous operation: no stop job is created and the scheduled start can restart a script that exited. Equal start/stop times are rejected for CRYPTO. Indian-exchange strategies continue to follow the trading calendar and its session controls. The scheduler examples below illustrate the bounded-session path; see the maintained [API reference](python-strategies-api-reference.md) for the full contract.
+
 Complete documentation for APScheduler integration and market-aware scheduling.
 
 ## Overview

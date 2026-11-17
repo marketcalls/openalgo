@@ -61,7 +61,7 @@ class Client:
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, module_sleep):
     monkeypatch.setattr(
         runtime, "_registered", {"worker_class": "gthread", "threads": 64, "pid": os.getpid()}
     )
@@ -73,7 +73,7 @@ def client(monkeypatch):
         return holder["client"]
 
     monkeypatch.setattr(order_api, "apply_rate_limit", lambda *a, **k: None)
-    monkeypatch.setattr(order_api.time, "sleep", lambda seconds: None)
+    module_sleep(order_api, lambda seconds: None)
     monkeypatch.setattr(order_api, "get_token", lambda symbol, exchange: "2885")
     return install
 

@@ -42,7 +42,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     url = f"{INTERACTIVE_URL}{endpoint}"
 
     logger.debug(f"Request URL: {url}")
-    logger.debug(f"Headers: {headers}")
+    logger.debug(f"Header names: {list(headers)}")
     logger.debug(f"Payload: {json.dumps(payload, indent=2) if payload else 'None'}")
 
     if method == "GET":
@@ -182,7 +182,7 @@ def place_order_api(data, auth):
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data["symbol"], data["exchange"])
-        logger.debug(f"token: {token}")
+        logger.debug("Order API token available")
         newdata = transform_data(data, token)
 
     headers = {

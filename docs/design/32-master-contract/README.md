@@ -207,10 +207,10 @@ FORMAT = "JSON"
 ### In-Memory Cache
 
 ```python
-from cachetools import TTLCache
+from utils.thread_safe_cache import LockedTTLCache
 
 # Cache symbol lookups for 5 minutes
-symbol_cache = TTLCache(maxsize=10000, ttl=300)
+symbol_cache = LockedTTLCache(maxsize=10000, ttl=300)
 
 def get_br_symbol(symbol, exchange):
     key = f"{symbol}:{exchange}"

@@ -86,14 +86,14 @@ const PROVIDER_KIND_SPECS: ProviderKindSpec[] = [
     label: 'OpenAI',
     needsKey: true,
     needsBaseUrl: false,
-    modelHint: 'The model name on its own, for example gpt-4o.',
+    modelHint: 'The model name on its own, for example gpt-6.1-sol.',
   },
   {
     value: 'anthropic',
     label: 'Anthropic',
     needsKey: true,
     needsBaseUrl: false,
-    modelHint: 'The model name on its own, for example claude-sonnet-4-20250514.',
+    modelHint: 'The model name on its own, for example claude-sonnet-5-5.',
   },
   {
     value: 'ollama',

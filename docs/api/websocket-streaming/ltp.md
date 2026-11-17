@@ -78,7 +78,7 @@ instruments = [
 
 # Callback for LTP updates
 def on_ltp(data):
-    print(f"LTP Update: {data['symbol']} = {data['ltp']}")
+    print(f"LTP Update: {data['symbol']} = {data['data'].get('ltp')}")
 
 # Connect and subscribe
 client.connect()
@@ -130,7 +130,7 @@ finally:
 ## Notes
 
 - LTP mode provides **minimal data** for lowest latency
-- Updates are pushed **on every tick** (each trade)
+- The proxy forwards publications it receives; broker cadence and network conditions determine which ticks arrive. There is no replay or guarantee of every exchange trade
 - Subscribe to multiple symbols in a single message
 - Use for:
   - Price displays

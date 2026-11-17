@@ -870,6 +870,311 @@ class BrokerData:
             df.loc[negative, "volume"] = 0
         return df
 
+    @staticmethod
+    def _ist_dates(timestamps: pd.Series) -> pd.Series:
+        """Trading date (IST) of each epoch-second timestamp."""
+        return (
+            pd.to_datetime(timestamps.astype("int64"), unit="s", utc=True)
+            .dt.tz_convert("Asia/Kolkata")
+            .dt.date
+        )
+
+    @classmethod
+    def _day_end_repair_window(cls, bars: pd.DataFrame) -> tuple[int, int] | None:
+        """The 1m span _rebuild_day_last_bars reads, or None when nothing needs it.
+
+        Only a day followed by another day in the same reply can carry that
+        day's first 1m bar, so the last date is never repaired and a reply
+        covering one date needs no 1m bars at all. The span runs from the
+        first date's last bar to just before the last date's first bar, so it
+        is bounded by the bars Shoonya actually returned rather than by the
+        requested range: a five-year request against roughly a year of
+        intraday history fetches a year of 1m bars, not five.
+        """
+        if bars.empty:
+            return None
+        bar_day = cls._ist_dates(bars["timestamp"])
+        first_day, last_day = bar_day.min(), bar_day.max()
+        if first_day == last_day:
+            return None
+        start = int(bars.loc[bar_day == first_day, "timestamp"].max())
+        end = int(bars.loc[bar_day == last_day, "timestamp"].min()) - 1
+        return start, end
+
+    @classmethod
+    def _rebuild_day_last_bars(
+        cls,
+        bars: pd.DataFrame,
+        minute_bars: pd.DataFrame,
+        exchange: str,
+        symbol: str,
+        interval: str,
+        failed_ranges: list | tuple = (),
+    ) -> pd.DataFrame:
+        """Rebuild each trading day's last bar from that day's 1m bars (#2343).
+
+        When one TPSeries request spans more than one trading day, the last
+        bar of each day comes back with the next trading day's first 1m bar
+        folded in. On NSE that is the 09:14 pre-open bar: SBIN 5m 30-10-2026
+        15:25 returned high=close=965.00, the 02-11 09:14 price, against its
+        own close of 961.85, and NIFTY, the 3m/15m/1h/4h bars and BSE do the
+        same. A single-day request returns the bar clean, and 1m bars are
+        never affected.
+
+        Every other bar is Shoonya's own, so its bucketing and session times
+        are kept, special sessions included. The last bar of each date is
+        replaced by the 1m bars from its own timestamp to the end of that same
+        date (IST), which leaves out anything from the next day without
+        assuming any session open or close. Volume is the raw 1m sum, which
+        equals TPSeries' own bar volume. A day with no 1m bars at or after its
+        last bar keeps the bar Shoonya sent.
+
+        A 1m chunk that failed leaves a hole in `minute_bars`, and a chunk
+        boundary can fall inside a last bar's span, so rebuilding from what
+        arrived could produce a partial candle. A day whose span (its last bar
+        to just before the next day's first bar) overlaps any of
+        `failed_ranges` therefore keeps the bar Shoonya sent.
+        """
+        if bars.empty or minute_bars.empty:
+            return bars
+
+        bars = bars.reset_index(drop=True).copy()
+        minute_bars = minute_bars.sort_values("timestamp").reset_index(drop=True)
+        bar_day = cls._ist_dates(bars["timestamp"])
+        minute_day = cls._ist_dates(minute_bars["timestamp"])
+
+        changed = 0
+        skipped = 0
+        all_ts = bars["timestamp"].astype("int64")
+        for day, idx in bars.groupby(bar_day)["timestamp"].idxmax().items():
+            last_ts = int(bars.at[idx, "timestamp"])
+            later = all_ts[all_ts > last_ts]
+            span_end = int(later.min()) - 1 if not later.empty else None
+            if any(
+                fail_end >= last_ts and (span_end is None or fail_start <= span_end)
+                for fail_start, fail_end in failed_ranges
+            ):
+                skipped += 1
+                continue
+            window = minute_bars[(minute_day == day) & (minute_bars["timestamp"] >= last_ts)]
+            if window.empty:
+                continue
+            rebuilt = {
+                "open": float(window["open"].iloc[0]),
+                "high": float(window["high"].max()),
+                "low": float(window["low"].min()),
+                "close": float(window["close"].iloc[-1]),
+                "volume": float(window["volume"].sum()),
+                "oi": float(window["oi"].iloc[-1]),
+            }
+            if any(bars.at[idx, k] != v for k, v in rebuilt.items() if k != "volume"):
+                changed += 1
+            for k, v in rebuilt.items():
+                bars.at[idx, k] = v
+
+        if changed:
+            logger.info(
+                f"HISTORY API - Rebuilt {changed} day-end candle(s) from 1m bars for "
+                f"{exchange}:{symbol} {interval}"
+            )
+        if skipped:
+            logger.warning(
+                f"HISTORY API - Kept {skipped} day-end candle(s) as Shoonya sent them for "
+                f"{exchange}:{symbol} {interval}: the 1m bars covering them did not arrive"
+            )
+        return bars
+
+    def _fetch_chart_frame(
+        self,
+        endpoint: str,
+        interval: str,
+        exchange: str,
+        token: str,
+        eod_symbol,
+        start_ts: int,
+        end_ts: int,
+        label: str,
+        failed_ranges: list | None = None,
+    ) -> pd.DataFrame:
+        """Fetch [start_ts, end_ts] from a chart endpoint in chunks and parse it.
+
+        Returns the raw candles as a frame (timestamp, open, high, low, close,
+        volume, oi), unsorted and unrepaired. Raises on a dead session or when
+        every chunk failed; `label` names the request in that error. A single
+        failed chunk is tolerated, and when `failed_ranges` is given its
+        (start, end) epoch range is appended there so a caller can tell which
+        part of the frame is missing.
+        """
+        chunk_seconds = self._get_history_chunk_seconds(interval)
+
+        response_candles = []
+        chunk_start = start_ts
+        attempted_chunks = 0
+        failed_chunks = 0
+        while chunk_start <= end_ts:
+            chunk_end = min(chunk_start + chunk_seconds, end_ts)
+            attempted_chunks += 1
+            if interval == "D":
+                payload = {
+                    "sym": f"{exchange}:{eod_symbol}",
+                    "from": str(chunk_start),
+                    "to": str(chunk_end),
+                }
+            else:
+                payload = {
+                    "exch": exchange,
+                    "token": token,
+                    "st": str(chunk_start),
+                    "et": str(chunk_end),
+                    "intrv": self.timeframe_map[interval],
+                }
+            logger.debug(f"{endpoint} Payload: {payload}")
+
+            try:
+                chunk_response = get_chart_api_response(endpoint, self.auth_token, payload=payload)
+            except Exception as e:
+                logger.error(f"{endpoint} chunk request failed ({chunk_start}-{chunk_end}): {e}")
+                failed_chunks += 1
+                if failed_ranges is not None:
+                    failed_ranges.append((chunk_start, chunk_end))
+                chunk_start = chunk_end + 1
+                continue
+
+            # Both endpoints normally return a LIST of candles. On error
+            # they return a DICT like {"stat":"Not_Ok","emsg":"..."} —
+            # detect that before iterating (the old code iterated dict keys
+            # and crashed trying to json.loads("stat")).
+            if isinstance(chunk_response, dict):
+                emsg = chunk_response.get("emsg") or chunk_response.get("message") or "unknown"
+                # A dead session fails every chunk identically, so tolerating
+                # it per chunk drains the loop to zero candles and the API
+                # layer reports {"status":"success","data":[]} - a fake gap
+                # indistinguishable from a quiet window (#1944). Raise on it
+                # the way get_quotes() does.
+                if is_session_error(emsg):
+                    raise Exception(f"Error from Shoonya API: {emsg}")
+                # "no data" is Shoonya answering, not failing: illiquid
+                # contracts, pre-listing ranges and holiday-only windows all
+                # come back this way. Count it as an empty success so the
+                # all-chunks-failed guard below does not turn it into a 500.
+                if is_no_data_error(emsg):
+                    logger.debug(f"{endpoint} reported no data for chunk {chunk_start}-{chunk_end}")
+                    chunk_start = chunk_end + 1
+                    continue
+                logger.warning(
+                    f"{endpoint} returned error for chunk {chunk_start}-{chunk_end}: "
+                    f"stat={chunk_response.get('stat')} emsg={emsg}"
+                )
+                failed_chunks += 1
+                if failed_ranges is not None:
+                    failed_ranges.append((chunk_start, chunk_end))
+                chunk_start = chunk_end + 1
+                continue
+
+            if not isinstance(chunk_response, list):
+                logger.warning(
+                    f"Unexpected {endpoint} response type {type(chunk_response).__name__}: "
+                    f"{str(chunk_response)[:200]}"
+                )
+                failed_chunks += 1
+                if failed_ranges is not None:
+                    failed_ranges.append((chunk_start, chunk_end))
+                chunk_start = chunk_end + 1
+                continue
+
+            response_candles.extend(chunk_response)
+            chunk_start = chunk_end + 1
+
+        # A single bad chunk inside a long range stays tolerated - the rest
+        # of the series is still worth returning. Every chunk failing is a
+        # different animal: there is no series at all, so surface it as an
+        # error instead of an empty success (#1944).
+        if attempted_chunks and failed_chunks == attempted_chunks:
+            raise Exception(
+                f"All {attempted_chunks} {endpoint} chunk request(s) failed for {label}"
+            )
+
+        if interval == "D" and not response_candles:
+            # An unknown index name resolves to an empty list rather than
+            # an error, so say which symbol Shoonya did not recognise.
+            logger.warning(
+                f"EODChartData returned no daily candles for {exchange}:{eod_symbol} ({label})"
+            )
+
+        # Convert candles to rows. Both endpoints carry `ssboe` (epoch)
+        # alongside `time` — DD-MM-YYYY HH:MM:SS for TPSeries, DD-MON-YYYY
+        # for EODChartData. Prefer ssboe: it is already an integer and
+        # avoids both the format split and timezone quirks. EODChartData
+        # rows arrive as JSON strings and carry no `oi`.
+        data = []
+        for candle in response_candles:
+            if isinstance(candle, str):
+                try:
+                    candle = json.loads(candle)
+                except json.JSONDecodeError:
+                    logger.error(f"Non-JSON candle entry, skipping: {candle[:200]}")
+                    continue
+
+            if not isinstance(candle, dict):
+                continue
+
+            try:
+                # Skip candles with all zero OHLC (stale ticks)
+                if (
+                    float(candle.get("into", 0)) == 0
+                    and float(candle.get("inth", 0)) == 0
+                    and float(candle.get("intl", 0)) == 0
+                    and float(candle.get("intc", 0)) == 0
+                ):
+                    continue
+
+                ssboe = candle.get("ssboe")
+                if ssboe is not None:
+                    timestamp = int(ssboe)
+                else:
+                    # TPSeries `time` is IST wall-clock, so a naive parse
+                    # against the host clock reproduces its ssboe. The
+                    # date-only EODChartData form has no clock at all and
+                    # must be pinned to 00:00 UTC — the convention every
+                    # other daily bar here uses — or it would land 5.5
+                    # hours early and miss the timestamp dedupe.
+                    timestamp = None
+                    for time_format, as_utc in (
+                        ("%d-%m-%Y %H:%M:%S", False),
+                        ("%d-%b-%Y", True),
+                    ):
+                        try:
+                            parsed = datetime.strptime(candle["time"], time_format)
+                        except ValueError:
+                            continue
+                        if as_utc:
+                            parsed = parsed.replace(tzinfo=UTC)
+                        timestamp = int(parsed.timestamp())
+                        break
+                    if timestamp is None:
+                        logger.error(f"Unparseable candle time, skipping: {candle}")
+                        continue
+
+                data.append(
+                    {
+                        "timestamp": timestamp,
+                        "open": float(candle.get("into", 0)),
+                        "high": float(candle.get("inth", 0)),
+                        "low": float(candle.get("intl", 0)),
+                        "close": float(candle.get("intc", 0)),
+                        "volume": float(candle.get("intv", 0)),
+                        "oi": float(candle.get("oi", 0)),
+                    }
+                )
+            except (KeyError, ValueError) as e:
+                logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
+                continue
+
+        df = pd.DataFrame(data)
+        if df.empty:
+            df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume", "oi"])
+        return df
+
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -950,178 +1255,16 @@ class BrokerData:
                 endpoint = "/NorenWClientAPI/TPSeries"
                 eod_symbol = None
 
-            chunk_seconds = self._get_history_chunk_seconds(interval)
-
-            response_candles = []
-            chunk_start = start_ts
-            attempted_chunks = 0
-            failed_chunks = 0
-            while chunk_start <= end_ts:
-                chunk_end = min(chunk_start + chunk_seconds, end_ts)
-                attempted_chunks += 1
-                if interval == "D":
-                    payload = {
-                        "sym": f"{exchange}:{eod_symbol}",
-                        "from": str(chunk_start),
-                        "to": str(chunk_end),
-                    }
-                else:
-                    payload = {
-                        "exch": exchange,
-                        "token": token,
-                        "st": str(chunk_start),
-                        "et": str(chunk_end),
-                        "intrv": self.timeframe_map[interval],
-                    }
-                logger.debug(f"{endpoint} Payload: {payload}")
-
-                try:
-                    chunk_response = get_chart_api_response(
-                        endpoint, self.auth_token, payload=payload
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"{endpoint} chunk request failed ({chunk_start}-{chunk_end}): {e}"
-                    )
-                    failed_chunks += 1
-                    chunk_start = chunk_end + 1
-                    continue
-
-                # Both endpoints normally return a LIST of candles. On error
-                # they return a DICT like {"stat":"Not_Ok","emsg":"..."} —
-                # detect that before iterating (the old code iterated dict keys
-                # and crashed trying to json.loads("stat")).
-                if isinstance(chunk_response, dict):
-                    emsg = chunk_response.get("emsg") or chunk_response.get("message") or "unknown"
-                    # A dead session fails every chunk identically, so tolerating
-                    # it per chunk drains the loop to zero candles and the API
-                    # layer reports {"status":"success","data":[]} - a fake gap
-                    # indistinguishable from a quiet window (#1944). Raise on it
-                    # the way get_quotes() does.
-                    if is_session_error(emsg):
-                        raise Exception(f"Error from Shoonya API: {emsg}")
-                    # "no data" is Shoonya answering, not failing: illiquid
-                    # contracts, pre-listing ranges and holiday-only windows all
-                    # come back this way. Count it as an empty success so the
-                    # all-chunks-failed guard below does not turn it into a 500.
-                    if is_no_data_error(emsg):
-                        logger.debug(
-                            f"{endpoint} reported no data for chunk {chunk_start}-{chunk_end}"
-                        )
-                        chunk_start = chunk_end + 1
-                        continue
-                    logger.warning(
-                        f"{endpoint} returned error for chunk {chunk_start}-{chunk_end}: "
-                        f"stat={chunk_response.get('stat')} emsg={emsg}"
-                    )
-                    failed_chunks += 1
-                    chunk_start = chunk_end + 1
-                    continue
-
-                if not isinstance(chunk_response, list):
-                    logger.warning(
-                        f"Unexpected {endpoint} response type {type(chunk_response).__name__}: "
-                        f"{str(chunk_response)[:200]}"
-                    )
-                    failed_chunks += 1
-                    chunk_start = chunk_end + 1
-                    continue
-
-                response_candles.extend(chunk_response)
-                chunk_start = chunk_end + 1
-
-            # A single bad chunk inside a long range stays tolerated - the rest
-            # of the series is still worth returning. Every chunk failing is a
-            # different animal: there is no series at all, so surface it as an
-            # error instead of an empty success (#1944).
-            if attempted_chunks and failed_chunks == attempted_chunks:
-                raise Exception(
-                    f"All {attempted_chunks} {endpoint} chunk request(s) failed for "
-                    f"{symbol}/{oa_exchange} between {start_date_str} and {end_date_str}"
-                )
-
-            if interval == "D" and not response_candles:
-                # An unknown index name resolves to an empty list rather than
-                # an error, so say which symbol Shoonya did not recognise.
-                logger.warning(
-                    f"EODChartData returned no daily candles for {exchange}:{eod_symbol} "
-                    f"({symbol}/{oa_exchange}) between {start_ts} and {end_ts}"
-                )
-
-            # Convert candles to rows. Both endpoints carry `ssboe` (epoch)
-            # alongside `time` — DD-MM-YYYY HH:MM:SS for TPSeries, DD-MON-YYYY
-            # for EODChartData. Prefer ssboe: it is already an integer and
-            # avoids both the format split and timezone quirks. EODChartData
-            # rows arrive as JSON strings and carry no `oi`.
-            data = []
-            for candle in response_candles:
-                if isinstance(candle, str):
-                    try:
-                        candle = json.loads(candle)
-                    except json.JSONDecodeError:
-                        logger.error(f"Non-JSON candle entry, skipping: {candle[:200]}")
-                        continue
-
-                if not isinstance(candle, dict):
-                    continue
-
-                try:
-                    # Skip candles with all zero OHLC (stale ticks)
-                    if (
-                        float(candle.get("into", 0)) == 0
-                        and float(candle.get("inth", 0)) == 0
-                        and float(candle.get("intl", 0)) == 0
-                        and float(candle.get("intc", 0)) == 0
-                    ):
-                        continue
-
-                    ssboe = candle.get("ssboe")
-                    if ssboe is not None:
-                        timestamp = int(ssboe)
-                    else:
-                        # TPSeries `time` is IST wall-clock, so a naive parse
-                        # against the host clock reproduces its ssboe. The
-                        # date-only EODChartData form has no clock at all and
-                        # must be pinned to 00:00 UTC — the convention every
-                        # other daily bar here uses — or it would land 5.5
-                        # hours early and miss the timestamp dedupe.
-                        timestamp = None
-                        for time_format, as_utc in (
-                            ("%d-%m-%Y %H:%M:%S", False),
-                            ("%d-%b-%Y", True),
-                        ):
-                            try:
-                                parsed = datetime.strptime(candle["time"], time_format)
-                            except ValueError:
-                                continue
-                            if as_utc:
-                                parsed = parsed.replace(tzinfo=UTC)
-                            timestamp = int(parsed.timestamp())
-                            break
-                        if timestamp is None:
-                            logger.error(f"Unparseable candle time, skipping: {candle}")
-                            continue
-
-                    data.append(
-                        {
-                            "timestamp": timestamp,
-                            "open": float(candle.get("into", 0)),
-                            "high": float(candle.get("inth", 0)),
-                            "low": float(candle.get("intl", 0)),
-                            "close": float(candle.get("intc", 0)),
-                            "volume": float(candle.get("intv", 0)),
-                            "oi": float(candle.get("oi", 0)),
-                        }
-                    )
-                except (KeyError, ValueError) as e:
-                    logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
-                    continue
-
-            df = pd.DataFrame(data)
-            if df.empty:
-                df = pd.DataFrame(
-                    columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
-                )
+            df = self._fetch_chart_frame(
+                endpoint,
+                interval,
+                exchange,
+                token,
+                eod_symbol,
+                start_ts,
+                end_ts,
+                f"{symbol}/{oa_exchange} between {start_date_str} and {end_date_str}",
+            )
 
             # For daily data, append today's data from quotes if it's missing
             if interval == "D":
@@ -1182,7 +1325,42 @@ class BrokerData:
             # Sort by timestamp. Adjacent chunks are half-open, but a candle
             # landing exactly on a boundary would otherwise appear twice.
             df = df.sort_values("timestamp").drop_duplicates(subset="timestamp", keep="last")
-            df = self._repair_candles(df.reset_index(drop=True), oa_exchange, symbol, interval)
+            df = df.reset_index(drop=True)
+
+            # Intraday intervals above 1m: TPSeries folds the next trading
+            # day's first 1m bar into each day's last bar (#2343), so rebuild
+            # those from 1m bars. Only the span the repair reads is fetched.
+            repair_window = self._day_end_repair_window(df) if interval not in ("D", "1m") else None
+            if repair_window:
+                failed_ranges = []
+                try:
+                    minute_df = self._fetch_chart_frame(
+                        endpoint,
+                        "1m",
+                        exchange,
+                        token,
+                        None,
+                        repair_window[0],
+                        repair_window[1],
+                        f"{symbol}/{oa_exchange} 1m between {repair_window[0]} and "
+                        f"{repair_window[1]}",
+                        failed_ranges=failed_ranges,
+                    )
+                    minute_df = minute_df.sort_values("timestamp").drop_duplicates(
+                        subset="timestamp", keep="last"
+                    )
+                    df = self._rebuild_day_last_bars(
+                        df, minute_df, oa_exchange, symbol, interval, failed_ranges
+                    )
+                except Exception as e:
+                    # The bars Shoonya sent are still returned; only the
+                    # last-bar repair is skipped.
+                    logger.warning(
+                        f"HISTORY API - Could not fetch 1m bars to repair the last bar of "
+                        f"each day for {oa_exchange}:{symbol} {interval}: {e}"
+                    )
+
+            df = self._repair_candles(df, oa_exchange, symbol, interval)
             return df.reset_index(drop=True)
 
         except Exception as e:

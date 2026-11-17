@@ -92,8 +92,9 @@ export async function checkTradingWorkspace({ page, check, expect, report, reloa
       return { csv: t.exportDataCsv(), bars: t.chart.primaryBars().map(bar => ({ ...bar })), comparisons: t.comparisonState().items.length };
     });
     await toolbar().getByRole('button', { name: 'Chart snapshot', exact: true }).click();
-    const pending = page.waitForEvent('download');
     await page.getByRole('button', { name: 'Download CSV', exact: true }).click();
+    const pending = page.waitForEvent('download');
+    await page.getByRole('dialog', { name: 'Download chart data' }).getByRole('button', { name: 'Download CSV', exact: true }).click();
     const file = await pending;
     const csv = await readFile(await file.path(), 'utf8');
     assert.equal(csv, expected.csv, 'Downloaded CSV must come from the selected real chart');
@@ -215,7 +216,7 @@ export async function checkTradingWorkspace({ page, check, expect, report, reloa
         const t = window.__compatTerminals.filter(item => !item.destroyed && item.chart)[0];
         return t.comparisonState().items.length === 1 && t.comparisonState().items[0].status === 'ready';
       });
-      await page.getByLabel('Comparison scale', { exact: true }).selectOption('percentage');
+      await page.getByLabel('Comparison scale', { exact: true }).selectOption('percent');
       assert.deepEqual(await live(terminals => terminals.map(t => t.comparisonState().items.length)), [1, 0]);
       assert.equal(await live(terminals => terminals[0].price.priceScale().options.mode), 'percentage');
       await page.keyboard.press('Escape');
@@ -291,7 +292,7 @@ export async function checkTradingWorkspace({ page, check, expect, report, reloa
       // Queue a real configuration save, then enter replay in the same event turn.
       await live((terminals, volume) => {
         terminals[0].setVolumeVisible(!volume);
-        document.querySelector('[data-toolbar-pane] button[title="Replay this session from a bar you pick"]').click();
+        document.querySelector('[data-toolbar-pane] button[aria-label="Replay"]').click();
       }, volume);
       await expect(replayBar()).toBeVisible();
       assert.equal((await state()).phase, 'picking');

@@ -38,6 +38,9 @@ vi.mock('@/lib/agent/stream', async (importOriginal) => ({
 /** Whether this instance has a usable model, for the setup gate. */
 let configured = true
 
+/** The operator's trading switch, as the config page stores it. */
+let tradingOn = false
+
 vi.mock('@/api/agent', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/agent')>()),
   getStatus: async () => ({ configured, default_model_id: 1, model_count: 1 }),
@@ -46,6 +49,10 @@ vi.mock('@/api/agent', async (importOriginal) => ({
   // none, and no model means the question cannot be answered, which is not a
   // reason to refuse a file.
   listModels: async () => models,
+  getSettings: async () => ({
+    data: { trading_enabled: tradingOn },
+    defaults: { trading_enabled: false },
+  }),
 }))
 
 /** The registered models the picker offers; empty unless a test sets them. */
@@ -104,6 +111,7 @@ beforeEach(() => {
   streams.length = 0
   replies = []
   configured = true
+  tradingOn = false
   models = []
   localStorage.clear()
 })
@@ -148,15 +156,111 @@ describe('AgentPanel chart context', () => {
     expect(streams[0].body.chart_context).toMatchObject({ symbol: 'INFY', interval: '15m' })
   })
 
-  it('runs on the chart surface and asks for no order tools', async () => {
+  it('runs on the chart surface and asks for no order tools while trading is off', async () => {
     wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
     await userEvent.type(box(), 'read this chart{Enter}')
 
     await waitFor(() => expect(streams).toHaveLength(1))
     expect(streams[0].body.surface).toBe('chart')
-    // Asking is not the same as getting, but this surface does not even ask:
-    // the backend then builds no order tool into the run's schema at all.
+    // The operator's switch is off, so the panel does not even ask: the backend
+    // then builds no order tool into the run's schema at all.
     expect(streams[0].body.trading_enabled).toBe(false)
+  })
+
+  it('asks for order tools when the operator has trading on', async () => {
+    tradingOn = true
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+    await screen.findByText(/wait for your approval/)
+    await userEvent.type(box(), 'buy 1 share of RELIANCE{Enter}')
+
+    await waitFor(() => expect(streams).toHaveLength(1))
+    expect(streams[0].body.surface).toBe('chart')
+    expect(streams[0].body.trading_enabled).toBe(true)
+  })
+
+  it('shows the approval card when an order pauses the run', async () => {
+    tradingOn = true
+    replies = [
+      {
+        type: 'confirm',
+        run_id: 'run-1',
+        session_id: 'session-1',
+        requirements: [
+          {
+            id: 'req-1',
+            tool_call_id: 'call-1',
+            tool_name: 'place_order',
+            args: { symbol: 'RELIANCE', exchange: 'NSE', action: 'BUY', quantity: 1 },
+            kind: 'confirmation',
+          },
+        ],
+      },
+    ]
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+    await screen.findByText(/wait for your approval/)
+    await userEvent.type(box(), 'buy 1 share of RELIANCE{Enter}')
+
+    expect(await screen.findByText('This turn is waiting for your approval.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled()
+  })
+
+  it('refuses to approve an order whose details never arrived', async () => {
+    tradingOn = true
+    replies = [
+      {
+        type: 'confirm',
+        run_id: 'run-1',
+        session_id: 'session-1',
+        requirements: [
+          {
+            id: 'req-1',
+            tool_call_id: 'call-1',
+            tool_name: 'place_order',
+            args: {},
+            missing: ['exchange', 'symbol'],
+          },
+        ],
+      },
+    ]
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+    await screen.findByText(/wait for your approval/)
+    await userEvent.type(box(), 'buy RELIANCE{Enter}')
+
+    expect(
+      await screen.findByText(/details did not arrive \(exchange, symbol\)/)
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled()
+  })
+
+  it('still approves a tool that takes no arguments at all', async () => {
+    // cancel_all_orders and close_all_positions have no arguments, so empty
+    // arguments are complete, not lost.
+    tradingOn = true
+    replies = [
+      {
+        type: 'confirm',
+        run_id: 'run-1',
+        session_id: 'session-1',
+        requirements: [
+          {
+            id: 'req-1',
+            tool_call_id: 'call-1',
+            tool_name: 'cancel_all_orders',
+            args: {},
+            missing: [],
+          },
+        ],
+      },
+    ]
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+    await screen.findByText(/wait for your approval/)
+    await userEvent.type(box(), 'cancel all my orders{Enter}')
+
+    expect(await screen.findByText('This turn is waiting for your approval.')).toBeInTheDocument()
+    expect(screen.queryByText(/details did not arrive/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
   })
 
   it('sends no context when nothing is charted', async () => {

@@ -1,5 +1,9 @@
 # Scalping Terminal (`/scalping`) — Implementation Plan
 
+Historical implementation plan. The branch, tracker path and phase instructions
+below record the original work; they are not current setup steps. Use the
+[scalping reference](PRD.md) and `blueprints/scalping.py` for the current contract.
+
 A keyboard-driven, low-latency options scalping terminal for OpenAlgo: a one-click
 scaling tool for fast intraday execution. Built as a new surface inside OpenAlgo, reusing
 the existing broker session, WebSocket market-data feed, and service layer.

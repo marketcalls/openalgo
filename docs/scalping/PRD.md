@@ -53,12 +53,12 @@ underlying — NFO→NIFTY, BFO→SENSEX, MCX→CRUDEOIL, CDS→USDINR.
 - **Futures**: nearest expiry auto-selected; framed `…FUT` symbol.
 
 ### 3.2 Order entry (keyboard)
-- One-Click **ARM** toggle (persisted across reloads); arming gates only new
+- **One-Click** toggle (persisted across reloads); enabling it permits new
   risk-increasing entries.
 - Options: `↑` Buy Call · `↓` Sell Call · `→` Buy Put · `←` Sell Put.
 - Single-instrument (equity/futures): `↑/→` Buy · `↓/←` Sell.
 - `F6` Close-All (scalping-scoped), `F7` Cancel-All. These safety actions fire even from
-  inputs and even when disarmed. *(macOS treats F1–F12 as hardware keys by default — the
+  inputs and even when One-Click is off. *(macOS treats F1–F12 as hardware keys by default — the
   on-screen Close-All / Cancel-All buttons always work; F6/F7 need Fn or the "use F-keys
   as standard function keys" setting.)*
 - Lots configurable up to **MAX_LOTS = 20** per click; whole-lot validation server-side.
@@ -84,7 +84,9 @@ underlying — NFO→NIFTY, BFO→SENSEX, MCX→CRUDEOIL, CDS→USDINR.
 ### 3.6 Books scoping
 - Position/Order/Trade books and Close-All are scoped to **instruments this terminal has
   traded** (the scalping list / `scalping_tracked_symbol`), since broker positions carry no
-  strategy tag. Order/Trade books additionally show **today only**.
+  strategy tag. Order/Trade books additionally show **today only**. A manual
+  trade in the same symbol/exchange/product can share the broker position;
+  tracking an instrument does not provide separate strategy ownership.
 
 ### 3.7 Freeze-quantity handling
 - Exits split into whole-lot, freeze-sized chunks (e.g. NIFTY freeze 1800 / lot 65 → 27

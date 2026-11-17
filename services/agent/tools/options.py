@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from services.agent.prompts import wrap_tool_result
@@ -53,6 +54,8 @@ from services.agent.tools.base import (
     dumps_capped,
     invalid_argument,
 )
+from services.agent.tools.market import MONTHS, clean_exchange, resolve_exchange
+from services.agent.tools.symbols import symbol_expiry
 from services.option_chain_service import get_option_chain as fetch_option_chain
 from services.option_greeks_service import get_option_greeks as fetch_option_greeks
 from services.option_symbol_service import get_option_symbol as resolve_option_symbol
@@ -96,8 +99,34 @@ _EXPIRY_PATTERN = re.compile(r"\A(\d{2})([A-Z]{3})(\d{2})\Z")
 # The same expiry appearing inside a symbol, as NIFTY28OCT25FUT carries it.
 _EMBEDDED_EXPIRY_PATTERN = re.compile(r"\d{2}[A-Z]{3}\d{2}")
 
+# An expiry written as an ISO date, 2026-10-28.
+_ISO_EXPIRY_PATTERN = re.compile(r"\A(\d{4})-(\d{1,2})-(\d{1,2})\Z")
+
+# The base symbol in front of an embedded expiry: NIFTY in NIFTY28OCT25FUT.
+_EMBEDDED_BASE_PATTERN = re.compile(r"\A(.+?)\d{2}[A-Z]{3}\d{2}")
+
 # ATM, ITM1..ITM50, OTM1..OTM50. Same vocabulary the REST schema validates.
 _OFFSET_PATTERN = re.compile(r"\A(?:ATM|(?:ITM|OTM)(?:[1-9]|[1-4][0-9]|50))\Z")
+
+# ATM+2, ATM-1, ATM0: strikes counted from ATM in a vocabulary the services do
+# not have, because the direction of a step depends on CE or PE.
+_ATM_STEP_PATTERN = re.compile(r"\AATM([+-]?)(\d+)\Z")
+
+_OPTION_TYPES: Mapping[str, str] = {
+    "CE": "CE",
+    "C": "CE",
+    "CALL": "CE",
+    "CALLS": "CE",
+    "PE": "PE",
+    "P": "PE",
+    "PUT": "PE",
+    "PUTS": "PE",
+}
+
+#: Cash exchanges an index is commonly named on, and the index exchange each
+#: one's index is quoted on. The option services quote the underlying on the
+#: exchange they are given, so NIFTY on NSE fails its price lookup.
+_INDEX_HOME: Mapping[str, str] = {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX"}
 
 _TRUE_WORDS = frozenset({"true", "t", "yes", "y", "1", "on"})
 _FALSE_WORDS = frozenset({"false", "f", "no", "n", "0", "off"})
@@ -216,6 +245,22 @@ def _narrow_chain_to_budget(payload: Any, budget: int = MAX_JSON_CHARS) -> Any:
     return trimmed
 
 
+def _with_notice(payload: Any, notice: str | None) -> Any:
+    """Attach a correction notice to a service response.
+
+    Args:
+        payload: The service's response.
+        notice: What the tool corrected before calling it, or None.
+
+    Returns:
+        A copy carrying ``notices`` when there is one to report and the
+        response is an object, otherwise the response unchanged.
+    """
+    if not notice or not isinstance(payload, Mapping):
+        return payload
+    return {**payload, "notices": [notice]}
+
+
 # ---------------------------------------------------------------------------
 # Shared argument handling
 # ---------------------------------------------------------------------------
@@ -257,12 +302,14 @@ def normalise_exchange(value: Any, allowed: tuple[str, ...]) -> str:
         allowed: The exchange codes this argument permits.
 
     Returns:
-        The trimmed, upper-cased exchange code.
+        The exchange code as :func:`services.agent.tools.market.clean_exchange`
+        spells it, so ``nse index`` and ``NSE-INDEX`` both read as
+        ``NSE_INDEX``.
 
     Raises:
         RetryAgentRun: If it is not one of ``allowed``.
     """
-    text = "" if value is None else str(value).strip().upper()
+    text = clean_exchange(value)
     if text not in allowed:
         invalid_argument(
             "exchange",
@@ -272,8 +319,46 @@ def normalise_exchange(value: Any, allowed: tuple[str, ...]) -> str:
     return text
 
 
-def normalise_expiry(value: Any, underlying: str, allow_embedded: bool) -> str:
-    """Check an expiry against the DDMMMYY format every service expects.
+def _expiry_text(text: str) -> str | None:
+    """Spell an expiry the way every OpenAlgo symbol and service does.
+
+    Args:
+        text: The trimmed, upper-cased expiry.
+
+    Returns:
+        ``DDMMMYY`` for ``28OCT26``, ``28-OCT-26``, ``28OCT2026``,
+        ``8OCT26``, ``28 OCT 26`` and ``2026-10-28``, or None when the text is
+        none of them or names no real month or day.
+    """
+    iso = _ISO_EXPIRY_PATTERN.match(text)
+    if iso:
+        try:
+            day = date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+        except ValueError:
+            return None
+        return f"{day.day:02d}{MONTHS[day.month - 1]}{day.year % 100:02d}"
+
+    # symbol_expiry reads the master's DD-MMM-YY and DD-MMM-YYYY with or without
+    # the hyphens, so spaces and slashes only need turning into hyphens first.
+    spelled = symbol_expiry(re.sub(r"[\s/]+", "-", text))
+    if not spelled:
+        return None
+    match = _EXPIRY_PATTERN.match(spelled)
+    if not match or match.group(2) not in _MONTHS:
+        return None
+    # A real calendar day, not merely 1 to 31: 31FEB25 names no contract, and
+    # passing it on would surface as a confusing empty chain rather than here.
+    try:
+        date(2000 + int(spelled[-2:]), MONTHS.index(match.group(2)) + 1, int(match.group(1)))
+    except ValueError:
+        return None
+    return spelled
+
+
+def normalise_expiry_argument(
+    value: Any, underlying: str, allow_embedded: bool, field: str = "expiry_date"
+) -> str:
+    """Read an expiry argument whose underlying may carry the expiry itself.
 
     Args:
         value: The model's value.
@@ -281,9 +366,10 @@ def normalise_expiry(value: Any, underlying: str, allow_embedded: bool) -> str:
             expiry when the argument is empty.
         allow_embedded: True when an empty value is acceptable because the
             underlying may carry the expiry itself.
+        field: Argument name, used in the failure message.
 
     Returns:
-        The trimmed, upper-cased expiry, or an empty string when the underlying
+        The expiry as ``DDMMMYY``, or an empty string when the underlying
         carries it.
 
     Raises:
@@ -295,7 +381,7 @@ def normalise_expiry(value: Any, underlying: str, allow_embedded: bool) -> str:
         if allow_embedded and _EMBEDDED_EXPIRY_PATTERN.search(underlying):
             return ""
         invalid_argument(
-            "expiry_date",
+            field,
             (
                 "no expiry was given and the underlying does not carry one."
                 if allow_embedded
@@ -305,18 +391,136 @@ def normalise_expiry(value: Any, underlying: str, allow_embedded: bool) -> str:
             "listed expiries first rather than guessing a date.",
         )
 
-    match = _EXPIRY_PATTERN.match(text)
-    if not match or match.group(2) not in _MONTHS:
+    spelled = _expiry_text(text)
+    if spelled is None:
         invalid_argument(
-            "expiry_date",
-            f"{text!r} is not a DDMMMYY expiry.",
-            "Use two digits for the day, a three-letter month and two digits for the "
-            "year, for example '28NOV25' or '05JAN26'.",
+            field,
+            f"{text!r} is not an expiry date.",
+            "Use DDMMMYY: two digits for the day, a three-letter month and two digits for "
+            "the year, for example '28NOV25' or '05JAN26'.",
+        )
+    return spelled
+
+
+def normalise_expiry(value: Any, field: str = "expiry_date") -> str:
+    """Read one expiry into the DDMMMYY form every service expects.
+
+    Accepts ``28OCT26``, ``28-OCT-26``, ``28OCT2026``, ``8OCT26``,
+    ``28 OCT 26`` and ``2026-10-28``, and refuses an empty value. Shared, so
+    every toolkit taking an expiry reads the same spellings. Where an
+    underlying such as ``NIFTY28OCT25FUT`` may carry the expiry instead, use
+    :func:`normalise_expiry_argument`.
+
+    Args:
+        value: The model's value.
+        field: Argument name, used in the failure message.
+
+    Returns:
+        The expiry as ``DDMMMYY``.
+
+    Raises:
+        RetryAgentRun: If it is missing or malformed.
+    """
+    return normalise_expiry_argument(value, "", False, field=field)
+
+
+def normalise_offset(value: Any) -> str:
+    """Check a strike offset against the ATM, ITMn and OTMn vocabulary.
+
+    Spaces and hyphens are dropped and case is ignored, so ``otm-2`` and
+    ``OTM 2`` read as ``OTM2``, and ``ATM0`` reads as ``ATM``. A step counted
+    from ATM with a sign, such as ``ATM+2``, is refused with the spelling to
+    use instead, because which way a step goes depends on CE or PE.
+
+    Args:
+        value: The model's value.
+
+    Returns:
+        The offset, such as ``ATM`` or ``OTM2``.
+
+    Raises:
+        RetryAgentRun: If it is not a strike offset.
+    """
+    spaced = re.sub(r"\s+", "", "" if value is None else str(value)).upper()
+    step = _ATM_STEP_PATTERN.match(spaced)
+    if step and int(step.group(2)) == 0:
+        return "ATM"
+    if step:
+        invalid_argument(
+            "offset",
+            f"{spaced} is not a strike offset.",
+            "Count steps from ATM with ITM or OTM followed by the number of strikes, for "
+            "example 'OTM2' or 'ITM2'. For a CE a higher strike is OTMn and a lower one is "
+            "ITMn; for a PE a higher strike is ITMn and a lower one is OTMn.",
+        )
+
+    text = spaced.replace("-", "")
+    if not _OFFSET_PATTERN.match(text):
+        invalid_argument(
+            "offset",
+            f"{text or 'it'} is not a strike offset.",
+            "Use 'ATM', or 'ITM' or 'OTM' followed by 1 to 50, for example 'OTM2'. "
+            "Each step is one listed strike, not one point of price.",
         )
     return text
 
 
-def normalise_int(value: Any, field: str, minimum: int, maximum: int) -> int:
+def normalise_option_type(value: Any) -> str:
+    """Check an option type is a call or a put.
+
+    Args:
+        value: The model's value. ``C`` and ``CALL`` read as ``CE``, ``P`` and
+            ``PUT`` as ``PE``, in any case.
+
+    Returns:
+        ``CE`` or ``PE``.
+
+    Raises:
+        RetryAgentRun: For anything else.
+    """
+    text = "" if value is None else str(value).strip().upper()
+    kind = _OPTION_TYPES.get(text)
+    if kind is None:
+        invalid_argument(
+            "option_type",
+            f"{text or 'it'} is not an option type.",
+            "Use 'CE' for a call or 'PE' for a put.",
+        )
+    return kind
+
+
+def index_underlying(underlying: str, exchange: str) -> tuple[str, str | None]:
+    """Move an index named on its cash exchange onto its index exchange.
+
+    The option chain, option symbol and synthetic future services quote the
+    underlying on the exchange they are given, and NIFTY is not listed on NSE,
+    so that quote fails. Only NSE and BSE are corrected, and only towards their
+    own index exchange; whether to move at all is decided by the symbol
+    database through :func:`services.agent.tools.market.resolve_exchange`, so a
+    stock stays where it is.
+
+    Args:
+        underlying: The already-normalised underlying. A futures symbol is
+            looked up by the base symbol in front of its expiry.
+        exchange: The already-normalised underlying exchange.
+
+    Returns:
+        The exchange to use, and a notice when it differs from the request.
+    """
+    home = _INDEX_HOME.get(exchange)
+    if home is None:
+        return exchange, None
+    match = _EMBEDDED_BASE_PATTERN.match(underlying)
+    base = match.group(1) if match else underlying
+    resolved, notice = resolve_exchange(base, exchange)
+    if resolved != home:
+        return exchange, None
+    return resolved, notice
+
+
+def normalise_int(
+    value: Any, field: str, minimum: int, maximum: int, default: int | None = None
+) -> int:
     """Coerce a whole-number argument and check its range.
 
     A model routinely sends ``"5"`` or ``5.0`` where an integer is wanted, so
@@ -328,6 +532,8 @@ def normalise_int(value: Any, field: str, minimum: int, maximum: int) -> int:
         field: Argument name, used in the failure message.
         minimum: Smallest acceptable value, inclusive.
         maximum: Largest acceptable value, inclusive.
+        default: The argument's own default, named in the failure message so
+            the model is pointed at the value the tool would have used.
 
     Returns:
         The value as an int.
@@ -354,8 +560,9 @@ def normalise_int(value: Any, field: str, minimum: int, maximum: int) -> int:
         invalid_argument(
             field,
             f"{value!r} is not a whole number between {minimum} and {maximum}.",
-            f"Pass an integer in that range; {DEFAULT_STRIKE_COUNT} is a sensible "
-            f"{field} for a first look.",
+            f"Pass an integer in that range; the default {field} is {default}."
+            if default is not None and minimum <= default <= maximum
+            else "Pass an integer in that range.",
         )
     return number
 
@@ -460,8 +667,11 @@ class OptionsToolkit(OpenAlgoToolkit):
         underlying = self._symbol_argument(underlying, "underlying")
         exchange = self._exchange_argument(exchange, UNDERLYING_EXCHANGES)
         expiry = self._expiry_argument(expiry_date, underlying, allow_embedded=True)
-        count = self._int_argument(strike_count, "strike_count", ALL_STRIKES, MAX_STRIKE_COUNT)
+        count = self._int_argument(
+            strike_count, "strike_count", ALL_STRIKES, MAX_STRIKE_COUNT, DEFAULT_STRIKE_COUNT
+        )
         greeks = self._bool_argument(with_greeks, "with_greeks")
+        exchange, notice = index_underlying(underlying, exchange)
 
         payload = self.service_call(
             fetch_option_chain,
@@ -474,7 +684,7 @@ class OptionsToolkit(OpenAlgoToolkit):
 
         return wrap_tool_result(
             "get_option_chain",
-            self.to_json(_narrow_chain_to_budget(payload)),
+            self.to_json(_narrow_chain_to_budget(_with_notice(payload, notice))),
             underlying=underlying,
             exchange=exchange,
             expiry=expiry or None,
@@ -523,8 +733,10 @@ class OptionsToolkit(OpenAlgoToolkit):
                 so: ``OTM2`` with option_type CE is 24350, ``ITM2`` with CE is
                 24150, ``OTM2`` with PE is 24150, ``ITM2`` with PE is 24350. Case
                 does not matter. An offset past the end of the listed ladder is
-                an error, not a clamp to the last strike.
-            option_type: ``CE`` for a call or ``PE`` for a put.
+                an error, not a clamp to the last strike. ``ATM+2`` is not an
+                offset; say ``OTM2`` or ``ITM2``.
+            option_type: ``CE`` for a call or ``PE`` for a put. ``CALL`` and
+                ``PUT`` are read as those.
 
         Returns:
             JSON with ``symbol`` (the OpenAlgo option symbol to trade),
@@ -539,6 +751,7 @@ class OptionsToolkit(OpenAlgoToolkit):
         expiry = self._expiry_argument(expiry_date, underlying, allow_embedded=True)
         offset = self._offset_argument(offset)
         option_type = self._option_type_argument(option_type)
+        exchange, notice = index_underlying(underlying, exchange)
 
         payload = self.service_call(
             resolve_option_symbol,
@@ -555,7 +768,7 @@ class OptionsToolkit(OpenAlgoToolkit):
 
         return wrap_tool_result(
             "get_option_symbol",
-            self.to_json(payload),
+            self.to_json(_with_notice(payload, notice)),
             underlying=underlying,
             exchange=exchange,
             expiry=expiry or None,
@@ -664,6 +877,7 @@ class OptionsToolkit(OpenAlgoToolkit):
                 "Pass the base symbol on its own, such as 'NIFTY', and name the expiry in "
                 "expiry_date.",
             )
+        exchange, notice = index_underlying(underlying, exchange)
 
         payload = self.service_call(
             fetch_synthetic_future,
@@ -674,7 +888,7 @@ class OptionsToolkit(OpenAlgoToolkit):
 
         return wrap_tool_result(
             "get_synthetic_future",
-            self.to_json(payload),
+            self.to_json(_with_notice(payload, notice)),
             underlying=underlying,
             exchange=exchange,
             expiry=expiry or None,
@@ -696,49 +910,22 @@ class OptionsToolkit(OpenAlgoToolkit):
         return normalise_exchange(value, allowed)
 
     def _expiry_argument(self, value: Any, underlying: str, allow_embedded: bool) -> str:
-        """Delegate to :func:`normalise_expiry`."""
-        return normalise_expiry(value, underlying, allow_embedded)
+        """Delegate to :func:`normalise_expiry_argument`."""
+        return normalise_expiry_argument(value, underlying, allow_embedded)
 
     def _offset_argument(self, value: Any) -> str:
-        """Check a strike offset against the ATM/ITMn/OTMn vocabulary.
-
-        Args:
-            value: The model's value.
-
-        Returns:
-            The trimmed, upper-cased offset.
-        """
-        text = "" if value is None else str(value).strip().upper()
-        if not _OFFSET_PATTERN.match(text):
-            self.invalid_argument(
-                "offset",
-                f"{text or 'it'} is not a strike offset.",
-                "Use 'ATM', or 'ITM' or 'OTM' followed by 1 to 50, for example 'OTM2'. "
-                "Each step is one listed strike, not one point of price.",
-            )
-        return text
+        """Delegate to :func:`normalise_offset`."""
+        return normalise_offset(value)
 
     def _option_type_argument(self, value: Any) -> str:
-        """Check an option type is a call or a put.
+        """Delegate to :func:`normalise_option_type`."""
+        return normalise_option_type(value)
 
-        Args:
-            value: The model's value.
-
-        Returns:
-            ``CE`` or ``PE``.
-        """
-        text = "" if value is None else str(value).strip().upper()
-        if text not in ("CE", "PE"):
-            self.invalid_argument(
-                "option_type",
-                f"{text or 'it'} is not an option type.",
-                "Use 'CE' for a call or 'PE' for a put.",
-            )
-        return text
-
-    def _int_argument(self, value: Any, field: str, minimum: int, maximum: int) -> int:
+    def _int_argument(
+        self, value: Any, field: str, minimum: int, maximum: int, default: int | None = None
+    ) -> int:
         """Delegate to :func:`normalise_int`."""
-        return normalise_int(value, field, minimum, maximum)
+        return normalise_int(value, field, minimum, maximum, default)
 
     def _bool_argument(self, value: Any, field: str) -> bool:
         """Coerce a true/false argument, accepting the words a model may send.

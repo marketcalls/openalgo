@@ -53,14 +53,15 @@ def keys_for(**kwargs: Any) -> set[str]:
     """The toolkit keys a run with these context values would be offered.
 
     Args:
-        **kwargs: Overrides for :class:`ToolContext`. Web search is switched off
-            unless a test says otherwise, so the sets below name only the
-            toolkits the surface decides.
+        **kwargs: Overrides for :class:`ToolContext`. Web search and external
+            data (MCP) are switched off unless a test says otherwise, so the
+            sets below name only the toolkits the surface decides.
 
     Returns:
         The selected toolkit keys.
     """
     kwargs.setdefault("web_search_enabled", False)
+    kwargs.setdefault("mcp_enabled", False)
     return {spec.key for spec in select_specs(ToolContext(api_key="k", **kwargs))}
 
 
@@ -137,8 +138,11 @@ class TestVoiceWidensNothing:
         assert "chart" not in keys_for(surface=SURFACE_CHAT)
 
     def test_the_chart_panel_is_unchanged_by_the_new_surface(self):
+        # Orders reach the chart panel through the trading capability alone, the
+        # same gate as chat and voice; the chat-only authoring tools do not.
         chart = keys_for(surface=SURFACE_CHART, trading_enabled=True)
-        assert "orders" not in chart
+        assert "orders" in chart
+        assert "orders" not in keys_for(surface=SURFACE_CHART, trading_enabled=False)
         assert not ({"openui", "strategy_gen", "flow_gen"} & chart)
 
     def test_a_context_that_does_not_carry_the_capability_is_refused_it(self):

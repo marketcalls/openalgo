@@ -76,6 +76,7 @@ Deliberately left out for now, and why:
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -94,16 +95,19 @@ from services.agent.tools.market import (
     BrokerIntervals,
     candle_columns,
     chart_bars,
-    normalise_interval,
+    history_range,
     normalise_pair,
-    normalise_range,
     normalise_source,
+    plan_interval,
+    roll_up_candles,
     summarise_candles,
 )
 from services.agent.tools.options import (
     UNDERLYING_EXCHANGES,
+    index_underlying,
     normalise_exchange,
     normalise_expiry,
+    normalise_expiry_argument,
     normalise_int,
     normalise_symbol,
 )
@@ -181,16 +185,29 @@ MAX_SURFACE_STRIKE_COUNT = 25
 #: Most expiries one surface may span.
 MAX_SURFACE_EXPIRIES = 8
 
-#: An ``openalgo-charts`` indicator id: lower case, letters, digits and
-#: underscores. Validated for shape only. The client owns the real list, and an
-#: id it does not know is skipped there, so a newer indicator does not need a
-#: change here to be usable.
-_INDICATOR_ID = re.compile(r"\A[a-z][a-z0-9_]{1,23}\Z")
+#: An ``openalgo-charts`` indicator id: lower case kebab-case, as in
+#: ``parabolic-sar``. Checked against the generated catalogue as well, because
+#: the chat chart skips an id it does not know, and a tool that then says it
+#: drew it has told the operator something false.
+_INDICATOR_ID = re.compile(r"\A[a-z][a-z0-9-]{1,31}\Z")
 
 _INDICATOR_INPUT_KEY = re.compile(r"\A[A-Za-z][A-Za-z0-9_]{0,23}\Z")
 
 #: ``ema:20`` and ``ema(20)``, the two shorthands a model reaches for.
-_INDICATOR_SHORTHAND = re.compile(r"\A([A-Za-z][A-Za-z0-9_]{1,23})\s*[:(]?\s*(\d{1,4})?\)?\Z")
+_INDICATOR_SHORTHAND = re.compile(r"\A([A-Za-z][A-Za-z0-9_-]{1,31})\s*[:(]?\s*(\d{1,4})?\)?\Z")
+
+#: Names other charting tools use for an indicator the chart calls something
+#: else. ``bbands`` is also the ``openalgo.ta`` name, which is why a model
+#: reaches for it.
+_INDICATOR_ALIASES: Mapping[str, str] = {
+    "bbands": "bollinger",
+    "bb": "bollinger",
+    "psar": "parabolic-sar",
+    "sar": "parabolic-sar",
+}
+
+#: Close matches named when an indicator id is refused.
+_MAX_INDICATOR_SUGGESTIONS = 6
 
 #: The input key an ``openalgo-charts`` moving average and most oscillators call
 #: their period, so a bare ``ema:20`` lands on the right field.
@@ -311,6 +328,8 @@ def _indicator(item: Any, position: int) -> dict[str, Any]:
             'Pass strings such as "ema:20", or objects carrying an "id".',
         )
 
+    identifier = identifier.replace("_", "-")
+    identifier = _INDICATOR_ALIASES.get(identifier, identifier)
     if not _INDICATOR_ID.match(identifier):
         invalid_argument(
             "indicators",
@@ -318,7 +337,68 @@ def _indicator(item: Any, position: int) -> dict[str, Any]:
             "Use a lower-case id such as 'ema', 'sma', 'rsi', 'macd', 'bollinger', 'vwap', "
             "'atr' or 'supertrend'.",
         )
+
+    known = _chart_indicator_ids()
+    if known and identifier not in known:
+        close = _close_indicator_ids(identifier, known)
+        invalid_argument(
+            "indicators",
+            f"entry {position} names {identifier!r}, which this chart cannot draw",
+            (
+                f"The closest ids the chart has are: {', '.join(close)}. "
+                if close
+                else "Common ids are 'ema', 'sma', 'rsi', 'macd', 'bollinger', 'vwap', "
+                "'atr' and 'supertrend'. "
+            )
+            + "Use one exactly as written, or leave the indicator out.",
+        )
     return {"id": identifier, "inputs": inputs}
+
+
+def _chart_indicator_ids() -> frozenset[str]:
+    """The indicator ids the chart can draw, from the generated catalogue.
+
+    Imported at call time because the chart toolkit is the heavier module and
+    nothing here needs it at import. An unreadable catalogue answers an empty
+    set, and the caller then checks the id's shape only, so a stale install
+    loses the check and not the feature.
+
+    Returns:
+        The catalogue's ids, or an empty set when it could not be read.
+    """
+    try:
+        from services.agent.tools.chart import _chart_indicator_catalogue
+
+        return frozenset(row["id"] for row in _chart_indicator_catalogue())
+    except Exception:
+        logger.exception("Could not read the chart indicator catalogue for the chat chart")
+        return frozenset()
+
+
+def _close_indicator_ids(identifier: str, known: frozenset[str]) -> list[str]:
+    """Name the catalogue ids nearest to one the chart does not have.
+
+    Args:
+        identifier: The refused id.
+        known: The catalogue's ids.
+
+    Returns:
+        Up to :data:`_MAX_INDICATOR_SUGGESTIONS` ids: those sharing a prefix or
+        containing the refused id first, then the closest spellings.
+    """
+    ordered = sorted(known)
+    root = identifier.split("-")[0]
+    related = [
+        item
+        for item in ordered
+        if item.startswith(root) or identifier in item or (len(item) >= 3 and item in root)
+    ]
+    spelled = difflib.get_close_matches(identifier, ordered, n=_MAX_INDICATOR_SUGGESTIONS)
+    out: list[str] = []
+    for item in [*related, *spelled]:
+        if item not in out:
+            out.append(item)
+    return out[:_MAX_INDICATOR_SUGGESTIONS]
 
 
 def normalise_indicators(value: Any) -> list[dict[str, Any]]:
@@ -340,7 +420,9 @@ def normalise_indicators(value: Any) -> list[dict[str, Any]]:
         return []
     if isinstance(raw, str):
         text = raw.strip()
-        if text.startswith("["):
+        if text.startswith(("[", "{")):
+            # A single object arrives as text too, and splitting it on its
+            # commas would cut {"id": "ema", "inputs": {...}} into fragments.
             try:
                 raw = json.loads(text)
             except ValueError:
@@ -450,7 +532,7 @@ def _expiries(value: Any) -> list[str]:
 
     expiries: list[str] = []
     for item in raw:
-        expiry = normalise_expiry(item, "", allow_embedded=False)
+        expiry = normalise_expiry(item, "expiry_dates")
         if expiry not in expiries:
             expiries.append(expiry)
     return expiries
@@ -669,11 +751,11 @@ class VizToolkit(OpenAlgoToolkit):
         self,
         symbol: str,
         exchange: str,
-        interval: str,
-        start_date: str,
-        end_date: str,
+        interval: str = "D",
+        start_date: str | None = None,
+        end_date: str | None = None,
         chart_type: str = DEFAULT_CHART_TYPE,
-        indicators: list[str] | None = None,
+        indicators: list[str | dict] | str | None = None,
         source: str = "api",
     ) -> str:
         """Draw a price chart of one instrument in the conversation.
@@ -697,11 +779,13 @@ class VizToolkit(OpenAlgoToolkit):
                 NSE_INDEX or BSE_INDEX for an index.
             interval: Candle size. Call ``get_intervals`` for the ones this
                 broker accepts. Case matters: ``1m`` is one minute and ``M`` is
-                one month.
+                one month. Defaults to ``D``.
             start_date: First day of the range, as ``YYYY-MM-DD``. Inclusive,
-                and interpreted in IST.
+                and interpreted in IST. Leave it out for about the last 100
+                candles at ``interval`` up to ``end_date``.
             end_date: Last day of the range, as ``YYYY-MM-DD``. Inclusive, and
                 interpreted in IST. It must not be before ``start_date``.
+                Defaults to today.
             chart_type: The shape to draw: ``candlestick`` (the default),
                 ``hollow-candle``, ``bar``, ``high-low``, ``line``, ``step``,
                 ``area``, ``baseline`` or ``heikin-ashi``. Use ``line`` or
@@ -714,7 +798,11 @@ class VizToolkit(OpenAlgoToolkit):
                 3}}]``. Ids are the chart's own: ``sma``, ``ema``, ``wma``,
                 ``hma``, ``vwap``, ``bollinger``, ``supertrend``, ``rsi``,
                 ``macd``, ``atr``, ``adx``, ``stochastic``, ``obv`` and the
-                rest. Leave it out when the question is about price alone.
+                rest; ``bbands`` and ``psar`` are read as ``bollinger`` and
+                ``parabolic-sar``, and an id the chart cannot draw is refused
+                with the nearest ones it can. A single string such as
+                ``"ema:20, rsi:14"`` is accepted too. Leave it out when the
+                question is about price alone.
             source: Where the candles come from. ``api`` (the default) asks the
                 broker. ``db`` reads the local Historify store, which only holds
                 what the operator has already downloaded.
@@ -725,10 +813,15 @@ class VizToolkit(OpenAlgoToolkit):
         """
         symbol, exchange, notices = normalise_pair(symbol, exchange)
         source = normalise_source(source)
-        interval, interval_notice = normalise_interval(interval, source, self._intervals.accepted())
+        fetched, interval_notice, rollup = plan_interval(
+            interval, source, self._intervals.accepted()
+        )
         if interval_notice:
             notices.append(interval_notice)
-        start, end = normalise_range(start_date, end_date)
+        # Charted in the roll-up target when daily candles are rolled up, which
+        # is also the interval the default range is sized in.
+        interval = rollup or fetched
+        start, end = history_range(interval, start_date, end_date)
         shape = _chart_type(chart_type)
         overlays = normalise_indicators(indicators)
 
@@ -736,7 +829,7 @@ class VizToolkit(OpenAlgoToolkit):
             history_service.get_history,
             symbol=symbol,
             exchange=exchange,
-            interval=interval,
+            interval=fetched,
             start_date=start,
             end_date=end,
             source=source,
@@ -747,6 +840,8 @@ class VizToolkit(OpenAlgoToolkit):
             [row for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
         )
         columns = candle_columns(records[0]) if records else {}
+        if rollup:
+            records = roll_up_candles(records, columns, rollup)
         summary = summarise_candles(records, columns)
         bars = chart_bars(records, columns)
 
@@ -850,9 +945,12 @@ class VizToolkit(OpenAlgoToolkit):
             answer.
         """
         underlying = normalise_symbol(underlying, "underlying")
-        exchange = _underlying_exchange(exchange)
-        expiry = normalise_expiry(expiry_date, underlying, allow_embedded=True)
-        count = normalise_int(strike_count, "strike_count", 1, MAX_OI_STRIKE_COUNT)
+        exchange, index_notice = index_underlying(underlying, _underlying_exchange(exchange))
+        notices = [index_notice] if index_notice else []
+        expiry = normalise_expiry_argument(expiry_date, underlying, allow_embedded=True)
+        count = normalise_int(
+            strike_count, "strike_count", 1, MAX_OI_STRIKE_COUNT, DEFAULT_OI_STRIKE_COUNT
+        )
 
         payload = self.service_call(
             get_option_chain,
@@ -932,7 +1030,11 @@ class VizToolkit(OpenAlgoToolkit):
             f"total put OI {format_number(put_total)}, PCR {format_number(ratio)}."
         )
         return self._answer(
-            "plot_open_interest", message, underlying=underlying, expiry=expiry or None
+            "plot_open_interest",
+            message,
+            underlying=underlying,
+            expiry=expiry or None,
+            notices=notices,
         )
 
     def plot_gamma_exposure(self, underlying: str, exchange: str, expiry_date: str) -> str:
@@ -960,8 +1062,9 @@ class VizToolkit(OpenAlgoToolkit):
             of gamma. The per-strike series travels to the operator's screen.
         """
         underlying = normalise_symbol(underlying, "underlying")
-        exchange = _underlying_exchange(exchange)
-        expiry = normalise_expiry(expiry_date, underlying, allow_embedded=True)
+        exchange, index_notice = index_underlying(underlying, _underlying_exchange(exchange))
+        notices = [index_notice] if index_notice else []
+        expiry = normalise_expiry_argument(expiry_date, underlying, allow_embedded=True)
 
         payload = self.service_call(
             get_gex_data,
@@ -1033,14 +1136,18 @@ class VizToolkit(OpenAlgoToolkit):
             f"shortest at {format_number(negative)}."
         )
         return self._answer(
-            "plot_gamma_exposure", message, underlying=underlying, expiry=expiry or None
+            "plot_gamma_exposure",
+            message,
+            underlying=underlying,
+            expiry=expiry or None,
+            notices=notices,
         )
 
     def plot_volatility_surface(
         self,
         underlying: str,
         exchange: str,
-        expiry_dates: list[str],
+        expiry_dates: list[str] | str,
         strike_count: int = DEFAULT_SURFACE_STRIKE_COUNT,
     ) -> str:
         """Draw a 3D implied volatility surface across strikes and expiries.
@@ -1058,8 +1165,9 @@ class VizToolkit(OpenAlgoToolkit):
             underlying: Underlying symbol, for example ``NIFTY``.
             exchange: Exchange of the underlying, such as ``NSE_INDEX``.
             expiry_dates: The expiries to span, in DDMMMYY format, nearest
-                first, for example ``["28NOV25", "26DEC25", "29JAN26"]``. At
-                most eight. Look the listed expiries up first.
+                first, for example ``["28NOV25", "26DEC25", "29JAN26"]``, or
+                one comma separated string of them. At most eight. Look the
+                listed expiries up first.
             strike_count: Strikes each side of ATM, defaulting to 8. The maximum
                 is 25, and a wide surface is slow as well as unreadable.
 
@@ -1068,9 +1176,12 @@ class VizToolkit(OpenAlgoToolkit):
             to the operator's screen.
         """
         underlying = normalise_symbol(underlying, "underlying")
-        exchange = _underlying_exchange(exchange)
+        exchange, index_notice = index_underlying(underlying, _underlying_exchange(exchange))
+        notices = [index_notice] if index_notice else []
         expiries = _expiries(expiry_dates)
-        count = normalise_int(strike_count, "strike_count", 1, MAX_SURFACE_STRIKE_COUNT)
+        count = normalise_int(
+            strike_count, "strike_count", 1, MAX_SURFACE_STRIKE_COUNT, DEFAULT_SURFACE_STRIKE_COUNT
+        )
 
         response = self.service_call(
             get_vol_surface_data,
@@ -1144,7 +1255,9 @@ class VizToolkit(OpenAlgoToolkit):
             f"{format_number(payload.get('atm_strike'))}, spot "
             f"{format_number(payload.get('underlying_ltp'))}."
         )
-        return self._answer("plot_volatility_surface", message, underlying=underlying)
+        return self._answer(
+            "plot_volatility_surface", message, underlying=underlying, notices=notices
+        )
 
     # -- delivery ------------------------------------------------------------
 

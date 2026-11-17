@@ -3,7 +3,7 @@
 Write your own indicators for the `/trading` charting terminal.
 
 Drop a `.js` file into `strategies/indicators/`, open the indicator picker, and
-it is there alongside the 105 built-ins. No build step, no Node.js, no restart of
+it is there alongside the built-in studies. No build step, no Node.js, no restart of
 OpenAlgo, no page reload.
 
 ## Only add indicators you have read
@@ -55,7 +55,7 @@ The chart loads your files over HTTP at runtime rather than compiling them in:
 
 ```
 /trading  ->  terminal.ts loadIndicators()
-                 1. import 'openalgo-charts/indicators'      (the 105 built-ins)
+                 1. import 'openalgo-charts/indicators'      (built-in studies)
                  2. GET /custom-indicators/index.json        (your file list)
                  3. import each /custom-indicators/<file>.js
                  4. call its default export with the charting API
@@ -74,6 +74,12 @@ The trade-off is that these are plain `.js` files, not TypeScript. Nothing
 compiles them, so use plain JavaScript with no types, no JSX and no imports.
 
 ---
+
+## Chart Indicators, Python Indicators and OpenScript
+
+This guide is for runtime JavaScript descriptors on `/trading`. Python strategies and Flow use the separate `openalgo.ta` library. [OpenScript](openscript.md) is the compiled study/strategy language edited from the terminal's Scripts panel; use it when you need a study without arbitrary JavaScript access or a strategy to backtest and deploy.
+
+After installing a descriptor, use [Charting Terminal](userguide/32-charting-terminal/README.md) for study settings, templates, workspaces and replay. A chart library capability becomes available in the terminal only when its host supplies the required data and UI.
 
 ## Your first indicator
 

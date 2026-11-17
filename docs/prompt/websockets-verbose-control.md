@@ -9,11 +9,13 @@ This helps developers toggle between silent mode, basic logs, or full debug-leve
 
 | Level      | Value          | Description                                        |
 | ---------- | -------------- | -------------------------------------------------- |
-| **Silent** | `False` or `0` | Errors only (default)                              |
+| **Silent** | `False` or `0` | No SDK log output (default in 2.0.5)                              |
 | **Basic**  | `True` or `1`  | Connection, authentication, subscription logs      |
 | **Debug**  | `2`            | All market data updates, including LTP/Quote/Depth |
 
 ***
+
+In the pinned SDK 2.0.5, feed errors use the same level-1 logger as connection messages, so `verbose=False` suppresses those SDK error logs too. Check `connect()`/subscription return values and application state; silence is not proof of a healthy feed. Basic/debug authentication logs include a masked API-key prefix and suffix, so avoid sharing unredacted logs.
 
 ### **Usage**
 
@@ -154,7 +156,7 @@ MY CALLBACK: NIFTY LTP: 26008.5
 | **\[QUOTE]** | Quote updates *(verbose=2)*         |
 | **\[DEPTH]** | Market depth updates *(verbose=2)*  |
 | **\[ORDER]** | Order status updates via `subscribe_orders()` *(verbose=2)* |
-| **\[ERROR]** | Error messages *(always shown)*     |
+| **\[ERROR]** | SDK error logs (shown from `verbose=1` in 2.0.5) |
 
 
 ---

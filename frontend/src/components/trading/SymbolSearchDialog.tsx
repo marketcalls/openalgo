@@ -3,8 +3,8 @@ import { isPlainSymbol, parseExpression } from 'openalgo-charts/transform'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import type { SearchRow } from '@/lib/trading/terminal'
 import { SEARCH_INPUT_ATTR } from '@/lib/trading/quickEntry'
+import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 
 /**
@@ -189,14 +189,25 @@ function compareRows(a: SearchRow, b: SearchRow, q: string): number {
 /** Cap on rendered rows after ranking (the most relevant are already on top). */
 const MAX_ROWS = 150
 
+/**
+ * The segments whose symbols carry a CE, PE or FUT suffix in OpenAlgo
+ * symbology. Crypto reuses the Indian future and option forms
+ * (`BTC28FEB2562000CE`, perpetual `BTCUSDFUT`), and its spot pairs end in the
+ * quote currency, so the suffix is as safe there as on F&O. Cash symbols are
+ * plain names, and a name such as ACE or BAJFINANCE ends in CE by chance.
+ */
+const SUFFIXED_SEGMENTS: ReadonlySet<Category> = new Set(['F&O', 'Currency', 'Commodity', 'Crypto'])
+
 /** Short instrument-type badge (INDEX / FUT / CE / PE / EQ). */
 function typeBadge(row: SearchRow): string {
   const ex = String(row.exchange)
   if (ex.endsWith('_INDEX')) return 'INDEX'
-  const s = String(row.symbol).toUpperCase()
-  if (s.endsWith('CE')) return 'CE'
-  if (s.endsWith('PE')) return 'PE'
-  if (s.endsWith('FUT')) return 'FUT'
+  if (SUFFIXED_SEGMENTS.has(categoryOf(ex))) {
+    const s = String(row.symbol).toUpperCase()
+    if (s.endsWith('CE')) return 'CE'
+    if (s.endsWith('PE')) return 'PE'
+    if (s.endsWith('FUT')) return 'FUT'
+  }
   const it = String(row.instrumenttype ?? '').toUpperCase()
   return it && it !== 'EQ' ? it : 'EQ'
 }

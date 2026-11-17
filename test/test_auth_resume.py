@@ -21,6 +21,19 @@ import database.auth_db as auth_db  # noqa: E402
 import utils.auth_utils as auth_utils  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _keys_in_place(monkeypatch):
+    """Resume puts the stored broker's keys in place before validating its token.
+
+    These tests are about the validation, so the keys are taken as available.
+    Without this a missing key would refuse the resume first, and every test
+    expecting a refusal would pass without reaching the check it is about.
+    """
+    monkeypatch.setattr(auth_utils, "begin_broker_login", lambda *args, **kwargs: None)
+    # The session these tests read is a stand-in, so it is taken as still stored.
+    monkeypatch.setattr(auth_bp_module, "_stored_session_unchanged", lambda *args: True)
+
+
 @pytest.fixture()
 def app_context():
     app = Flask(__name__)
@@ -92,8 +105,12 @@ def test_resume_accepts_valid_broker_validation(monkeypatch, app_context):
     )
 
     def fake_auth_success(**kwargs):
+        from flask import g
+
         session["logged_in"] = True
         session["broker"] = kwargs["broker"]
+        # What the real one records once the session is stored.
+        g.broker_login_completed = True
 
     monkeypatch.setattr(auth_db, "get_auth_token_dbquery", lambda username: _auth_record())
     monkeypatch.setattr(auth_db, "decrypt_token", lambda token: "plain-token")

@@ -353,6 +353,12 @@ not a period of time. Set to Underlying bars, the study computes on the time
 bars under them and the flag is absent, as it is on every plain chart. Read it
 to warn or to skip a time-based reading, never to change what a value means.
 
+Since 2.6.8 a Renko brick, range bar, line break element or point and figure
+column carries the volume traded while it formed, so a volume study works on
+Chart bars. A Kagi element does not: its `volume` is the line's thickness (1
+or 0), and a study reading it as traded volume is wrong without warning. A
+volume study that must also be right on Kagi asks for Underlying bars.
+
 ---
 
 ## 21. Do not ask the user for the tick size
@@ -439,6 +445,13 @@ inputs and computes with the `rsi` helper shows a Timeframe select that does
 nothing, which is worse than no control. Drop the row, or hand the settings to
 `getIndicator('rsi').calc` so the fold happens; for a study of your own,
 `withTimeframe(descriptor)` adds the row and the fold together.
+
+From 2.7.3 the fold refuses a timeframe the chart's bars do not divide into,
+such as 5m on a 3m chart, with an `IndicatorInputError` naming both: a 3m bar
+opening at 09:18 runs past 09:20, so the buckets would be 6 and 3 minutes
+long while each read as 5. The study shows that as its error status, which
+is right, since the trader can change the setting. A day or longer still
+takes any intraday bar.
 
 The tail does not come along either. Since 2.5.8 a built-in holds `calcTail`
 as a property a spread does not copy, so `{ ...getIndicator('ema'), id: 'x' }`

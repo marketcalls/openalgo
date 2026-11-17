@@ -373,8 +373,9 @@ class TestFlapBackoff:
     def test_flap_backoff_does_not_consume_the_give_up_budget(self, adapter):
         """A contended session must keep retrying slowly, not stop for good.
 
-        reconnect_attempts is what trips "Maximum reconnection attempts reached"
-        and sets running=False; the flap counter is deliberately separate.
+        reconnect_attempts counts failed connects and drives the long-outage
+        report; the flap counter is deliberately separate. Neither stops the
+        feed (issue #2324, test_flattrade_issue_2324.py).
         """
         for _ in range(20):
             adapter._session_started_at = time.monotonic() - 0.2

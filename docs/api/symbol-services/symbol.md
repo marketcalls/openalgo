@@ -93,7 +93,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/symbol \
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
 | symbol | Trading symbol in OpenAlgo format | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
+| exchange | Exchange code from the [shared constants](../../prompt/order-constants.md), supported by the active broker | Mandatory | - |
 
 ## Response Fields
 
@@ -122,13 +122,9 @@ curl -X POST http://127.0.0.1:5000/api/v1/symbol \
 
 ## Notes
 
-- Use this endpoint to get the **broker-specific symbol** for order placement
-- The **lotsize** field shows:
-  - NIFTY: 65
-  - BANKNIFTY: 30
-  - SENSEX: 20
-  - Equity: 1
-- The **freeze_qty** field indicates the maximum quantity allowed per order
+- Send the OpenAlgo `symbol` and `exchange` to unified order APIs; `brsymbol` is broker metadata, not a replacement for the standard symbol
+- Read **lotsize** from the exact refreshed contract/expiry. Equity is normally 1; derivative sizes vary by instrument and expiry. Do not size orders from a static underlying table
+- The **freeze_qty** field is a separate maximum-order constraint from lot size. Read it for the exact instrument and keep installed exchange freeze-limit data up to date
 - The **token** is used by brokers for faster symbol lookup
 
 ---

@@ -16,6 +16,7 @@ price land after a modify had changed it.
 from __future__ import annotations
 
 import threading
+from datetime import datetime as RealDatetime
 from decimal import Decimal
 
 import pytest
@@ -33,6 +34,18 @@ from test_gthread_sandbox_support import (
 USER = "gthread_sandbox_fills"
 QTY = 10
 LIMIT = Decimal("2500.00")
+
+
+def _allow_mis_orders(monkeypatch):
+    from sandbox import order_manager
+
+    class MarketHoursDatetime(RealDatetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = RealDatetime(2026, 10, 12, 14, 0)
+            return tz.localize(fixed) if tz else fixed
+
+    monkeypatch.setattr(order_manager, "datetime", MarketHoursDatetime)
 
 
 @pytest.fixture(autouse=True)
@@ -142,6 +155,77 @@ def test_a_stop_loss_release_cannot_reopen_a_cancelled_order():
     db_session.remove()
 
     assert _counts(orderid)["status"] == "cancelled"
+
+
+def test_cancel_closing_mis_order_does_not_release_unreserved_margin(monkeypatch):
+    from database.sandbox_db import SandboxOrders, db_session
+    from sandbox.order_manager import OrderManager
+
+    _allow_mis_orders(monkeypatch)
+    # Open a long MIS position, then leave a SELL limit resting to close it.
+    _place(price_type="MARKET", product="MIS")
+    closing_orderid = _place(
+        action="SELL", product="MIS", price_type="LIMIT", price=2700
+    )
+    closing_order = SandboxOrders.query.filter_by(orderid=closing_orderid).first()
+    assert closing_order.order_status == "open"
+    assert closing_order.margin_blocked is None
+    used_before_cancel = funds_of(USER)["used"]
+    db_session.remove()
+
+    ok, response, status_code = run_in_thread(
+        lambda: OrderManager(USER).cancel_order(closing_orderid)
+    )
+
+    assert ok and status_code == 200, response
+    assert _counts(closing_orderid)["status"] == "cancelled"
+    assert funds_of(USER)["used"] == used_before_cancel
+
+
+def test_cancel_legacy_zero_margin_field_recalculates_opening_order_reservation(monkeypatch):
+    from database.sandbox_db import SandboxOrders, db_session
+    from sandbox.order_manager import OrderManager
+
+    _allow_mis_orders(monkeypatch)
+    orderid = _place(product="MIS")
+    order = SandboxOrders.query.filter_by(orderid=orderid).first()
+    assert funds_of(USER)["used"] > 0
+    # Simulate a legacy row whose migration supplied zero for the old field.
+    order.margin_blocked = 0
+    db_session.commit()
+    db_session.remove()
+
+    ok, response, status_code = run_in_thread(
+        lambda: OrderManager(USER).cancel_order(orderid)
+    )
+
+    assert ok and status_code == 200, response
+    assert funds_of(USER)["used"] == 0
+
+
+def test_cancel_pre_marker_zero_margin_closing_order_preserves_position_margin(monkeypatch):
+    from database.sandbox_db import SandboxOrders, db_session
+    from sandbox.order_manager import OrderManager
+
+    _allow_mis_orders(monkeypatch)
+    _place(price_type="MARKET", product="MIS")
+    closing_orderid = _place(
+        action="SELL", product="MIS", price_type="LIMIT", price=2700
+    )
+    closing_order = SandboxOrders.query.filter_by(orderid=closing_orderid).first()
+    assert closing_order.margin_blocked is None
+    # Rows from before the NULL sentinel were stored as zero by the migration.
+    closing_order.margin_blocked = 0
+    used_before_cancel = funds_of(USER)["used"]
+    db_session.commit()
+    db_session.remove()
+
+    ok, response, status_code = run_in_thread(
+        lambda: OrderManager(USER).cancel_order(closing_orderid)
+    )
+
+    assert ok and status_code == 200, response
+    assert funds_of(USER)["used"] == used_before_cancel
 
 
 def test_a_modify_after_the_fill_was_decided_is_not_filled_at_the_old_terms():

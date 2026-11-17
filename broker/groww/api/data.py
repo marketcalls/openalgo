@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
@@ -8,9 +9,13 @@ import httpx
 import pandas as pd
 import pytz
 
+from broker.groww.api.order_api import _groww_error_message
+from broker.groww.api.rate_limiter import groww_request
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from database.token_db_enhanced import get_symbol_info
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.broker_backpressure import BrokerBusyError
 
 logger = get_logger(__name__)
 # API endpoints are handled by the Groww SDK
@@ -24,7 +29,9 @@ SEGMENT_CASH = "CASH"  # Segment code for Cash market
 SEGMENT_FNO = "FNO"  # Segment code for F&O market
 
 
-def get_api_response(endpoint, auth_token, method="GET", params=None, data=None, debug=False):
+def get_api_response(
+    endpoint, auth_token, method="GET", params=None, data=None, debug=False, category="live"
+):
     """Make direct API requests to Groww endpoints
 
     This function directly calls Groww API endpoints using the shared httpx client
@@ -59,18 +66,15 @@ def get_api_response(endpoint, auth_token, method="GET", params=None, data=None,
         "Accept": "application/json",
         "Content-Type": "application/json",
         "Authorization": f"Bearer {auth_token}",
+        "X-API-VERSION": "1.0",
     }
 
     try:
         # Make the request based on the HTTP method
-        if method.upper() == "GET":
-            response = client.get(url, headers=headers, params=params)
-        elif method.upper() == "POST":
-            response = client.post(url, headers=headers, json=data)
-        elif method.upper() == "PUT":
-            response = client.put(url, headers=headers, json=data)
-        elif method.upper() == "DELETE":
-            response = client.delete(url, headers=headers, params=params)
+        if method.upper() in ("GET", "DELETE"):
+            response = groww_request(client, method.upper(), url, category, headers=headers, params=params)
+        elif method.upper() in ("POST", "PUT"):
+            response = groww_request(client, method.upper(), url, category, headers=headers, json=data)
         else:
             logger.error(f"Unsupported HTTP method: {method}")
             return {"error": f"Unsupported HTTP method: {method}"}
@@ -96,6 +100,8 @@ def get_api_response(endpoint, auth_token, method="GET", params=None, data=None,
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
         return {"error": f"HTTP error: {e.response.status_code}", "details": e.response.text}
+    except BrokerBusyError:
+        raise
     except Exception as e:
         logger.error(f"Error in API request: {str(e)}")
         if debug:
@@ -103,36 +109,42 @@ def get_api_response(endpoint, auth_token, method="GET", params=None, data=None,
         return {"error": str(e)}
 
 
+def _response_reason(response, fallback):
+    """Groww's own reason for a failed get_api_response call, if it gave one."""
+    if not isinstance(response, dict):
+        return fallback
+    details = response.get("details")
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except ValueError:
+            details = None
+    if isinstance(details, dict):
+        reason = _groww_error_message(details, None)
+        if reason:
+            return reason
+    return _groww_error_message(response, None) or fallback
+
+
 class BrokerData:
     def __init__(self, auth_token):
         """Initialize Groww data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to Groww resolutions (in minutes)
-        # Only including timeframes that Groww actually provides
+        # OpenAlgo interval -> Groww candle_interval (backtesting "Get Historical
+        # Candle Data": 1minute ... 1month)
         self.timeframe_map = {
-            # Minutes
-            "1m": "1",  # 1 minute
-            "5m": "5",  # 5 minutes
-            "10m": "10",  # 10 minutes
-            # Hours
-            "1h": "60",  # 1 hour (60 minutes)
-            "4h": "240",  # 4 hours (240 minutes)
-            # Daily
-            "D": "1440",  # Daily data (1440 minutes)
-            # Weekly
-            "W": "10080",  # Weekly data (10080 minutes)
+            "1m": "1minute",
+            "2m": "2minute",
+            "3m": "3minute",
+            "5m": "5minute",
+            "10m": "10minute",
+            "15m": "15minute",
+            "30m": "30minute",
+            "1h": "1hour",
+            "4h": "4hour",
+            "D": "1day",
+            "W": "1week",
         }
-
-        # The duration-based interval constraints as documented in the Groww API
-        self.time_constraints = [
-            {"max_days": 3, "min_interval": "1"},  # 0-3 days: 1 min minimum
-            {"max_days": 15, "min_interval": "5"},  # 3-15 days: 5 min minimum
-            {"max_days": 30, "min_interval": "10"},  # 15-30 days: 10 min minimum
-            {"max_days": 150, "min_interval": "60"},  # 30-150 days: 60 min minimum
-            {"max_days": 365, "min_interval": "240"},  # 150-365 days: 240 min minimum
-            {"max_days": 1080, "min_interval": "1440"},  # 365-1080 days: 1440 min minimum
-            {"max_days": float("inf"), "min_interval": "10080"},  # >1080 days: 10080 min minimum
-        ]
 
     def _convert_openalgo_to_groww_derivative_symbol(self, symbol):
         """
@@ -163,888 +175,300 @@ class BrokerData:
         # If no pattern matches, return original
         return symbol
 
-    def _convert_to_groww_params(self, symbol, exchange):
-        """
-        Convert symbol and exchange to Groww API parameters
+    # Longest range one request may span, in days. Intraday uses the candles
+    # endpoint (backtesting "Data Availability Limits": 1-5 min 30 days, 10-30
+    # min 90 days, 1 hour+ 180 days); daily and weekly use candle/range
+    # (historical-data: 1 day 1080 days, 1 week no limit).
+    _MAX_DAYS = {
+        "1minute": 30,
+        "2minute": 30,
+        "3minute": 30,
+        "5minute": 30,
+        "10minute": 90,
+        "15minute": 90,
+        "30minute": 90,
+        "1hour": 180,
+        "4hour": 180,
+        "1440": 1080,
+        "10080": 3650,
+    }
+    # Daily and weekly come from /v1/historical/candle/range. Its EOD candles
+    # match NSE's bhavcopy; the candles endpoint's daily, weekly and monthly
+    # candles leave open null on most days and can differ from NSE's close
+    # (checked on RELIANCE, 1 Sep - 7 Oct 2026: 22 of 23 days had no open).
+    # candle/range is marked deprecated, so these move once Groww fixes that.
+    _EOD_MINUTES = {"D": "1440", "W": "10080"}
+    # Length of each intraday candle, to tell a pre-open candle from one that
+    # reaches into the regular session
+    _INTERVAL_MINUTES = {
+        "1minute": 1,
+        "2minute": 2,
+        "3minute": 3,
+        "5minute": 5,
+        "10minute": 10,
+        "15minute": 15,
+        "30minute": 30,
+        "1hour": 60,
+        "4hour": 240,
+    }
 
-        Args:
-            symbol (str): Trading symbol
-            exchange (str): Exchange code (NSE, BSE, etc.)
+    def _groww_symbol(self, symbol, exchange):
+        """
+        Groww symbol for an OpenAlgo symbol (backtesting "Groww Symbol Format").
+
+        Stocks and indices are EXCHANGE-TRADINGSYMBOL (NSE-WIPRO, NSE-NIFTY).
+        Futures are EXCHANGE-UNDERLYING-DDMonYY-FUT and options
+        EXCHANGE-UNDERLYING-DDMonYY-STRIKE-CE/PE. Every CASH and FNO row of
+        Groww's instrument file follows this, so it is built from the master
+        contract instead of being stored. The underlying is the part of the
+        OpenAlgo symbol before its expiry, which the master contract builds
+        from Groww's underlying_symbol.
 
         Returns:
-            tuple: (exchange, segment, trading_symbol)
+            tuple: (groww exchange, segment, groww symbol, trading symbol)
         """
-        logger.debug(f"Converting params - Symbol: {symbol}, Exchange: {exchange}")
+        info = get_symbol_info(symbol, exchange)
+        if info is None:
+            raise ValueError(f"{symbol} is not in the {exchange} master contract")
+        groww_exchange = info.brexchange or (
+            "BSE" if exchange in ("BSE", "BFO", "BSE_INDEX") else "NSE"
+        )
 
-        # Handle cases where exchange is not specified or is same as symbol
-        if not exchange or exchange == symbol:
-            exchange = "NSE"
-            logger.info(f"Exchange not specified, defaulting to NSE for symbol {symbol}")
+        if exchange not in ("NFO", "BFO"):
+            return (
+                groww_exchange,
+                SEGMENT_CASH,
+                f"{groww_exchange}-{info.brsymbol}",
+                info.brsymbol,
+            )
 
-        # Determine segment based on exchange
-        # Indexes (NSE_INDEX / BSE_INDEX) live in the CASH segment on Groww —
-        # mirrors the mapping in _process_quotes_batch.
-        if exchange in ["NSE", "BSE", "NSE_INDEX", "BSE_INDEX"]:
-            segment = SEGMENT_CASH
-            logger.debug(f"Using SEGMENT_CASH for exchange {exchange}")
-        elif exchange in ["NFO", "BFO"]:
-            segment = SEGMENT_FNO
-            logger.debug(f"Using SEGMENT_FNO for exchange {exchange}")
+        match = re.match(r"^(.+?)(\d{2}[A-Z]{3}\d{2})(FUT|[\d.]+(CE|PE))$", info.symbol)
+        if not match or not info.expiry:
+            raise ValueError(
+                f"{symbol} is not in OpenAlgo F&O format; download the master contract again"
+            )
+        underlying = match.group(1)
+        expiry = datetime.strptime(info.expiry, "%d-%b-%y").strftime("%d%b%y")
+        if info.instrumenttype == "FUT":
+            groww_symbol = f"{groww_exchange}-{underlying}-{expiry}-FUT"
         else:
-            logger.error(f"Unsupported exchange: {exchange}")
-            raise ValueError(f"Unsupported exchange: {exchange}")
+            strike = float(info.strike or 0)
+            strike_str = str(int(strike)) if strike == int(strike) else str(strike)
+            groww_symbol = f"{groww_exchange}-{underlying}-{expiry}-{strike_str}-{info.instrumenttype}"
+        return groww_exchange, SEGMENT_FNO, groww_symbol, info.brsymbol
 
-        # Map exchange to Groww's format
-        if exchange == "NFO":
-            groww_exchange = EXCHANGE_NSE
-            logger.debug("Mapped NFO to EXCHANGE_NSE")
-        elif exchange == "BFO":
-            groww_exchange = EXCHANGE_BSE
-            logger.debug("Mapped BFO to EXCHANGE_BSE")
-        elif exchange == "NSE_INDEX":
-            groww_exchange = EXCHANGE_NSE
-            logger.debug("Mapped NSE_INDEX to EXCHANGE_NSE")
-        elif exchange == "BSE_INDEX":
-            groww_exchange = EXCHANGE_BSE
-            logger.debug("Mapped BSE_INDEX to EXCHANGE_BSE")
-        else:
-            groww_exchange = exchange
-            logger.debug(f"Using exchange as-is: {exchange}")
+    # Intervals built from 15-minute candles (see get_history)
+    _REBUCKETED = {"30minute", "1hour", "4hour"}
 
-        # For derivatives, convert symbol format
-        if exchange in ["NFO", "BFO"]:
-            # First try to get from database
-            br_symbol = get_br_symbol(symbol, exchange)
-            if br_symbol:
-                trading_symbol = br_symbol
-                logger.debug(f"Found broker symbol in database: {trading_symbol}")
-            else:
-                # If not in database, convert format
-                trading_symbol = self._convert_openalgo_to_groww_derivative_symbol(symbol)
-                logger.debug(f"Converted derivative symbol: {symbol} -> {trading_symbol}")
-        else:
-            # For equity, use broker symbol if available
-            br_symbol = get_br_symbol(symbol, exchange)
-            trading_symbol = br_symbol or symbol
-
-        return groww_exchange, segment, trading_symbol
-
-    def _convert_date_to_utc(self, date_str: str) -> str:
-        """Convert IST date to UTC date for API request"""
-        # Simply return the date string as the API expects YYYY-MM-DD format
-        return date_str
-
-    def fix_timestamps(self, df, interval):
+    @staticmethod
+    def _rebucket(candles, minutes):
+        """Combine 15-minute session candles into ``minutes``-long candles
+        starting at 09:15 each day: first open, highest high, lowest low,
+        last close, summed volume (None when Groww gave none, as for indices).
         """
-        Fix timestamps to align with Indian market hours in IST.
-        For daily/weekly intervals, set to 09:15:00 IST. For intraday, ensure within 9:15 AM - 3:30 PM IST.
 
-        Based on successful FivePaisa implementation pattern.
+        def pick(fn, a, b):
+            return b if a is None else a if b is None else fn(a, b)
+
+        buckets = {}
+        for stamp, open_, high, low, close, volume in sorted(candles):
+            market_open = stamp.replace(hour=9, minute=15, second=0, microsecond=0)
+            offset = int((stamp - market_open).total_seconds() // 60) // minutes * minutes
+            key = market_open + timedelta(minutes=offset)
+            bucket = buckets.get(key)
+            if bucket is None:
+                buckets[key] = [key, open_, high, low, close, volume]
+                continue
+            bucket[2] = pick(max, bucket[2], high)
+            bucket[3] = pick(min, bucket[3], low)
+            bucket[4] = close
+            bucket[5] = pick(lambda x, y: x + y, bucket[5], volume)
+        return [tuple(bucket) for _, bucket in sorted(buckets.items())]
+
+    @staticmethod
+    def _to_date(value):
+        """A datetime for a YYYY-MM-DD string, date or datetime."""
+        if isinstance(value, str):
+            return datetime.strptime(value, "%Y-%m-%d")
+        if hasattr(value, "hour"):
+            return value
+        return datetime.combine(value, datetime.min.time())
+
+    def _fetch_candles(self, symbol, path, params, start, end, max_days):
+        """Every candle between start and end, one request per max_days chunk.
+
+        Raises:
+            ValueError: When Groww refuses a chunk; carries Groww's reason.
         """
-        # Handle empty DataFrame case
-        if df.empty:
-            logger.warning("Empty DataFrame passed to fix_timestamps, returning as is")
-            return df
-
-        ist_tz = pytz.timezone("Asia/Kolkata")
-
-        # For daily or weekly interval: Set all timestamps to 09:15 AM IST (market open time)
-        # Important: Weekly timeframes should be treated like daily (first day of week at market open)
-        if interval in ["D", "1D", "1d", "W", "w", "1W", "1w"]:
-            logger.info(f"Setting all {interval} candles to 09:15:00 IST market open time")
-            new_index = []
-            for i, idx in enumerate(df.index):
-                # Convert the date part to a Python date object
-                if isinstance(idx, pd.Timestamp):
-                    date_part = idx.date()
-                else:
-                    # If it's a string or another format, convert to datetime first
-                    date_part = pd.to_datetime(idx).date()
-
-                # Create market open time (09:15 AM IST) for this date
-                # Create date directly at 9:15 instead of using datetime.time
-                market_open = datetime(date_part.year, date_part.month, date_part.day, 9, 15, 0)
-                market_open_ist = ist_tz.localize(market_open)
-                new_index.append(market_open_ist)
-
-            # Replace the DataFrame index with the new datetime index
-            df.index = pd.DatetimeIndex(new_index)
-
-        # For intraday: Ensure times are within market hours (9:15 AM - 3:30 PM)
-        else:
-            logger.info("Ensuring intraday candles are within market hours (9:15 AM - 3:30 PM IST)")
-            # Check if index is already a DatetimeIndex
-            if not isinstance(df.index, pd.DatetimeIndex):
-                logger.warning("Index is not a DatetimeIndex, converting first")
-                df.index = pd.to_datetime(df.index)
-
-            # Apply timezone handling
-            if hasattr(df.index, "tz") and df.index.tz is None:
-                df.index = df.index.tz_localize("UTC").tz_convert(ist_tz)
-            elif hasattr(df.index, "tz"):
-                df.index = df.index.tz_convert(ist_tz)
-
-            # Clamp times to market hours
-            new_index = []
-            for dt in df.index:
-                date_part = dt.date()
-                # Create market open and close times directly without using datetime.time
-                market_open = datetime(date_part.year, date_part.month, date_part.day, 9, 15, 0)
-                market_open = ist_tz.localize(market_open)
-                market_close = datetime(date_part.year, date_part.month, date_part.day, 15, 30, 0)
-                market_close = ist_tz.localize(market_close)
-
-                # Clamp time within market hours
-                if dt < market_open:
-                    new_dt = market_open
-                elif dt > market_close:
-                    new_dt = market_close
-                else:
-                    new_dt = dt
-
-                new_index.append(new_dt)
-
-            if new_index:  # Only update if we have valid timestamps
-                df.index = pd.DatetimeIndex(new_index)
-
-        return df
+        client = get_httpx_client()
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.auth_token}",
+            "X-API-VERSION": "1.0",
+        }
+        candles = []
+        chunk_start = start
+        while chunk_start.date() <= end.date():
+            chunk_end = min(chunk_start + timedelta(days=max_days - 1), end)
+            resp = groww_request(
+                client,
+                "GET",
+                f"https://api.groww.in{path}",
+                "history",
+                headers=headers,
+                params={
+                    **params,
+                    "start_time": f"{chunk_start:%Y-%m-%d} 00:00:00",
+                    "end_time": f"{chunk_end:%Y-%m-%d} 23:59:59",
+                },
+                timeout=30,
+            )
+            try:
+                body = resp.json()
+            except ValueError:
+                body = None
+            if (
+                resp.status_code != 200
+                or not isinstance(body, dict)
+                or body.get("status") != "SUCCESS"
+            ):
+                reason = _groww_error_message(body, f"HTTP {resp.status_code}")
+                raise ValueError(f"Groww did not return history for {symbol}: {reason}")
+            candles.extend((body.get("payload") or {}).get("candles") or [])
+            chunk_start = chunk_end + timedelta(days=1)
+        return candles
 
     def get_history(
         self, symbol: str, exchange: str, timeframe: str, start_time: str, end_time: str
     ) -> pd.DataFrame:
         """
-        Get historical candle data for a symbol using direct Groww API calls.
-        Implements chunking for large date ranges, similar to FivePaisa and Angel.
+        Historical candles for an OpenAlgo symbol.
+
+        Intraday intervals come from GET /v1/historical/candles (backtesting
+        docs), whose volume is per candle. Candles wholly inside the 09:00-09:15
+        pre-open session are left out, so the day starts at 09:15; no other
+        value is filled in or dropped. Its open-interest field is not used: on 2026-10-07 it summed
+        the per-minute values over each candle and did not match Groww's quote.
+
+        Daily and weekly come from GET /v1/historical/candle/range (see
+        _EOD_MINUTES for why), stamped at midnight UTC of their date as
+        before. Intraday timestamps are the IST candle start in epoch seconds.
 
         Args:
-            exchange (str): Exchange code (NSE, BSE, NFO, etc.)
-            symbol (str): Trading symbol (e.g. 'INFY')
-            timeframe (str): Timeframe such as '1m', '5m', etc.
-            start_time (str): Start date in YYYY-MM-DD format
-            end_time (str): End date in YYYY-MM-DD format
+            symbol (str): OpenAlgo symbol
+            exchange (str): OpenAlgo exchange
+            timeframe (str): OpenAlgo interval, e.g. '1m', '15m', '1h', 'D'
+            start_time (str): Start date, YYYY-MM-DD
+            end_time (str): End date, YYYY-MM-DD
 
         Returns:
-            pd.DataFrame: DataFrame with historical candle data
+            pd.DataFrame: timestamp, open, high, low, close, volume
+
+        Raises:
+            ValueError: For an unsupported interval or symbol, or when Groww
+                refuses a request; the message carries Groww's reason.
         """
-        try:
-            # Convert symbol and exchange to Groww API parameters
-            groww_exchange, segment, trading_symbol = self._convert_to_groww_params(
-                symbol, exchange
+        columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        interval = self.timeframe_map.get(timeframe)
+        if interval is None:
+            raise ValueError(
+                f"Groww does not provide {timeframe} candles. "
+                f"Supported intervals: {', '.join(self.timeframe_map)}"
             )
+        groww_exchange, segment, groww_symbol, trading_symbol = self._groww_symbol(
+            symbol, exchange
+        )
+        start = self._to_date(start_time)
+        end = self._to_date(end_time)
 
-            # Check if we need to map the timeframe
-            if timeframe in self.timeframe_map:
-                interval_minutes = self.timeframe_map[timeframe]
-            else:
-                logger.warning(f"Unrecognized timeframe {timeframe}, defaulting to daily")
-                interval_minutes = "1440"  # Default to daily
-
-            # Check if it's a daily or weekly timeframe
-            is_daily = interval_minutes == "1440" or timeframe.upper() == "D"
-            is_weekly = interval_minutes == "10080" or timeframe.upper() == "W"
-
-            # Treat both daily and weekly similarly for timestamp handling
-            is_eod = is_daily or is_weekly
-
-            # Parse start and end dates - handle both string and datetime.date formats
-            if isinstance(start_time, str):
-                start_date = datetime.strptime(start_time, "%Y-%m-%d")
-            elif hasattr(start_time, "strftime"):  # datetime.date or datetime.datetime object
-                start_date = (
-                    datetime.combine(start_time, datetime.min.time())
-                    if not hasattr(start_time, "hour")
-                    else start_time
-                )
-            else:
-                raise ValueError(f"Invalid start_time format: {type(start_time)}")
-
-            if isinstance(end_time, str):
-                end_date = datetime.strptime(end_time, "%Y-%m-%d")
-            elif hasattr(end_time, "strftime"):  # datetime.date or datetime.datetime object
-                end_date = (
-                    datetime.combine(end_time, datetime.min.time())
-                    if not hasattr(end_time, "hour")
-                    else end_time
-                )
-            else:
-                raise ValueError(f"Invalid end_time format: {type(end_time)}")
-
-            # Implement chunking for better reliability and to avoid API limits
-            # Define chunk size based on timeframe
-            if is_weekly:
-                chunk_size = 300  # 300 days (about 43 weeks) per request for weekly data
-            elif is_daily:
-                chunk_size = 100  # 100 days per request for daily data
-            elif int(interval_minutes) >= 60:  # Hourly or higher
-                chunk_size = 15  # 15 days for hourly data
-            elif int(interval_minutes) >= 5:  # 5min, 10min, 15min
-                chunk_size = 7  # 7 days for medium intervals
-            else:  # 1min
-                chunk_size = 3  # 3 days for 1min data as per Groww constraints
-
-            # Initialize empty list to store all candles
-            all_candles = []
-
-            # Process data in chunks
-            current_start = start_date
-            while current_start <= end_date:
-                # Calculate chunk end (ensuring it doesn't exceed the overall end date)
-                current_end = min(current_start + timedelta(days=chunk_size - 1), end_date)
-
-                # Format dates for API request
-                chunk_start = current_start.strftime("%Y-%m-%d")
-                chunk_end = current_end.strftime("%Y-%m-%d")
-
-                logger.info(
-                    f"Fetching chunk from {chunk_start} to {chunk_end} with interval {interval_minutes}"
-                )
-
-                # Make API request for this chunk
-                response = get_api_response(
-                    endpoint="/v1/historical/candle/range",
-                    auth_token=self.auth_token,
-                    method="GET",
-                    params={
-                        "exchange": groww_exchange,
-                        "segment": segment,
-                        "trading_symbol": trading_symbol,
-                        "start_time": f"{chunk_start} 09:15:00",
-                        "end_time": f"{chunk_end} 15:30:00",
-                        "interval_in_minutes": interval_minutes,
-                    },
-                    debug=True,
-                )
-
-                # Check for valid response
-                if not response or response.get("status") != "SUCCESS" or "payload" not in response:
-                    logger.warning(
-                        f"Invalid response from Groww API for chunk {chunk_start} to {chunk_end}"
-                    )
-                    # Move to next chunk without failing the entire request
-                    current_start = current_end + timedelta(days=1)
-                    continue
-
-                # Extract candles data for this chunk
-                chunk_candles = response.get("payload", {}).get("candles", [])
-                if not chunk_candles or len(chunk_candles) == 0:
-                    logger.warning(f"No candles found for chunk {chunk_start} to {chunk_end}")
-                    # Move to next chunk
-                    current_start = current_end + timedelta(days=1)
-                    continue
-
-                logger.info(
-                    f"Received {len(chunk_candles)} candles for chunk {chunk_start} to {chunk_end}"
-                )
-
-                # Add candles from this chunk to the overall list
-                all_candles.extend(chunk_candles)
-
-                # Move to next chunk
-                current_start = current_end + timedelta(days=1)
-
-            # Check if we received any data across all chunks
-            if not all_candles or len(all_candles) == 0:
-                logger.warning("No candles found across all chunks")
-                return pd.DataFrame()
-
-            logger.info(f"Total candles received across all chunks: {len(all_candles)}")
-
-            # Process the combined candles data
-            candles = all_candles
-
-            # SIMPLIFIED APPROACH: Work with the data directly
-            # Create a datetime index with market open time (09:15 AM IST)
+        eod_minutes = self._EOD_MINUTES.get(timeframe)
+        rows = []
+        if eod_minutes:
+            candles = self._fetch_candles(
+                symbol,
+                "/v1/historical/candle/range",
+                {
+                    "exchange": groww_exchange,
+                    "segment": segment,
+                    "trading_symbol": trading_symbol,
+                    "interval_in_minutes": eod_minutes,
+                },
+                start,
+                end,
+                self._MAX_DAYS[eod_minutes],
+            )
             ist = pytz.timezone("Asia/Kolkata")
+            for candle in candles:
+                ts = int(candle[0])
+                if ts > 4102444800:  # milliseconds
+                    ts //= 1000
+                day = datetime.fromtimestamp(ts, tz=ist).date()
+                midnight = pytz.UTC.localize(datetime.combine(day, datetime.min.time()))
+                rows.append([int(midnight.timestamp()), *candle[1:6]])
+        else:
+            # Groww starts 30m/1h/4h candles on the clock hour, so the first one
+            # of a day mixes the 09:00-09:15 pre-open session with regular
+            # trading and carries a null open. Those intervals are built from
+            # 15-minute candles instead (which split exactly at 09:15), aligned
+            # to the 09:15 market open as other brokers' are.
+            fetch_interval = interval if interval not in self._REBUCKETED else "15minute"
+            candles = self._fetch_candles(
+                symbol,
+                "/v1/historical/candles",
+                {
+                    "exchange": groww_exchange,
+                    "segment": segment,
+                    "groww_symbol": groww_symbol,
+                    "candle_interval": fetch_interval,
+                },
+                start,
+                end,
+                self._MAX_DAYS[fetch_interval],
+            )
+            ist = pytz.timezone("Asia/Kolkata")
+            fetch_minutes = self._INTERVAL_MINUTES[fetch_interval]
+            session = []
+            for candle in candles:
+                prices = candle[1:5]
+                stamp = datetime.fromisoformat(str(candle[0]).replace(" ", "T"))
+                market_open = stamp.replace(hour=9, minute=15, second=0, microsecond=0)
+                # Leave out candles wholly inside the pre-open session
+                if stamp + timedelta(minutes=fetch_minutes) <= market_open:
+                    continue
+                if prices[0] is None:
+                    continue  # pre-open fragment: volume without an opening price
+                volume = candle[5] if len(candle) > 5 else None
+                session.append((stamp, *prices, volume))
 
-            # Convert based on timeframe and data format
-            # Process both daily (D, 1d) and weekly (W) candles the same way
-            if is_eod:  # Use the previously defined is_eod flag for consistency
-                # Set all timestamps to 09:15 AM IST for both daily and weekly data
-                dates = []
-                rows = []
+            if interval in self._REBUCKETED:
+                session = self._rebucket(session, self._INTERVAL_MINUTES[interval])
+            for stamp, *ohlcv in session:
+                rows.append([int(ist.localize(stamp).timestamp()), *ohlcv])
 
-                # Parse start date - handle both string and datetime formats
-                if isinstance(start_time, str):
-                    start_date = datetime.strptime(start_time, "%Y-%m-%d").date()
-                elif hasattr(start_time, "strftime"):
-                    start_date = start_time if hasattr(start_time, "year") else start_time.date()
-                else:
-                    start_date = datetime.strptime(str(start_time), "%Y-%m-%d").date()
-
-                # Process all candles - extract actual dates from timestamps if available
-                for i, candle in enumerate(candles):
-                    # Try to get the actual date from the candle timestamp
-                    actual_date = None
-                    if isinstance(candle, list) and len(candle) >= 6:
-                        ts = int(candle[0])
-                        # Check if timestamp is in milliseconds
-                        if ts > 4102444800:
-                            ts = ts / 1000
-                        actual_date = datetime.fromtimestamp(ts, tz=ist).date()
-
-                        # [timestamp, open, high, low, close, volume]
-                        row = {
-                            "open": float(candle[1]),
-                            "high": float(candle[2]),
-                            "low": float(candle[3]),
-                            "close": float(candle[4]),
-                            "volume": int(candle[5]) if candle[5] is not None else 0,
-                        }
-                    elif isinstance(candle, dict):
-                        if "timestamp" in candle:
-                            ts = int(candle["timestamp"])
-                            if ts > 4102444800:
-                                ts = ts / 1000
-                            actual_date = datetime.fromtimestamp(ts, tz=ist).date()
-                        # Dictionary format
-                        row = {
-                            "open": float(candle.get("open", 0)),
-                            "high": float(candle.get("high", 0)),
-                            "low": float(candle.get("low", 0)),
-                            "close": float(candle.get("close", 0)),
-                            "volume": int(candle.get("volume") or 0),
-                        }
-                    else:
-                        row = {}
-
-                    # Use actual date if available, otherwise calculate based on index
-                    if actual_date:
-                        current_date = actual_date
-                    else:
-                        current_date = start_date + timedelta(days=i)
-
-                    # For daily data, use midnight UTC for clean date display
-                    # This will show as just the date when converted
-                    midnight_utc = datetime.combine(current_date, datetime.min.time())
-                    # Create as UTC directly (pytz is already imported at the top)
-                    utc = pytz.UTC
-                    midnight_utc = utc.localize(midnight_utc)
-                    dates.append(midnight_utc)
-                    rows.append(row)
-
-                # Create DataFrame with dates as index initially
-                if dates and rows:
-                    df = pd.DataFrame(rows, index=pd.DatetimeIndex(dates))
-                    # Add timestamp column - these will be midnight UTC timestamps
-                    df["timestamp"] = [int(dt.timestamp()) for dt in df.index]
-                    # Reset index to have timestamp as a column (matching Angel format)
-                    df = df.reset_index(drop=True)
-                    logger.info(f"Created DataFrame with {len(df)} rows for daily timeframe")
-                else:
-                    df = pd.DataFrame()
-                    logger.warning("No valid data for daily timeframe")
-            else:
-                # For intraday data (1m, 5m, 15m, 1h, 4h, W)
-                logger.info(f"Processing intraday data for timeframe {timeframe}")
-                rows = []
-                timestamps = []
-                ist_tz = pytz.timezone("Asia/Kolkata")
-
-                # For proper market hour representation in all intraday timeframes
-                for candle in candles:
-                    if isinstance(candle, list) and len(candle) >= 6:
-                        # For list format candles
-                        # Groww returns timestamps in milliseconds, not seconds
-                        ts = int(candle[0])
-                        # Check if timestamp is in milliseconds (larger than year 2100 in seconds)
-                        if ts > 4102444800:  # If timestamp is likely in milliseconds
-                            ts = ts / 1000  # Convert to seconds
-                        # Create timezone-aware datetime in IST
-                        dt = datetime.fromtimestamp(ts, tz=ist_tz)
-
-                        row = {
-                            "open": float(candle[1]),
-                            "high": float(candle[2]),
-                            "low": float(candle[3]),
-                            "close": float(candle[4]),
-                            "volume": int(candle[5]) if candle[5] is not None else 0,
-                        }
-                    else:
-                        # For dictionary format candles
-                        if "timestamp" in candle:
-                            ts = int(candle["timestamp"])
-                            # Check if timestamp is in milliseconds
-                            if ts > 4102444800:  # If timestamp is likely in milliseconds
-                                ts = ts / 1000  # Convert to seconds
-                            # Create timezone-aware datetime in IST
-                            dt = datetime.fromtimestamp(ts, tz=ist_tz)
-                        else:
-                            # Fallback: Create market hours timestamp at proper intervals
-                            # Start with market open time
-                            start_str = (
-                                start_time
-                                if isinstance(start_time, str)
-                                else start_time.strftime("%Y-%m-%d")
-                            )
-                            base_dt = datetime.strptime(
-                                f"{start_str} 09:15:00", "%Y-%m-%d %H:%M:%S"
-                            )
-                            base_dt = ist_tz.localize(base_dt)
-                            # Create proper interval based on timeframe
-                            dt = base_dt + timedelta(
-                                minutes=int(interval_minutes) * len(timestamps)
-                            )
-                            # Ensure it's within market hours
-                            market_close = datetime.strptime(
-                                f"{start_str} 15:30:00", "%Y-%m-%d %H:%M:%S"
-                            )
-                            market_close = ist_tz.localize(market_close)
-                            if dt > market_close:
-                                # Move to next day's market open
-                                next_day = base_dt + timedelta(days=1)
-                                next_day = next_day.replace(
-                                    hour=9, minute=15, second=0, microsecond=0
-                                )
-                                dt = next_day
-
-                        row = {
-                            "open": float(candle.get("open", 0)),
-                            "high": float(candle.get("high", 0)),
-                            "low": float(candle.get("low", 0)),
-                            "close": float(candle.get("close", 0)),
-                            "volume": int(candle.get("volume") or 0),
-                        }
-
-                    # Apply market hours check (9:15 AM - 3:30 PM IST)
-                    # Skip timestamps outside market hours
-                    day_part = dt.date()
-                    market_open = datetime.combine(day_part, datetime.min.time()).replace(
-                        hour=9, minute=15
-                    )
-                    market_open = ist_tz.localize(market_open)
-                    market_close = datetime.combine(day_part, datetime.min.time()).replace(
-                        hour=15, minute=30
-                    )
-                    market_close = ist_tz.localize(market_close)
-
-                    # Only include timestamps within market hours
-                    if market_open <= dt <= market_close:
-                        timestamps.append(dt)
-                        rows.append(row)
-                    else:
-                        # Skip this candle
-                        logger.debug(f"Skipping candle outside market hours: {dt}")
-
-                logger.info(
-                    f"Processed {len(timestamps)} valid intraday candles within market hours"
-                )
-
-                # Create DataFrame with timestamps as index
-                if timestamps:
-                    # Ensure we have a proper DatetimeIndex
-                    df = pd.DataFrame(rows, index=pd.DatetimeIndex(timestamps))
-                    # Sort by index to ensure chronological order
-                    df = df.sort_index()
-                else:
-                    df = pd.DataFrame(rows)
-
-            # Log information for debugging
-            logger.info(f"Final DataFrame has {len(df)} records")
-            if not df.empty:
-                if is_eod and "timestamp" in df.columns:
-                    # For daily data, we already have timestamp column
-                    logger.info(f"Daily data with {len(df)} records")
-                elif not isinstance(df.index, pd.RangeIndex):
-                    logger.info(f"First index timestamp: {df.index[0]}")
-
-            # For proper timestamp handling
-            if not df.empty:
-                # Skip this processing for daily data as it already has timestamp column
-                if is_eod and "timestamp" in df.columns:
-                    logger.info(
-                        "Daily/weekly data already has timestamp column, skipping index processing"
-                    )
-                    # For daily data, timestamp column already exists, no need to create
-                    pass
-                elif not isinstance(df.index, pd.RangeIndex):
-                    # For intraday data with DatetimeIndex
-                    # Convert datetime index to Unix timestamp (seconds) for the API response
-                    unix_timestamps = [int(dt.timestamp()) for dt in df.index]
-
-                # Handle different data types
-                if is_eod and "timestamp" in df.columns:
-                    # Daily data already has timestamp column, just use it
-                    result_df = df.copy()
-                elif not isinstance(df.index, pd.RangeIndex):
-                    # Intraday data with DatetimeIndex
-                    # Create a proper copy of the DataFrame with the datetime index
-                    result_df = df.copy()
-                    # Reset the index and add timestamp column
-                    result_df = result_df.reset_index()
-                    result_df.rename(columns={"index": "datetime"}, inplace=True)
-                    # Add the Unix timestamp column
-                    result_df["timestamp"] = unix_timestamps
-                    # Set the datetime column as the index for display purposes
-                    df = result_df.set_index("datetime")
-                else:
-                    # Fallback
-                    result_df = df.copy()
-
-                # Log sample data for debugging
-                if not result_df.empty and "timestamp" in result_df.columns:
-                    sample_timestamp = result_df["timestamp"].iloc[0]
-                    ist_tz = pytz.timezone("Asia/Kolkata")
-                    sample_dt = datetime.fromtimestamp(sample_timestamp, tz=ist_tz)
-                    logger.info(f"First row timestamp: {sample_timestamp} ({sample_dt})")
-
-                # Update df to use result_df for further processing
-                df = result_df
-            else:
-                # Empty DataFrame case
-                df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-                logger.warning("Returning empty DataFrame with expected columns")
-
-            # Final processing for consistency
-            if not df.empty:
-                try:
-                    # Only apply fix_timestamps for intraday data that needs adjustment
-                    # Skip for daily/weekly as they're already processed
-                    if not is_eod:
-                        df = self.fix_timestamps(df, timeframe)
-
-                    # Check if DataFrame is still empty after processing
-                    if df.empty:
-                        logger.warning("No valid data after timestamp processing")
-                        # Create empty DataFrame with proper columns
-                        return pd.DataFrame(
-                            columns=["timestamp", "open", "high", "low", "close", "volume"]
-                        )
-
-                    # Special handling for weekly timeframe - Groww API returns daily data, so we need to resample
-                    if is_weekly and not df.empty:
-                        logger.info(
-                            f"Resampling daily data to weekly timeframe, original shape: {df.shape}"
-                        )
-                        # Make sure the index is a DatetimeIndex
-                        if not isinstance(df.index, pd.DatetimeIndex):
-                            df.index = pd.to_datetime(df.index)
-
-                        # Resample to weekly frequency according to financial markets standards
-                        # For OHLCV data:
-                        # - 'open' should be the first value of the week
-                        # - 'high' should be the maximum value of the week
-                        # - 'low' should be the minimum value of the week
-                        # - 'close' should be the last value of the week
-                        # - 'volume' should be the sum of all values for the week
-
-                        # Ensure index is sorted
-                        df = df.sort_index()
-
-                        # Use pandas resample with the appropriate offset
-                        # For financial data, we commonly use 'W-MON' which starts the week on Monday
-                        # and includes data up to the following Sunday
-                        ohlc_dict = {
-                            "open": "first",
-                            "high": "max",
-                            "low": "min",
-                            "close": "last",
-                            "volume": "sum",
-                        }
-
-                        # Log the date range to help with debugging
-                        logger.info(f"Date range: {df.index.min()} to {df.index.max()}")
-
-                        # Use pandas resample with 'W-MON' frequency
-                        # This creates weekly aggregated data with weeks starting on Monday
-                        try:
-                            # Try the standard pandas resample first
-                            weekly_df = df.resample("W-MON", closed="left", label="left").agg(
-                                ohlc_dict
-                            )
-
-                            # Make sure the index of each weekly candle is set to market open time (9:15 AM)
-                            new_index = []
-                            for dt in weekly_df.index:
-                                # Create a new datetime with the same date but at 9:15 AM
-                                ist_tz = pytz.timezone("Asia/Kolkata")
-                                market_open = datetime(dt.year, dt.month, dt.day, 9, 15, 0)
-                                market_open = ist_tz.localize(market_open)
-                                new_index.append(market_open)
-
-                            # Set the new index
-                            weekly_df.index = new_index
-
-                            # If we don't have enough candles, try the manual method as fallback
-                            expected_candles = 5  # Based on the user's example
-                            if len(weekly_df) < expected_candles:
-                                logger.warning(
-                                    f"Resample produced only {len(weekly_df)} candles, trying manual method"
-                                )
-                                raise ValueError("Not enough candles")
-
-                            logger.info(
-                                f"Successfully resampled to weekly with {len(weekly_df)} candles"
-                            )
-                            df = weekly_df
-
-                        except Exception as e:
-                            logger.warning(
-                                f"Standard resampling failed: {str(e)}, using manual method"
-                            )
-
-                            # Manual method - create weekly candles by manually aggregating daily data
-                            # This gives us more control over exactly how many candles we produce
-
-                            # Get the date range
-                            start_date = df.index.min().to_pydatetime()
-                            end_date = df.index.max().to_pydatetime()
-
-                            # Calculate number of weeks
-                            days_diff = (end_date - start_date).days
-                            # We want to ensure we have 5 candles as per user's expectation
-                            num_weeks = min(5, max(1, (days_diff // 7) + 1))
-
-                            logger.info(f"Manual method: creating {num_weeks} weekly candles")
-
-                            # Create date ranges for each week
-                            weekly_dates = []
-                            weekly_data = []
-
-                            for i in range(num_weeks):
-                                # Calculate week start and end
-                                week_start = start_date + timedelta(days=i * 7)
-                                week_end = min(week_start + timedelta(days=6), end_date)
-
-                                # Filter daily data for this week
-                                week_mask = (df.index >= pd.Timestamp(week_start)) & (
-                                    df.index <= pd.Timestamp(week_end)
-                                )
-                                week_data = df[week_mask]
-
-                                if not week_data.empty:
-                                    # Create market open time for the first day of the week
-                                    ist_tz = pytz.timezone("Asia/Kolkata")
-                                    market_open = datetime(
-                                        week_start.year, week_start.month, week_start.day, 9, 15, 0
-                                    )
-                                    market_open = ist_tz.localize(market_open)
-
-                                    weekly_dates.append(market_open)
-                                    weekly_data.append(
-                                        {
-                                            "open": week_data["open"].iloc[0],
-                                            "high": week_data["high"].max(),
-                                            "low": week_data["low"].min(),
-                                            "close": week_data["close"].iloc[-1],
-                                            "volume": week_data["volume"].sum(),
-                                        }
-                                    )
-
-                            # Create a new DataFrame with the weekly data
-                            weekly_df = pd.DataFrame(weekly_data, index=weekly_dates)
-                            logger.info(f"Manually created {len(weekly_df)} weekly candles")
-
-                            # Replace the daily data with the manually created weekly data
-                            df = weekly_df
-
-                    # Now get Unix timestamps from the properly aligned IST datetime index
-                    # Check if we already have timestamps (for daily data)
-                    if "timestamp" in df.columns:
-                        unix_timestamps_ist = df["timestamp"].tolist()
-                    elif len(df.index) > 0 and hasattr(df.index[0], "timestamp"):
-                        # Don't add offset - timestamps should already be in IST
-                        unix_timestamps_ist = [int(dt.timestamp()) for dt in df.index]
-                    else:
-                        # Index might be a RangeIndex or similar
-                        logger.warning("Unable to extract timestamps from index")
-                        unix_timestamps_ist = list(range(len(df)))
-                    if unix_timestamps_ist:
-                        logger.info(
-                            f"Unix timestamps (showing proper market hours): {unix_timestamps_ist[: min(5, len(unix_timestamps_ist))]}..."
-                        )
-                except Exception as e:
-                    logger.error(f"Error in timestamp processing: {str(e)}")
-                    # Create empty DataFrame with proper columns as fallback
-                    return pd.DataFrame(
-                        columns=["timestamp", "open", "high", "low", "close", "volume"]
-                    )
-
-                # Build the final DataFrame - ensure all required columns exist
-                if "timestamp" not in df.columns:
-                    # This shouldn't happen, but handle it gracefully
-                    logger.warning("timestamp column missing, creating from index")
-                    if hasattr(df.index, "to_timestamp"):
-                        df["timestamp"] = [int(dt.timestamp()) for dt in df.index]
-                    else:
-                        # Create sequential timestamps
-                        df["timestamp"] = range(len(df))
-
-                # Ensure all required columns exist
-                required_cols = ["timestamp", "open", "high", "low", "close", "volume"]
-                for col in required_cols:
-                    if col not in df.columns:
-                        df[col] = 0
-
-                # Create clean data dictionary
-                data = {
-                    "timestamp": df["timestamp"].values,
-                    "open": df["open"].values,
-                    "high": df["high"].values,
-                    "low": df["low"].values,
-                    "close": df["close"].values,
-                    "volume": df["volume"].values,
-                }
-
-                # Create the DataFrame with timestamp as a column (not an index)
-                # NOTE: For OpenAlgoXTS, return non-indexed DataFrame with timestamp as a column
-                # This matches the FivePaisa pattern that has been proven to work correctly
-                result_df = pd.DataFrame(data)
-
-                # Verify timestamps are correctly showing market hours
-                sample_timestamps = result_df["timestamp"].head(3).tolist()
-                sample_times = []
-                for ts in sample_timestamps:
-                    dt = datetime.fromtimestamp(ts, tz=pytz.timezone("Asia/Kolkata"))
-                    sample_times.append(dt.strftime("%Y-%m-%d %H:%M:%S%z"))
-
-                logger.info(f"Final format - timestamp column values: {sample_timestamps}")
-                logger.info(f"These represent market hours in IST: {', '.join(sample_times)}")
-
-                # Final verification of first few rows
-                logger.info(f"First few rows of final DataFrame:\n{result_df.head(3)}")
-
-                # Ensure the DataFrame has the expected columns in the right order (consistent with other brokers)
-                expected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
-                # Add oi column for consistency
-                result_df["oi"] = 0  # Historical data doesn't have OI
-                expected_columns.append("oi")
-                result_df = result_df[expected_columns]
-
-                # Keep timestamp as Unix timestamp column (not as index) - matches Angel implementation
-                # Sort by timestamp and remove any duplicates
-                result_df = (
-                    result_df.sort_values("timestamp")
-                    .drop_duplicates(subset=["timestamp"])
-                    .reset_index(drop=True)
-                )
-
-                # Return DataFrame with timestamp as column, similar to Angel
-                df = result_df
-
-                # No need to set index for API client compatibility
-                # Many other methods in the codebase expect regular columns
-
-            return df
-
-        except Exception as e:
-            logger.exception(f"Error getting historical data: {str(e)}")
-            # Return empty DataFrame with expected columns on error
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        if not rows:
+            return pd.DataFrame(columns=columns)
+        df = pd.DataFrame(rows, columns=columns)
+        df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+        # OpenAlgo's history format has a numeric volume, and the chart rejects
+        # a candle whose volume is null. Groww sends none for indices and
+        # leaves it empty on the odd stock candle, so that reads as 0, as the
+        # reference broker reports index volume. Prices are never filled in.
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+        return df.astype(object).where(df.notna(), None)
 
     def get_intervals(self) -> dict[str, dict[str, list[str]]]:
-        """
-        Get supported timeframes for Groww historical data in the OpenAlgo format.
-
-        Note that Groww has time-based constraints on minimum interval size:
-        - 0-3 days: 1 min minimum
-        - 3-15 days: 5 min minimum
-        - 15-30 days: 10 min minimum
-        - 30-150 days: 60 min (1h) minimum
-        - 150-365 days: 240 min (4h) minimum
-        - 365-1080 days: 1440 min (1d) minimum
-        - >1080 days: 10080 min (1w) minimum
-
-        Returns:
-            Dict: Structured response with categorized timeframes
-        """
-        # Define all the categories and their timeframes as supported by Groww
-        # Exactly as provided by Groww: 1m, 5m, 10m, 1h, 4h, D and W
-        intervals = {
-            "seconds": [],  # Groww doesn't support second-level data
-            "minutes": ["1m", "5m", "10m"],
-            "hours": ["1h", "4h"],
-            "days": ["D"],
-            "weeks": ["W"],
-            "months": [],  # Groww doesn't support month-level data
+        """Intervals Groww's history provides, in OpenAlgo format."""
+        return {
+            "status": "success",
+            "data": {
+                "seconds": [],
+                "minutes": ["1m", "2m", "3m", "5m", "10m", "15m", "30m"],
+                "hours": ["1h", "4h"],
+                "days": ["D"],
+                "weeks": ["W"],
+                "months": [],
+            },
         }
-
-        # Return in the standard OpenAlgo format
-        return {"status": "success", "data": intervals}
-
-    def get_valid_interval(self, start_time: str, end_time: str, requested_interval: str) -> str:
-        """
-        Get a valid interval based on Groww's time-based constraints.
-
-        Args:
-            start_time (str): Start date in YYYY-MM-DD format
-            end_time (str): End date in YYYY-MM-DD format
-            requested_interval (str): The requested interval (e.g., '1m', '5m', etc.)
-
-        Returns:
-            str: A valid interval that meets Groww's constraints
-        """
-        # Map legacy and alternative formats to supported Groww formats
-        interval_map = {
-            "1d": "D",  # Map 1d to D
-            "1w": "W",  # Map 1w to W
-        }
-
-        # Convert to a format Groww supports if needed
-        if requested_interval in interval_map:
-            requested_interval = interval_map[requested_interval]
-            logger.info(
-                f"Mapped requested interval to Groww-supported format: {requested_interval}"
-            )
-
-        # Verify we have a supported interval
-        if requested_interval not in self.timeframe_map:
-            logger.warning(f"Unsupported interval: {requested_interval}, defaulting to 'D'")
-            return "1440"  # Default to daily
-
-        # Calculate the duration in days - handle both string and datetime formats
-        if isinstance(start_time, str):
-            start_dt = datetime.strptime(start_time, "%Y-%m-%d")
-        elif hasattr(start_time, "strftime"):
-            start_dt = (
-                datetime.combine(start_time, datetime.min.time())
-                if not hasattr(start_time, "hour")
-                else start_time
-            )
-        else:
-            start_dt = datetime.strptime(str(start_time), "%Y-%m-%d")
-
-        if isinstance(end_time, str):
-            end_dt = datetime.strptime(end_time, "%Y-%m-%d")
-        elif hasattr(end_time, "strftime"):
-            end_dt = (
-                datetime.combine(end_time, datetime.min.time())
-                if not hasattr(end_time, "hour")
-                else end_time
-            )
-        else:
-            end_dt = datetime.strptime(str(end_time), "%Y-%m-%d")
-        duration_days = (end_dt - start_dt).days
-
-        # Get the requested interval in minutes
-        requested_minutes = int(self.timeframe_map[requested_interval])
-
-        # Find the minimum allowed interval based on duration
-        min_allowed_interval = "1"  # Default to 1 minute
-        for constraint in self.time_constraints:
-            if duration_days <= constraint["max_days"]:
-                min_allowed_interval = constraint["min_interval"]
-                break
-
-        min_allowed_minutes = int(min_allowed_interval)
-
-        # Check if the requested interval is valid
-        if requested_minutes < min_allowed_minutes:
-            logger.warning(
-                f"Requested interval {requested_interval} is too small for duration {duration_days} days."
-            )
-
-            # Find the appropriate timeframe to use
-            for tf, minutes in self.timeframe_map.items():
-                if int(minutes) >= min_allowed_minutes:
-                    logger.info(
-                        f"Using {tf} ({minutes} minutes) instead of {requested_interval} ({requested_minutes} minutes)"
-                    )
-                    return minutes
-
-            # If nothing found (unlikely), use the minimum allowed
-            return min_allowed_interval
-
-        return self.timeframe_map[requested_interval]
 
     def get_quotes(self, symbol_list, exchange=None, timeout: int = 5) -> dict[str, Any]:
         """
@@ -1099,6 +523,8 @@ class BrokerData:
                         "data": [],
                         "message": "Missing symbol or exchange in request",
                     }
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.error(f"Error processing single symbol request: {str(e)}")
                 return {
@@ -1143,10 +569,12 @@ class BrokerData:
                 token = get_token(symbol, exchange)
 
                 # Map OpenAlgo exchange to Groww exchange format
-                if exchange == "NSE":
+                # Indexes live in the CASH segment on Groww; without the *_INDEX
+                # branches BSE_INDEX fell through to NSE and SENSEX quoted 0.
+                if exchange in ("NSE", "NSE_INDEX"):
                     groww_exchange = EXCHANGE_NSE
                     segment = SEGMENT_CASH
-                elif exchange == "BSE":
+                elif exchange in ("BSE", "BSE_INDEX"):
                     groww_exchange = EXCHANGE_BSE
                     segment = SEGMENT_CASH
                 elif exchange == "NFO":
@@ -1156,9 +584,10 @@ class BrokerData:
                     groww_exchange = EXCHANGE_BSE
                     segment = SEGMENT_FNO
                 else:
-                    logger.warning(f"Unsupported exchange: {exchange}, defaulting to NSE")
-                    groww_exchange = EXCHANGE_NSE
-                    segment = SEGMENT_CASH
+                    raise ValueError(
+                        f"Groww does not provide market data for the {exchange} exchange. "
+                    "Supported: NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX."
+                    )
 
                 # Get broker-specific symbol. For FNO contracts, fall back to
                 # format conversion when the master-contract lookup misses —
@@ -1254,6 +683,8 @@ class BrokerData:
                                             key = key_val[0].strip()
                                             val = key_val[1].strip()
                                             ohlc[key] = float(val)
+                                except BrokerBusyError:
+                                    raise
                                 except Exception as e:
                                     logger.error(f"Error parsing OHLC string: {e}")
                             else:
@@ -1280,21 +711,27 @@ class BrokerData:
                             # alternate keys for some segments. Probe each
                             # known name so FNO contracts populate bid/ask/
                             # volume/OI even when the canonical key is absent.
+                            _depth = response.get("depth") or {}
+                            _top_bid = (_depth.get("buy") or [{}])[0] or {}
+                            _top_ask = (_depth.get("sell") or [{}])[0] or {}
                             _bid = (
                                 response.get("bid_price")
                                 or response.get("bid")
                                 or response.get("best_bid_price")
+                                or _top_bid.get("price")
                             )
                             _ask = (
                                 response.get("offer_price")
                                 or response.get("ask")
                                 or response.get("best_offer_price")
                                 or response.get("best_ask_price")
+                                or _top_ask.get("price")
                             )
                             _bid_qty = (
                                 response.get("bid_quantity")
                                 or response.get("bid_size")
                                 or response.get("best_bid_quantity")
+                                or _top_bid.get("quantity")
                             )
                             _ask_qty = (
                                 response.get("offer_quantity")
@@ -1302,6 +739,7 @@ class BrokerData:
                                 or response.get("ask_size")
                                 or response.get("offer_size")
                                 or response.get("best_offer_quantity")
+                                or _top_ask.get("quantity")
                             )
                             _vol = (
                                 response.get("volume")
@@ -1395,10 +833,23 @@ class BrokerData:
                             logger.info(f"Added quote_item: {quote_item}")
                         else:
                             logger.warning(f"Invalid response format for {symbol} on {exchange}")
-                            response = {}
+                            quote_data.append(
+                                {
+                                    "symbol": symbol,
+                                    "exchange": exchange,
+                                    "error": f"Groww returned no quote for {symbol}",
+                                }
+                            )
                     else:
-                        logger.warning(f"Empty or error response for {symbol} on {exchange}")
-                        response = {}
+                        reason = _response_reason(response, "no response")
+                        logger.warning(f"Groww refused quote for {symbol} on {exchange}: {reason}")
+                        quote_data.append(
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "error": f"Groww did not return a quote for {symbol}: {reason}",
+                            }
+                        )
 
                     # This section is now handled directly in the response processing code above to avoid duplicate processing
                     continue
@@ -1433,6 +884,8 @@ class BrokerData:
 
                         quote_item["depth"] = depth
 
+                except BrokerBusyError:
+                    raise
                 except Exception as api_error:
                     logger.error(f"Groww API error: {str(api_error)}")
                     error_msg = str(api_error)
@@ -1446,6 +899,8 @@ class BrokerData:
                             "ltp": 0,
                         }
                     )
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.error(f"Error processing Groww API data for {sym}: {str(e)}")
                 # Add empty quote data with error message
@@ -1463,8 +918,7 @@ class BrokerData:
 
         # No data case
         if not quote_data:
-            logger.warning("No quote data found for the requested symbols")
-            return {"status": "error", "message": "No data retrieved"}
+            raise ValueError("Groww returned no quote data for the requested symbols")
 
         # Single symbol case - return in simpler format for OpenAlgo frontend
         if isinstance(symbol_list, (str, dict)) or len(symbol_list) == 1:
@@ -1491,6 +945,9 @@ class BrokerData:
             return {}
 
         quote = quote_data[0]
+        if quote.get("error"):
+            # A failed quote is an error, not a quote of zeros
+            raise ValueError(quote["error"])
 
         logger.info(f"Formatting single quote: {quote}")
 
@@ -1681,10 +1138,10 @@ class BrokerData:
         token = get_token(symbol, exchange)
 
         # Map OpenAlgo exchange to Groww exchange format
-        if exchange == "NSE":
+        if exchange in ("NSE", "NSE_INDEX"):
             groww_exchange = EXCHANGE_NSE
             segment = SEGMENT_CASH
-        elif exchange == "BSE":
+        elif exchange in ("BSE", "BSE_INDEX"):
             groww_exchange = EXCHANGE_BSE
             segment = SEGMENT_CASH
         elif exchange == "NFO":
@@ -1694,8 +1151,10 @@ class BrokerData:
             groww_exchange = EXCHANGE_BSE
             segment = SEGMENT_FNO
         else:
-            groww_exchange = EXCHANGE_NSE
-            segment = SEGMENT_CASH
+            raise ValueError(
+                f"Groww does not provide market data for the {exchange} exchange. "
+                "Supported: NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX."
+            )
 
         # Convert symbol format for derivatives
         if exchange in ["NFO", "BFO"]:
@@ -1777,6 +1236,8 @@ class BrokerData:
                             key = key_val[0].strip()
                             val = key_val[1].strip()
                             ohlc[key] = float(val)
+                except BrokerBusyError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error parsing OHLC string: {e}")
             elif isinstance(ohlc_data, dict):
@@ -1855,6 +1316,8 @@ class BrokerData:
             )
             return depth_response
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception(f"Error getting market depth: {str(e)}")
             return {}
@@ -1879,7 +1342,6 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = 50  # Groww API limit: up to 50 instruments per request
-            RATE_LIMIT_DELAY = 0.2  # Delay in seconds between batch API calls
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -1897,9 +1359,6 @@ class BrokerData:
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
 
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -1909,6 +1368,8 @@ class BrokerData:
                 # Single batch processing
                 return self._process_quotes_batch(symbols)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.exception("Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
@@ -1940,6 +1401,10 @@ class BrokerData:
                 # shape happens to match the OpenAlgo pattern (e.g. JUN26
                 # contracts: "NIFTY26JUN22350PE" → "NIFTY22JUN350PE").
                 # Only convert from OpenAlgo when DB lookup misses.
+                if exchange not in ("NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"):
+                    raise ValueError(
+                        f"Groww does not provide market data for the {exchange} exchange"
+                    )
                 br_symbol = get_br_symbol(symbol, exchange)
 
                 if not br_symbol:
@@ -1964,7 +1429,9 @@ class BrokerData:
                 elif exchange in ["BSE", "BFO", "BSE_INDEX"]:
                     groww_exchange = "BSE"
                 else:
-                    groww_exchange = "NSE"  # Default
+                    raise ValueError(
+                        f"Groww does not provide market data for the {exchange} exchange"
+                    )
 
                 # Build exchange_trading_symbol format: EXCHANGE_SYMBOL
                 exchange_symbol = f"{groww_exchange}_{br_symbol}"
@@ -1982,6 +1449,8 @@ class BrokerData:
                 else:
                     cash_symbols.append(exchange_symbol)
 
+            except BrokerBusyError:
+                raise
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
                 skipped_symbols.append({"symbol": symbol, "exchange": exchange, "error": str(e)})
@@ -2126,18 +1595,43 @@ class BrokerData:
             else:
                 payload = response  # Direct response format
 
+            # The OHLC snapshot's close is the previous session's close (it
+            # equals the quote's ohlc.close, and day_change = LTP - close), so
+            # the live price comes from the LTP endpoint (08-live-data
+            # "Get LTP": 50 instruments, payload maps each symbol to its LTP).
+            ltp_response = get_api_response(
+                endpoint="/v1/live-data/ltp",
+                auth_token=self.auth_token,
+                method="GET",
+                params={"segment": segment, "exchange_symbols": symbols_param},
+            )
+            ltp_payload = (
+                ltp_response.get("payload")
+                if isinstance(ltp_response, dict) and ltp_response.get("status") == "SUCCESS"
+                else None
+            )
+            no_price = "Groww returned no live price for this symbol"
+            if not isinstance(ltp_payload, dict):
+                ltp_payload = {}
+                no_price = (
+                    "Groww did not return live prices: "
+                    f"{_response_reason(ltp_response, 'no response')}"
+                )
+                logger.warning(f"Groww LTP batch failed for {segment}: {ltp_response}")
+
             # Process each symbol's data
             for exchange_symbol in exchange_symbols:
                 original = symbol_map.get(exchange_symbol, {})
                 ohlc_data = payload.get(exchange_symbol)
+                ltp = ltp_payload.get(exchange_symbol)
 
-                if not ohlc_data:
-                    logger.warning(f"No OHLC data found for {exchange_symbol}")
+                if not ohlc_data and ltp is None:
+                    logger.warning(f"No OHLC or LTP data found for {exchange_symbol}")
                     results.append(
                         {
                             "symbol": original.get("symbol", exchange_symbol),
                             "exchange": original.get("exchange", "UNKNOWN"),
-                            "error": "No quote data available",
+                            "error": no_price,
                         }
                     )
                     continue
@@ -2160,26 +1654,34 @@ class BrokerData:
                             parsed[k.strip()] = float(v.strip())
                         if parsed:
                             ohlc_dict = parsed
+                    except BrokerBusyError:
+                        raise
                     except Exception as parse_err:
                         logger.warning(
                             f"Failed to parse OHLC string for {exchange_symbol}: "
                             f"{ohlc_data!r} ({parse_err})"
                         )
 
-                if ohlc_dict is not None:
-                    open_price = float(ohlc_dict.get("open", 0) or 0)
-                    high_price = float(ohlc_dict.get("high", 0) or 0)
-                    low_price = float(ohlc_dict.get("low", 0) or 0)
-                    close_price = float(ohlc_dict.get("close", 0) or 0)
-                    # Use close as LTP for OHLC endpoint
-                    ltp = close_price
-                else:
-                    # Scalar fallback (just LTP)
-                    try:
-                        ltp = float(ohlc_data) if ohlc_data else 0
-                    except (TypeError, ValueError):
-                        ltp = 0
-                    open_price = high_price = low_price = close_price = ltp
+                if ltp is None:
+                    results.append(
+                        {
+                            "symbol": original.get("symbol", exchange_symbol),
+                            "exchange": original.get("exchange", "UNKNOWN"),
+                            "error": no_price,
+                        }
+                    )
+                    continue
+                ltp = float(ltp)
+                if ohlc_dict is None:
+                    # Groww priced the symbol but its OHLC entry was missing or a
+                    # bare number: the live price still stands, the OHLC fields
+                    # read 0 like the other fields the batch does not carry
+                    logger.warning(f"No OHLC breakdown for {exchange_symbol}: {ohlc_data!r}")
+                    ohlc_dict = {}
+                open_price = float(ohlc_dict.get("open", 0) or 0)
+                high_price = float(ohlc_dict.get("high", 0) or 0)
+                low_price = float(ohlc_dict.get("low", 0) or 0)
+                close_price = float(ohlc_dict.get("close", 0) or 0)
 
                 result_item = {
                     "symbol": original.get("symbol", exchange_symbol),
@@ -2187,17 +1689,21 @@ class BrokerData:
                     "data": {
                         "bid": 0,  # OHLC endpoint doesn't provide bid/ask
                         "ask": 0,
+                        "bid_qty": 0,
+                        "ask_qty": 0,
                         "open": open_price,
                         "high": high_price,
                         "low": low_price,
                         "ltp": ltp,
-                        "prev_close": close_price,  # Using close as prev_close
+                        "prev_close": close_price,  # ohlc.close is the previous close
                         "volume": 0,  # OHLC endpoint doesn't provide volume
                         "oi": 0,  # OHLC endpoint doesn't provide OI
                     },
                 }
                 results.append(result_item)
 
+        except BrokerBusyError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching OHLC batch: {str(e)}")
             # Return error entries for all symbols
@@ -2225,13 +1731,12 @@ class BrokerData:
         already carry LTP/OHLC from the batch endpoint. Mutates
         ``existing_results`` in place.
 
-        Per-symbol /v1/live-data/quote calls are issued sequentially with a
-        wide gap to avoid Groww's 429 lockout, and the loop aborts after a
-        run of consecutive failures so we never spin in a banned state.
-        Symbols whose overlay fails simply keep their LTP/OHLC baseline.
+        Per-symbol /v1/live-data/quote calls are issued sequentially and paced
+        by broker.groww.api.rate_limiter (Live Data, 300/min), and the loop
+        aborts after a run of consecutive failures so we never spin in a
+        banned state. Symbols whose overlay fails simply keep their LTP/OHLC
+        baseline.
         """
-        # 250ms gap = ~4 RPS — observed sustained safe rate on Groww Live Data.
-        REQUEST_INTERVAL = 0.25
         # Stop overlaying after this many back-to-back 429s — Groww has put
         # us in cooldown and continuing only delays the user.
         MAX_CONSECUTIVE_429 = 4
@@ -2264,6 +1769,8 @@ class BrokerData:
                     },
                     debug=False,
                 )
+            except BrokerBusyError:
+                raise
             except Exception as fetch_err:
                 logger.warning(
                     f"Quote fetch failed for {exchange_symbol}: {fetch_err}"
@@ -2314,6 +1821,8 @@ class BrokerData:
                         if ":" in part:
                             k, v = part.split(":", 1)
                             ohlc[k.strip()] = float(v.strip())
+                except BrokerBusyError:
+                    raise
                 except Exception:
                     ohlc = {}
 
@@ -2394,9 +1903,6 @@ class BrokerData:
         overlaid = 0
 
         for idx, exchange_symbol in enumerate(exchange_symbols):
-            if idx > 0:
-                time.sleep(REQUEST_INTERVAL)
-
             quote_result = _fetch_one(exchange_symbol)
             err_str = str(quote_result.get("error", ""))
 
@@ -2423,7 +1929,9 @@ class BrokerData:
             quote_data = quote_result["data"]
             # Merge enriched fields onto the OHLC baseline. Keep OHLC values
             # from the batch (they're the authoritative LTP/open/high/low) and
-            # overlay everything else from the quote endpoint.
+            # overlay the rest of OpenAlgo's multiquote fields: the documented
+            # bid/ask/volume/oi plus bid_qty/ask_qty, as the reference broker
+            # returns them for the option chain. Depth stays in the depth API.
             for key in (
                 "bid",
                 "ask",
@@ -2431,9 +1939,6 @@ class BrokerData:
                 "ask_qty",
                 "volume",
                 "oi",
-                "total_buy_qty",
-                "total_sell_qty",
-                "depth",
             ):
                 if key in quote_data:
                     target["data"][key] = quote_data[key]

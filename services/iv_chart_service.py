@@ -458,7 +458,7 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
                 # IV calculation failed (deep ITM, no time value, etc.)
                 iv_value = None
 
-        # Convert timestamp to Unix seconds (UTC) for lightweight-charts
+        # Convert timestamp to Unix seconds (UTC) for the chart
         unix_seconds = int(ts.timestamp())
 
         iv_data.append({

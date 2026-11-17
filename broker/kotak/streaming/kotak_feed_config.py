@@ -124,8 +124,6 @@ def fetch_feed_config(data_center, timeout=CONFIG_TIMEOUT_SECONDS):
         )
         return result
 
-    result["source"] = source
-
     market_data = configs.get(f"{data_center}_{source}_broadcast_endpoint")
     order_feed = configs.get(f"{data_center}_{source}_interactive_endpoint")
 
@@ -151,8 +149,12 @@ def fetch_feed_config(data_center, timeout=CONFIG_TIMEOUT_SECONDS):
             f"({market_data}). OpenAlgo's SFeed decoder cannot read that protocol. "
             "Falling back to SFeed; if quotes do not arrive, this is why."
         )
+        # source stays unset, so the caller builds the SFeed client for the
+        # default host, which is what the message above promises. Recording
+        # "hs" here made kotak_adapter build the HSM client after all.
         return result
 
+    result["source"] = source
     result["market_data_url"] = _to_websocket_scheme(market_data)
     logger.info(
         f"Kotak data centre {data_center} routes market data to "

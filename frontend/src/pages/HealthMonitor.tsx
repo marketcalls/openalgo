@@ -9,16 +9,26 @@
  * - Thread Usage
  *
  * Auto-refreshes every 10 seconds
+ *
+ * The two history charts are drawn by openalgo-charts, the engine /trading
+ * uses, driven the way the other read-only charts drive it (`BacktestChart`,
+ * `CandleViz`): `createChart` on a host div and the app's theme tokens through
+ * `buildChartTheme`, applied again with `setTheme` when the theme changes.
+ *
+ * The history arrives as ISO timestamps with their +05:30 offset, so
+ * `Date.parse` already yields real UTC and that is what the engine is handed.
+ * The engine labels its axis and crosshair in IST by default, which is why
+ * there is no time formatter here: one that added 5h30m on top would label
+ * every point 5h30m late.
  */
 
 import {
-  ColorType,
+  type Chart,
+  type ChartTheme,
   createChart,
-  type IChartApi,
-  type ISeriesApi,
-  LineSeries,
-  type UTCTimestamp,
-} from 'lightweight-charts'
+  type PriceFormat,
+  type SeriesApi,
+} from 'openalgo-charts'
 import {
   Activity,
   AlertCircle,
@@ -59,7 +69,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { buildChartTheme, resolveCssColor } from '@/lib/trading/chartTheme'
 import { cn } from '@/lib/utils'
+import { type AppMode, type ThemeMode, useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 
 const AUTO_REFRESH_INTERVAL = 10000 // 10 seconds
@@ -143,9 +155,72 @@ function formatIstTime(timestamp: string): string {
   return formatIstDateTime(timestamp, { year: undefined, month: undefined, day: undefined })
 }
 
-// Check if dark mode is active
-function isDarkMode(): boolean {
-  return document.documentElement.classList.contains('dark')
+/** Each metric keeps its own line colour in every theme, so the two charts read apart. */
+const FD_LINE_COLOR = '#3b82f6'
+const MEMORY_LINE_COLOR = '#10b981'
+
+/** One history chart: the engine instance, its line, and the div it draws into. */
+interface MetricChart {
+  chart: Chart
+  series: SeriesApi
+  host: HTMLDivElement
+}
+
+/**
+ * The chart theme for one metric line.
+ *
+ * The app's chart theme, with two changes for a chart that sits inside a card:
+ * the card's own background rather than the page's, and the current-value tag
+ * in the line's colour rather than the up and down pair, which reads a price
+ * moving and not a count. The tag's text colour stays the theme's, because the
+ * engine prints the crosshair's pills in it too.
+ */
+function metricChartTheme(mode: ThemeMode, appMode: AppMode, line: string): ChartTheme {
+  return {
+    ...buildChartTheme(mode, appMode),
+    background: resolveCssColor('var(--card)'),
+    lastPriceUp: line,
+    lastPriceDown: line,
+  }
+}
+
+/** Create one read-only metric chart in `host`. */
+function createMetricChart(
+  host: HTMLDivElement,
+  line: string,
+  label: string,
+  priceFormat: PriceFormat
+): MetricChart {
+  const { mode, appMode } = useThemeStore.getState()
+  const chart = createChart(host, {
+    theme: metricChartTheme(mode, appMode, line),
+    ariaLabel: label,
+    // A dashboard tile, not a workspace: the keyboard belongs to the page and a
+    // hover zoom rail is more chrome than a 300px chart has room for.
+    shortcuts: false,
+    timeNavigator: false,
+    // The corner mark sits on the line in a chart this small, as it does on the
+    // backtest panel's chart.
+    branding: false,
+    grid: { vertLines: false, horzLines: false },
+  })
+  const series = chart.addSeries('line', {
+    style: {
+      color: line,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+    },
+    priceFormat,
+  })
+  return { chart, series, host }
+}
+
+/** Destroy one metric chart and empty its host, so a remount starts on a clean div. */
+function destroyMetricChart(entry: MetricChart | null) {
+  if (!entry) return
+  entry.chart.destroy()
+  entry.host.innerHTML = ''
 }
 
 export default function HealthMonitor() {
@@ -161,10 +236,10 @@ export default function HealthMonitor() {
   // Chart refs
   const fdChartContainerRef = useRef<HTMLDivElement>(null)
   const memoryChartContainerRef = useRef<HTMLDivElement>(null)
-  const fdChartRef = useRef<IChartApi | null>(null)
-  const memoryChartRef = useRef<IChartApi | null>(null)
-  const fdSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const memorySeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const fdChartRef = useRef<MetricChart | null>(null)
+  const memoryChartRef = useRef<MetricChart | null>(null)
+  const mode = useThemeStore((state) => state.mode)
+  const appMode = useThemeStore((state) => state.appMode)
 
   // Fetch all data
   const fetchData = async (displayToast = false) => {
@@ -223,133 +298,36 @@ export default function HealthMonitor() {
     return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [])
 
-  // Initialize charts with theme-aware colors
+  // Create the charts on the first history that arrives, then redraw them from
+  // every refresh. The theme is read once, at creation; later changes are the
+  // re-theme effect's job, so the charts are never rebuilt for one.
   useEffect(() => {
     if (!historicalMetrics.length) return
 
-    // Use simple hex colors that work with lightweight-charts
-    // Dark mode: lighter text, subtle grid
-    // Light mode: darker text, subtle grid
-    const dark = isDarkMode()
-    const textColor = dark ? '#9ca3af' : '#6b7280' // gray-400 / gray-500
-    const gridColor = dark ? '#374151' : '#e5e7eb' // gray-700 / gray-200
-    const borderColor = dark ? '#4b5563' : '#d1d5db' // gray-600 / gray-300
-
-    // IST offset in milliseconds (5 hours 30 minutes)
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000
-
-    // Helper to convert UTC timestamp to IST formatted string
-    const formatTimeIST = (time: number): string => {
-      const date = new Date(time * 1000)
-      const istDate = new Date(date.getTime() + IST_OFFSET_MS)
-      const hours = istDate.getUTCHours().toString().padStart(2, '0')
-      const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
-      return `${hours}:${minutes}`
-    }
-
-    // Helper to format date and time for crosshair tooltip in IST
-    const formatDateTimeIST = (time: number): string => {
-      const date = new Date(time * 1000)
-      const istDate = new Date(date.getTime() + IST_OFFSET_MS)
-      const day = istDate.getUTCDate().toString().padStart(2, '0')
-      const months = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
-      ]
-      const month = months[istDate.getUTCMonth()]
-      const year = istDate.getUTCFullYear().toString().slice(-2)
-      const hours = istDate.getUTCHours().toString().padStart(2, '0')
-      const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
-      const seconds = istDate.getUTCSeconds().toString().padStart(2, '0')
-      return `${day} ${month} '${year} ${hours}:${minutes}:${seconds}`
-    }
-
-    // Create chart options - no grid lines for clean look
-    const chartOptions = {
-      height: 300,
-      layout: {
-        background: { type: ColorType.Solid as const, color: 'transparent' },
-        textColor: textColor,
-      },
-      grid: {
-        vertLines: { visible: false },
-        horzLines: { visible: false },
-      },
-      timeScale: {
-        borderColor: borderColor,
-        timeVisible: true,
-        tickMarkFormatter: (time: number) => formatTimeIST(time),
-      },
-      rightPriceScale: {
-        borderColor: borderColor,
-      },
-      crosshair: {
-        vertLine: { color: gridColor },
-        horzLine: { color: gridColor },
-      },
-      localization: {
-        timeFormatter: (time: number) => formatDateTimeIST(time),
-      },
-    }
-
-    // FD Chart - integers only on Y-axis
     if (fdChartContainerRef.current && !fdChartRef.current) {
-      const chart = createChart(fdChartContainerRef.current, {
-        ...chartOptions,
-        width: fdChartContainerRef.current.clientWidth,
-        localization: {
-          ...chartOptions.localization,
-          priceFormatter: (price: number) => Math.round(price).toString(),
-        },
-      })
-
-      const series = chart.addSeries(LineSeries, {
-        color: '#3b82f6',
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        priceFormat: {
-          type: 'custom',
-          formatter: (price: number) => Math.round(price).toString(),
-        },
-      })
-
-      fdChartRef.current = chart
-      fdSeriesRef.current = series
+      // File descriptors are a count, so the axis and the readouts are integers.
+      fdChartRef.current = createMetricChart(
+        fdChartContainerRef.current,
+        FD_LINE_COLOR,
+        'File descriptors over the last 6 hours',
+        { type: 'custom', formatter: (value: number) => Math.round(value).toString() }
+      )
     }
 
-    // Memory Chart
     if (memoryChartContainerRef.current && !memoryChartRef.current) {
-      const chart = createChart(memoryChartContainerRef.current, {
-        ...chartOptions,
-        width: memoryChartContainerRef.current.clientWidth,
-      })
-
-      const series = chart.addSeries(LineSeries, {
-        color: '#10b981',
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: true,
-      })
-
-      memoryChartRef.current = chart
-      memorySeriesRef.current = series
+      memoryChartRef.current = createMetricChart(
+        memoryChartContainerRef.current,
+        MEMORY_LINE_COLOR,
+        'Memory usage in MB over the last 6 hours',
+        { type: 'price', precision: 2, minMove: 0.01 }
+      )
     }
 
     // Update chart data
-    if (fdSeriesRef.current && memorySeriesRef.current) {
+    if (fdChartRef.current && memoryChartRef.current) {
+      // Real UTC seconds: the timestamps carry their own +05:30 offset.
       const rawData = historicalMetrics.map((m) => ({
-        time: Math.floor(new Date(m.timestamp).getTime() / 1000) as UTCTimestamp,
+        time: Math.floor(new Date(m.timestamp).getTime() / 1000),
         fd: m.fd_count,
         mem: m.memory_rss_mb,
       }))
@@ -365,39 +343,24 @@ export default function HealthMonitor() {
         memoryData.push({ time: point.time, value: point.mem })
       }
 
-      fdSeriesRef.current.setData(fdData)
-      memorySeriesRef.current.setData(memoryData)
+      fdChartRef.current.series.setData(fdData)
+      memoryChartRef.current.series.setData(memoryData)
     }
-
-    // Handle resize
-    const handleResize = () => {
-      if (fdChartRef.current && fdChartContainerRef.current) {
-        fdChartRef.current.applyOptions({
-          width: fdChartContainerRef.current.clientWidth,
-        })
-      }
-      if (memoryChartRef.current && memoryChartContainerRef.current) {
-        memoryChartRef.current.applyOptions({
-          width: memoryChartContainerRef.current.clientWidth,
-        })
-      }
-    }
-
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
   }, [historicalMetrics])
+
+  // Re-theme the charts in place when the theme or the app mode changes.
+  useEffect(() => {
+    fdChartRef.current?.chart.setTheme(metricChartTheme(mode, appMode, FD_LINE_COLOR))
+    memoryChartRef.current?.chart.setTheme(metricChartTheme(mode, appMode, MEMORY_LINE_COLOR))
+  }, [mode, appMode])
 
   // Cleanup charts
   useEffect(() => {
     return () => {
-      if (fdChartRef.current) {
-        fdChartRef.current.remove()
-        fdChartRef.current = null
-      }
-      if (memoryChartRef.current) {
-        memoryChartRef.current.remove()
-        memoryChartRef.current = null
-      }
+      destroyMetricChart(fdChartRef.current)
+      fdChartRef.current = null
+      destroyMetricChart(memoryChartRef.current)
+      memoryChartRef.current = null
     }
   }, [])
 

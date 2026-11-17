@@ -652,6 +652,39 @@ class FlowOpenAlgoClient:
             logger.exception(f"Error sending Telegram alert: {e}")
             return {"status": "error", "error": str(e)}
 
+    def slack(self, message: str) -> dict[str, Any]:
+        """Post a message to the Slack webhook saved on the /slack page."""
+        return self._webhook_alert("slack", message)
+
+    def discord(self, message: str) -> dict[str, Any]:
+        """Post a message to the Discord webhook saved on the /discord page."""
+        return self._webhook_alert("discord", message)
+
+    def _webhook_alert(self, channel_name: str, message: str) -> dict[str, Any]:
+        """Queue ``message`` on a webhook channel, under the notify API's rules.
+
+        Same rules as ``POST /api/v1/<channel>/notify``: the channel must be
+        switched on at /alerts with a webhook saved. Queued rather than
+        awaited, like the Telegram node, so a slow provider never holds the
+        workflow. A message over the channel's limit is shortened, not
+        refused: nobody is watching a running workflow to send it again.
+        """
+        from services.alerts.notify import notify
+        from services.alerts.registry import get_webhook_channel
+
+        channel = get_webhook_channel(channel_name)
+        try:
+            result = notify(channel, message, shorten=True)
+        except Exception:
+            logger.exception(f"Could not send a {channel.label} alert from Flow")
+            return {
+                "status": "error",
+                "error": f"The {channel.label} alert could not be sent. The OpenAlgo log has the details.",
+            }
+        if result.ok:
+            return {"status": "success", "data": {"message": result.message}}
+        return {"status": "error", "error": result.message}
+
     # --- Additional Data Services ---
 
     def get_multi_quotes(self, symbols: list[dict[str, str]]) -> dict[str, Any]:

@@ -584,3 +584,177 @@ def test_real_threading_sleep_is_the_unpatched_one():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_staged_broker_keys_stay_with_their_own_greenlet():
+    """A login's callback stages its broker's keys for its own request
+    (utils.broker_keys.stage_broker_keys); under eventlet every request is a
+    greenlet on one OS thread, so the staging must follow the greenlet, not
+    the thread. Another greenlet that runs while the callback waits on the
+    broker, a greenlet started afterwards, and a real OS thread all keep
+    reading the process's keys."""
+    result = run(
+        """
+        import os
+        import utils.broker_keys as bk
+        from types import SimpleNamespace
+
+        os.environ["BROKER_API_KEY"] = "process-key"
+        os.environ.pop("BROKER_API_KEY_MARKET", None)
+        keys = SimpleNamespace(
+            broker="fyers", api_key="staged-key", api_secret="s", api_key_market="",
+            api_secret_market="", redirect_url="", source="saved",
+        )
+        bk._resolve_or_refuse = lambda broker: keys
+        seen = {}
+
+        def login():
+            _keys, token = bk.stage_broker_keys("fyers")
+            try:
+                seen["login_before"] = os.getenv("BROKER_API_KEY")
+                eventlet.sleep(0.1)  # the exchange with the broker
+                seen["login_after"] = os.environ["BROKER_API_KEY"]
+                seen["market"] = "BROKER_API_KEY_MARKET" in os.environ
+                seen["later"] = eventlet.spawn(lambda: os.getenv("BROKER_API_KEY")).wait()
+            finally:
+                bk.unstage_broker_keys(token)
+            seen["login_done"] = os.getenv("BROKER_API_KEY")
+
+        def other_request():
+            eventlet.sleep(0.05)
+            seen["other"] = os.getenv("BROKER_API_KEY")
+            got = []
+            t = _orig.Thread(target=lambda: got.append(os.getenv("BROKER_API_KEY")))
+            t.start()
+            while t.is_alive():
+                eventlet.sleep(0.01)
+            seen["thread"] = got[0]
+
+        a, b = eventlet.spawn(login), eventlet.spawn(other_request)
+        a.wait(); b.wait()
+        assert seen == {
+            "login_before": "staged-key",
+            "login_after": "staged-key",
+            "market": False,
+            "later": "process-key",
+            "login_done": "process-key",
+            "other": "process-key",
+            "thread": "process-key",
+        }, seen
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr
+
+
+def test_the_auth_commit_guard_lets_the_hub_run_while_a_holder_waits():
+    """database.auth_db.auth_commit_guard is taken by request greenlets around a
+    login's token write and every sign-out, and the holder yields on the
+    database. Under eventlet it must be green: a real lock would block the
+    whole worker while a second greenlet waited for it."""
+    result = run(
+        """
+        import database.auth_db as auth_db
+
+        guard = auth_db.auth_commit_guard()
+        order = []
+
+        def holder():
+            with guard:
+                order.append("held")
+                eventlet.sleep(0.2)  # the token write yields on the database
+                order.append("released")
+
+        def waiter():
+            eventlet.sleep(0.05)
+            with guard:
+                order.append("waiter")
+
+        ticks = []
+
+        def ticker():
+            for _ in range(5):
+                ticks.append(time.monotonic())
+                eventlet.sleep(0.03)
+
+        a, b, c = eventlet.spawn(holder), eventlet.spawn(waiter), eventlet.spawn(ticker)
+        a.wait(); b.wait(); c.wait()
+        assert order == ["held", "released", "waiter"], order
+        assert len(ticks) == 5, ticks  # the hub kept running while the waiter waited
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr
+
+
+def test_alert_delivery_runs_on_the_hub_without_stalling_it():
+    """Alerts travel order event -> alert subscriber -> one bus callback per
+    channel -> the shared webhook pool (services/alerts/channels/webhook.py),
+    which takes a stdlib lock and posts through httpx. Under eventlet every one
+    of those is green; nothing in the path may block the hub or cross into a
+    real thread. Fifty order events must reach Slack and Discord fifty times
+    each while a ticker on the hub keeps its 10 ms rhythm."""
+    result = run(
+        """
+        import os, tempfile
+        tmp = tempfile.mkdtemp()
+        os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(tmp, "alerts.db")
+        import httpx
+        import utils.httpx_client as hc
+        import database.alert_channels_db as db
+        from events import OrderPlacedEvent
+        from services.alerts import settings
+        from services.alerts.channels.discord import DiscordChannel
+        from services.alerts.channels.slack import SlackChannel
+        from subscribers import alert_subscriber
+        from utils.event_bus import EventBus
+
+        posts = []
+
+        def provider(request):
+            eventlet.sleep(0.05)  # a network round trip yields to the hub
+            posts.append(request.url.host)
+            return httpx.Response(200 if request.url.host == "hooks.slack.com" else 204)
+
+        client = httpx.Client(transport=httpx.MockTransport(provider))
+        hc.get_httpx_client = lambda: client
+        db.Base.metadata.create_all(db.engine)
+        slack, discord = SlackChannel(), DiscordChannel()
+        settings.save_webhook(slack, "https://hooks.slack.com/services/TFAKE/BFAKE/notarealslacktoken")
+        settings.save_webhook(discord, "https://discord.com/api/webhooks/1234/not-a-real-discord-token")
+
+        bus = EventBus(workers=10)
+        alert_subscriber.bus = bus
+        alert_subscriber.CHANNELS = (slack, discord)
+        alert_subscriber.register()
+
+        gaps = []
+
+        def ticker():
+            last = time.monotonic()
+            while len(posts) < 100:
+                eventlet.sleep(0.01)
+                now = time.monotonic()
+                gaps.append(now - last)
+                last = now
+
+        tick = eventlet.spawn(ticker)
+        for i in range(50):
+            bus.publish(OrderPlacedEvent(
+                api_type="placeorder",
+                request_data={"symbol": "SBIN"},
+                response_data={"status": "success", "orderid": str(i)},
+            ))
+        deadline = time.monotonic() + 20
+        while len(posts) < 100 and time.monotonic() < deadline:
+            eventlet.sleep(0.02)
+        tick.kill()
+
+        assert posts.count("hooks.slack.com") == 50, posts.count("hooks.slack.com")
+        assert posts.count("discord.com") == 50, posts.count("discord.com")
+        assert bus.stats()["dropped"] == 0, bus.stats()
+        assert max(gaps) < 0.5, max(gaps)  # the hub was never held
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr
