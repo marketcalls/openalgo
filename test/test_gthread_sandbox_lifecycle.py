@@ -310,13 +310,29 @@ def test_no_order_path_hook_waits_for_the_feed(monkeypatch, hook):
     assert elapsed < 1.5, f"notify_{hook} waited {elapsed:.2f}s for the feed"
 
 
+def _feed_queue_empty(timeout=5.0):
+    """Wait until the worker has taken every queued call (it may still be running one)."""
+    from sandbox import websocket_execution_engine as wse
+
+    deadline = time.monotonic() + timeout
+    while wse._feed_calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+    return not wse._feed_calls
+
+
 def test_a_quick_place_then_cancel_unsubscribes_after_it_subscribes(monkeypatch):
-    """The cancel's unsubscribe must not overtake the place's slower subscribe."""
+    """The cancel's unsubscribe must not overtake the place's slower subscribe.
+
+    The cancel lands while the subscribe is on its way to the proxy. A cancel
+    that lands before the subscribe has started cancels it instead (see
+    test_a_subscribe_still_waiting_is_cancelled_by_its_unsubscribe).
+    """
     engine = _running_engine(monkeypatch)
     calls = _slow_feed(monkeypatch, subscribe_delay=0.5)
 
     def place_then_cancel():
         engine.notify_order_placed(_order("LIFE-W3"))
+        assert _feed_queue_empty(), "the worker never started the subscribe"
         engine.notify_order_completed("LIFE-W3", "NSE:RELIANCE", USER)
 
     run_in_thread(place_then_cancel)
@@ -355,9 +371,114 @@ def test_a_cancel_racing_a_place_is_queued_after_it(monkeypatch):
     canceller.start()
     engine.notify_order_placed(_order("LIFE-W6"))
     canceller.join(10)
+    cancelled.set()
     _wait_for_feed_worker()
 
+    # Either the subscribe had started and the unsubscribe follows it, or the
+    # cancel caught it still waiting and neither was sent. Never the
+    # unsubscribe first, and never the symbol left subscribed.
+    assert calls in ([], [("subscribe", ["RELIANCE"]), ("unsubscribe", ["RELIANCE"])])
+
+
+def _hold_feed_worker():
+    """Keep the worker busy, as a proxy that does not answer would. Set the event to free it."""
+    from sandbox import websocket_execution_engine as wse
+
+    gate = threading.Event()
+    wse._feed_executor.submit(gate.wait, 10)
+    return gate
+
+
+def test_a_subscribe_still_waiting_is_cancelled_by_its_unsubscribe(monkeypatch):
+    """Neither call reaches the proxy, and the symbol ends unsubscribed."""
+    from sandbox import websocket_execution_engine as wse
+
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch)
+    gate = _hold_feed_worker()
+    try:
+        engine.notify_order_placed(_order("LIFE-C1"))
+        assert len(wse._feed_calls) == 1
+        engine.notify_order_completed("LIFE-C1", "NSE:RELIANCE", USER)
+        queued = len(wse._feed_calls)
+    finally:
+        gate.set()
+    _wait_for_feed_worker()
+
+    assert queued == 0
+    assert calls == []
+
+
+def test_an_unsubscribe_then_a_subscribe_are_both_kept(monkeypatch):
+    """The subscribe before the unsubscribe may have failed; the new one must still go."""
+    from sandbox import websocket_execution_engine as wse
+
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch)
+    engine.notify_order_placed(_order("LIFE-K1"))
+    _wait_for_feed_worker()
+    gate = _hold_feed_worker()
+    try:
+        engine.notify_order_completed("LIFE-K1", "NSE:RELIANCE", USER)
+        engine.notify_order_placed(_order("LIFE-K2"))
+        queued = len(wse._feed_calls)
+    finally:
+        gate.set()
+    _wait_for_feed_worker()
+
+    assert queued == 2
+    assert calls == [
+        ("subscribe", ["RELIANCE"]),
+        ("unsubscribe", ["RELIANCE"]),
+        ("subscribe", ["RELIANCE"]),
+    ]
+
+
+def test_the_queue_stays_bounded_while_the_feed_does_not_answer(monkeypatch):
+    """Orders keep coming while the worker is stuck; the queue does not grow with them."""
+    from sandbox import websocket_execution_engine as wse
+
+    engine = _running_engine(monkeypatch)
+    calls = _slow_feed(monkeypatch)
+    engine.notify_order_placed(_order("LIFE-B0"))
+    _wait_for_feed_worker()
+    gate = _hold_feed_worker()
+    try:
+        engine.notify_order_completed("LIFE-B0", "NSE:RELIANCE", USER)
+        longest = 0
+        for n in range(1, 501):
+            engine.notify_order_placed(_order(f"LIFE-B{n}"))
+            longest = max(longest, len(wse._feed_calls))
+            engine.notify_order_completed(f"LIFE-B{n}", "NSE:RELIANCE", USER)
+            longest = max(longest, len(wse._feed_calls))
+    finally:
+        gate.set()
+    _wait_for_feed_worker()
+
+    assert longest <= 2, f"{longest} calls waited for one symbol"
+    # The symbol ends where the refcount says: subscribed once, then released.
     assert calls == [("subscribe", ["RELIANCE"]), ("unsubscribe", ["RELIANCE"])]
+
+
+def test_calls_for_several_symbols_are_never_cancelled(monkeypatch):
+    """The index rebuild and a stop send several symbols at once; those always run."""
+    from sandbox import websocket_execution_engine as wse
+
+    engine = _running_engine(monkeypatch)
+    _slow_feed(monkeypatch)
+    gate = _hold_feed_worker()
+    try:
+        with engine._lock:
+            engine._queue_subscribe(USER, [("RELIANCE", "NSE"), ("ZEEL", "NSE")])
+            engine._queue_unsubscribe(USER, [("RELIANCE", "NSE")])
+            queued = len(wse._feed_calls)
+        wse._start_feed_calls()
+    finally:
+        gate.set()
+    _wait_for_feed_worker()
+
+    assert queued == 2
+    assert not wse._feed_calls, "queued calls were left for the next test"
 
 
 def test_a_failed_subscribe_does_not_stop_the_next_one(monkeypatch):
