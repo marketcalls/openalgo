@@ -202,7 +202,7 @@ sign in and use **Select Broker → Configure** to save your broker keys. Leave
 the broker placeholders unset; keep `VALID_BROKERS`. A configured `.env`
 broker continues to use its `.env` keys before any saved keys for that broker.
 
-Startup generates these keys for you. If `.env` cannot be written, see [First-Time Setup](../userguide/05-first-time-setup/README.md#if-openalgo-cannot-write-env) for the manual fallback.
+Startup generates `APP_KEY`, `API_KEY_PEPPER` and `FERNET_SALT` for you. If `.env` cannot be written, see [First-Time Setup](../userguide/05-first-time-setup/README.md#if-openalgo-cannot-write-env) for the manual fallback.
 
 Never commit your `.env`. It is gitignored, and after first run it holds real
 secrets.
