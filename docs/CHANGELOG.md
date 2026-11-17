@@ -6,10 +6,60 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
-## [Unreleased]
+## [2.0.3.4] - 2026-11-17
+
+### Alert Channels and Nuvama Release
+
+32 commits since 2.0.3.3, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.4-released.md](releases/version-2.0.3.4-released.md).
+This release adds two migrations, `migrate_alert_channels.py` and
+`migrate_password_reset_grants.py`, both required. Run `migrate_all.py` and
+restart.
+
+### Highlights
+
+- One Alerts page for Telegram, WhatsApp, Slack and Discord, with Slack and
+  Discord from the API, Flow and MCP (#2435, #2440).
+- The Nuvama broker (#2461).
+- Four security fixes: the live Socket.IO channel, Telegram `/link`, broker
+  postbacks and password resets.
+- Scheduled Flow workflows keep running when the database is busy (#2355,
+  #2326).
+- The Latency Monitor reports orders apart from data calls (#2421, #2286).
+- Elliott wave counts and openalgo-charts 2.7.3 on every chart.
+- Fixes for nine brokers, among them Paytm Money stop orders (#2404) and
+  market price protection for cash symbols ending in CE or PE (#2388).
+
+### Security
+
+- **The live Socket.IO channel needs a signed-in session.** A client with no
+  login could connect and receive live order events, analyzer updates, the
+  signed-in device list, scalping levels and the WhatsApp pairing QR code. A
+  Socket.IO client of your own now needs a signed-in session.
+- **Telegram `/link` checks this instance's API key.** Anyone who found the
+  bot could link a chat by naming a server of their own, then switch between
+  Live and analyzer mode or stop every Python strategy. A chat linked before
+  the API key was last regenerated is asked to send `/link` again.
+- **Broker postbacks need proof of their sender.** Anybody who could reach
+  the server could post a fake fill for Dhan, Fyers, Upstox, Angel One or
+  AliceBlue. Postbacks from those five are refused; their order updates come
+  through the order feed OpenAlgo opens at login. A postback URL registered
+  at those brokers no longer delivers anything. Zerodha's signed postbacks
+  are accepted as before.
+- **A password reset works once and lapses** after 15 minutes (TOTP) or one
+  hour (emailed link). A copy of the reset cookie could set the password a
+  second time. A reset started before the upgrade has to be started again.
 
 ### Added
 
+- **Nuvama broker** (#2461): login, funds, master contract, orders, quotes
+  and depth, history, live market data and order status updates. Nuvama's
+  API has no margin calculator. Its order updates had not yet been seen on
+  `/websocket/order` when merged; report it if they do not arrive.
+- **Sahi TOTP keys** (#2441): Login with Sahi opens a short form with one
+  optional field. Type the code your authenticator app shows for a TOTP key,
+  or leave it blank for a Regular key approved in Sahi's API Dashboard.
 - **Alerts page (`/alerts`)**: Telegram, WhatsApp, Slack and Discord on one
   page. Each channel has a card with how it stands, an on/off switch, a test
   button and a link to its own setup page, and a grid chooses which orders
@@ -190,6 +240,41 @@ fix, live in [docs/releases](releases/).
   (`db/backups/openalgo.db.before-rotate-pepper-<time>`) still holds the data
   under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
   in `.env`.
+- **Market price protection for cash symbols ending in CE or PE** (#2388,
+  #2446). 91 NSE and BSE equities, RELIANCE and BAJFINANCE among them, got the
+  options slab, so a MARKET BUY on RELIANCE went 1% above the last price
+  instead of 0.5%. A symbol is an option only with the full option shape.
+- **Paytm Money stop orders** (#2404). SL and SL-M were sent as MARKET with no
+  trigger, so a protective stop executed at once. They now carry their
+  trigger, and one without a valid trigger is refused before sending.
+- **Paytm Money cancels** (#2374). Only an order whose status read exactly
+  "Pending" could be cancelled; open, trigger pending and modified orders
+  were left working with no error. They are cancelled now.
+- **Tradejini refusals** (#2385, #2444) were reported as "Order Placed ...
+  Order ID: None". They now return Tradejini's reason.
+- **Fyers history** (#2422, #2438). An empty period no longer costs about 13
+  seconds and four requests, and a real error is no longer an empty result.
+- **Flattrade and Kotak margins** (#2156, #2436, #2439) report the basket's
+  own margin, without margin already used by the account, and a basket with
+  a failed or unknown leg returns an error instead of pricing the rest.
+- **Samco, 5paisa and HDFC Sky live data** (#2397): follow-ups to the
+  2.0.3.3 feed fixes. 5paisa's memory no longer grows with unsubscribed
+  instruments, and HDFC Sky sends subscribe and unsubscribe in order.
+- **Order tickets after an in-app broker login** (#2417, #2423). After a
+  login on OpenAlgo's own broker login page (5paisa, Angel One, mStock,
+  Tradejini, INDmoney, Firstock, Nubra, Motilal Oswal, Kotak, Definedge,
+  Samco), Place Order stayed disabled until a reload.
+- **`/api/v1/instruments`** (#2406) is served from the symbol cache: about
+  90,000 NFO rows in 0.07 s where they took 1.26 s.
+- **Broker Configuration in dark mode**: the open broker list was white with
+  near-white names.
+
+### Documentation
+
+- The `/python` resource limits guide is rewritten from measurements: 512 MB
+  is the practical minimum memory for a strategy that imports the SDK, and a
+  strategy that uses up its CPU budget is ended with nothing in its log.
+- The Docker guides no longer say `.env` is mounted read-only (#1921).
 
 ### Dependencies
 
@@ -210,6 +295,27 @@ fix, live in [docs/releases](releases/).
   kept whichever version it already had. It is now pinned in both, and the
   next update installs 4.1.
 - No behaviour change is expected from any of the three.
+- `openalgo-charts` 2.6.9 to 2.7.3 (frontend).
+- The pinned `openalgo` Python SDK remains 2.0.5. It has no Slack or Discord
+  method yet; call the notify endpoints directly until it does.
+
+### Contributors
+
+- **@marketcalls** - the Alerts page with Slack and Discord (#2435, #2440),
+  the four security fixes, scheduled Flow workflows (#2355, #2326), the
+  Latency Monitor groups (#2421, #2286), openalgo-charts 2.7.0 to 2.7.3 with
+  the Elliott waves, the MCP index fix, the `rotate_pepper.py` fix, the
+  dependency updates, the dark mode fix, the documentation and the release.
+- **@Kalaiviswa** - the Nuvama broker (#2461), market price protection for
+  cash symbols (#2388, #2446), Tradejini refusals (#2385, #2444), Sahi TOTP
+  keys (#2441), Fyers history (#2422, #2438), Flattrade and Kotak margins
+  (#2156, #2436, #2439), order tickets after an in-app login (#2417, #2423)
+  and the Samco, 5paisa and HDFC Sky live data follow-ups (#2397).
+- **@Mystery01092000 (Pranav Tomar)** - Paytm Money stop orders (#2404) and
+  the faster instruments endpoint (#2406).
+- **@raghav-iit (Raghav Verma)** - Paytm Money cancels (#2374).
+- **@santhiprakash (Santhi Prakash)** - the Docker records without read-only
+  `.env` mounts (#1921).
 
 ## [2.0.3.3] - 2026-11-06
 
