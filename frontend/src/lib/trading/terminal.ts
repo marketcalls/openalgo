@@ -4572,12 +4572,17 @@ export class TradingTerminal {
       this.applyingIndicators = true
       try {
         if (this.activeIndicators.every((record) => record.paneIndex !== undefined)) {
-          chart.restoreState({
+          const report = chart.restoreState({
             version: 1,
             indicators: this.activeIndicators as IndicatorState[],
             drawings: this.draw?.toJSON() ?? this.drawJson,
             alerts: this.alertJson,
           })
+          // A study that cannot be rebuilt is refused, not thrown, and the
+          // chart is left without it. Failing here keeps the tracked studies:
+          // the sync below would otherwise save the bare chart over them.
+          if (!report.applied)
+            throw new Error(report.reason ?? 'The saved studies could not be applied')
         } else {
           // Legacy duplicate healing happens during migration. Modern templates
           // may intentionally contain identical studies, including a shared pane.

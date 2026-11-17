@@ -88,7 +88,30 @@ fix, live in [docs/releases](releases/).
     cover different spans. Each group says which on its first card.
   - Not measured, as before: the time to an exchange fill, and anything
     outside the OpenAlgo API such as signing in.
-- `/trading`, Historify and every other chart now use openalgo-charts 2.7.2
+- **openalgo-charts 2.7.3 on every chart.** A correctness release. What you
+  can see on `/trading`:
+  - With an instrument's tick size known, the price axis labels only prices
+    the instrument trades at, so a tight range no longer prints a price twice
+    or a price between ticks. A logarithmic axis fits when a visible low is
+    zero or below, and dragging it zooms instead of collapsing the chart.
+  - A chart alert judges the bars a history refresh adds, so a crossing that
+    lands during a refresh now fires.
+  - A failed order book read leaves the chart's order lines in place instead
+    of clearing them, and cancelling an order from its line checks the
+    broker's answer, as modifying already did.
+  - A study **Timeframe** the chart's own bars do not divide into, such as 5
+    minutes on a 3-minute chart, is refused with a message when the study
+    cannot fetch that timeframe's history. It used to be drawn from buckets
+    of the wrong length. CPR draws no levels from a partly loaded first
+    period, KAMA steps over a missing value and HalfTrend starts from the
+    first complete bar.
+  - Renko on a decimal box size, point and figure reversals and Kagi line
+    thickness are corrected, so those charts can differ from before where
+    they were wrong. TPO and volume profile rows hold the same number of
+    ticks each, so the point of control no longer moves on a decimal row.
+  - A chart with many studies updates faster: fills paint only the bars in
+    view.
+- `/trading`, Historify and every other chart now use openalgo-charts 2.7.3
   (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
   each one shows its drawing the way the chart shows it when selected, with an
   open ring at every point you place, so a trend line has a ring at each end

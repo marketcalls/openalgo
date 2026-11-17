@@ -179,6 +179,12 @@ chart's own bars, keeps the study on the chart without drawing it, and a message
 says why. Set **Compute on** to **Underlying bars** (below) or pick Chart
 interval to draw it again.
 
+When a study cannot fetch its timeframe's own history and is computed from the
+chart's bars instead, a timeframe those bars do not divide into, such as 5
+minutes on a 3-minute chart, is refused with a message. Before, it was drawn
+from buckets of the wrong length (6 and 3 minutes, each read as 5) with nothing
+to say so. A day or longer still works on any intraday chart.
+
 Seven studies are new in this version: **ZigZag**, **52 Week High/Low**, **Zero
 Lag EMA**, **Variable Index Dynamic Average**, **Elder-Ray Index**, **Schaff
 Trend Cycle** and **Volatility Squeeze**.
@@ -407,7 +413,7 @@ Pick a tool from the left rail. A group button selects whatever you last used
 from that group again; the small corner wedge opens the full list without
 changing the selected tool.
 
-The terminal exposes all 90 drawing tools from openalgo-charts 2.7.2. Each
+The terminal exposes all 90 drawing tools from openalgo-charts 2.7.3. Each
 tool's icon shows its drawing with an open ring at every point you place.
 Channels include regression and pitchfork variants; Fibonacci and Gann include
 fans, arcs, circles and squares. Patterns include XABCD, head and shoulders and

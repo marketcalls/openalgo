@@ -446,6 +446,13 @@ nothing, which is worse than no control. Drop the row, or hand the settings to
 `getIndicator('rsi').calc` so the fold happens; for a study of your own,
 `withTimeframe(descriptor)` adds the row and the fold together.
 
+From 2.7.3 the fold refuses a timeframe the chart's bars do not divide into,
+such as 5m on a 3m chart, with an `IndicatorInputError` naming both: a 3m bar
+opening at 09:18 runs past 09:20, so the buckets would be 6 and 3 minutes
+long while each read as 5. The study shows that as its error status, which
+is right, since the trader can change the setting. A day or longer still
+takes any intraday bar.
+
 The tail does not come along either. Since 2.5.8 a built-in holds `calcTail`
 as a property a spread does not copy, so `{ ...getIndicator('ema'), id: 'x' }`
 recomputes in full. Copy it by name only when your `calc` returns the

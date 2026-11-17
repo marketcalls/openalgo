@@ -59,6 +59,21 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.3: one refusal to know about, three built-ins re-derived.** A
+  correctness release; nothing a descriptor declares changed and the registry
+  stays at 112 and the index at 438 names. A study timeframe the chart's bars
+  do not divide into (5m on a 3m chart) is refused with an
+  `IndicatorInputError` instead of folded into buckets of the wrong length,
+  for a built-in and for a study of your own wrapped in `withTimeframe`
+  (pitfall 24); a day or longer still takes any intraday bar. CPR prints no
+  levels from a partly loaded first period, KAMA steps over a missing value
+  and HalfTrend seeds from the first complete bar, so a study measured
+  against one of those re-derives its expectations. Renko on a decimal box,
+  point and figure reversals and Kagi thickness change where they were
+  wrong, so a study on those elements (`ctx.transformed`) can see different
+  ones. Fills paint only the bars in view, which is faster and draws the
+  same.
+
 - **2.7.2: nothing for a descriptor to change.** Elliott wave counts leave
   their origin unlabelled and number their waves from the second anchor,
   default to the Intermediate degree, `(1)` to `(5)`, centre each label on
