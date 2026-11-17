@@ -143,6 +143,10 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] Master contract validated offline BEFORE the in-app run: per-exchange row
       counts, sample symbols per segment vs `docs/prompt/symbol-format.md`,
       zero duplicate `(symbol, exchange)`, all common index symbols present
+- [ ] Nifty 500 check prints `NIFTY 500 COMPLETE`, on the processed rows
+      (`--rows-csv`) before the in-app run and on the live symtoken after it
+      (`scripts/check_nifty500.py`; a missing constituent is fixed in the
+      master contract)
 - [ ] Quotes / depth for EQ, FUT, option on **EVERY** exchange in `plugin.json`
       (not just NSE — Arrow's MCX needed a different code and CDS/NCO turned
       out unsupported) + NSE_INDEX/BSE_INDEX
