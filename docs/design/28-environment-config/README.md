@@ -49,7 +49,7 @@ BROKER_API_SECRET_MARKET = 'YOUR_BROKER_MARKET_API_SECRET'
 REDIRECT_URL = 'http://127.0.0.1:5000/<broker>/callback'
 
 # Enabled brokers (comma-separated)
-# Copy the current enabled-broker list from .sample.env (38 plugins in this tree).
+# Copy the current enabled-broker list from .sample.env (39 plugins in this tree).
 VALID_BROKERS = '<comma-separated broker keys from .sample.env>'
 ```
 

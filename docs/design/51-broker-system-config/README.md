@@ -10,7 +10,7 @@
 | `broker/*/plugin.json` | Broker type, supported exchanges and capability metadata |
 | Main settings tables | Analyzer mode, SMTP, notification and application preferences |
 
-`utils/broker_keys.py` owns credential resolution. When `REDIRECT_URL` names a broker and `BROKER_API_KEY` is set, that broker uses its `.env` keys even if database keys exist for it. Saved keys serve every other broker, or every broker when `.env` names none. A pure `.env` installation keeps its existing values. `VALID_BROKERS` gates which brokers can be selected; the tree currently has 38 plugins.
+`utils/broker_keys.py` owns credential resolution. When `REDIRECT_URL` names a broker and `BROKER_API_KEY` is set, that broker uses its `.env` keys even if database keys exist for it. Saved keys serve every other broker, or every broker when `.env` names none. A pure `.env` installation keeps its existing values. `VALID_BROKERS` gates which brokers can be selected; the tree currently has 39 plugins.
 
 ## Broker Pages And APIs
 

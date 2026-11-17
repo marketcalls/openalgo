@@ -18,7 +18,7 @@ day cost you the morning.
 ## 1. What OpenAlgo is (3 minute read)
 
 OpenAlgo is a self-hosted algorithmic trading platform for Indian markets. It puts
-one common API in front of 38 broker plugins, including Dhan Sandbox, Rupeezy
+one common API in front of 39 broker plugins, including Dhan Sandbox, Rupeezy
 and Sahi. Strategies use shared order and symbol formats; exchange, order and
 market-data capabilities still depend on the broker.
 
@@ -400,7 +400,7 @@ git push --force-with-lease
 These are not style preferences. They are the things maintainers actually send PRs
 back for.
 
-**One feature or one fix per pull request.** OpenAlgo supports 38 broker plugins, and
+**One feature or one fix per pull request.** OpenAlgo supports 39 broker plugins, and
 every change has to be validated across that surface. Large combined PRs are not
 reviewable and will be asked to be split. The one exception is a brand new broker
 integration, which is self-contained inside its own `broker/` directory.
