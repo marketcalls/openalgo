@@ -42,8 +42,8 @@ families, and picking the right template saves days:
 | Family | Members already in the tree | Auth shape | Copy |
 | --- | --- | --- | --- |
 | **OAuth2 / checksum redirect** | zerodha, upstox, fyers, dhan, arrow, groww, paytm, aliceblue, definedge | Redirect to broker, get `request_token`/`code` back on callback, exchange it (often SHA256 checksum of `api_key + token + secret`) | **`broker/zerodha/`** |
-| **Noren / Finvasia** | shoonya, flattrade, tradesmart, zebu, ibulls, wisdom | Shared upstream codebase. Near-identical endpoints, `jData=`/`jKey=` form bodies, susurl/scrip-master CSVs per exchange | **`broker/shoonya/`** or `broker/flattrade/` |
-| **Symphony XTS** | fivepaisaxts, jainamxts, compositedge, rmoney, iiflcapital | Dual credentials: interactive + market-data. `BROKER_API_KEY_MARKET` / `_SECRET_MARKET` | **`broker/fivepaisaxts/`** |
+| **Noren / Finvasia** | shoonya, flattrade, tradesmart, zebu | Shared upstream codebase. Near-identical endpoints, `jData=`/`jKey=` form bodies, susurl/scrip-master CSVs per exchange | **`broker/shoonya/`** or `broker/flattrade/` |
+| **Symphony XTS** | fivepaisaxts, jainamxts, compositedge, rmoney, iifl, ibulls, wisdom | Dual credentials: interactive + market-data. `BROKER_API_KEY_MARKET` / `_SECRET_MARKET` | **`broker/fivepaisaxts/`** |
 | **Direct login + TOTP** | angel, mstock, motilal, kotak, firstock, samco, nubra, tradejini, fivepaisa | User submits clientcode/password/TOTP in a form; no redirect | **`broker/angel/`** |
 
 Special cases: **`broker/fyers/`** if the broker offers depth beyond 5 levels

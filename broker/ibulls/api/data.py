@@ -222,6 +222,18 @@ class BrokerData:
             )
             return None
 
+    def get_ltp(self, symbol: str, exchange: str) -> float:
+        """Last traded price for one instrument, or 0.0 when there is none.
+
+        One touchline request (xtsMessageCode 1502), without the open interest
+        request get_quotes adds: the order path prices a MARKET order from the
+        LTP alone and should not wait on a second round trip.
+        """
+        symbol_info, brexchange = self._get_instrument_token(symbol, exchange)
+        token = {"exchangeSegment": brexchange, "exchangeInstrumentID": symbol_info.token}
+        market_data = self._fetch_market_data(token, 1502) or {}
+        return float(market_data.get("Touchline", {}).get("LastTradedPrice") or 0)
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
         Get real-time quotes for given symbol including Open Interest
