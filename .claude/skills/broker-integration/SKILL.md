@@ -282,7 +282,7 @@ See the capability list in `references/cross-broker-reference.md`.
 1. **Research** — API docs, pick the family template, read the common contracts, inspect a live `symtoken`, download the broker SDK.
 2. **`plugin.json` + `api/auth_api.py`** — get login working end-to-end first. Nothing else can be tested until a token is stored.
 3. **Platform wiring** — `VALID_BROKERS` in `.sample.env` and the `start.sh` fallback (installers take it from `.sample.env`), `utils/broker_login.py` (how the login starts and how its answer is checked), `utils/broker_keys.BROKER_NAMES`, `utils/broker_setup_guide.py` (its Broker Configuration fields and sign-in sentence; Select Broker lists brokers from the server, so there is no frontend list), `websocket_proxy/__init__.py`, `brlogin.py` branch that ends in `_complete_login(...)`, and `BrokerTOTP.tsx` for a form broker. See `references/auth-and-login.md`, which also covers the state a broker must return, account checks from the broker's own answer, the refusal codes and the tests a login needs. Without this the broker will not even appear on Select Broker, or its login answer is refused.
-4. **`database/master_contract_db.py`** — symbols must exist before quotes/orders can be tested. Validate offline against the live symtoken reference.
+4. **`database/master_contract_db.py`**: symbols must exist before quotes/orders can be tested. Validate offline against the live symtoken reference, then run the **Nifty 500 check** until it prints `NIFTY 500 COMPLETE` (see below). A missing constituent is fixed in the master contract, never worked around in a consumer.
 5. **`mapping/` + `api/data.py`** — quotes, depth, history.
 6. **`api/order_api.py` + `mapping/order_data.py`** — orders and books.
 7. **`api/funds.py`, `api/margin_api.py`** — funds and margin.
@@ -294,3 +294,28 @@ See the capability list in `references/cross-broker-reference.md`.
 - **Analyze mode passing proves nothing.** It routes to the sandbox and never calls your code.
 - **A clean code review proves little.** All six Arrow bugs survived review; every one needed a live probe.
 - **NSE working proves nothing about the other exchanges.** Test every exchange listed in your `plugin.json` — that list is a promise.
+- **A symbol search that finds HFCL proves nothing about its symbol.** Search matches substrings, so it shows HFCL-BE for "HFCL". Only an exact lookup of NSE's own list does: the Nifty 500 check below.
+
+## The Nifty 500 check (required for every broker)
+
+OpenAlgo's NSE equity symbol is the exchange's base symbol, which is exactly the
+`Symbol` column of NSE's index constituent list. Every broker plugin must store
+all 500 constituents under that symbol on `NSE`, each exactly once:
+
+```bash
+# After the broker's master contract download (log in first): checks the live symtoken
+uv run python .claude/skills/broker-integration/scripts/check_nifty500.py
+
+# Before anything is written: check the plugin's processed rows
+#   process_<broker>_csv(path)[["symbol", "brsymbol", "exchange"]].to_csv("rows.csv", index=False)
+uv run python .claude/skills/broker-integration/scripts/check_nifty500.py --rows-csv rows.csv
+```
+
+It downloads NSE's `ind_nifty500list.csv` (or takes `--nifty-csv` for a saved
+copy), skips rows NSE marks as placeholders (ISIN beginning `DUM`, such as
+`DUMMYHEG`) and prints `NIFTY 500 COMPLETE` with exit code 0. Anything else is
+a master contract defect to fix before the broker ships: for each missing
+constituent it prints what the master contract holds instead. The usual cause
+is a series suffix kept in the OpenAlgo symbol (see `references/master-contract.md`,
+"series suffixes"). Zerodha failed it with 495 of 500 until HFCL-BE, STLTECH-BE,
+EMBASSY-RR, BIRET-RR and BAGMANE-RR were given their base symbols.
