@@ -14,6 +14,18 @@ Open `http://127.0.0.1:5000`, or your installation's configured Host Server URL.
 
 The installers and the first startup without a `.env` generate unique `APP_KEY`, `API_KEY_PEPPER` and `FERNET_SALT` values. Startup also replaces public sample placeholders on a fresh database. Keep `.env` private and back it up with your databases.
 
+### If OpenAlgo cannot write `.env`
+
+Startup writes `.env` itself. If the file is read-only (a bind mount, or a `.env` owned by another user), startup prints what to do instead of writing it. Generate one value per key:
+
+```bash
+uv run python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Run that once for each value and paste the three outputs into `APP_KEY`, `API_KEY_PEPPER` and `FERNET_SALT` in `.env`, then restart.
+
+On an installation that already has a database, regenerate only `APP_KEY`. `API_KEY_PEPPER` and `FERNET_SALT` must keep their current values or stored credentials become unreadable; if startup reports a public sample pepper, use the `upgrade/rotate_pepper.py` migration described below. If only `FERNET_SALT` cannot be saved, startup warns and keeps the legacy static salt until `.env` is writable; no manual value is needed.
+
 Do not replace these values as a routine setup or upgrade step after creating your account. `API_KEY_PEPPER` and `FERNET_SALT` protect stored credentials; changing them without migration can make that data unreadable. If an existing installation reports a public sample pepper, follow the startup message and the dedicated `upgrade/rotate_pepper.py` migration. See [Installation](../04-installation/README.md) for install and backup procedures.
 
 ## Create the Administrator Account
