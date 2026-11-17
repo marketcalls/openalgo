@@ -110,7 +110,8 @@ def test_pocketful_repeated_connect_during_backoff_keeps_one_retry_thread():
             def close(self):
                 pass
         module.websocket.WebSocketApp = Socket
-        module.get_auth_token = lambda *_args, **_kwargs: "token"
+        # The stored Pocketful token carries the client id the socket URL needs.
+        module.get_auth_token = lambda *_args, **_kwargs: "C1:::token"
 
         adapter = object.__new__(module.PocketfulWebSocketAdapter)
         adapter.logger = logging.getLogger("pocketful-retry-test")

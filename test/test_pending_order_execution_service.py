@@ -264,7 +264,8 @@ def test_only_pilot_brokers_ship_gtt_modules():
     # The set is exhaustive on purpose: a broker gaining a gtt_api module by
     # accident should fail here rather than silently start routing GTTs.
     # Rupeezy joined with its Vortex GTT API (single + OCO).
-    assert brokers == {"angel", "dhan", "fyers", "rupeezy", "upstox", "zerodha"}
+    # Pocketful joined with its event GTT API (single only; OCO is refused).
+    assert brokers == {"angel", "dhan", "fyers", "pocketful", "rupeezy", "upstox", "zerodha"}
 
 
 def test_queue_order_remains_successful_when_notification_fails(monkeypatch):
