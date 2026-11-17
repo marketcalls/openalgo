@@ -8,6 +8,7 @@ from flask_restx import Resource
 from database.auth_db import db_session as auth_db_session
 from database.auth_db import get_broker_name
 from database.latency_db import OrderLatency, init_latency_db, latency_session, purge_old_data_logs
+from database.latency_groups import ORDER_TAGS, RETENTION_DAYS, TAG_FOR_NAMESPACE
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,31 +19,16 @@ logger = get_logger(__name__)
 # long-lived thread.
 _latency_log_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="latency-log")
 
-#: Latency records of these types are kept forever; everything else is a data
-#: query and is purged after a week. Must stay in step with the set in
-#: ``database.latency_db.purge_old_data_logs``, which does the deleting -- a
-#: type here but missing there is purged despite being an order.
+#: Latency records with these tags are kept forever; every other record is a
+#: data query and is removed after a week. The list itself is
+#: ``database.latency_groups.ORDER_TAGS``, the orders group, which is also what
+#: ``database.latency_db.purge_old_data_logs`` leaves alone. There used to be a
+#: copy here and a copy there, each asking to be kept in step with the other.
 #:
 #: A GTT is an order instruction, not a data query. It can also rest for a year
 #: before firing, so purging its placement latency after a week would discard
 #: the record long before the order it describes exists.
-KEEP_FOREVER_TYPES = frozenset(
-    {
-        "PLACE",
-        "SMART",
-        "MODIFY",
-        "CANCEL",
-        "CLOSE",
-        "CANCEL_ALL",
-        "BASKET",
-        "SPLIT",
-        "OPTIONS",
-        "OPTIONS_MULTI",
-        "GTT_PLACE",
-        "GTT_MODIFY",
-        "GTT_CANCEL",
-    }
-)
+KEEP_FOREVER_TYPES = ORDER_TAGS
 
 
 def _log_latency_async(
@@ -349,66 +335,25 @@ def init_latency_monitoring(app):
     # Initialize the latency database
     init_latency_db()
 
-    # Auto-purge old data endpoint logs (keep order logs forever, purge data logs after 7 days)
-    purge_old_data_logs(days=7)
+    # Order records are kept forever; every other record goes after a week.
+    purge_old_data_logs(days=RETENTION_DAYS)
 
     # Import all RESTX API resources
     from restx_api import api
 
-    # Map of endpoint names to their types
-    # ORDER endpoints: Keep latency logs forever
-    # DATA endpoints: Auto-purge after 7 days
-    api_types = {
-        # Order execution endpoints (keep forever)
-        "place_order": "PLACE",
-        "place_smart_order": "SMART",
-        "modify_order": "MODIFY",
-        "cancel_order": "CANCEL",
-        "close_position": "CLOSE",
-        "cancel_all_order": "CANCEL_ALL",
-        "basket_order": "BASKET",
-        "split_order": "SPLIT",
-        "options_order": "OPTIONS",
-        "options_multiorder": "OPTIONS_MULTI",
-        # GTT. These were already being wrapped - an unmapped namespace falls
-        # back to its uppercased name - but as PLACE_GTT_ORDER etc, which does
-        # not match the ORDER_TYPES set below, so GTT latency was being purged
-        # after 7 days as though it were a data query.
-        "place_gtt_order": "GTT_PLACE",
-        "modify_gtt_order": "GTT_MODIFY",
-        "cancel_gtt_order": "GTT_CANCEL",
-        # Data/Account endpoints (auto-purge after 7 days)
-        "quotes": "QUOTES",
-        "history": "HISTORY",
-        "depth": "DEPTH",
-        "intervals": "INTERVALS",
-        "funds": "FUNDS",
-        "orderbook": "ORDERBOOK",
-        "tradebook": "TRADEBOOK",
-        "positionbook": "POSITIONBOOK",
-        "holdings": "HOLDINGS",
-        "orderstatus": "STATUS",
-        "openposition": "POSITION",
-        "instruments": "INSTRUMENTS",
-        "search": "SEARCH",
-        "symbol": "SYMBOL",
-        "expiry": "EXPIRY",
-        "margin": "MARGIN",
-        "option_greeks": "GREEKS",
-        "multi_option_greeks": "MULTI_GREEKS",
-        "option_symbol": "OPTION_SYMBOL",
-        "synthetic_future": "SYNTHETIC",
-        "ticker": "TICKER",
-        "ping": "PING",
-        "analyzer": "ANALYZER",
-        "chart": "CHART",
-        "market/holidays": "MARKET_HOLIDAYS",
-        "market/timings": "MARKET_TIMINGS",
-    }
+    # The tag each endpoint is recorded under comes from
+    # database.latency_groups, keyed by the namespace's own name. The table
+    # that used to be here was keyed by names typed in by hand, and six of them
+    # matched no namespace: an unmatched namespace falls back to its uppercased
+    # name, so options orders were recorded as OPTIONSORDER and
+    # OPTIONSMULTIORDER, which the keep list did not have, and their latency
+    # was deleted after a week as though they were data queries. The fallback
+    # stays for a namespace nobody has placed in a group yet, where it lands in
+    # "Other"; test/test_latency_groups.py fails until it is placed.
 
     # Wrap all API endpoints with latency tracking
     for namespace in api.namespaces:
-        api_type = api_types.get(namespace.name, namespace.name.upper())
+        api_type = TAG_FOR_NAMESPACE.get(namespace.name, namespace.name.upper())
 
         # Get all resources in the namespace
         for resource in namespace.resources:

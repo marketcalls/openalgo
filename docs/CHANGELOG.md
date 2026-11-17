@@ -69,6 +69,25 @@ fix, live in [docs/releases](releases/).
   fails, `migrate_all.py` reports the failure and exits non-zero instead of
   calling it a warning.
 
+- **The Latency Monitor (`/logs/latency`) shows one group of endpoints at a
+  time.** Buttons at the top choose between Orders, Account and books,
+  Market data, Options, Symbols and settings, Tools and alerts, and All
+  calls, each with how many calls it holds. The page opens on Orders, and
+  every figure, the broker table, the recent list and the CSV export are for
+  the chosen group only. A new By Endpoint table lists each endpoint of the
+  group on its own, so history is no longer averaged into quotes, or either
+  into orders. What changes for you:
+  - The numbers under Orders will differ from what the page showed before,
+    usually lower in count. They were not order figures before.
+  - The Excellent, Good, Acceptable and Slow ratings and the under 150 ms
+    figure are shown for Orders only. A history call that takes a second is
+    not rated as a slow order.
+  - The latency distribution now counts every recorded order. It used to
+    count the 100 most recent calls of any kind.
+  - Orders are kept for all time and other calls for 7 days, so the groups
+    cover different spans. Each group says which on its first card.
+  - Not measured, as before: the time to an exchange fill, and anything
+    outside the OpenAlgo API such as signing in.
 - `/trading`, Historify and every other chart now use openalgo-charts 2.7.2
   (from 2.6.9). The drawing tool icons on the `/trading` rail are redrawn:
   each one shows its drawing the way the chart shows it when selected, with an
@@ -104,6 +123,39 @@ fix, live in [docs/releases](releases/).
   `NSE_INDEX`) and the BSE indices' expiries come from `BFO`. An exchange
   the assistant names is still used as given, and every other symbol keeps
   the NSE and NFO defaults.
+- **Latency Monitor counting every API call as an order** (#2421, #2286). The
+  page at `/logs/latency` put every recorded call into one set of figures and
+  called them orders. A chart or a scanner makes hundreds of history calls
+  for each order, so those decided the average, the P99 and the share under
+  150 ms: an install that had never placed an order through the API could
+  read "2,607 orders tracked". See **Changed** for what the page does now.
+- **Latency of options orders deleted after a week.** Order latency is kept
+  for good and everything else for 7 days. Options orders and options
+  multi-leg orders were recorded under names the keep list did not have, so
+  their records went with the data calls. They are kept now, and records
+  from the last week that are still there are counted as the orders they are.
+  Records already deleted cannot be brought back.
+- **Scheduled Flow workflows stopping until OpenAlgo was restarted** (#2355,
+  #2326). Every scheduled workflow could stop at the same moment and stay
+  stopped: the Flow page still showed them Active, switching one off and on
+  again logged "Added job", and nothing ran until a restart. An exit workflow
+  that should have closed an open position was among the ones that did not
+  run. Two faults made it:
+  - A workflow run kept the database locked for writing for as long as it ran.
+    A run that took more than 15 seconds, or a workflow running every few
+    seconds, made every other write to `openalgo.db` fail with "database is
+    locked", including other workflows recording their own runs. A run now
+    holds nothing while it works.
+  - One of the writes that failed was the scheduler saving a workflow's next
+    run time, and that single failure ended the scheduler. It now keeps the
+    schedule in memory, keeps running every workflow on time, each run once,
+    and saves when the database allows. A stopped scheduler is also started
+    again the next time a workflow is activated.
+  The Historify download scheduler had the same weakness and has the same
+  protection. Nothing to configure. If you restarted OpenAlgo to work around
+  this, you no longer need to. One thing is unchanged: a run that cannot
+  record itself because the database is busy is still skipped and logged, not
+  run without a record.
 - **`upgrade/rotate_pepper.py` on an install with its own `FERNET_SALT`.**
   It derived the encryption key with the legacy static salt, so on any
   install that has a per-install salt (every install started since that salt
@@ -115,6 +167,26 @@ fix, live in [docs/releases](releases/).
   (`db/backups/openalgo.db.before-rotate-pepper-<time>`) still holds the data
   under the old pepper; restoring it also needs the old `API_KEY_PEPPER` back
   in `.env`.
+
+### Dependencies
+
+- `dnspython` 2.9.0 to 2.9.2 (GHSA-vvf4-9x63-8xvv, high): a crafted zone file
+  could use up memory and CPU. Nothing in OpenAlgo imports dnspython or reads
+  zone files; it comes with the email-validator package and, on the eventlet
+  web server, looks up the broker hosts. Both were checked on 2.9.2.
+- `tornado` 6.6 to 6.6.1 (GHSA-5cjw-f85j-cv6r, low): an open redirect through
+  a path starting with three slashes. OpenAlgo does not import tornado or
+  serve HTTP with it; it is installed for the Jupyter kernel packages. A
+  kernel was started and ran code on 6.6.1.
+- `soupsieve` to 4.1 (GHSA-mmhr-3c5m-f64f and GHSA-6655-6qjp-jx7x, high;
+  GHSA-7g44-g9rc-x53w and GHSA-4j63-6c4x-wfg4, medium): a crafted CSS selector
+  or page could take a very long time to match. Nothing in OpenAlgo imports
+  it; it comes with the portfolio statistics library, through yfinance and
+  beautifulsoup4. It was 2.9.1 in `uv.lock` and not listed in the
+  requirements files at all, so an Ubuntu server updated with `update.sh`
+  kept whichever version it already had. It is now pinned in both, and the
+  next update installs 4.1.
+- No behaviour change is expected from any of the three.
 
 ## [2.0.3.3] - 2026-11-06
 

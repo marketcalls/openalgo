@@ -465,6 +465,37 @@ SPECS = {
         error={"error": "Invalid session"},
         patches={"resolve_position": lambda position: ("SBIN", "NSE")},
     ),
+    "nuvama": Spec(
+        path="/positions/net/",
+        br_symbol="INE062A01020",
+        auth="AUTH:::SOURCE:::APPID:::ACC01:::EQ:::KEY01",
+        # Nuvama answers an empty book with an error object (HTTP 222 in
+        # production) whose code says there are no positions.
+        book=lambda q: (
+            {
+                "error": {
+                    "actCd": "54",
+                    "errCd": "ETRD0004",
+                    "errMsg": "Seems like there are no positions in your account currently",
+                }
+            }
+            if q is None
+            else {
+                "data": {
+                    "pos": [
+                        {
+                            "sym": TOKEN,
+                            "trdSym": "INE062A01020",
+                            "exc": "NSE",
+                            "prdCode": "MIS",
+                            "ntQty": str(q),
+                        }
+                    ]
+                }
+            }
+        ),
+        error={"error": {"actCd": "52", "errCd": "EGN0011", "errMsg": "Session Expired"}},
+    ),
     "paytm": Spec(
         path="/orders/v1/position",
         book=lambda q: {

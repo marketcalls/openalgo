@@ -721,6 +721,29 @@ GUIDES = {
         "MPIN to finish.",
         "redirect_hint": "",
     },
+    "nuvama": {
+        "name": "Nuvama",
+        "sign_in": "redirect",
+        "fields": (
+            {
+                "hint": "The API key Nuvama issued for your API Connect app.",
+                "key": "api_key",
+                "label": "API Key",
+                "required": True,
+                "secret": False,
+            },
+            {
+                "hint": "The API secret Nuvama issued with the key.",
+                "key": "api_secret",
+                "label": "API Secret",
+                "required": True,
+                "secret": True,
+            },
+        ),
+        "banner": "Login with Nuvama takes you to Nuvama's login page. Enter your login id, "
+        "password and OTP there, and Nuvama sends you back to OpenAlgo.",
+        "redirect_hint": "Register this exact address as the redirect URL of your Nuvama API key.",
+    },
     "paytm": {
         "name": "Paytm Money",
         "sign_in": "redirect",
