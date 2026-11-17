@@ -394,7 +394,13 @@ class WisdomWebSocketClient:
         for instrument in instruments:
             self.subscriptions.pop((xts_message_code, *self._instrument_key(instrument)), None)
 
-    def subscribe_batch(self, mode: int, instruments: list[dict]) -> None:
+    def subscribe_batch(
+        self,
+        mode: int,
+        instruments: list[dict],
+        still_wanted: Callable[[dict], bool] | None = None,
+        subscribed: list[dict] | None = None,
+    ) -> list[dict]:
         """
         Subscribe instruments of one mode using XTS HTTP API
 
@@ -407,22 +413,40 @@ class WisdomWebSocketClient:
         Args:
             mode: Subscription mode (1=LTP, 2=Quote, 3=Depth)
             instruments: Instruments to subscribe
+            still_wanted: Asked before each request; an instrument it reports
+                as no longer wanted (unsubscribed while an earlier request of
+                this batch was in flight) is not sent.
+            subscribed: Filled in as the server confirms instruments, so the
+                caller still learns what was subscribed when a later request
+                raises.
+
+        Returns:
+            list[dict]: The instruments the server confirmed (or reported as
+            already subscribed).
 
         Raises:
             RuntimeError: Socket.IO is not connected.
             requests.RequestException: A request could not be sent; the
                 caller retries the instruments.
         """
+        if subscribed is None:
+            subscribed = []
         if not self.connected:
             raise RuntimeError("Socket.IO not connected")
+
+        def wanted(items: list[dict]) -> list[dict]:
+            return items if still_wanted is None else [i for i in items if still_wanted(i)]
 
         xts_message_code = self.MODE_TO_XTS_CODE.get(mode, 1501)
         step = self.MAX_INSTRUMENTS_PER_REQUEST
         for offset in range(0, len(instruments), step):
-            chunk = instruments[offset : offset + step]
+            chunk = wanted(instruments[offset : offset + step])
+            if not chunk:
+                continue
             outcome = self._send_subscription(xts_message_code, chunk)
             if outcome == "ok" or (outcome == "duplicate" and len(chunk) == 1):
                 self._remember(mode, xts_message_code, chunk)
+                subscribed.extend(chunk)
                 continue
             if len(chunk) == 1:
                 continue
@@ -433,12 +457,19 @@ class WisdomWebSocketClient:
             for instrument in chunk:
                 if not self.connected:
                     raise RuntimeError("Socket.IO not connected")
+                # Each request here can take seconds; an instrument
+                # unsubscribed meanwhile is left out.
+                if not wanted([instrument]):
+                    continue
                 if self._send_subscription(xts_message_code, [instrument]) in ("ok", "duplicate"):
                     self._remember(mode, xts_message_code, [instrument])
+                    subscribed.append(instrument)
 
         self.logger.debug(
-            f"Subscribed to {len(instruments)} instruments with XTS code {xts_message_code} (mode {mode})"
+            f"Subscribed to {len(subscribed)} of {len(instruments)} instruments with XTS code "
+            f"{xts_message_code} (mode {mode})"
         )
+        return subscribed
 
     def _send_subscription(self, xts_message_code: int, instruments: list[dict]) -> str:
         """POST one subscription request.
@@ -496,17 +527,18 @@ class WisdomWebSocketClient:
             mode: Subscription mode
             instruments: List of instruments to unsubscribe from
         """
-        if not self.connected:
-            return
-
         # Derive the code from the mode, the same way subscribe_batch() does
         xts_message_code = self.MODE_TO_XTS_CODE.get(mode, 1501)
 
+        # Remove from subscriptions, connected or not: the bookkeeping must
+        # not outlive the subscription
+        self._forget(xts_message_code, instruments)
+
+        if not self.connected:
+            return
+
         # Prepare unsubscription request
         unsubscription_request = {"instruments": instruments, "xtsMessageCode": xts_message_code}
-
-        # Remove from subscriptions
-        self._forget(xts_message_code, instruments)
 
         # Send unsubscription via HTTP PUT (different from subscription POST)
         try:

@@ -131,6 +131,10 @@ class World:
         self.handshake_started = threading.Event()
         self.reply = None  # callable(body) -> FakeResponse, or None for success
         self.before_post = None  # callable(body), runs before the reply
+        # What the broker holds subscribed: (xts code, instrument id). A
+        # request held open by before_post is applied when it returns, so an
+        # unsubscribe made meanwhile reaches the broker first.
+        self.subscribed = set()
 
     def post(self, url, json=None, headers=None, timeout=None):
         if url.endswith("/auth/login"):
@@ -140,16 +144,27 @@ class World:
             return FakeResponse({"type": "success", "result": {"token": token, "userID": "U1"}})
         if self.before_post is not None:
             self.before_post(json)
+        if self.reply is not None:
+            response = self.reply(json)
+        else:
+            response = FakeResponse({"type": "success", "result": {"listQuotes": []}})
         with self.lock:
             self.posts.append((headers["Authorization"], json))
-        if self.reply is not None:
-            return self.reply(json)
-        return FakeResponse({"type": "success", "result": {"listQuotes": []}})
+            if response.status_code == 200 and response.body.get("type") == "success":
+                for i in json["instruments"]:
+                    self.subscribed.add((json["xtsMessageCode"], i["exchangeInstrumentID"]))
+        return response
 
     def put(self, url, json=None, headers=None, timeout=None):
         with self.lock:
             self.puts.append((headers["Authorization"], json))
+            for i in json["instruments"]:
+                self.subscribed.discard((json["xtsMessageCode"], i["exchangeInstrumentID"]))
         return FakeResponse({"type": "success"})
+
+    def holds(self, code, instrument_id):
+        with self.lock:
+            return (code, instrument_id) in self.subscribed
 
     def posted_ids(self, token=None):
         return [
@@ -515,10 +530,105 @@ def test_unsubscribe_cancels_a_queued_subscribe(adapter, world):
     adapter.subscribe("SYM1", "NSE", 2)
     adapter.subscribe("SYM2", "NSE", 2)
     adapter.unsubscribe("SYM1", "NSE", 2)
+    # Taken out of the queue itself, not only skipped when the batch is sent
+    with adapter.lock:
+        assert (2, "1", "1") not in adapter.pending_subscriptions
     wait_until(lambda: sender_idle(adapter))
     time.sleep(0.05)
 
     assert world.posted_ids() == ["2"]
+
+
+def refuse_batches(body):
+    """Refuse any request of several instruments, as XTS may for a mixed batch."""
+    if len(body["instruments"]) > 1:
+        return FakeResponse(
+            {"type": "error", "code": "e-session-0002", "description": "Already Subscribed"},
+            status_code=400,
+        )
+    return FakeResponse({"type": "success", "result": {"listQuotes": []}})
+
+
+def hold_post(world, ids):
+    """Hold the subscribe request for exactly `ids` open until released."""
+    held, release = threading.Event(), threading.Event()
+
+    def before_post(body):
+        if [i["exchangeInstrumentID"] for i in body["instruments"]] == ids:
+            held.set()
+            release.wait(5)
+
+    world.before_post = before_post
+    return held, release
+
+
+def in_another_thread(target, *args):
+    caller = threading.Thread(target=target, args=args)
+    caller.start()
+    caller.join(5)
+    assert not caller.is_alive()
+
+
+def test_unsubscribe_during_the_one_at_a_time_retry_is_honoured(adapter, world):
+    # The batch is refused, its instruments go one at a time, and instrument
+    # 2 is unsubscribed while the request for instrument 1 is still open.
+    world.reply = refuse_batches
+    held, release = hold_post(world, ["1"])
+    for n in (1, 2, 3):
+        adapter.subscribe(f"SYM{n}", "NSE", 2)
+    connect(adapter, world)
+    assert held.wait(3)
+
+    in_another_thread(adapter.unsubscribe, "SYM2", "NSE", 2)
+    sent_before = len(world.posts)
+    release.set()
+    wait_until(lambda: sender_idle(adapter) and world.holds(1501, "3"))
+
+    assert not world.holds(1501, "2"), "instrument 2 was left subscribed at the broker"
+    assert world.holds(1501, "1")
+    sent_after = [
+        i["exchangeInstrumentID"] for _, b in world.posts[sent_before:] for i in b["instruments"]
+    ]
+    assert sent_after == ["1", "3"], "the retry subscribed an instrument dropped meanwhile"
+    assert list(adapter.subscriptions) == ["SYM1_NSE_2", "SYM3_NSE_2"]
+
+
+def test_unsubscribe_while_the_batch_request_is_in_flight_is_honoured(adapter, world):
+    held, release = hold_post(world, ["1", "2", "3"])
+    for n in (1, 2, 3):
+        adapter.subscribe(f"SYM{n}", "NSE", 2)
+    connect(adapter, world)
+    assert held.wait(3)
+
+    # Its unsubscribe reaches the broker first; the batch's subscribe lands after.
+    in_another_thread(adapter.unsubscribe, "SYM2", "NSE", 2)
+    release.set()
+    wait_until(lambda: sender_idle(adapter) and world.holds(1501, "1"))
+
+    assert not world.holds(1501, "2"), "instrument 2 was left subscribed at the broker"
+    assert world.holds(1501, "1") and world.holds(1501, "3")
+    # Dropped from the client's own bookkeeping too: (code, segment, id).
+    assert (1501, "1", "2") not in adapter.ws_client.subscriptions
+    assert (1501, "1", "1") in adapter.ws_client.subscriptions
+
+
+def test_resubscribe_after_an_in_flight_unsubscribe_stays_subscribed(adapter, world):
+    held, release = hold_post(world, ["1", "2", "3"])
+    for n in (1, 2, 3):
+        adapter.subscribe(f"SYM{n}", "NSE", 2)
+    connect(adapter, world)
+    assert held.wait(3)
+
+    # Dropped and asked for again while the batch is in flight: the
+    # clean-up after the batch must not undo the newer subscribe.
+    in_another_thread(adapter.unsubscribe, "SYM2", "NSE", 2)
+    in_another_thread(adapter.subscribe, "SYM2", "NSE", 2)
+    release.set()
+    wait_until(lambda: sender_idle(adapter) and world.holds(1501, "1"))
+    time.sleep(0.1)
+
+    assert world.holds(1501, "2"), "the newer subscribe of instrument 2 was undone"
+    assert "SYM2_NSE_2" in adapter.subscriptions
 
 
 def test_initial_quotes_of_a_batch_are_published(adapter, world):

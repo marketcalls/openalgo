@@ -437,6 +437,47 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for instrument in sub["instruments"]
         }
 
+    def _is_wanted(self, mode: int, instrument: dict) -> bool:
+        """Whether a stored subscription still asks for this instrument in this mode."""
+        key = self._instrument_key(instrument)
+        with self.lock:
+            return any(
+                sub["mode"] == mode
+                and any(self._instrument_key(i) == key for i in sub["instruments"])
+                for sub in self.subscriptions.values()
+            )
+
+    def _release_unwanted(self, client, mode: int, subscribed: list) -> None:
+        """Unsubscribe at the broker what a batch subscribed after it was dropped.
+
+        The sender takes a batch out of the queue before sending it, so an
+        unsubscribe() landing while one of the batch's requests is in flight
+        finds nothing queued to cancel; its own unsubscribe request can reach
+        the broker before the subscribe does. Whatever the batch subscribed
+        that is no longer in the book is unsubscribed here.
+
+        Every subscribe reaches the broker through the sender thread that
+        calls this: subscribe() and _resubscribe_all() only queue. So a
+        subscribe of the same instrument made after the check below is queued
+        behind this unsubscribe, sent after it, and never undone by it.
+        """
+        if not subscribed:
+            return
+        with self.lock:
+            if not self.running:
+                return  # disconnect() ends the whole session
+            wanted = self._wanted_locked()
+            dropped = [i for i in subscribed if (mode, *self._instrument_key(i)) not in wanted]
+        if not dropped:
+            return
+        self.logger.info(
+            f"Unsubscribing {len(dropped)} instrument(s) dropped while their subscribe was in flight"
+        )
+        try:
+            client.unsubscribe(mode, dropped)
+        except Exception:
+            self.logger.exception("Error unsubscribing instruments dropped during a subscribe")
+
     def _send_pending_subscriptions(self, stop_event: threading.Event) -> None:
         """Drain the queue into batched subscribe requests, outside the lock.
 
@@ -444,6 +485,10 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
         _queue_subscriptions_locked() holds when it checks whether a sender
         is running, so an instrument queued as this thread exits is never
         left behind.
+
+        This is the only thread that sends subscribe requests, which is what
+        lets _release_unwanted() undo a dropped instrument without racing a
+        newer subscribe of it.
         """
         me = threading.current_thread()
         failures = 0
@@ -466,36 +511,53 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     batch_mode, batch = self._take_batch_locked()
                     client = self.ws_client
 
+                subscribed = []
+                error = None
                 try:
-                    client.subscribe_batch(batch_mode, batch)
+                    client.subscribe_batch(
+                        batch_mode,
+                        batch,
+                        still_wanted=lambda i, m=batch_mode: self._is_wanted(m, i),
+                        subscribed=subscribed,
+                    )
+                except Exception as e:
+                    error = e
+                # On success and on failure: a request that raised may follow
+                # others the server had already confirmed.
+                self._release_unwanted(client, batch_mode, subscribed)
+
+                if error is None:
                     failures = 0
                     self.logger.debug(
                         f"Sent batched subscription: {len(batch)} instruments in mode {batch_mode}"
                     )
                     delay = self.SUBSCRIPTION_DELAY
-                except Exception as e:
+                else:
                     failures += 1
+                    done = {self._instrument_key(i) for i in subscribed}
                     with self.lock:
                         if stop_event.is_set() or not self.running:
                             self._sender_thread = None
                             return
-                        # Back to the front, unless unsubscribed meanwhile
+                        # Back to the front, unless unsubscribed meanwhile or
+                        # already confirmed before the failure
                         wanted = self._wanted_locked()
                         retry = {
                             key: (batch_mode, i)
                             for i in batch
                             if (key := (batch_mode, *self._instrument_key(i))) in wanted
+                            and self._instrument_key(i) not in done
                         }
                         self.pending_subscriptions = {**retry, **self.pending_subscriptions}
                         if failures >= self.MAX_SEND_FAILURES:
                             self._sender_thread = None
                             self.logger.error(
-                                f"Batch subscription failed {failures} times in a row: {e}. "
+                                f"Batch subscription failed {failures} times in a row: {error}. "
                                 f"Holding {len(self.pending_subscriptions)} instrument(s) "
                                 "until the next subscribe or reconnect."
                             )
                             return
-                    self.logger.error(f"Batch subscription failed (mode {batch_mode}): {e}")
+                    self.logger.error(f"Batch subscription failed (mode {batch_mode}): {error}")
                     delay = self.SUBSCRIPTION_DELAY * 2
 
                 # Throttle only while more work remains
