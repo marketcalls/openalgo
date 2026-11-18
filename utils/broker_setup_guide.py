@@ -772,24 +772,26 @@ GUIDES = {
         "sign_in": "redirect",
         "fields": (
             {
-                "hint": "The client ID of your Pocketful app, not your trading account ID.",
+                "hint": "The App ID of your app on the Pocketful API portal, not your "
+                "trading client ID.",
                 "key": "api_key",
-                "label": "App Client ID",
+                "label": "App ID",
                 "required": True,
                 "secret": False,
             },
             {
-                "hint": "The client secret of that app.",
+                "hint": "The App Secret of that app.",
                 "key": "api_secret",
-                "label": "Client Secret",
+                "label": "App Secret",
                 "required": True,
                 "secret": True,
             },
         ),
         "banner": "Login with Pocketful takes you to Pocketful's login page. Log in and "
         "approve, and Pocketful sends you back to OpenAlgo.",
-        "redirect_hint": "OpenAlgo sends this address with each login. If your broker "
-        "app asks for a redirect URL, register this exact address.",
+        "redirect_hint": "When you create the app on the Pocketful API portal, choose "
+        "Enter Custom URL and register this exact address. Pocketful's default redirect "
+        "URL does not send the login back to OpenAlgo.",
     },
     "rmoney": {
         "name": "RMoney",

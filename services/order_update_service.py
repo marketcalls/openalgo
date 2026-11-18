@@ -76,6 +76,10 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.tradesmart.streaming.tradesmart_order_adapter",
         "create_tradesmart_order_adapter",
     ),
+    "pocketful": (
+        "broker.pocketful.streaming.pocketful_order_adapter",
+        "create_pocketful_order_adapter",
+    ),
 }
 
 # Brokers with no *usable* push mechanism fall back to REST-orderbook polling.

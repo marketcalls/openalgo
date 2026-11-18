@@ -235,7 +235,9 @@ def test_nubra_index_quote_without_feed_is_zeros(gthread, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["motilal", "tradejini", "pocketful"])
+# Pocketful's multiquotes refuse through its REST pacer instead of a feed gate;
+# test/test_pocketful_data.py drives that refusal through the quotes service.
+@pytest.mark.parametrize("name", ["motilal", "tradejini"])
 def test_multiquote_refusal_is_a_busy_answer(gthread, monkeypatch, name):
     import importlib
 
@@ -259,19 +261,20 @@ def test_multiquote_refusal_is_a_busy_answer(gthread, monkeypatch, name):
     assert is_broker_busy(status), (status, response)
 
 
-@pytest.mark.parametrize("method", ["get_quotes", "get_market_depth"])
+@pytest.mark.parametrize("method", ["get_quotes", "get_market_depth", "get_depth"])
 def test_pocketful_quote_and_depth_refusals_keep_their_type(gthread, monkeypatch, method):
+    """A busy refusal from Pocketful's paced REST request reaches the caller
+    as BrokerBusyError, not as a generic error or an empty quote."""
     import broker.pocketful.api.data as pocketful
 
-    def refuse(self, symbol, exchange):
-        raise BrokerBusyError(pocketful._FEED_BUSY_MESSAGE)
+    def refuse(*args, **kwargs):
+        raise BrokerBusyError("Pocketful is busy. Try again in a moment.")
 
-    monkeypatch.setattr(pocketful.BrokerData, "__init__", lambda self, *a, **k: None)
-    monkeypatch.setattr(pocketful.BrokerData, "_get_quotes_compact", refuse)
-    monkeypatch.setattr(pocketful.BrokerData, "_get_market_depth_websocket", refuse)
+    monkeypatch.setattr(pocketful, "get_token", lambda symbol, exchange: "26000")
+    monkeypatch.setattr(pocketful, "_data_request", refuse)
 
     with pytest.raises(BrokerBusyError):
-        getattr(pocketful.BrokerData(), method)("NIFTY", "NSE_INDEX")
+        getattr(pocketful.BrokerData("DEMO1:::tok"), method)("NIFTY", "NSE_INDEX")
 
 
 # ---------------------------------------------------------------------------
