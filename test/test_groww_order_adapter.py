@@ -153,7 +153,8 @@ def test_push_fields_are_used_when_the_detail_read_fails(adapter):
     assert fields["action"] == "SELL"
     assert fields["pricetype"] == "LIMIT"
     assert fields["product"] == "NRML"
-    assert (fields["price"], fields["average_price"]) == (130.0, 110.0)
+    # The push's integer prices have no documented unit, so none are reported.
+    assert not {"price", "trigger_price", "average_price"} & fields.keys()
     assert fields["order_status"] == "complete"
 
 
@@ -221,6 +222,22 @@ def test_socket_token_refusal_stands_the_adapter_down(adapter):
         with pytest.raises(adapter_mod.GrowwSocketTokenRefused) as exc:
             adapter.get_ws_url()
     assert exc.value.status_code == 401  # read by order_adapter._is_auth_rejection
+
+
+def test_socket_token_request_sends_the_sdk_headers(adapter):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"token": "jwt", "subscriptionId": "sub-1"}
+    client = MagicMock()
+    client.post.return_value = response
+    with patch.object(adapter_mod, "get_httpx_client", return_value=client):
+        assert adapter.get_ws_url() == adapter_mod.GROWW_FEED_URL
+    headers = client.post.call_args.kwargs["headers"]
+    assert headers["Authorization"] == "Bearer tok"
+    assert headers["x-client-id"] == "growwapi"
+    assert headers["x-client-platform"] == "growwapi-python-client"
+    assert headers["x-client-platform-version"]
+    assert headers["x-api-version"] == "1.0"
+    assert (adapter.socket_token, adapter.subscription_id) == ("jwt", "sub-1")
 
 
 def test_factory_without_session_returns_none():

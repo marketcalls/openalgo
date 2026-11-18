@@ -198,10 +198,15 @@ class GrowwOrderUpdateAdapter(BaseOrderUpdateAdapter):
         response = get_httpx_client().post(
             GROWW_SOCKET_TOKEN_URL,
             json={"socketKey": key_pair.public_key.decode("utf-8")},
+            # The headers growwapi 1.5.0 sends (client.py _build_headers), as the
+            # market-data feed does (nats_websocket.py).
             headers={
                 "x-request-id": str(uuid.uuid4()),
                 "Authorization": f"Bearer {self.auth_token}",
                 "Content-Type": "application/json",
+                "x-client-id": "growwapi",
+                "x-client-platform": "growwapi-python-client",
+                "x-client-platform-version": "1.5.0",
                 "x-api-version": "1.0",
             },
             timeout=15,
@@ -341,6 +346,12 @@ class GrowwOrderUpdateAdapter(BaseOrderUpdateAdapter):
                 "product": detail.get("product", ""),
                 "average_price": float(detail.get("average_fill_price") or 0),
             }
+        # Detail read failed: only the push's own fields are left. Its prices
+        # are integers in a unit neither the docs nor the SDK state (the SDK
+        # passes them through unscaled), so they are left out rather than
+        # reported as rupees and risk being 100x off; the event's defaults
+        # apply. The symbol is the push's contractId (an ISIN for equity, which
+        # the master contract does not hold) unless the master contract maps it.
         exchange = openalgo_exchange(push.get("exchange", ""), push.get("segment", ""))
         order_type = push.get("orderType", "")
         return {
@@ -348,11 +359,8 @@ class GrowwOrderUpdateAdapter(BaseOrderUpdateAdapter):
             "symbol": to_openalgo_symbol(push.get("contractId", ""), exchange),
             "exchange": exchange,
             "action": push.get("transactionType", ""),
-            "price": float(push.get("price") or 0),
-            "trigger_price": float(push.get("triggerPrice") or 0),
             "pricetype": GROWW_PRICETYPE_MAP.get(order_type, order_type),
             "product": push.get("product", ""),
-            "average_price": float(push.get("avgFillPrice") or 0),
         }
 
     def normalize(self, raw_message):
