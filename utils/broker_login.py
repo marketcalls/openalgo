@@ -69,6 +69,7 @@ CALLBACK_START_BROKERS = frozenset(
         "iifl",
         "kotak",
         "shoonya",
+        "smifs",
         "tradejini",
         "tradesmart",
         "wisdom",

@@ -1,8 +1,9 @@
 """SMIFS God Quant authentication for OpenAlgo.
 
 SMIFS uses a direct-token model: the token is an access token minted in the
-SMIFS developer portal, supplied via BROKER_API_SECRET. There is no OAuth
-redirect.
+SMIFS developer portal. It is saved in Broker Configuration as the API key
+(BROKER_API_KEY); BROKER_API_SECRET is still read for .env installs that
+set it there. There is no OAuth redirect.
 """
 
 import os
@@ -17,12 +18,12 @@ logger = get_logger(__name__)
 def authenticate_broker(code):
     """Called with the callback `code` (here the literal 'smifs').
 
-    Returns (auth_token, error_message). The token comes from BROKER_API_SECRET,
-    which the operator sets to a token minted in the SMIFS developer portal.
+    Returns (auth_token, error_message). The token is a token minted in the SMIFS
+    developer portal: BROKER_API_KEY, or BROKER_API_SECRET for older .env installs.
     """
-    token = os.getenv("BROKER_API_SECRET", "").strip()
+    token = (os.getenv("BROKER_API_KEY", "") or os.getenv("BROKER_API_SECRET", "")).strip()
     if not token:
-        return None, "BROKER_API_SECRET is not set; mint a token in the SMIFS developer portal"
+        return None, "no SMIFS access token is saved; mint one in the SMIFS developer portal"
     ok, err = test_auth_token(token)
     if not ok:
         return None, err
