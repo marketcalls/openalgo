@@ -832,6 +832,23 @@ def _mcp_section(surface: str, state: Mapping[str, Any]) -> prompts.PromptSectio
     return mcp_prompt_section(surface)
 
 
+def _web_section(state: Mapping[str, Any]) -> prompts.PromptSection | None:
+    """The web sources section, when this run is offered the web tools.
+
+    Args:
+        state: The session state just built, which carries ``web_search_enabled``.
+
+    Returns:
+        The section, or None when the web tools are withheld or no source is
+        preferred.
+    """
+    if not state.get("web_search_enabled"):
+        return None
+    from services.agent.web_prompt import web_prompt_section
+
+    return web_prompt_section(settings.get_preferred_sources())
+
+
 def _effective_trading_enabled(session_flag: Any) -> bool:
     """Combine the session's trading flag with the operator's setting.
 
@@ -1014,13 +1031,23 @@ def build_agent(
     except Exception:
         logger.exception("The agent MCP section could not be built; continuing without it")
 
+    # Where company figures are looked for first, taught only to a run that is
+    # offered the web tools.
+    web_sections: list[prompts.PromptSection] = []
+    try:
+        web_section = _web_section(state)
+        if web_section is not None:
+            web_sections.append(web_section)
+    except Exception:
+        logger.exception("The agent web sources section could not be built; continuing without it")
+
     system_prompt = prompts.build_system_prompt(
         surface=context.surface,
         trading_enabled=bool(state["trading_enabled"]),
         analyzer_mode=bool(state["analyzer_mode"]),
         now=now or datetime.now(IST),
         override=settings.get_system_prompt_override(),
-        extra_sections=[*skill_sections, *mcp_sections, *extra_sections],
+        extra_sections=[*skill_sections, *mcp_sections, *web_sections, *extra_sections],
         extra_runtime_lines=extra_runtime_lines,
         max_chars=max_prompt_chars,
     )

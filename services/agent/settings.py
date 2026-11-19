@@ -37,6 +37,7 @@ is on. A database that cannot be read must not be a database that trades.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -896,8 +897,12 @@ def set_risk_limits(**limits: Any) -> dict[str, Any]:
 WEBSEARCH_DUCKDUCKGO = "duckduckgo"
 WEBSEARCH_TAVILY = "tavily"
 WEBSEARCH_PERPLEXITY = "perplexity"
+WEBSEARCH_FIRECRAWL = "firecrawl"
+WEBSEARCH_TINYFISH = "tinyfish"
 
 KEY_WEBSEARCH_PROVIDER = "websearch_provider"
+KEY_WEBFETCH_PROVIDER = "webfetch_provider"
+KEY_WEBSEARCH_PREFERRED_SOURCES = "websearch_preferred_sources"
 KEY_WEBSEARCH_PERPLEXITY_MODEL = "websearch_perplexity_model"
 KEY_WEBSEARCH_MAX_CALLS_PER_TURN = "websearch_max_calls_per_turn"
 KEY_WEBSEARCH_DAILY_CAP = "websearch_daily_cap"
@@ -910,7 +915,19 @@ WEBSEARCH_SECRET_PREFIX = "websearch:"
 #: nothing leaves the machine to a paid API until an operator asks for it.
 DEFAULT_WEBSEARCH_PROVIDER = WEBSEARCH_DUCKDUCKGO
 DEFAULT_WEBSEARCH_PERPLEXITY_MODEL = "openai/gpt-5.6-luna"
-DEFAULT_WEBSEARCH_MAX_CALLS_PER_TURN = 5
+#: Which keyed provider reads pages first. Fetch has no keyless provider, so this
+#: only orders the ones that hold a key.
+DEFAULT_WEBFETCH_PROVIDER = WEBSEARCH_FIRECRAWL
+
+#: Where company fundamentals are looked for first, best first. A search with
+#: ``topic="fundamentals"`` tries these in order and only then the open web.
+DEFAULT_WEBSEARCH_PREFERRED_SOURCES: tuple[str, ...] = (
+    "screener.in",
+    "scanx.trade",
+    "tickertape.in",
+)
+MAX_PREFERRED_SOURCES = 5
+DEFAULT_WEBSEARCH_MAX_CALLS_PER_TURN = 10
 DEFAULT_WEBSEARCH_DAILY_CAP = 200
 
 #: The ceilings the tool module clamps the same two settings to. A value above
@@ -930,6 +947,9 @@ MAX_WEBSEARCH_KEY_CHARS = 500
 #: what is meant to be the cheapest real call that settles the question.
 WEBSEARCH_PROBE_QUERY = "who wrote Hamlet"
 WEBSEARCH_PROBE_MAX_RESULTS = 3
+
+#: The page a fetch test reads: a stable, tiny page that exists to be fetched.
+WEBFETCH_PROBE_URL = "https://example.com"
 
 #: Indian markets, Indian trading day. The daily cap resets on the IST date,
 #: matching how `tools/websearch.py` counts it.
@@ -952,6 +972,8 @@ class WebSearchProviderSpec:
             is why they are different tools.
         tool: The agent tool this provider answers.
         description: One sentence an operator can choose on.
+        fetch: Whether the provider also reads a whole page for ``web_fetch``.
+            One key serves both tools.
     """
 
     id: str
@@ -960,6 +982,7 @@ class WebSearchProviderSpec:
     result_kind: str
     tool: str
     description: str
+    fetch: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         """Render the spec as JSON-safe primitives.
@@ -974,6 +997,7 @@ class WebSearchProviderSpec:
             "result_kind": self.result_kind,
             "tool": self.tool,
             "description": self.description,
+            "fetch": self.fetch,
         }
 
 
@@ -1014,9 +1038,38 @@ WEBSEARCH_PROVIDERS: tuple[WebSearchProviderSpec, ...] = (
             "web_search on DuckDuckGo."
         ),
     ),
+    WebSearchProviderSpec(
+        id=WEBSEARCH_FIRECRAWL,
+        label="Firecrawl",
+        needs_key=True,
+        result_kind="links",
+        tool="web_search",
+        fetch=True,
+        description=(
+            "Searches the web and reads a whole page as clean text, tables included. One key "
+            "answers both web_search and web_fetch, so the agent can find a page and then open it."
+        ),
+    ),
+    WebSearchProviderSpec(
+        id=WEBSEARCH_TINYFISH,
+        label="TinyFish",
+        needs_key=True,
+        result_kind="links",
+        tool="web_search",
+        fetch=True,
+        description=(
+            "Searches the web and reads a whole page as text, with a free daily allowance. One key "
+            "answers both web_search and web_fetch."
+        ),
+    ),
 )
 
 WEBSEARCH_PROVIDER_IDS: tuple[str, ...] = tuple(spec.id for spec in WEBSEARCH_PROVIDERS)
+
+#: The providers ``web_fetch`` can use, in the order the tool borrows one.
+WEBFETCH_PROVIDER_IDS: tuple[str, ...] = tuple(
+    spec.id for spec in WEBSEARCH_PROVIDERS if spec.fetch
+)
 
 WEBSEARCH_KEYED_PROVIDER_IDS: tuple[str, ...] = tuple(
     spec.id for spec in WEBSEARCH_PROVIDERS if spec.needs_key
@@ -1031,6 +1084,8 @@ _WEBSEARCH_BY_ID: Mapping[str, WebSearchProviderSpec] = MappingProxyType(
 #: does nothing is indistinguishable from a setting that was never applied.
 WEBSEARCH_UPDATABLE_KEYS: tuple[str, ...] = (
     "provider",
+    "fetch_provider",
+    "preferred_sources",
     "perplexity_model",
     "max_calls_per_turn",
     "daily_cap",
@@ -1079,6 +1134,25 @@ def websearch_provider_spec(provider: Any) -> WebSearchProviderSpec:
     return spec
 
 
+def webfetch_provider_spec(provider: Any) -> WebSearchProviderSpec:
+    """Resolve a provider that can read a page.
+
+    Args:
+        provider: The submitted provider id.
+
+    Returns:
+        The matching spec.
+
+    Raises:
+        ValueError: For anything that cannot fetch, naming the ones that can.
+    """
+    key = str(provider or "").strip().lower()
+    spec = _WEBSEARCH_BY_ID.get(key)
+    if spec is None or not spec.fetch:
+        raise ValueError(f"fetch_provider must be one of: {', '.join(WEBFETCH_PROVIDER_IDS)}")
+    return spec
+
+
 def _keyed_provider_spec(provider: Any) -> WebSearchProviderSpec:
     """Resolve a provider that is allowed to hold a key.
 
@@ -1101,7 +1175,7 @@ def websearch_secret_name(provider: str) -> str:
     """The ``ag_secret`` name holding one provider's key.
 
     Args:
-        provider: ``tavily`` or ``perplexity``.
+        provider: A keyed provider id.
 
     Returns:
         The secret name, for example ``websearch:tavily``.
@@ -1198,6 +1272,126 @@ def _websearch_selected(values: Mapping[str, Any]) -> str:
     return DEFAULT_WEBSEARCH_PROVIDER
 
 
+_DOMAIN_PATTERN = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
+)
+
+
+def normalise_source(raw: Any) -> str:
+    """Reduce what an operator typed to a bare domain name.
+
+    Accepts ``screener.in``, ``https://www.screener.in/company/TCS/`` and
+    ``Screener.in`` alike, because a pasted address is the natural thing to type.
+
+    Args:
+        raw: The submitted text.
+
+    Returns:
+        The lower-case domain without scheme, ``www.``, path or port.
+
+    Raises:
+        ValueError: When the text is not a domain name, naming the text so the
+            operator can see which entry was refused.
+    """
+    text = str(raw or "").strip().lower()
+    host = text.split("://", 1)[-1].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    host = host.rsplit("@", 1)[-1].split(":", 1)[0].strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if not host or len(host) > 120 or not _DOMAIN_PATTERN.match(host):
+        raise ValueError(f"'{str(raw).strip()[:60]}' is not a website address such as screener.in")
+    return host
+
+
+def preferred_sources_from(raw: Any) -> tuple[str, ...]:
+    """Read the stored preferred sources.
+
+    Args:
+        raw: The stored row: a JSON list of domains, or nothing.
+
+    Returns:
+        The domains, best first. A missing row is the shipped default, while a
+        stored empty list means the operator turned the preference off. A row
+        that is not a list of domains reads as the default, because a bad row
+        must not take the preference away silently in either direction.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return DEFAULT_WEBSEARCH_PREFERRED_SOURCES
+    try:
+        parsed = json.loads(text)
+        if not isinstance(parsed, list):
+            raise ValueError
+        found: list[str] = []
+        for item in parsed:
+            domain = normalise_source(item)
+            if domain not in found:
+                found.append(domain)
+    except ValueError:
+        logger.warning(
+            "Agent setting %s is not a list of domains; using the default",
+            KEY_WEBSEARCH_PREFERRED_SOURCES,
+        )
+        return DEFAULT_WEBSEARCH_PREFERRED_SOURCES
+    return tuple(found[:MAX_PREFERRED_SOURCES])
+
+
+def get_preferred_sources() -> tuple[str, ...]:
+    """The preferred sources as configured now, read fresh.
+
+    Returns:
+        The domains, best first. The default when the store cannot be read.
+    """
+    try:
+        return preferred_sources_from(_load_all(fresh=True).get(KEY_WEBSEARCH_PREFERRED_SOURCES))
+    except Exception:
+        logger.exception("Could not read the preferred web sources; using the default")
+        return DEFAULT_WEBSEARCH_PREFERRED_SOURCES
+
+
+def _validated_preferred_sources(raw: Any) -> str:
+    """Validate a submitted list of preferred sources.
+
+    Args:
+        raw: A list of domains or addresses. An empty list turns the preference
+            off, so the open web is searched straight away.
+
+    Returns:
+        The JSON text to store.
+
+    Raises:
+        ValueError: When it is not a list, is too long, or holds a non-domain.
+    """
+    if isinstance(raw, str):
+        raw = [part for part in re.split(r"[,\s]+", raw) if part]
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("preferred_sources must be a list of website addresses")
+    found: list[str] = []
+    for item in raw:
+        domain = normalise_source(item)
+        if domain not in found:
+            found.append(domain)
+    if len(found) > MAX_PREFERRED_SOURCES:
+        raise ValueError(f"preferred_sources can hold at most {MAX_PREFERRED_SOURCES} sites")
+    return json.dumps(found)
+
+
+def _webfetch_selected(values: Mapping[str, Any]) -> str:
+    """The provider ``web_fetch`` is configured to try first.
+
+    Args:
+        values: The raw setting rows.
+
+    Returns:
+        A fetch-capable provider id. An unset or unrecognised value reads as the
+        default, matching the tool module.
+    """
+    raw = str(values.get(KEY_WEBFETCH_PROVIDER) or "").strip().lower()
+    if raw in WEBFETCH_PROVIDER_IDS:
+        return raw
+    return DEFAULT_WEBFETCH_PROVIDER
+
+
 def _websearch_perplexity_model(values: Mapping[str, Any]) -> str:
     """The model ``web_research`` runs.
 
@@ -1268,6 +1462,8 @@ def get_websearch_defaults() -> dict[str, Any]:
     """
     return {
         "provider": DEFAULT_WEBSEARCH_PROVIDER,
+        "fetch_provider": DEFAULT_WEBFETCH_PROVIDER,
+        "preferred_sources": list(DEFAULT_WEBSEARCH_PREFERRED_SOURCES),
         "perplexity_model": DEFAULT_WEBSEARCH_PERPLEXITY_MODEL,
         "max_calls_per_turn": DEFAULT_WEBSEARCH_MAX_CALLS_PER_TURN,
         "daily_cap": DEFAULT_WEBSEARCH_DAILY_CAP,
@@ -1306,6 +1502,14 @@ def get_websearch_config() -> dict[str, Any]:
 
     return {
         "provider": _websearch_selected(values),
+        "fetch_provider": _webfetch_selected(values),
+        # Whether web_fetch can run at all: it has no keyless provider.
+        "fetch_ready": any(
+            entry["ready"] for entry in providers if entry["id"] in WEBFETCH_PROVIDER_IDS
+        ),
+        "preferred_sources": list(
+            preferred_sources_from(values.get(KEY_WEBSEARCH_PREFERRED_SOURCES))
+        ),
         "perplexity_model": _websearch_perplexity_model(values),
         "max_calls_per_turn": _websearch_int(
             values,
@@ -1406,6 +1610,12 @@ def update_websearch(values: Mapping[str, Any]) -> dict[str, Any]:
     prepared: dict[str, str] = {}
     if "provider" in values:
         prepared[KEY_WEBSEARCH_PROVIDER] = websearch_provider_spec(values["provider"]).id
+    if "fetch_provider" in values:
+        prepared[KEY_WEBFETCH_PROVIDER] = webfetch_provider_spec(values["fetch_provider"]).id
+    if "preferred_sources" in values:
+        prepared[KEY_WEBSEARCH_PREFERRED_SOURCES] = _validated_preferred_sources(
+            values["preferred_sources"]
+        )
     if "perplexity_model" in values:
         prepared[KEY_WEBSEARCH_PERPLEXITY_MODEL] = _validated_perplexity_model(
             values["perplexity_model"]
@@ -1605,6 +1815,7 @@ def probe_websearch_provider(provider: Any, api_key: Any = None) -> WebSearchPro
 
     model = _websearch_perplexity_model(_load_all(fresh=True))
     started = time.perf_counter()
+    fetch_outcome = None
     try:
         # The tool module's own dispatch. Reaching past the leading underscore is
         # deliberate: a request written here would be a second implementation,
@@ -1612,11 +1823,14 @@ def probe_websearch_provider(provider: Any, api_key: Any = None) -> WebSearchPro
         if spec.id == WEBSEARCH_PERPLEXITY:
             outcome = websearch._perplexity_research(WEBSEARCH_PROBE_QUERY, model, key)
             count = len(outcome.citations)
-        elif spec.id == WEBSEARCH_TAVILY:
-            outcome = websearch._tavily_search(
+        elif spec.id in websearch._LINK_SEARCH:
+            outcome = websearch._LINK_SEARCH[spec.id](
                 WEBSEARCH_PROBE_QUERY, WEBSEARCH_PROBE_MAX_RESULTS, key
             )
             count = len(outcome.results)
+            if spec.fetch and outcome.ok and count:
+                # One key answers both tools, so a pass has to mean both work.
+                fetch_outcome = websearch._PAGE_FETCH[spec.id](WEBFETCH_PROBE_URL, key)
         else:
             outcome = websearch._duckduckgo_search(
                 WEBSEARCH_PROBE_QUERY, WEBSEARCH_PROBE_MAX_RESULTS
@@ -1665,10 +1879,21 @@ def probe_websearch_provider(provider: Any, api_key: Any = None) -> WebSearchPro
 
     noun = "citation" if spec.result_kind == "answer" else "result"
     plural = "" if count == 1 else "s"
+    message = f"{spec.label} answered with {count} {noun}{plural}."
+    if fetch_outcome is not None:
+        if not fetch_outcome.ok:
+            return WebSearchProbe(
+                ok=False,
+                provider=spec.id,
+                message=f"Search works, but reading a page failed. {fetch_outcome.error}",
+                latency_ms=latency_ms,
+                result_count=count,
+            )
+        message += " Reading a page worked too."
     return WebSearchProbe(
         ok=True,
         provider=spec.id,
-        message=f"{spec.label} answered with {count} {noun}{plural}.",
+        message=message,
         latency_ms=latency_ms,
         result_count=count,
     )
