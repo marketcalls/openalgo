@@ -589,7 +589,7 @@ capability gate returns **501** and that 501 is itself the assertion.
 
 | ID | Check | Pass criteria |
 | --- | --- | --- |
-| GT-01 | Capability gate | Broker without GTT returns 501 with a clear message on all four endpoints |
+| GT-01 | Capability gate | First check whether the broker provides GTT at all (`broker/<name>/api/gtt_api.py`). If it does not, report a **WARN** "GTT is not provided by broker '<name>'" and skip GT-02..GT-23: in analyzer mode the sandbox answers every GTT endpoint before the broker gate is reached, so those checks would only test the sandbox. In live mode a broker without GTT returns 501 with a clear message on all four endpoints |
 | GT-02 | Place SINGLE, trigger **below** LTP via `triggerprice_sl` | `trigger_id` returned |
 | GT-03 | Place SINGLE, trigger **above** LTP via `triggerprice_tg` | `trigger_id` returned |
 | GT-04 | Place SINGLE with `pricetype=MARKET`, `price=0` | Accepted; where the broker only accepts LIMIT children, the MPP conversion is transparent to the caller |

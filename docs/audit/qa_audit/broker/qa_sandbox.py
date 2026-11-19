@@ -3629,9 +3629,46 @@ def sec_books(run: Runner) -> None:
               expected="ltp non-zero and matches /quotes")
 
     def pb_pnl():
+        """PB-05 - pnl arithmetic.
+
+        positionbook.md allows `pnl` to include the day's realized P&L, and
+        brokers (and the sandbox) report it that way: a symbol traded and
+        closed earlier in the day carries that result into the open row. So a
+        row passes when pnl matches either the open position's mark-to-market,
+        (ltp - average_price) x quantity, or the day's P&L for that symbol and
+        product, (sell value - buy value) + quantity x ltp over today's trades.
+        The second form does not depend on how the broker averages, and is
+        only used when today's trades account for the whole open quantity.
+        """
         d = book("positionbook")
         if not d:
             raise Warn("positionbook empty")
+        trades = run.ok(run.client.tradebook(), "tradebook").get("data") or []
+
+        def _pnl_tolerance(v):
+            return max(1.0, abs(v) * 0.02)
+
+        def day_pnl(p, q, lt):
+            rows = [t for t in trades
+                    if t.get("symbol") == p["symbol"] and t.get("exchange") == p.get("exchange")
+                    and t.get("product") == p.get("product")]
+            if not rows:
+                return None
+            net = cash = 0.0
+            for t in rows:
+                tq = as_num(t["quantity"], "trade quantity")
+                val = (as_num(t["trade_value"], "trade_value") if t.get("trade_value") not in (None, "")
+                       else tq * as_num(t["average_price"], "trade average_price"))
+                if str(t.get("action")).upper() == "BUY":
+                    net += tq
+                    cash -= val
+                else:
+                    net -= tq
+                    cash += val
+            if abs(net - q) > 1e-9:
+                return None   # part of the position predates today's trades
+            return cash + q * lt
+
         checked = 0
         for p in d:
             q = as_num(p["quantity"], "quantity")
@@ -3641,8 +3678,14 @@ def sec_books(run: Runner) -> None:
             lt = as_num(p["ltp"], "ltp")
             pnl = as_num(p["pnl"], "pnl")
             exp = (lt - ap) * q
-            need(abs(pnl - exp) <= max(1.0, abs(exp) * 0.02),
-                 f"{p['symbol']}: pnl {pnl} vs (ltp {lt} - avg {ap}) x qty {q} = {exp:.2f}")
+            if abs(pnl - exp) > _pnl_tolerance(exp):
+                day = day_pnl(p, q, lt)
+                need(day is not None and abs(pnl - day) <= _pnl_tolerance(day),
+                     f"{p['symbol']}: pnl {pnl} vs (ltp {lt} - avg {ap}) x qty {q} = {exp:.2f}"
+                     + (f", and vs the day's P&L from today's trades = {day:.2f}"
+                        if day is not None else ""))
+                run.note_limit(f"pnl includes day's realized ({p['symbol']})",
+                               f"pnl {pnl} = day P&L {day:.2f}; open MTM alone {exp:.2f}")
             checked += 1
         if not checked:
             raise Skip("could not open a position to check pnl arithmetic"
@@ -3771,6 +3814,30 @@ def sec_gtt(run: Runner) -> None:
             run.blocked(cid, "EQ_CHEAP unresolved", endpoint="gtt")
         return
     sym, ex = m["EQ_CHEAP"]
+
+    # Does the broker provide GTT at all? The services decide that by whether
+    # broker/<name>/api/gtt_api.py exists, but only in live mode: in analyzer
+    # mode every GTT endpoint is answered by OpenAlgo's sandbox before that
+    # gate is reached, so the endpoint probe below can never see "not
+    # supported" and GT-02..GT-23 would only be testing the sandbox. Check the
+    # broker module itself and stop here when there is none.
+    broker = run.env["broker"]
+    gtt_module = Path(__file__).resolve().parents[4] / "broker" / broker / "api" / "gtt_api.py"
+    if not gtt_module.is_file():
+        reason = (f"GTT is not provided by broker '{broker}' "
+                  f"(no broker/{broker}/api/gtt_api.py)")
+
+        def not_provided():
+            raise Warn(f"{reason}; live GTT calls return 501. In analyzer mode the "
+                       "sandbox still answers them, so GT-02..GT-23 are skipped "
+                       "rather than reported as the broker's")
+
+        run.check("GT-01", not_provided, endpoint="gtt",
+                  expected="broker provides GTT, or the gap is reported")
+        for cid in GT_IDS[1:]:
+            run.record(cid, SKIP, reason, endpoint="gtt")
+        return
+
     ltp = as_num(run.ok(run.client.quotes(symbol=sym, exchange=ex), "q")["data"]["ltp"], "ltp")
 
     probe = run.client.gttorderbook()
