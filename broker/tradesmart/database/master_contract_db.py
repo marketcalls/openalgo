@@ -168,7 +168,8 @@ def process_tradesmart_nse_data(output_path):
     # them are EQ, as Kite types its cash and index rows (QA MC-04).
     df["instrumenttype"] = "EQ"
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100  # paise -> rupees
+    # TradeSmart's NSE file already gives TickSize in rupees (RELIANCE 0.1, MRF 5)
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
 
     columns_to_keep = [
         "symbol", "brsymbol", "name", "exchange", "brexchange", "token",
@@ -363,7 +364,7 @@ def process_tradesmart_bse_data(output_path):
     df["strike"] = -1
     df["instrumenttype"] = "EQ"
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")  # already rupees
 
     columns_to_keep = [
         "symbol", "brsymbol", "name", "exchange", "brexchange", "token",
