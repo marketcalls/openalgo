@@ -33,8 +33,12 @@ class _Response:
 # ---------------------------------------------------------------------------
 
 
+def _seen(urls):
+    return {websearch.url_key(u): u for u in urls}
+
+
 def _check(url, operator=OPERATOR, seen=()):
-    return websearch.check_fetch_url(url, operator, set(seen))
+    return websearch.check_fetch_url(url, operator, _seen(seen))
 
 
 def test_a_url_nobody_wrote_and_no_search_returned_is_refused():
@@ -45,15 +49,51 @@ def test_a_url_nobody_wrote_and_no_search_returned_is_refused():
 
 
 def test_a_url_from_this_runs_search_is_accepted():
-    check = _check(SCREENER, seen={websearch.url_key(SCREENER)})
+    check = _check(SCREENER, seen={SCREENER})
 
     assert check.allowed and check.source == "search"
 
 
 def test_search_results_match_across_scheme_www_and_trailing_slash():
-    seen = {websearch.url_key("http://screener.in/company/RELIANCE/consolidated")}
+    returned = "http://screener.in/company/RELIANCE/consolidated"
 
-    assert _check(SCREENER, seen=seen).allowed
+    check = _check(SCREENER, seen={returned})
+
+    assert check.allowed
+    assert check.url == returned, "what is sent is what the search returned, not the model's"
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "https://www.screener.in/company/reliance/consolidated/",
+        "HTTPS://WWW.SCREENER.IN/COMPANY/RELIANCE/CONSOLIDATED/",
+        "http://screener.in/company/RELIANCE/consolidated",
+        "https://www.screener.in/company/RELIANCE/consolidated/#x",
+    ],
+)
+def test_the_model_cannot_choose_among_spellings_of_an_accepted_url(spelling):
+    # Every spelling is accepted, and every one sends the same string. Letting the
+    # model's own spelling through would let it carry bits in the casing.
+    returned = "https://www.screener.in/company/RELIANCE/consolidated/"
+
+    check = _check(spelling, seen={returned})
+
+    assert check.allowed and check.url == returned
+
+
+def test_an_operator_url_is_sent_as_the_operator_typed_it_not_as_the_model_spelled_it():
+    message = "read Screener.IN/Company/TCS please"
+
+    check = _check("https://screener.in/company/tcs", operator=message)
+
+    assert check.allowed and check.url == "https://Screener.IN/Company/TCS"
+
+
+def test_a_built_screener_page_is_rebuilt_from_the_validated_symbol():
+    check = _preferred("HTTPS://SCREENER.IN/company/reliance/consolidated", "show reliance ratios")
+
+    assert check.allowed and check.url == "https://www.screener.in/company/RELIANCE/consolidated/"
 
 
 def test_a_url_the_operator_typed_is_accepted_as_written():
@@ -91,11 +131,11 @@ def test_a_prefix_of_a_pasted_link_is_accepted_but_not_an_extension_of_it():
 def test_private_credentialed_and_non_web_addresses_are_refused_even_if_typed(url):
     message = f"fetch {url}"
 
-    assert not _check(url, operator=message, seen={websearch.url_key(url)}).allowed
+    assert not _check(url, operator=message, seen={url}).allowed
 
 
 def test_a_fragment_is_dropped_before_the_url_is_sent():
-    check = _check(f"{SCREENER}#profit-loss", seen={websearch.url_key(SCREENER)})
+    check = _check(f"{SCREENER}#profit-loss", seen={SCREENER})
 
     assert check.allowed and "#" not in check.url
 
@@ -289,7 +329,7 @@ def test_a_fetch_with_no_search_and_no_operator_url_never_reaches_a_provider(mon
 
 def test_a_long_page_is_read_in_slices_and_the_slices_cost_one_call(monkeypatch):
     kit, recorded = _toolkit(monkeypatch)
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
     calls = []
     monkeypatch.setattr(
         websearch,
@@ -311,7 +351,7 @@ def test_a_long_page_is_read_in_slices_and_the_slices_cost_one_call(monkeypatch)
 
 def test_fetch_falls_through_to_the_other_provider_when_the_first_fails(monkeypatch):
     kit, recorded = _toolkit(monkeypatch)
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
     monkeypatch.setattr(
         websearch,
         "_PAGE_FETCH",
@@ -335,7 +375,7 @@ def test_fetch_falls_through_to_the_other_provider_when_the_first_fails(monkeypa
 
 def test_fetch_without_any_key_says_how_to_fix_it_and_spends_nothing(monkeypatch):
     kit, recorded = _toolkit(monkeypatch, keys=())
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
 
     body = json.loads(kit.web_fetch(SCREENER))
 
@@ -346,7 +386,7 @@ def test_fetch_without_any_key_says_how_to_fix_it_and_spends_nothing(monkeypatch
 
 def test_the_configured_fetch_provider_is_tried_first(monkeypatch):
     kit, _recorded = _toolkit(monkeypatch, fetch_provider="tinyfish")
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
     order = []
     monkeypatch.setattr(
         websearch,
@@ -364,8 +404,8 @@ def test_the_configured_fetch_provider_is_tried_first(monkeypatch):
 
 def test_the_per_turn_budget_stops_a_fetch_before_dispatch(monkeypatch):
     kit, recorded = _toolkit(monkeypatch, per_turn=1)
-    kit._seen_urls.add(websearch.url_key(SCREENER))
-    kit._seen_urls.add(websearch.url_key("https://www.screener.in/company/TCS/"))
+    kit._remember_url(SCREENER)
+    kit._remember_url("https://www.screener.in/company/TCS/")
     monkeypatch.setattr(websearch, "_PAGE_FETCH", {"firecrawl": lambda url, key: _page("a")})
 
     kit.web_fetch(SCREENER)
@@ -377,7 +417,7 @@ def test_the_per_turn_budget_stops_a_fetch_before_dispatch(monkeypatch):
 
 def test_a_busy_hub_on_fetch_is_this_platform_and_spends_nothing(monkeypatch):
     kit, recorded = _toolkit(monkeypatch)
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
 
     def full(*_a, **_k):
         raise websearch.real_threading.HubQueueFull("full")
@@ -411,7 +451,7 @@ def test_perplexity_borrows_firecrawl_for_links_when_tavily_has_no_key(monkeypat
 
 def test_a_fetch_result_is_wrapped_as_third_party_content(monkeypatch):
     kit, _recorded = _toolkit(monkeypatch)
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
     monkeypatch.setattr(
         websearch,
         "_PAGE_FETCH",
@@ -434,7 +474,7 @@ SCANX = "https://scanx.trade/company/reliance-industries-ltd"
 
 
 def _preferred(url, operator, seen=()):
-    return websearch.check_fetch_url(url, operator, set(seen), PREFERRED)
+    return websearch.check_fetch_url(url, operator, _seen(seen), PREFERRED)
 
 
 def test_a_screener_page_for_a_symbol_the_operator_wrote_needs_no_search():
@@ -535,9 +575,7 @@ def test_three_sources_failing_one_after_another_end_on_the_open_web(monkeypatch
 
     monkeypatch.setattr(websearch, "_LINK_SEARCH", {"firecrawl": run})
     kit._failed_sources.update({"screener.in", "scanx.trade"})
-    kit._seen_urls.add(
-        websearch.url_key("https://www.tickertape.in/stocks/reliance-industries-RELI")
-    )
+    kit._remember_url("https://www.tickertape.in/stocks/reliance-industries-RELI")
     monkeypatch.setattr(
         websearch,
         "_PAGE_FETCH",
@@ -625,7 +663,8 @@ def test_an_unknown_topic_is_a_correction_for_the_model(monkeypatch):
 def test_when_scanx_cannot_be_read_screener_carries_on_alone(monkeypatch):
     kit, _ = _toolkit(monkeypatch)
     kit.preferred_sources = PREFERRED
-    kit._seen_urls.update({websearch.url_key(SCREENER), websearch.url_key(SCANX)})
+    kit._remember_url(SCREENER)
+    kit._remember_url(SCANX)
 
     def fetch(url, key):
         if "scanx.trade" in url:
@@ -659,7 +698,7 @@ def test_a_source_that_failed_is_not_searched_again_this_turn(monkeypatch):
 def test_when_every_preferred_source_has_failed_the_next_step_is_the_open_web(monkeypatch):
     kit, _ = _toolkit(monkeypatch)
     kit.preferred_sources = ("screener.in",)
-    kit._seen_urls.add(websearch.url_key(SCREENER))
+    kit._remember_url(SCREENER)
     monkeypatch.setattr(
         websearch,
         "_PAGE_FETCH",
@@ -718,3 +757,117 @@ def test_no_preferred_source_means_no_prompt_section():
     from services.agent.web_prompt import web_prompt_section
 
     assert web_prompt_section([]) is None
+
+
+# ---------------------------------------------------------------------------
+# The budget counts every request that went out
+# ---------------------------------------------------------------------------
+
+
+def _failing_pages(monkeypatch, calls):
+    def fail(name):
+        def run(url, key):
+            calls.append(name)
+            return websearch.ProviderOutcome(ok=False, provider=name, error="blocked")
+
+        return run
+
+    monkeypatch.setattr(
+        websearch, "_PAGE_FETCH", {name: fail(name) for name in ("firecrawl", "tinyfish")}
+    )
+
+
+def test_a_failed_fetch_uses_the_turn_but_not_the_daily_cap(monkeypatch):
+    kit, recorded = _toolkit(monkeypatch)
+    kit._remember_url(SCREENER)
+    calls: list[str] = []
+    _failing_pages(monkeypatch, calls)
+
+    kit.web_fetch(SCREENER)
+
+    assert calls == ["firecrawl", "tinyfish"]
+    assert kit.budget.used_this_turn == 2, "two paid requests went out"
+    assert recorded == [], "an outage must not use up the persistent daily cap"
+
+
+def test_a_loop_on_a_failing_page_is_stopped_by_the_turn_budget(monkeypatch):
+    kit, _ = _toolkit(monkeypatch, per_turn=4)
+    kit._remember_url(SCREENER)
+    calls: list[str] = []
+    _failing_pages(monkeypatch, calls)
+
+    answers = [json.loads(kit.web_fetch(SCREENER)) for _ in range(6)]
+
+    assert len(calls) <= 4, "no more requests than the turn allows ever reach a provider"
+    assert answers[-1]["error"] == "per_turn_budget_exhausted"
+
+
+def test_the_second_provider_is_not_tried_once_the_budget_is_spent(monkeypatch):
+    kit, _ = _toolkit(monkeypatch, per_turn=1)
+    kit._remember_url(SCREENER)
+    calls: list[str] = []
+    _failing_pages(monkeypatch, calls)
+
+    body = json.loads(kit.web_fetch(SCREENER))
+
+    assert calls == ["firecrawl"]
+    assert any("was not tried" in note for note in body["notices"])
+
+
+def test_a_busy_hub_still_uses_nothing(monkeypatch):
+    kit, recorded = _toolkit(monkeypatch)
+    kit._remember_url(SCREENER)
+
+    def full(*_a, **_k):
+        raise websearch.real_threading.HubQueueFull("full")
+
+    monkeypatch.setattr(websearch, "_post", full)
+
+    kit.web_fetch(SCREENER)
+
+    assert kit.budget.used_this_turn == 0 and recorded == []
+
+
+def test_a_failed_search_uses_the_turn_but_not_the_daily_cap(monkeypatch):
+    kit, recorded = _toolkit(monkeypatch)
+    monkeypatch.setattr(
+        websearch,
+        "_LINK_SEARCH",
+        {
+            "firecrawl": lambda q, n, key: websearch.ProviderOutcome(
+                ok=False, provider="firecrawl", error="down"
+            )
+        },
+    )
+    monkeypatch.setattr(
+        websearch,
+        "_duckduckgo_search",
+        lambda q, n: websearch.ProviderOutcome(ok=False, provider="duckduckgo", error="down"),
+    )
+
+    kit.web_search("reliance screener")
+
+    assert kit.budget.used_this_turn == 1
+    assert recorded == []
+
+
+def test_a_failed_search_that_a_fallback_answered_counts_once_and_as_a_success(monkeypatch):
+    kit, recorded = _toolkit(monkeypatch)
+    monkeypatch.setattr(
+        websearch,
+        "_LINK_SEARCH",
+        {
+            "firecrawl": lambda q, n, key: websearch.ProviderOutcome(
+                ok=False, provider="firecrawl", error="down"
+            )
+        },
+    )
+    monkeypatch.setattr(
+        websearch,
+        "_duckduckgo_search",
+        lambda q, n: websearch.ProviderOutcome(ok=True, provider="duckduckgo", results=()),
+    )
+
+    kit.web_search("reliance screener")
+
+    assert kit.budget.used_this_turn == 1 and len(recorded) == 1

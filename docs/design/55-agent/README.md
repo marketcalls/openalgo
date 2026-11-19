@@ -1593,6 +1593,17 @@ are requested with `links: false`, so a poisoned page cannot add URLs to the
 accepted set. Results are wrapped as third-party content like every other web
 result.
 
+The URL that is sent is never the model's own spelling. The comparisons are loose
+(case, scheme, `www.`, trailing slash), and a loose comparison that then sends the
+model's string would let the model carry bits in its choice of spelling, so an
+accepted URL is replaced by the exact text the operator typed, the exact URL the
+search returned, or a Screener page rebuilt from the validated symbol.
+
+The budget counts every request that actually went out. A failed request uses the
+turn's allowance, so a loop on a failing page is bounded, and the second provider
+is only tried if the budget still allows. Only successes count against the daily
+cap, so a provider outage cannot use up the day.
+
 What this does not do: it does not let the model follow a link it read inside a
 page. If the answer needs a second page, the model searches for it. Raising that
 limit is a decision about exfiltration, not about convenience.

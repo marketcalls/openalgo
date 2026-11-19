@@ -38,10 +38,12 @@ set of controls from ``docs/design/55-agent/README.md``:
 * **Redaction runs before the construction**, not after, so the patterns that
   depend on punctuation still match: emails, bearer tokens, provider-prefixed
   keys, ``key=value`` pairs and long high-entropy strings.
-* **A per-turn budget and a persistent daily cap**, both checked before the call
-  and incremented only after it succeeds, so an upstream failure cannot burn the
-  budget. The per-turn budget alone is bypassed by sending another message, which
-  is why the daily one is persisted.
+* **A per-turn budget and a persistent daily cap**, both checked before the call.
+  The per-turn budget counts every request that actually went out, failures
+  included, so a loop on a failing page or provider is bounded. The daily cap
+  counts successes only, so a provider outage cannot use up the operator's day.
+  The per-turn budget alone is bypassed by sending another message, which is why
+  the daily one is persisted.
 * **Results are lower trust than platform data.** Everything a provider returned
   comes back inside a ``<web_result>`` block from
   :func:`services.agent.prompts.wrap_web_result`, labelled as third-party.
@@ -557,7 +559,9 @@ class FetchUrlCheck:
 
     Attributes:
         allowed: True when the URL may be sent to a fetch provider.
-        url: The cleaned URL to fetch, with no fragment. Empty when refused.
+        url: The URL to fetch: the operator's own text, the exact URL a search
+            returned, or a company page built from a validated symbol. Never the
+            model's spelling. Empty when refused.
         source: ``operator`` when the operator wrote it, ``search`` when a
             search of this run returned it, ``preferred`` when it is a company
             page on a preferred source built from a symbol the operator wrote.
@@ -618,7 +622,7 @@ def _blocked_host(host: str) -> str:
 def check_fetch_url(
     requested: Any,
     operator_message: str,
-    seen_urls: set[str],
+    seen_urls: Mapping[str, str],
     preferred_sources: tuple[str, ...] = (),
 ) -> FetchUrlCheck:
     """Decide whether ``web_fetch`` may send this URL to a provider.
@@ -633,7 +637,9 @@ def check_fetch_url(
     Args:
         requested: The URL the model asked for.
         operator_message: The operator's message for this turn, redacted.
-        seen_urls: :func:`url_key` of every URL a search of this run returned.
+        seen_urls: Every URL a search of this run returned, as
+            ``{url_key(url): the URL exactly as returned}``. The key finds a match
+            and the value is what is sent.
         preferred_sources: The operator's preferred domains. A company page on
             one whose addresses follow the symbol is accepted when that symbol
             is a word of the operator's message, so no character of it is the
@@ -671,15 +677,23 @@ def check_fetch_url(
 
     haystack = operator_message.lower()
     bare = clean.split("://", 1)[1].lower().rstrip("/")
-    if (
-        bare in haystack
-        or (bare.startswith("www.") and bare[4:] in haystack)
-        or f"www.{bare}" in haystack
-    ):
-        return FetchUrlCheck(True, url=clean, source="operator")
 
-    if url_key(clean) in seen_urls:
-        return FetchUrlCheck(True, url=clean, source="search")
+    # The URL that is sent is never the model's spelling. The comparisons below
+    # are loose on purpose (case, scheme, www, trailing slash), and a loose
+    # comparison that then sends the model's own string leaves the model free to
+    # choose among the spellings, which is a few bits per URL to carry data out
+    # in. So an accepted URL is replaced by the one the operator typed or the one
+    # the search returned, character for character.
+    forms = [bare]
+    forms.append(bare[4:] if bare.startswith("www.") else f"www.{bare}")
+    for form in forms:
+        typed = re.search(re.escape(form), operator_message, re.IGNORECASE)
+        if typed is not None:
+            return FetchUrlCheck(True, url=f"https://{typed.group(0)}", source="operator")
+
+    returned = seen_urls.get(url_key(clean))
+    if returned is not None:
+        return FetchUrlCheck(True, url=returned, source="search")
 
     for domain in preferred_sources:
         pattern = _COMPANY_PAGE.get(domain)
@@ -687,7 +701,12 @@ def check_fetch_url(
             continue
         match = pattern.match(parts.path)
         if match and match.group(1).lower() in haystack:
-            return FetchUrlCheck(True, url=clean, source="preferred")
+            # Built from the validated symbol, not copied from the model.
+            tail = "/consolidated/" if "consolidated" in parts.path else "/"
+            symbol = match.group(1).upper()
+            return FetchUrlCheck(
+                True, url=f"https://www.{domain}/company/{symbol}{tail}", source="preferred"
+            )
 
     return FetchUrlCheck(
         False,
@@ -1979,6 +1998,16 @@ class _Budget:
         self.used_this_turn += 1
         _increment_usage()
 
+    def record_attempt(self) -> None:
+        """Count one request that went out and failed, against this turn only.
+
+        A failed request still reached a paid provider, so it uses the turn's
+        allowance, which is what stops a loop on a failing page or provider. It
+        does not touch the persistent daily cap, so an outage cannot use up the
+        operator's day.
+        """
+        self.used_this_turn += 1
+
 
 class WebSearchToolkit(OpenAlgoToolkit):
     """Search the public web, read a page, and ask a research provider for a cited answer.
@@ -2016,7 +2045,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
         # Per run, like the rest of the toolkit: the URLs a search of this run
         # returned (the only ones web_fetch accepts besides the operator's own)
         # and the pages already read, so reading on with offset is free.
-        self._seen_urls: set[str] = set()
+        self._seen_urls: dict[str, str] = {}
         self._pages: dict[str, ProviderOutcome] = {}
         # Preferred sources whose page could not be read during this run. They
         # are skipped from then on, so one blocked site costs one failed call
@@ -2103,6 +2132,16 @@ class WebSearchToolkit(OpenAlgoToolkit):
 
         return self._general_search(constrained, count, notices)
 
+    def _remember_url(self, url: str) -> None:
+        """Note a URL a search returned, exactly as returned, minus any fragment.
+
+        Args:
+            url: The URL from a provider's result row.
+        """
+        exact = url.strip().split("#", 1)[0]
+        if exact:
+            self._seen_urls[url_key(exact)] = exact
+
     def _live_preferred_sources(self) -> list[str]:
         """The preferred sources that have not failed during this run.
 
@@ -2156,6 +2195,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
                 return self.to_json(busy)
             tried.append(domain)
             if not outcome.ok:
+                self.budget.record_attempt()
                 continue
             self.budget.record()
             provider_used = outcome.provider
@@ -2176,7 +2216,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
             return None
 
         for row in found:
-            self._seen_urls.add(url_key(str(row.get("url") or "")))
+            self._remember_url(str(row.get("url") or ""))
         used = found[0]["preferred_source"]
         later = [d for d in self._live_preferred_sources() if d != used and d not in tried]
         follow_up = (
@@ -2298,6 +2338,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
         self._log_decision("web_search", outcome.provider, constrained, len(outcome.results))
 
         if not outcome.ok:
+            self.budget.record_attempt()
             return self.to_json(
                 {
                     "ok": False,
@@ -2310,7 +2351,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
 
         self.budget.record()
         for row in outcome.results:
-            self._seen_urls.add(url_key(str(row.get("url") or "")))
+            self._remember_url(str(row.get("url") or ""))
         payload = {
             "ok": True,
             "provider": outcome.provider,
@@ -2379,6 +2420,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
         self._log_decision("web_research", PROVIDER_PERPLEXITY, constrained, len(outcome.citations))
 
         if not outcome.ok:
+            self.budget.record_attempt()
             return self.to_json(
                 {
                     "ok": False,
@@ -2477,11 +2519,21 @@ class WebSearchToolkit(OpenAlgoToolkit):
 
         outcome: ProviderOutcome | None = None
         for index, (name, api_key) in enumerate(providers):
+            if index:
+                # A second provider is a second paid request, so the budget is
+                # asked again rather than trusted from the check above.
+                refusal = self.budget.refusal()
+                if refusal is not None:
+                    notices.append(
+                        "The other provider was not tried because this turn's web calls are used."
+                    )
+                    break
             outcome = _PAGE_FETCH[name](check.url, api_key)
             if outcome.busy:
                 return self.to_json(_busy_payload(outcome, notices))
             if outcome.ok:
                 break
+            self.budget.record_attempt()
             if index + 1 < len(providers):
                 notices.append(
                     f"{outcome.error} {PROVIDER_LABELS[providers[index + 1][0]]} was tried instead."
