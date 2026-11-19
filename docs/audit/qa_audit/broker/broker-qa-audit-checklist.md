@@ -252,7 +252,7 @@ bug the matrix exists to catch.
 | SYM-01 | `/symbol` | Equity lookup | All documented fields present; `brsymbol` is the broker tradingsymbol; `tick_size` and `lotsize` sane |
 | SYM-02 | `/symbol` | Futures lookup | `instrumenttype=FUT`, `expiry` in `DD-MMM-YY`, `freeze_qty` present for F&O |
 | SYM-03 | `/symbol` | Options lookup incl. `OPT_DECIMAL_STRIKE` | `strike` float preserved exactly |
-| SYM-04 | `/symbol` | Index lookup on `NSE_INDEX` / `BSE_INDEX` | Resolves; `exchange` echoed as the index exchange |
+| SYM-04 | `/symbol` | Index lookup on `NSE_INDEX` / `BSE_INDEX` | Resolves; `exchange` echoed as the index exchange. `tick_size` may be `0` or null: index spot rows are quote-only and never ordered (Kite sends `0`), the same exemption as MC-11 |
 | SYM-05 | `/symbol` | `EQ_SPECIAL` | Hyphen/ampersand/digit symbols resolve without mangling |
 | SYM-06 | `/symbol` | Unknown symbol | Clean 404/400 with a message; never 500 |
 | SYM-07 | `/search` | Plain symbol query | Returns matches; every row carries the full documented field set |

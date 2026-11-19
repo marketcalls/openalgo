@@ -796,7 +796,7 @@ def sec_symbols(run: Runner) -> None:
     run.section("3. Symbol services")
     m = run.matrix
 
-    def sym_lookup(slot, itype=None):
+    def sym_lookup(slot, itype=None, index=False):
         if slot not in m:
             raise Skip(f"{slot} unresolved")
         s, ex = m[slot]
@@ -804,7 +804,14 @@ def sec_symbols(run: Runner) -> None:
         need_keys(d, ["symbol", "brsymbol", "exchange", "brexchange", "token",
                       "lotsize", "tick_size"], f"symbol {s}")
         need(d["symbol"] == s, f"echoed symbol {d['symbol']} != {s}")
-        need_nonzero(d["tick_size"], f"{s}.tick_size")
+        if index:
+            # Index spot rows are quote-only and never ordered, so a 0 or null
+            # tick is what brokers send (Kite included) and is correct - the
+            # same exemption MC-11 makes. What SYM-04 asserts is that the row
+            # resolves on, and echoes, the index exchange.
+            need(d["exchange"] == ex, f"{s}: exchange echoed {d['exchange']!r}, expected {ex}")
+        else:
+            need_nonzero(d["tick_size"], f"{s}.tick_size")
         if itype:
             need(d.get("instrumenttype") == itype, f"{s}: instrumenttype {d.get('instrumenttype')}")
         return d
@@ -812,7 +819,10 @@ def sec_symbols(run: Runner) -> None:
     run.check("SYM-01", lambda: sym_lookup("EQ_LIQUID"), endpoint="symbol", expected="full field set")
     run.check("SYM-03", lambda: sym_lookup("OPT_DECIMAL_STRIKE"),
               endpoint="symbol", expected="decimal strike preserved")
-    run.check("SYM-04", lambda: sym_lookup("IDX_NSE"), endpoint="symbol", expected="index resolves")
+    for cid, slot in (("SYM-04.NSE", "IDX_NSE"), ("SYM-04.BSE", "IDX_BSE")):
+        run.check(cid, lambda s=slot: sym_lookup(s, index=True), endpoint="symbol",
+                  symbol=str(m.get(slot, "")),
+                  expected="index resolves, exchange echoed as the index exchange")
     run.check("SYM-05", lambda: sym_lookup("EQ_SPECIAL"), endpoint="symbol",
               expected="special char intact")
     run.check("SYM-06", lambda: run.expect_error(
