@@ -106,6 +106,14 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 # the OrderUpdateEvent would be published on the wrong process's event bus.
 _POLLING_BROKERS = {"groww", "fivepaisa", "samco"}
 
+# Brokers deliberately left out of both sets above, so they get no order updates:
+#
+# hdfcsky, hdfcsecurities: the broker provides no order-update push. The feed
+# proto lists ORDER (8) and TRADE (9) packet types, but the docs give no way to
+# subscribe to them, and a live feed socket received neither for accepted
+# orders placed, modified and cancelled while it was open (checked 2026-11-13
+# and 2026-11-19). They are not polled either.
+
 # user_id -> live adapter (BaseOrderUpdateAdapter or PollingOrderUpdateAdapter)
 _ADAPTERS: dict[str, object] = {}
 _LOCK = threading.Lock()
