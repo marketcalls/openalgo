@@ -84,6 +84,14 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.tradejini.streaming.tradejini_order_adapter",
         "create_tradejini_order_adapter",
     ),
+    "hdfcsky": (
+        "broker.hdfcsky.streaming.hdfcsky_order_adapter",
+        "create_hdfcsky_order_adapter",
+    ),
+    "hdfcsecurities": (
+        "broker.hdfcsecurities.streaming.hdfcsecurities_order_adapter",
+        "create_hdfcsecurities_order_adapter",
+    ),
 }
 
 # Brokers with no *usable* push mechanism fall back to REST-orderbook polling.
@@ -95,14 +103,6 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 # "quote" and "quote2"; there is no order/trade confirmation stream, postback or
 # webhook anywhere in the v3.2 reference.
 #
-# hdfcsky: the feed docs list ORDER and TRADE packet types, but a live HDFC Sky
-# socket subscribed to a scrip received no order packet for an order placed
-# while it was open (checked 2026-11-13), so orders are polled instead.
-#
-# hdfcsecurities: same gateway, feed protocol and docs as HDFC Sky (ORDER and
-# TRADE packet types that the socket was never seen to deliver), so it is
-# polled the same way.
-#
 # fivepaisa: it does document an OrderTradeConfirmations WebSocket, but 5Paisa
 # permits only ONE feed connection per {access_token, client_code} and a new
 # connection evicts the existing one. A dedicated order socket therefore fights
@@ -112,7 +112,7 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 # updates onto the market-data socket instead is not viable either: that adapter
 # runs in the websocket_proxy *subprocess* under gunicorn+eventlet and Docker, so
 # the OrderUpdateEvent would be published on the wrong process's event bus.
-_POLLING_BROKERS = {"groww", "fivepaisa", "samco", "hdfcsky", "hdfcsecurities"}
+_POLLING_BROKERS = {"groww", "fivepaisa", "samco"}
 
 # user_id -> live adapter (BaseOrderUpdateAdapter or PollingOrderUpdateAdapter)
 _ADAPTERS: dict[str, object] = {}

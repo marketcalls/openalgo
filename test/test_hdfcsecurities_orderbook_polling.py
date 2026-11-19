@@ -1,9 +1,8 @@
-"""HDFC Securities order book, as the order-update poller reads it.
+"""HDFC Securities order book: fill progress.
 
-HDFC Securities is in services/order_update_service.py::_POLLING_BROKERS, so
-its order updates come from diffing the normalized order book on
-(order_status, filled_quantity). These tests pin what that needs: the fill
-fields in the transformed rows.
+The order book reports each order's fill progress (filled and pending
+quantity, average price, rejection reason). Order updates themselves stream
+from the feed socket (hdfcsecurities_order_adapter.py).
 """
 
 import os

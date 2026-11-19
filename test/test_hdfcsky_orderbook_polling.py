@@ -1,10 +1,9 @@
-"""HDFC Sky order book, as the order-update poller reads it.
+"""HDFC Sky order book: fill progress and a whole book.
 
-HDFC Sky is in services/order_update_service.py::_POLLING_BROKERS, so
-its order updates come from diffing the normalized order book on
-(order_status, filled_quantity). These tests pin what that needs: the fill
-fields in the transformed rows, and an error rather than half a
-book when one of its two order-book calls fails.
+The order book reports each order's fill progress (filled and pending
+quantity, average price, rejection reason), and fails as a whole rather than
+returning half a book when one of its two order-book calls fails. Order
+updates themselves stream from the feed socket (hdfcsky_order_adapter.py).
 """
 
 import os
