@@ -440,7 +440,7 @@ def _websearch_spec_or_400(provider: str):
         provider: The path segment naming the provider.
 
     Returns:
-        The resolved spec, or a 400 naming the three that exist.
+        The resolved spec, or a 400 naming the providers that exist.
     """
     try:
         return agent_settings.websearch_provider_spec(provider), None

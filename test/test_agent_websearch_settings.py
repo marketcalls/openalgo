@@ -213,4 +213,132 @@ def test_the_literals_match_the_tool_module_they_were_copied_from():
         websearch.PROVIDER_DUCKDUCKGO,
         websearch.PROVIDER_TAVILY,
         websearch.PROVIDER_PERPLEXITY,
+        websearch.PROVIDER_FIRECRAWL,
+        websearch.PROVIDER_TINYFISH,
     }
+    assert agent_settings.KEY_WEBFETCH_PROVIDER == websearch.SETTING_FETCH_PROVIDER
+    assert agent_settings.DEFAULT_WEBFETCH_PROVIDER == websearch.DEFAULT_FETCH_PROVIDER
+    assert set(agent_settings.WEBFETCH_PROVIDER_IDS) == set(websearch.FETCH_PROVIDERS)
+
+
+def test_firecrawl_and_tinyfish_are_keyed_link_providers_that_also_fetch():
+    for provider in ("firecrawl", "tinyfish"):
+        spec = agent_settings.websearch_provider_spec(provider)
+        assert spec.needs_key and spec.fetch and spec.result_kind == "links"
+        assert spec.tool == "web_search"
+    assert not agent_settings.websearch_provider_spec("tavily").fetch
+    assert agent_settings.WEBFETCH_PROVIDER_IDS == ("firecrawl", "tinyfish")
+
+
+def test_config_reports_the_fetch_provider_and_whether_fetch_can_run(stored_keys):
+    config = agent_settings.get_websearch_config()
+
+    assert config["fetch_provider"] == agent_settings.DEFAULT_WEBFETCH_PROVIDER
+    assert config["fetch_ready"] is True
+    assert agent_settings.get_websearch_defaults()["fetch_provider"] == "firecrawl"
+
+
+def test_fetch_is_not_ready_when_only_a_non_fetching_provider_has_a_key(monkeypatch):
+    only_tavily = {"websearch:tavily": {"fingerprint": "f", "has_value": True}}
+    monkeypatch.setattr(agent_settings, "_websearch_secret_index", lambda: only_tavily)
+    monkeypatch.setattr(agent_settings, "_load_all", lambda fresh=False: {})
+
+    assert agent_settings.get_websearch_config()["fetch_ready"] is False
+
+
+@pytest.mark.parametrize("provider", ["tavily", "perplexity", "duckduckgo", "bing", ""])
+def test_a_provider_that_cannot_read_a_page_is_refused_as_the_fetch_provider(provider):
+    with pytest.raises(ValueError, match="fetch_provider must be one of: firecrawl, tinyfish"):
+        agent_settings.update_websearch({"fetch_provider": provider})
+
+
+def test_a_fetch_provider_choice_is_validated_before_anything_is_written(monkeypatch):
+    written: list[str] = []
+    from database import agent_db
+
+    monkeypatch.setattr(agent_db, "set_setting", lambda key, value: written.append(key) or True)
+
+    with pytest.raises(ValueError):
+        agent_settings.update_websearch({"daily_cap": 50, "fetch_provider": "tavily"})
+
+    assert written == []
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("screener.in", "screener.in"),
+        ("https://www.Screener.in/company/TCS/", "screener.in"),
+        ("  SCANX.trade  ", "scanx.trade"),
+        ("http://user@scanx.trade:8080/x?y=1", "scanx.trade"),
+    ],
+)
+def test_a_pasted_address_is_reduced_to_its_domain(typed, expected):
+    assert agent_settings.normalise_source(typed) == expected
+
+
+@pytest.mark.parametrize(
+    "typed", ["", "screener", "not a site", "a..b", "-x.com", "x" * 200 + ".in"]
+)
+def test_something_that_is_not_a_website_is_refused(typed):
+    with pytest.raises(ValueError, match="not a website address"):
+        agent_settings.normalise_source(typed)
+
+
+def test_preferred_sources_default_to_three_in_priority_order_and_empty_turns_them_off():
+    assert agent_settings.preferred_sources_from(None) == (
+        "screener.in",
+        "scanx.trade",
+        "tickertape.in",
+    )
+    assert agent_settings.preferred_sources_from("") == (
+        "screener.in",
+        "scanx.trade",
+        "tickertape.in",
+    )
+    assert agent_settings.preferred_sources_from("[]") == ()
+    assert agent_settings.preferred_sources_from('["scanx.trade"]') == ("scanx.trade",)
+
+
+@pytest.mark.parametrize("raw", ["not json", '{"a": 1}', '["not a site"]'])
+def test_a_damaged_preference_row_reads_as_the_default(raw):
+    assert agent_settings.preferred_sources_from(raw) == (
+        "screener.in",
+        "scanx.trade",
+        "tickertape.in",
+    )
+
+
+def test_preferred_sources_are_validated_before_anything_is_written(monkeypatch):
+    written: list[str] = []
+    from database import agent_db
+
+    monkeypatch.setattr(agent_db, "set_setting", lambda key, value: written.append(key) or True)
+
+    for bad in (["screener.in", "nonsense"], "a.com b.com c.com d.com e.com f.com", 5):
+        with pytest.raises(ValueError):
+            agent_settings.update_websearch({"daily_cap": 10, "preferred_sources": bad})
+
+    assert written == []
+
+
+def test_the_config_reports_the_preferred_sources(stored_keys):
+    assert agent_settings.get_websearch_config()["preferred_sources"] == [
+        "screener.in",
+        "scanx.trade",
+        "tickertape.in",
+    ]
+    assert agent_settings.get_websearch_defaults()["preferred_sources"] == [
+        "screener.in",
+        "scanx.trade",
+        "tickertape.in",
+    ]
+
+
+def test_the_preferred_sources_key_matches_the_tool_module():
+    websearch = pytest.importorskip(
+        "services.agent.tools.websearch",
+        reason="the web search tools need the optional agno package",
+    )
+
+    assert agent_settings.KEY_WEBSEARCH_PREFERRED_SOURCES == websearch.SETTING_PREFERRED_SOURCES

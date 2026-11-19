@@ -1516,14 +1516,24 @@ browser against a running instance rather than asserted in a test:
 
 ## Web search
 
-Three providers, configured in the same database-backed settings UI as the LLM
+Five providers, configured in the same database-backed settings UI as the LLM
 providers. **No web search key ever goes in `.env`**, including Perplexity's.
 
-| provider | key | shape of result |
-| --- | --- | --- |
-| DuckDuckGo | none | links |
-| Tavily | required | links, optionally a short answer |
-| Perplexity | required | a synthesised answer with citations |
+| provider | key | shape of result | tools |
+| --- | --- | --- | --- |
+| DuckDuckGo | none | links | `web_search` |
+| Tavily | required | links | `web_search` |
+| Perplexity | required | a synthesised answer with citations | `web_research` |
+| Firecrawl | required | links, and the text of a page | `web_search`, `web_fetch` |
+| TinyFish | required | links, and the text of a page | `web_search`, `web_fetch` |
+
+One key serves every tool its provider offers. The search provider
+(`websearch_provider`) and the page provider (`webfetch_provider`) are chosen
+separately; fetch has no keyless provider, so an install with no Firecrawl or
+TinyFish key tells the model and the operator that pages cannot be read.
+`web_search`, `web_research` and `web_fetch` share the per-turn budget and the
+daily cap, because each is one paid call. The composer's Web search switch turns
+all three off together.
 
 Keys live in `ag_secret` under `websearch:{provider}`, encrypted with the same
 Fernet, returned to the UI as a fingerprint and a boolean, and testable with the
@@ -1561,6 +1571,60 @@ process, to whichever MCP server is registered, and do not carry this envelope;
   content so the model does not present a random page with the authority of the
   broker's own position book.
 - **The decision is logged, never the query.**
+
+### Fetching a page
+
+`web_fetch(url, max_chars, offset)` is the "open the link and read it" step: it
+returns one page as markdown, tables included, so a question such as "get the
+fundamentals for Reliance from the Screener portal" is a search followed by a
+fetch of the page the search returned. A long page comes back in slices
+(`truncated`, `next_offset`); the page is kept for the rest of the run, so
+reading on costs no second call.
+
+A search query can be built out of the operator's words. A URL cannot, because
+the page wanted is usually one the operator never typed, and a URL carries data
+in its path and query string. The fetch boundary is therefore its own rule,
+`websearch.check_fetch_url`: a URL is accepted only if the operator wrote it
+(the text after the scheme appears in their message, which also admits a prefix
+of a longer link they pasted, but never an extension of one), or a search in
+this run returned it. Anything the model assembled is refused, and so are
+private, loopback, credentialed and non-standard-port addresses. Fetched pages
+are requested with `links: false`, so a poisoned page cannot add URLs to the
+accepted set. Results are wrapped as third-party content like every other web
+result.
+
+What this does not do: it does not let the model follow a link it read inside a
+page. If the answer needs a second page, the model searches for it. Raising that
+limit is a decision about exfiltration, not about convenience.
+
+### Preferred sources for company figures
+
+For anything about a company's fundamentals (market cap, P/E, results, ratios,
+shareholding) the agent looks at the operator's preferred sources first, in
+order, and searches the open web only when none of them has the page. The list
+is the `websearch_preferred_sources` setting, edited on `/agent/config`; it
+defaults to `screener.in`, then `scanx.trade`, holds up to five domains, and an
+empty list turns the preference off.
+
+- **Search.** `web_search(topic="fundamentals")` asks each source in turn with a
+  `site:` term that the code appends (the model cannot choose or alter it), keeps
+  only results whose host really is that domain, and returns them best first with
+  `preferred_source` set. Each source is one call against the budget. When none
+  has a page the open web is searched and the result says so.
+- **Direct pages.** Screener's company page is a function of the NSE symbol, so
+  `web_fetch` opens `https://www.screener.in/company/SYMBOL/consolidated/` with no
+  search, but only when SYMBOL is a word the operator wrote and the address has
+  exactly that shape (no query string, no extra path). Nothing the model chose
+  reaches the provider. ScanX names a page after the company, so it is reached
+  through search only.
+- **A blocked source is dropped, not fatal.** When a preferred source cannot be
+  read, it is skipped for the rest of the run, the result says which source to use
+  instead, and the open web is the next step only when every source has failed.
+  A site that blocks one provider is often readable through the other, which is
+  why fetch tries Firecrawl and TinyFish in turn before a source counts as failed.
+- **The model is taught the order** by the `web_sources` prompt section
+  (`services/agent/web_prompt.py`), added only to a run that is offered the web
+  tools, like the MCP section.
 
 ### Requests run on the hub
 
@@ -1973,7 +2037,7 @@ limit, CSRF on by default.
 | GET/PUT | `/settings` | agent settings |
 | GET/PUT | `/websearch` | web-search settings |
 | PUT/DELETE | `/websearch/providers/<provider>/key` | store, remove a search key |
-| POST | `/websearch/providers/<provider>/test` | validate a search key |
+| POST | `/websearch/providers/<provider>/test` | validate a search key; for Firecrawl and TinyFish it also reads a page |
 | GET | `/mcp` | the external data switch and the registered servers; contacts none |
 | POST | `/mcp/test` | test every server, or the one named in `{"server": key}`; on the tighter limit |
 | GET | `/chatgpt/status` | is a plan authorised, plus any login in flight |
