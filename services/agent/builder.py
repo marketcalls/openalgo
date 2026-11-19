@@ -549,6 +549,55 @@ def _register_chatgpt_models() -> None:
     litellm_tool_args.install()
 
 
+#: Providers whose API takes explicit cache breakpoints for Claude models. A
+#: model on any other provider either caches on its own (OpenAI) or has no cache,
+#: and a ``cache_control`` field sent to one that does not know it can be refused,
+#: so nothing is injected for them.
+_PROMPT_CACHE_PROVIDERS = frozenset({"anthropic", "bedrock", "vertex_ai", "openrouter"})
+
+
+def prompt_cache_points(litellm_id: str) -> list[dict[str, Any]]:
+    """The cache breakpoints to inject for one model, or none.
+
+    Every model call in a turn re-sends the same tool definitions and system
+    prompt (about 47,000 tokens), and a turn that searches and reads a page makes
+    several calls. A cache breakpoint lets the provider read that prefix back at a
+    fraction of the price and time instead of processing it again.
+
+    Anthropic reads its prefix in the order tools, system, messages, and a
+    breakpoint caches everything before it, so three are used:
+
+    * on the tool definitions, about 80 percent of the block and the part that
+      almost never changes, so it stays cached even when the system prompt text
+      moves on (the clock changes it every minute, see
+      ``prompts.volatile_section``);
+    * on the system message, which adds the prompt itself when it is unchanged;
+    * on the last message, so each later call in the turn reuses everything the
+      call before it already sent, the tool results included.
+
+    LiteLLM injects them and enforces the provider's four-breakpoint limit.
+
+    Args:
+        litellm_id: The id LiteLLM is addressed with, such as
+            ``anthropic/claude-haiku-5-5``.
+
+    Returns:
+        The injection points for a Claude model on a provider that takes them,
+        otherwise an empty list.
+    """
+    name = (litellm_id or "").strip().lower()
+    provider = name.split("/", 1)[0]
+    if provider not in _PROMPT_CACHE_PROVIDERS:
+        return []
+    if provider != "anthropic" and "claude" not in name and "anthropic" not in name:
+        return []
+    return [
+        {"location": "tool_config"},
+        {"location": "message", "role": "system"},
+        {"location": "message", "index": -1},
+    ]
+
+
 def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None) -> LiteLLM:
     """Construct the LiteLLM model for a resolved row.
 
@@ -616,6 +665,10 @@ def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None)
     # covers it.
     kwargs.setdefault("request_params", {})["_skip_mcp_handler"] = True
 
+    cache_points = prompt_cache_points(resolved.litellm_id)
+    if cache_points:
+        kwargs.setdefault("request_params", {})["cache_control_injection_points"] = cache_points
+
     kwargs["name"] = resolved.display_name
 
     try:
@@ -636,10 +689,11 @@ def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None)
         agent_db.mark_secret_used(resolved.secret_name)
 
     logger.info(
-        "Agent model resolved: %s (%s, reasoning=%s)",
+        "Agent model resolved: %s (%s, reasoning=%s, prompt cache=%s)",
         resolved.display_name,
         resolved.litellm_id,
         effort or "off",
+        "on" if cache_points else "off",
     )
     return model
 

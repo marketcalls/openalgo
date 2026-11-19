@@ -78,6 +78,7 @@ __all__ = [
     "escape_attribute",
     "render_sections",
     "runtime_section",
+    "volatile_section",
     "sections_for",
     "voice_surface_section",
     "with_body",
@@ -1041,10 +1042,16 @@ def runtime_section(
     *,
     trading_enabled: bool = False,
     analyzer_mode: bool = False,
-    now: datetime | None = None,
-    extra_lines: Sequence[str] = (),
 ) -> PromptSection:
-    """Build the section describing the state of this particular run.
+    """Build the section describing how this session is set up.
+
+    Only what changes rarely lives here (trading on or off, analyzer mode), so
+    the prompt stays the same text from one message to the next. What changes
+    every message, the clock and a chart's current symbol, is in
+    :func:`volatile_section` at the very end. That split is what lets a provider
+    reuse its cached copy of the tool definitions and the system prompt: a cache
+    matches a prefix, so one changing character early in the prompt used to
+    invalidate everything after it, about 90 percent of it.
 
     Args:
         trading_enabled: Whether the session may place orders at all. When it is
@@ -1052,20 +1059,11 @@ def runtime_section(
             stops the model promising an action it has no way to take.
         analyzer_mode: Whether the platform analyzer toggle is on, which routes
             every order to the sandbox instead of the broker.
-        now: Current time, already in the timezone the operator works in. A
-            timezone-aware value renders its zone name.
-        extra_lines: Additional facts a surface wants stated, such as the chart's
-            current symbol and interval. Each becomes its own bullet.
 
     Returns:
         A :class:`PromptSection` for the current run.
     """
     lines: list[str] = []
-    if now is not None:
-        # The weekday is stated because "last Friday" or "this week" is
-        # otherwise a calculation the model can get wrong.
-        stamp = now.strftime("%A, %Y-%m-%d %H:%M %Z").strip()
-        lines.append(f"- Current date and time: {stamp}.")
 
     if trading_enabled:
         lines.append(
@@ -1092,13 +1090,57 @@ def runtime_section(
             "broker account and real money."
         )
 
-    lines.extend(f"- {line}" for line in extra_lines if str(line).strip())
-
     return PromptSection(
         key="runtime",
         title="THIS SESSION",
         body="\n".join(lines),
         order=15,
+    )
+
+
+#: After every other section, so nothing that changes per message sits ahead of
+#: text that does not.
+_VOLATILE_ORDER = 99
+
+
+def volatile_section(
+    *,
+    now: datetime | None = None,
+    extra_lines: Sequence[str] = (),
+) -> PromptSection | None:
+    """Build the section for what changes with every message.
+
+    It is the last section of the prompt on purpose: a prompt cache matches a
+    prefix, so everything that stays the same must come before everything that
+    does not. It is pinned only so a prompt trimmed to its budget cannot drop it
+    first, since the highest-order sections go first; it is a few lines long.
+
+    Args:
+        now: Current time, already in the timezone the operator works in. A
+            timezone-aware value renders its zone name.
+        extra_lines: Additional facts a surface wants stated, such as the chart's
+            current symbol and interval. Each becomes its own bullet.
+
+    Returns:
+        The section, or None when there is nothing to say.
+    """
+    lines: list[str] = []
+    if now is not None:
+        # The weekday is stated because "last Friday" or "this week" is
+        # otherwise a calculation the model can get wrong.
+        stamp = now.strftime("%A, %Y-%m-%d %H:%M %Z").strip()
+        lines.append(f"- Current date and time: {stamp}.")
+
+    lines.extend(f"- {line}" for line in extra_lines if str(line).strip())
+    if not lines:
+        return None
+
+    return PromptSection(
+        key="now",
+        title="RIGHT NOW",
+        body="\n".join(lines),
+        pinned=True,
+        order=_VOLATILE_ORDER,
     )
 
 
@@ -1244,14 +1286,10 @@ def build_system_prompt(
         The system prompt text, with the anti-injection rule first.
     """
     sections = sections_for(surface, extra_sections=extra_sections, override=override)
-    sections.append(
-        runtime_section(
-            trading_enabled=trading_enabled,
-            analyzer_mode=analyzer_mode,
-            now=now,
-            extra_lines=extra_runtime_lines,
-        )
-    )
+    sections.append(runtime_section(trading_enabled=trading_enabled, analyzer_mode=analyzer_mode))
+    volatile = volatile_section(now=now, extra_lines=extra_runtime_lines)
+    if volatile is not None:
+        sections.append(volatile)
     sections.sort(key=lambda item: item.order)
     return render_sections(sections, max_chars=max_chars)
 

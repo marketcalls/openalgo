@@ -1658,6 +1658,66 @@ brings its own transport and never touches the shared client.
 `test/test_agent_websearch_transport.py` pins both the crossing and the longer
 wait.
 
+## Prompt caching
+
+Every model call in a turn re-sends the same tool definitions and system prompt,
+about 43,000 tokens, and a turn that searches and reads a page makes several
+calls. Whether that block is paid for again depends on the provider:
+
+| provider | how caching works | what this code does |
+| --- | --- | --- |
+| Claude (`anthropic/`, and Claude on `bedrock/`, `vertex_ai/`, `openrouter/`) | explicit: the request must mark where the cached prefix ends | injects three breakpoints, below |
+| OpenAI and Azure OpenAI | automatic for prompts of 1,024 tokens and more, no opt-in | nothing; the prompt only has to stay the same |
+| Gemini 2.5 and later | implicit caching is on by default, with no guarantee of a hit | nothing; same condition |
+| DeepSeek, xAI and other OpenAI-style APIs | automatic | nothing |
+| Ollama and local models | the server keeps its own prefix cache, free | nothing |
+| ChatGPT plan models | a flat plan, no per-token price | nothing |
+
+**Why not one switch for every provider.** LiteLLM has a provider-agnostic setting,
+`cache_control_injection_points`, but it is not a no-op where a provider has no such
+field. Measured against a local server: LiteLLM strips it for Gemini, DeepSeek and
+Groq, and sends `cache_control` unchanged to OpenAI, Azure, Ollama and custom
+OpenAI-compatible endpoints, which are not documented to accept it. Its
+`supports_prompt_caching` flag cannot be the gate either, because it is true for
+OpenAI models that cache with no field at all. So the field goes to Claude models
+only, through `builder.prompt_cache_points`, pinned by
+`test/test_agent_prompt_cache.py`.
+
+**The three Claude breakpoints.** Anthropic reads its prefix in the order tools,
+system, messages, and a breakpoint caches everything before it:
+
+- on the tool definitions, about 75 percent of the block and the part that almost
+  never changes, so it stays cached when the prompt text moves on;
+- on the system message, which adds the prompt itself while it is unchanged;
+- on the last message, so each later call in the turn reuses everything the call
+  before it sent, tool results included.
+
+Measured against the real provider across a simulated clock change: a message in
+the same minute read 42,621 of 42,704 tokens from cache; a message a minute or ten
+minutes later read 31,841 and rewrote only the 10,860-token system prompt. Before
+the change below, a new minute missed all of it.
+
+**The prompt must be the same text from one message to the next.** Every provider
+above matches a prefix, so one changing character early in the prompt used to
+throw away everything after it: the clock sat at character 2,638 of 29,349, which
+left 9 percent of the prompt stable and, for OpenAI's 1,024-token minimum, too
+little to ever hit across messages. `prompts.runtime_section` now holds only what
+changes rarely (trading on or off, analyzer mode) and `prompts.volatile_section`,
+the clock and a chart's current symbol, is the last section of the prompt. It is
+pinned only so a prompt trimmed to its budget cannot drop it first.
+`test/test_agent_prompt_cache.py` fails if anything that changes per message moves
+ahead of anything that does not.
+
+- **The cache lives about five minutes** (Claude) and is refreshed by each read, so
+  an active conversation stays warm and an idle one pays the write again.
+- **Usage and cost.** agno reads the provider's cached-token count
+  (`prompt_tokens_details.cached_tokens`) as `cache_read_tokens`; the usage frame
+  and `catalog.estimate_cost` already charge those tokens at the cache-read price
+  for any provider that reports them. The Claude cache-write premium is not
+  modelled, so a cold first call is shown slightly under what it cost.
+- **What it does not fix.** It makes the fixed block cheap and fast; it does not
+  make it smaller. Sending fewer tools per question is a separate change.
+
 ## External data (MCP)
 
 The agent can read read-only data servers over the Model Context Protocol beside

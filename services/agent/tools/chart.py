@@ -309,7 +309,7 @@ class ChartToolkit(OpenAlgoToolkit):
 
         Reach for it only when you need those lists. The instrument, the
         interval, the viewport and the last price are already stated in your
-        THIS SESSION instructions.
+        RIGHT NOW instructions.
 
         Returns:
             JSON with the instrument and timeframe, the viewport, the indicators
