@@ -1,5 +1,5 @@
 """
-HDFC Securities order-update adapter - ORDER and TRADE packets on the feed socket.
+HDFC Securities order-update adapter - ORDER packets on the feed socket.
 
 Docs: broker-api-docs/hdfcsecurities-api-docs/17-websocket.md ("Packet Types and
 their meanings") and the GenericDTO proto it links (vendored here as
@@ -12,9 +12,16 @@ two packet types besides market data:
 The docs give no subscribe message for them: the only documented subscription
 takes a scripId with type LTP, ALL or GREEK. They are taken to be pushed for the
 session's own account on any open socket, so this adapter opens one, sends the
-documented heartbeat, and decodes packet types 8 and 9. Every other packet type
+documented heartbeat, and publishes packet type 8. Every other packet type
 is ignored; the first packet of each type is logged, so a live session shows
 whether the gateway delivers order packets at all.
+
+TRADE packets are logged but not published. An order's fills already arrive as
+ORDER packets (Status PARTIAL_TRADE / COMPLETE, with the cumulative fill and the
+average price), so a TRADE packet would publish the same fill a second time with
+fewer fields. Trade also has no presence for RemainingVolume (proto3 int64), so
+"nothing remains" and "field not sent" read alike, and its Price is the order
+price, not the fill price.
 
 Why a separate socket instead of the market-data one: that adapter runs in the
 websocket_proxy subprocess under gunicorn, so an event published there would
@@ -28,9 +35,9 @@ Authorization header as hdfcsecurities_websocket.py sends it. A rejected token f
 the upgrade with 401, which the base class treats as "stand down until the next
 login".
 
-Packets flagged isOrderDownload / isTradeDownload are a replay of the day's
-book, not a change, so they are not published (the polling adapter seeds its
-first poll silently for the same reason).
+Packets flagged isOrderDownload are a replay of the day's book, not a change,
+so they are not published (the polling adapter seeds its first poll silently
+for the same reason).
 
 Same gateway, feed protocol and proto as HDFC Sky (hdfcsky_order_adapter.py);
 only the host, the plugin's own generated proto module and the API key differ.
@@ -48,7 +55,6 @@ from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_sy
 logger = get_logger(__name__)
 
 PACKET_ORDER = 8
-PACKET_TRADE = 9
 HEARTBEAT_SECONDS = 10  # what hdfcsecurities_websocket.py uses on the same gateway
 _DEDUPE_LIMIT = 2000  # orders remembered for duplicate suppression
 
@@ -103,6 +109,14 @@ def map_product(prod_name: str) -> str:
     return base if base in _OA_PRODUCTS else prod_name
 
 
+def filled_quantity(order) -> int:
+    """The order's total fill. Order carries two fill counts, fillQuantity (12)
+    and volFilledToday (14), and the docs define neither; lastTradedQty (42)
+    holds the latest fill's size, so both read as running totals. Taking the
+    larger keeps the total right if one of them turns out to be per-fill."""
+    return max(int(order.fillQuantity), int(order.volFilledToday))
+
+
 def map_exchange(exchange_name: str, segment_name: str) -> str:
     return _EXCHANGE_MAP.get((exchange_name, segment_name), exchange_name)
 
@@ -121,7 +135,7 @@ def decode_frame(payload: bytes) -> list:
 
 
 class HDFCSecuritiesOrderUpdateAdapter(BaseOrderUpdateAdapter):
-    """Order-update adapter for HDFC Securities (feed socket, ORDER/TRADE packets)."""
+    """Order-update adapter for HDFC Securities (feed socket, ORDER packets)."""
 
     broker = "hdfcsecurities"
 
@@ -155,7 +169,7 @@ class HDFCSecuritiesOrderUpdateAdapter(BaseOrderUpdateAdapter):
 
     def on_open_extra(self, ws) -> None:
         self.logger.info(
-            f"HDFC Securities order socket open ({self.user_id}); waiting for ORDER/TRADE packets"
+            f"HDFC Securities order socket open ({self.user_id}); waiting for ORDER packets"
         )
 
     def heartbeat_interval(self) -> int:
@@ -176,7 +190,7 @@ class HDFCSecuritiesOrderUpdateAdapter(BaseOrderUpdateAdapter):
         )
 
     def normalize_frame(self, raw_message) -> list[dict]:
-        """Every order/trade update in one frame, normalized."""
+        """Every order update in one frame, normalized."""
         if isinstance(raw_message, str):
             self.logger.debug(f"HDFC Securities order socket text frame: {raw_message[:300]}")
             return []
@@ -190,12 +204,9 @@ class HDFCSecuritiesOrderUpdateAdapter(BaseOrderUpdateAdapter):
             packet_type = int(packet.packetType)
             self._note_packet_type(packet_type)
             try:
-                if packet_type == PACKET_ORDER:
-                    fields = self.normalize_order(packet.order)
-                elif packet_type == PACKET_TRADE:
-                    fields = self.normalize_trade(packet.trade)
-                else:
+                if packet_type != PACKET_ORDER:
                     continue
+                fields = self.normalize_order(packet.order)
             except Exception as e:
                 # One bad packet must not cost the rest of the frame.
                 self.logger.debug(f"Skipping undecodable HDFC Securities order packet: {e}")
@@ -257,7 +268,7 @@ class HDFCSecuritiesOrderUpdateAdapter(BaseOrderUpdateAdapter):
             "pricetype": _PRICETYPE_MAP.get(type_name, type_name),
             "product": map_product(_enum_name(pb.ProdType, order.prodType)),
             "order_status": order_status,
-            "filled_quantity": int(order.fillQuantity),
+            "filled_quantity": filled_quantity(order),
             "pending_quantity": int(order.remainingQuantity),
             "average_price": float(order.avgPrice),
         }
@@ -267,29 +278,6 @@ class HDFCSecuritiesOrderUpdateAdapter(BaseOrderUpdateAdapter):
                 message = _enum_name(pb.ErrorCode, order.error.Code)
             fields["rejection_reason"] = message
         return fields
-
-    def normalize_trade(self, trade) -> dict | None:
-        """A fill. Trade carries the order's cumulative fill (VolFilledToday) and
-        what remains (RemainingVolume), but no average price, so that is left
-        out rather than reported as this fill's price."""
-        if trade.isTradeDownload or not trade.OrderID:
-            return None
-        exchange = map_exchange(
-            _enum_name(pb.Exchange, trade.exchange), _enum_name(pb.Segment, trade.segment)
-        )
-        remaining = int(trade.RemainingVolume)
-        return {
-            "orderid": str(trade.OrderID),
-            "symbol": self._symbol(trade.TradingSymbol or trade.symbol, exchange, trade.Token),
-            "exchange": exchange,
-            "action": _enum_name(pb.OrderSide, trade.side),
-            "quantity": int(trade.OriginalVol),
-            "price": float(trade.Price),
-            "product": map_product(_enum_name(pb.ProdType, trade.prodType)),
-            "order_status": "complete" if remaining == 0 else "open",
-            "filled_quantity": int(trade.VolFilledToday),
-            "pending_quantity": remaining,
-        }
 
 
 def create_hdfcsecurities_order_adapter(user_id: str) -> "HDFCSecuritiesOrderUpdateAdapter | None":

@@ -55,3 +55,9 @@ def test_hs_rejection_reason_comes_from_status_message():
     assert row["order_status"] == "rejected"
     assert row["rejection_reason"] == "RMS: insufficient funds"
     assert _hs(status_message="something")["rejection_reason"] == ""
+
+
+def test_hs_refused_modify_or_cancel_leaves_the_order_open():
+    # The order is still working; the stream adapter reports the same.
+    for status in ("MODIFY REJECTED", "CANCEL_REJECTED"):
+        assert _hs(status=status)["order_status"] == "open"

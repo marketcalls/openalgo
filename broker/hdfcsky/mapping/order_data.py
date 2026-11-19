@@ -23,12 +23,14 @@ logger = get_logger(__name__)
 #
 # The status vocabulary comes from the GenericDTO proto's `Status` enum, which
 # is the same set the REST order book returns. Anything that is still working
-# at the exchange normalizes to "open".
+# at the exchange normalizes to "open". A refused modify or cancel leaves the
+# order itself working, so MODIFY_REJECTED and CANCEL_REJECTED read "open" (as
+# the order-update stream reports them), not "rejected".
 _STATUS_MAP = {
     "COMPLETE": "complete",
     "REJECTED": "rejected",
-    "MODIFY_REJECTED": "rejected",
-    "CANCEL_REJECTED": "rejected",
+    "MODIFY_REJECTED": "open",
+    "CANCEL_REJECTED": "open",
     "BRACKET_ORDER_REJECTED": "rejected",
     "CANCELLED": "cancelled",
     "CANCEL_CONFIRMED": "cancelled",

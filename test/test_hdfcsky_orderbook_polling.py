@@ -99,3 +99,12 @@ def test_sky_one_failed_half_fails_the_whole_book(failed, failing_half):
         book = sky_order_api.get_order_book("tok")
     assert book["status"] == "error"
     assert "data" not in book
+
+
+@pytest.mark.parametrize("status", ["MODIFY_REJECTED", "CANCEL_REJECTED"])
+def test_sky_refused_modify_or_cancel_leaves_the_order_open(status):
+    # The order is still working; the stream adapter reports the same.
+    row = _sky(order_status=status)
+    assert row["order_status"] == "open"
+    assert row["rejection_reason"] == ""
+    assert status in sky_order_data.CANCELLABLE_STATUSES

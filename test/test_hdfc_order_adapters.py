@@ -1,9 +1,10 @@
 """HDFC Sky and HDFC Securities order updates from ORDER/TRADE feed packets.
 
 Both brokers' feed docs (17-websocket.md) list packet types ORDER (8) and
-TRADE (9) carrying GenericDTO.order / GenericDTO.trade. The adapters decode
-those from real protobuf frames built here with each plugin's own generated
-module, and map them to OpenAlgo's order-update fields.
+TRADE (9) carrying GenericDTO.order / GenericDTO.trade. The adapters publish
+ORDER packets, decoded from real protobuf frames built here with each plugin's
+own generated module, as OpenAlgo order-update fields; TRADE packets repeat the
+same fills and are not published.
 """
 
 import json
@@ -43,6 +44,7 @@ def _order(pb, **kw):
         triggerPrice=kw.get("triggerPrice", 0.0),
         quantity=kw.get("quantity", 1),
         fillQuantity=kw.get("fillQuantity", 0),
+        volFilledToday=kw.get("volFilledToday", 0),
         remainingQuantity=kw.get("remainingQuantity", 1),
         side=kw.get("side", pb.BUY),
         type=kw.get("type", pb.LIMIT),
@@ -194,20 +196,44 @@ def test_slm_is_sl_dash_m_and_fno_is_nfo(env):
     assert event["trigger_price"] == 99.5
 
 
-def test_trade_reports_cumulative_fill_without_an_average(env):
+def test_trade_packets_are_not_published(env):
+    # A fill arrives as an ORDER packet too; a TRADE packet would repeat it.
+    # RemainingVolume=0 is also what an omitted field reads as, so a TRADE
+    # packet alone must never report the order complete.
     _, pb, adapter = env
-    adapter._handle_message(_frame(pb, _trade(pb, VolFilledToday=5, RemainingVolume=5)))
-    adapter._handle_message(_frame(pb, _trade(pb, VolFilledToday=10, RemainingVolume=0)))
-    partial, done = _published(adapter)
-    assert partial["order_status"] == "open"
-    assert partial["filled_quantity"] == 5
-    assert partial["pending_quantity"] == 5
-    assert "average_price" not in partial
-    assert done["order_status"] == "complete"
-    assert done["filled_quantity"] == 10
-    assert done["action"] == "SELL"
-    assert done["product"] == "MIS"
-    assert done["quantity"] == 10
+    adapter._handle_message(_frame(pb, _trade(pb, VolFilledToday=5, RemainingVolume=0)))
+    assert _published(adapter) == []
+    assert pb.TRADE in adapter._seen_packet_types  # still logged once
+
+
+def test_a_fill_and_its_trade_in_one_frame_publish_once(env):
+    _, pb, adapter = env
+    order = _order(
+        pb,
+        status=pb.PARTIAL_TRADE,
+        quantity=10,
+        fillQuantity=5,
+        remainingQuantity=5,
+        avgPrice=800.0,
+    )
+    adapter._handle_message(_frame(pb, order, _trade(pb, VolFilledToday=5, RemainingVolume=5)))
+    [event] = _published(adapter)
+    assert event["order_status"] == "open"
+    assert event["filled_quantity"] == 5
+    assert event["average_price"] == 800.0
+
+
+@pytest.mark.parametrize(
+    "fill, vol, expected",
+    [(5, 5, 5), (3, 8, 8), (8, 3, 8), (0, 6, 6), (6, 0, 6)],
+)
+def test_filled_quantity_is_the_running_total(env, fill, vol, expected):
+    # fillQuantity and volFilledToday are both undocumented; if either is the
+    # last fill only, the larger one is still the order's total.
+    _, pb, adapter = env
+    packet = _order(pb, status=pb.PARTIAL_TRADE, quantity=10, fillQuantity=fill, volFilledToday=vol)
+    adapter._handle_message(_frame(pb, packet))
+    assert _published(adapter)[0]["filled_quantity"] == expected
 
 
 def test_book_downloads_are_not_published(env):

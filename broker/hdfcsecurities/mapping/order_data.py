@@ -47,8 +47,9 @@ _STATUS_MAP = {
     "COMPLETED": "complete",
     "FULLY EXECUTED": "complete",
     "REJECTED": "rejected",
-    "CANCEL REJECTED": "rejected",
-    "MODIFY REJECTED": "rejected",
+    # A refused cancel or modify leaves the order itself working.
+    "CANCEL REJECTED": "open",
+    "MODIFY REJECTED": "open",
     "CANCELLED": "cancelled",
     "CANCELED": "cancelled",
     "CANCEL CONFIRMED": "cancelled",
