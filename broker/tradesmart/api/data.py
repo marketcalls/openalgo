@@ -61,6 +61,33 @@ def _as_int(value, default=0):
         return default
 
 
+def _drop_preopen_bars(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop the pre-open bar TPSeries puts at the start of a session.
+
+    On NSE/BSE cash and indices, 1m TPSeries opens each date with a bar holding
+    the pre-open discovered price: flat OHLC and zero volume (RELIANCE
+    18-11-2026 09:14 1370.0 x4, vol 0, before the 09:15 bar that opens at
+    1367.0). It is not a trade, and the session's first candle is the one after
+    it (QA HS-07). F&O and MCX send no such bar.
+
+    It is recognised by its shape, not a session time, so special sessions are
+    covered too: the first bar of an IST date that is flat, has zero volume and
+    is followed by more bars that date. Index bars always carry zero volume,
+    but their first trading bar is not flat, so it is kept.
+    """
+    if df.empty:
+        return df
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    day = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
+    first_of_day = ~day.duplicated(keep="first")
+    more_that_day = day.duplicated(keep=False)
+    flat = (df["open"] == df["high"]) & (df["high"] == df["low"]) & (df["low"] == df["close"])
+    preopen = first_of_day & more_that_day & flat & (df["volume"] == 0)
+    if preopen.any():
+        logger.debug(f"Dropped {int(preopen.sum())} pre-open bar(s) from TPSeries history")
+    return df[~preopen].reset_index(drop=True)
+
+
 def _normalize_data_exchange(exchange):
     """Map OpenAlgo index pseudo-exchanges to their parent cash exchange for data."""
     if exchange == "NSE_INDEX":
@@ -788,6 +815,8 @@ class BrokerData:
                 df = pd.DataFrame(
                     columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
                 )
+            elif interval != "D":
+                df = _drop_preopen_bars(df)
 
             # For daily data, append today's candle from quotes if missing. Use an
             # IST-midnight epoch (+5:30) to match the cross-broker daily convention.
