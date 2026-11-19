@@ -2305,29 +2305,64 @@ def _operator_history(conversation_id: int) -> str:
     page, is not either. That is what makes these words safe to treat as the
     operator's own.
 
+    **Each message is redacted whole, before anything is cut.** Redaction
+    recognises a credential by its prefix, its length and the words around it, so
+    a cut made first can leave the tail of a key that no pattern recognises, and
+    that tail would then be a word the operator "typed". The text is therefore
+    only ever shortened by dropping whole oldest messages, and a single message
+    longer than the budget is cut at whitespace, never inside a token.
+
     Args:
         conversation_id: The conversation to read.
 
     Returns:
-        The messages joined by newlines, at most
+        The redacted messages joined by newlines, at most
         :data:`MAX_OPERATOR_HISTORY_MESSAGES` of them and
         :data:`MAX_OPERATOR_HISTORY_CHARS` characters, keeping the newest. Empty
-        when there is none or the store cannot be read, because this runs where
-        nothing may raise.
+        when there is none, when the store cannot be read, or when the redactor is
+        unavailable, because this runs where nothing may raise and an unredacted
+        history is never the fallback.
     """
     try:
+        # The redactor lives with the web tools, which need the optional agno
+        # package; without it there are no web tools to feed.
+        from services.agent.tools.websearch import redact
+
         rows = agent_db.list_messages(conversation_id, limit=64)
     except Exception:
         logger.exception("Could not read the earlier messages of conversation %s", conversation_id)
         return ""
+
     typed = [
-        str(row.get("content") or "").strip()
+        str(row.get("content") or "")
         for row in rows
         if isinstance(row, dict) and row.get("role") == "user"
     ]
-    typed = [text for text in typed if text][-MAX_OPERATOR_HISTORY_MESSAGES:]
-    joined = "\n".join(typed)
-    return joined[-MAX_OPERATOR_HISTORY_CHARS:]
+    cleaned: list[str] = []
+    for text in typed[-MAX_OPERATOR_HISTORY_MESSAGES:]:
+        try:
+            whole = redact(text).strip()
+        except Exception:
+            logger.exception("Could not redact an earlier message; leaving it out")
+            continue
+        if whole:
+            cleaned.append(whole)
+
+    # Whole oldest messages go first, so no token is ever cut.
+    while len(cleaned) > 1 and len("\n".join(cleaned)) > MAX_OPERATOR_HISTORY_CHARS:
+        cleaned.pop(0)
+    joined = "\n".join(cleaned)
+    if len(joined) <= MAX_OPERATOR_HISTORY_CHARS:
+        return joined
+
+    # One message alone is over the budget: keep its end, and drop the partial
+    # word the cut landed in. It was redacted whole above, so what is left is
+    # complete tokens only.
+    tail = joined[-MAX_OPERATOR_HISTORY_CHARS:]
+    if not joined[-MAX_OPERATOR_HISTORY_CHARS - 1].isspace():
+        parts = tail.split(None, 1)
+        tail = parts[1] if len(parts) > 1 else ""
+    return tail
 
 
 def _build_context(

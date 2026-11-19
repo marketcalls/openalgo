@@ -1562,7 +1562,11 @@ process, to whichever MCP server is registered, and do not carry this envelope;
   characters, `blueprints/agent._operator_history`), because a follow-up such as
   "get the marketcap of it" names its company only earlier. Only `user` rows
   qualify: an assistant reply can quote a web page and an attached file is never
-  stored in them. A run with no message of its own sends nothing, whatever the
+  stored in them. Each message is redacted whole before anything is cut, and the
+  text is only shortened by dropping whole oldest messages (a single oversize one
+  is cut at whitespace), because a cut made first can leave the tail of a key that
+  no pattern recognises; with the redactor unavailable the history is empty, never
+  unredacted. A run with no message of its own sends nothing, whatever the
   history holds, and history never widens the fallback. This is what stops injected tool output from exfiltrating
   account data inside a search string.
 - **Redaction runs before the construction**, not after, so patterns that depend
