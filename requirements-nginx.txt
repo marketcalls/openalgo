@@ -100,8 +100,8 @@ psutil==7.2.2
 ptyprocess==0.7.0
 pure-eval==0.2.3
 pycparser==2.22
-pydantic==2.13.4
-pydantic-core==2.46.4
+pydantic==2.14.3
+pydantic-core==2.50.4
 pydantic-settings==2.15.0
 Pygments==2.21.0
 PyJWT==2.15.1
@@ -163,7 +163,7 @@ openscript==0.8.1
 # The /agent module and the /trading agent side tab. They are imported only when
 # someone uses the agent, so a missing package does not stop the app starting;
 # it fails the first chat instead.
-litellm==1.106.6
+litellm==1.110.1
 agno==3.0.5
 ddgs>=9.16.0
 
