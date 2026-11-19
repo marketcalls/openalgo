@@ -137,6 +137,14 @@ NOT_FOUND = "Conversation not found"
 #: hydrator ignores a notice type it does not recognise, so this renders nothing.
 RUN_OPTIONS_NOTICE = "run_options"
 
+#: How many of the operator's earlier messages in a conversation, and how many
+#: characters of them, the web tools may take words from. A follow-up such as "get
+#: the marketcap of it" names its company only in an earlier message, and without
+#: this the search query lost it and the page for it was refused. Small on purpose:
+#: it bounds what an old message can contribute, not what the model can read.
+MAX_OPERATOR_HISTORY_MESSAGES = 8
+MAX_OPERATOR_HISTORY_CHARS = 4000
+
 #: How many ``viz`` charts one stored turn keeps. A chart spec is a series, not
 #: a sentence, so an unbounded count would put a data dump in a text column.
 MAX_STORED_VIZ = 4
@@ -2288,6 +2296,40 @@ def _model_id_of(agent: Any) -> str | None:
     return str(model_id) if model_id else None
 
 
+def _operator_history(conversation_id: int) -> str:
+    """The operator's own earlier messages in a conversation, newest last.
+
+    Only rows with the ``user`` role, which hold exactly what the operator typed:
+    the route stores the typed text and never the composed input, so an attached
+    file's contents are not in them, and an assistant reply, which can quote a web
+    page, is not either. That is what makes these words safe to treat as the
+    operator's own.
+
+    Args:
+        conversation_id: The conversation to read.
+
+    Returns:
+        The messages joined by newlines, at most
+        :data:`MAX_OPERATOR_HISTORY_MESSAGES` of them and
+        :data:`MAX_OPERATOR_HISTORY_CHARS` characters, keeping the newest. Empty
+        when there is none or the store cannot be read, because this runs where
+        nothing may raise.
+    """
+    try:
+        rows = agent_db.list_messages(conversation_id, limit=64)
+    except Exception:
+        logger.exception("Could not read the earlier messages of conversation %s", conversation_id)
+        return ""
+    typed = [
+        str(row.get("content") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and row.get("role") == "user"
+    ]
+    typed = [text for text in typed if text][-MAX_OPERATOR_HISTORY_MESSAGES:]
+    joined = "\n".join(typed)
+    return joined[-MAX_OPERATOR_HISTORY_CHARS:]
+
+
 def _build_context(
     username: str,
     api_key: str,
@@ -2331,6 +2373,9 @@ def _build_context(
     """
     chart_context = body.get("chart_context")
     extras: dict = {"user_message": operator_message} if operator_message else {}
+    history = _operator_history(conversation_id)
+    if history:
+        extras["operator_history"] = history
     if isinstance(chart_context, dict):
         extras["chart_context"] = chart_context
     if viz_sink is not None:

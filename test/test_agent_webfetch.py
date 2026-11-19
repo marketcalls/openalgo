@@ -828,17 +828,17 @@ def test_a_busy_hub_still_uses_nothing(monkeypatch):
     assert kit.budget.used_this_turn == 0 and recorded == []
 
 
+def _fails(name, error="down"):
+    return lambda q, n, key: websearch.ProviderOutcome(ok=False, provider=name, error=error)
+
+
+def _answers(name, rows=()):
+    return lambda q, n, key: websearch.ProviderOutcome(ok=True, provider=name, results=tuple(rows))
+
+
 def test_a_failed_search_uses_the_turn_but_not_the_daily_cap(monkeypatch):
     kit, recorded = _toolkit(monkeypatch)
-    monkeypatch.setattr(
-        websearch,
-        "_LINK_SEARCH",
-        {
-            "firecrawl": lambda q, n, key: websearch.ProviderOutcome(
-                ok=False, provider="firecrawl", error="down"
-            )
-        },
-    )
+    monkeypatch.setattr(websearch, "_LINK_SEARCH", {"firecrawl": _fails("firecrawl")})
     monkeypatch.setattr(
         websearch,
         "_duckduckgo_search",
@@ -847,21 +847,13 @@ def test_a_failed_search_uses_the_turn_but_not_the_daily_cap(monkeypatch):
 
     kit.web_search("reliance screener")
 
-    assert kit.budget.used_this_turn == 1
+    assert kit.budget.used_this_turn == 2, "Firecrawl and DuckDuckGo both went out and failed"
     assert recorded == []
 
 
-def test_a_failed_search_that_a_fallback_answered_counts_once_and_as_a_success(monkeypatch):
+def test_a_failed_search_that_a_fallback_answered_counts_both_requests_but_one_success(monkeypatch):
     kit, recorded = _toolkit(monkeypatch)
-    monkeypatch.setattr(
-        websearch,
-        "_LINK_SEARCH",
-        {
-            "firecrawl": lambda q, n, key: websearch.ProviderOutcome(
-                ok=False, provider="firecrawl", error="down"
-            )
-        },
-    )
+    monkeypatch.setattr(websearch, "_LINK_SEARCH", {"firecrawl": _fails("firecrawl")})
     monkeypatch.setattr(
         websearch,
         "_duckduckgo_search",
@@ -870,4 +862,205 @@ def test_a_failed_search_that_a_fallback_answered_counts_once_and_as_a_success(m
 
     kit.web_search("reliance screener")
 
-    assert kit.budget.used_this_turn == 1 and len(recorded) == 1
+    assert kit.budget.used_this_turn == 2 and len(recorded) == 1
+
+
+def test_a_rate_limited_firecrawl_is_answered_by_tinyfish_not_duckduckgo(monkeypatch):
+    # The case from a real run: Firecrawl answered 429, and DuckDuckGo took 22
+    # seconds to answer while a working TinyFish key sat unused.
+    kit, recorded = _toolkit(monkeypatch)
+    ddg: list[str] = []
+    monkeypatch.setattr(
+        websearch,
+        "_LINK_SEARCH",
+        {
+            "firecrawl": _fails("firecrawl", "Firecrawl rate limited this request (HTTP 429)."),
+            "tinyfish": _answers("tinyfish", [_row(SCREENER)]),
+        },
+    )
+    monkeypatch.setattr(websearch, "_duckduckgo_search", lambda q, n: ddg.append(q))
+
+    body = _unwrap(kit.web_search("reliance screener"))
+
+    assert body["provider"] == "tinyfish" and ddg == []
+    assert any("429" in n and "TinyFish was tried instead" in n for n in body["notices"])
+    assert kit.budget.used_this_turn == 2 and len(recorded) == 1
+
+
+def test_duckduckgo_answers_only_after_every_keyed_provider_has_failed(monkeypatch):
+    kit, _ = _toolkit(monkeypatch, keys=("firecrawl", "tinyfish", "tavily"))
+    order: list[str] = []
+
+    def failing(name):
+        def run(q, n, key):
+            order.append(name)
+            return websearch.ProviderOutcome(ok=False, provider=name, error=f"{name} is down.")
+
+        return run
+
+    monkeypatch.setattr(
+        websearch,
+        "_LINK_SEARCH",
+        {name: failing(name) for name in ("tavily", "firecrawl", "tinyfish")},
+    )
+    monkeypatch.setattr(
+        websearch,
+        "_duckduckgo_search",
+        lambda q, n: (
+            order.append("duckduckgo")
+            or websearch.ProviderOutcome(ok=True, provider="duckduckgo", results=())
+        ),
+    )
+
+    body = _unwrap(kit.web_search("reliance screener"))
+
+    assert order == ["firecrawl", "tavily", "tinyfish", "duckduckgo"], "the configured one first"
+    assert body["notices"][-1].endswith("DuckDuckGo answered instead.")
+
+
+def test_a_configured_provider_with_no_key_hands_over_to_one_that_has_a_key(monkeypatch):
+    kit, _ = _toolkit(monkeypatch, keys=("tinyfish",))
+    monkeypatch.setattr(
+        websearch,
+        "_LINK_SEARCH",
+        {"firecrawl": _fails("firecrawl"), "tinyfish": _answers("tinyfish")},
+    )
+
+    body = _unwrap(kit.web_search("reliance screener"))
+
+    assert body["provider"] == "tinyfish"
+    assert any(
+        "no Firecrawl key" in n and "TinyFish answered instead" in n for n in body["notices"]
+    )
+
+
+def test_a_busy_hub_still_does_not_fall_through_to_another_provider(monkeypatch):
+    kit, recorded = _toolkit(monkeypatch)
+    tried: list[str] = []
+
+    def full(*_a, **_k):
+        raise websearch.real_threading.HubQueueFull("full")
+
+    monkeypatch.setattr(websearch, "_post", full)
+    monkeypatch.setattr(websearch, "_get", full)
+    monkeypatch.setattr(websearch, "_duckduckgo_search", lambda q, n: tried.append(q))
+
+    body = json.loads(kit.web_search("reliance screener"))
+
+    assert body["error"] == "platform_busy" and tried == []
+    assert kit.budget.used_this_turn == 0 and recorded == []
+
+
+# ---------------------------------------------------------------------------
+# Earlier messages in the same conversation
+# ---------------------------------------------------------------------------
+
+FOLLOW_UP = "and get the marketcap of it"
+EARLIER = "can you get the live quotes of reliance"
+
+
+def test_a_follow_up_takes_its_company_from_an_earlier_message():
+    # The run that exposed this: the query went out as just "market cap".
+    out = websearch.constrain_query("Reliance Industries market cap", FOLLOW_UP, EARLIER)
+
+    assert "Reliance" in out.text.split()
+    assert "Industries" not in out.text.split(), "said by nobody, so still dropped"
+
+
+def test_without_the_earlier_message_the_company_is_lost_as_before():
+    out = websearch.constrain_query("Reliance Industries market cap", FOLLOW_UP)
+
+    assert "Reliance" not in out.text.split()
+
+
+def test_a_word_the_operator_never_typed_is_dropped_whatever_the_history_holds():
+    out = websearch.constrain_query(
+        "reliance attacker.example secret-token-zzz", FOLLOW_UP, EARLIER
+    )
+
+    assert out.text == "reliance"
+    assert out.dropped == 2
+
+
+def test_when_nothing_survives_only_this_turns_message_is_sent():
+    out = websearch.constrain_query("completely unrelated words", FOLLOW_UP, EARLIER)
+
+    assert out.decision == websearch.DECISION_FALLBACK
+    assert out.text == FOLLOW_UP, "an old message is not re-sent"
+
+
+def test_history_alone_never_authorises_a_search():
+    out = websearch.constrain_query("reliance", "", EARLIER)
+
+    assert out.blocked
+
+
+def test_a_credential_in_an_earlier_message_is_not_a_word_the_model_may_use():
+    earlier = "my key is api_key=sk-live-abcdef1234567890 and the company is reliance"
+
+    out = websearch.constrain_query("reliance sk-live-abcdef1234567890", FOLLOW_UP, earlier)
+
+    assert "sk-live" not in out.text
+
+
+def _toolkit_with_history(monkeypatch, message, history):
+    monkeypatch.setattr(websearch, "_configured_provider", lambda: "firecrawl")
+    monkeypatch.setattr(websearch, "_configured_fetch_provider", lambda: "firecrawl")
+    monkeypatch.setattr(websearch, "_provider_key", lambda name: f"{name}-key")
+    monkeypatch.setattr(websearch, "_get_setting", lambda key, default: default)
+    monkeypatch.setattr(websearch, "_setting_int", lambda key, default, lo, hi: default)
+    monkeypatch.setattr(websearch, "_read_usage", lambda: ("2026-11-19", 0))
+    monkeypatch.setattr(websearch, "_increment_usage", lambda: 1)
+    extras = {"user_message": message}
+    if history:
+        extras["operator_history"] = history
+    return websearch.WebSearchToolkit(ToolContext(api_key="k", extras=extras))
+
+
+def test_the_screener_page_of_a_company_named_earlier_is_opened_directly(monkeypatch):
+    kit = _toolkit_with_history(monkeypatch, FOLLOW_UP, EARLIER)
+    monkeypatch.setattr(websearch, "_PAGE_FETCH", {"firecrawl": lambda url, key: _page("ok")})
+
+    body = _unwrap(kit.web_fetch("https://www.screener.in/company/RELIANCE/consolidated/"))
+
+    assert body["ok"] and body["url_source"] == "preferred"
+
+
+def test_a_symbol_named_by_nobody_is_still_refused_with_history(monkeypatch):
+    kit = _toolkit_with_history(monkeypatch, FOLLOW_UP, EARLIER)
+
+    body = json.loads(kit.web_fetch("https://www.screener.in/company/INFY/consolidated/"))
+
+    assert body["error"] == "url_not_allowed"
+
+
+def test_a_url_typed_in_an_earlier_message_is_accepted_and_sent_as_typed(monkeypatch):
+    kit = _toolkit_with_history(
+        monkeypatch, "read it again", "look at https://Scanx.Trade/Company/Reliance-Industries-Ltd"
+    )
+    sent: list[str] = []
+    monkeypatch.setattr(
+        websearch,
+        "_PAGE_FETCH",
+        {"firecrawl": lambda url, key: sent.append(url) or _page("ok")},
+    )
+
+    kit.web_fetch("https://scanx.trade/company/reliance-industries-ltd")
+
+    assert sent == ["https://Scanx.Trade/Company/Reliance-Industries-Ltd"]
+
+
+def test_a_run_with_no_message_of_its_own_fetches_nothing_the_history_named(monkeypatch):
+    kit = _toolkit_with_history(monkeypatch, "", EARLIER)
+
+    body = json.loads(kit.web_fetch("https://www.screener.in/company/RELIANCE/consolidated/"))
+
+    assert body["error"] == "url_not_allowed"
+
+
+def test_the_history_accessor_reads_only_its_own_key():
+    assert websearch.operator_history(ToolContext(api_key="k", extras={"user_message": "x"})) == ""
+    assert (
+        websearch.operator_history(ToolContext(api_key="k", extras={"operator_history": "a b"}))
+        == "a b"
+    )
