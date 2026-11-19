@@ -21,6 +21,7 @@ from utils import runtime
 from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
 from utils.shared_executors import get_executor
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -59,6 +60,41 @@ def _as_int(value, default=0):
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+# Index tsym as /GetSecurityInfo reports it, keyed (exchange, token). The scrip
+# master's TradingSymbol for an NSE index ('NIFTY INDEX', 'FINNIFTY') is not the
+# name /EODChartData accepts ('Nifty 50', 'Nifty Fin Service'), and neither file
+# column matches it for every index. Index tsyms change rarely; a day's TTL keeps
+# a rename from sticking past the next session.
+_index_tsym_cache = LockedTTLCache(maxsize=64, ttl=24 * 3600)
+
+
+def _index_eod_symbol(exchange: str, token: str, fallback: str, auth_token: str) -> str:
+    """The tsym /EODChartData needs for an index, resolved by token.
+
+    Falls back to the stored broker symbol when /GetSecurityInfo does not
+    answer, so a failed lookup costs nothing that was working before.
+    """
+    key = (exchange, str(token))
+    cached = _index_tsym_cache.get(key)
+    if cached:
+        return cached
+    try:
+        apply_rate_limit("/GetSecurityInfo")
+        info = post(
+            "/GetSecurityInfo",
+            {"uid": resolve_uid(auth_token), "exch": exchange, "token": str(token)},
+            auth_token,
+        ).json()
+    except Exception:
+        logger.exception(f"GetSecurityInfo failed for {exchange}:{token}")
+        return fallback
+    tsym = info.get("tsym") if isinstance(info, dict) and info.get("stat") == "Ok" else None
+    if not tsym:
+        return fallback
+    _index_tsym_cache[key] = tsym
+    return tsym
 
 
 def _drop_preopen_bars(df: pd.DataFrame) -> pd.DataFrame:
@@ -730,8 +766,13 @@ class BrokerData:
             )
 
             if interval == "D":
+                eod_symbol = br_symbol
+                if exchange in ("NSE_INDEX", "BSE_INDEX"):
+                    eod_symbol = _index_eod_symbol(
+                        api_exchange, token, br_symbol, self.auth_token
+                    )
                 payload = {
-                    "sym": f"{api_exchange}:{br_symbol}",
+                    "sym": f"{api_exchange}:{eod_symbol}",
                     "from": str(start_ts),
                     "to": str(end_ts),
                 }
