@@ -168,23 +168,78 @@ def sec_master(run: Runner) -> None:
     def index_norm():
         """MC-07 - the headline index of each exchange must be present under
         its own exchange. Keyed per exchange: BANKNIFTY is NSE_INDEX, SENSEX
-        is BSE_INDEX. Checking one flat list against both is meaningless."""
+        is BSE_INDEX. Checking one flat list against both is meaningless.
+
+        Two outcomes are kept apart, because only one is OpenAlgo's to fix:
+          * FAIL - the broker lists the index but the master stores it under
+            a non-canonical name ('NIFTY NEXT 50') or leaves it on the cash
+            exchange instead of the *_INDEX one. That is a normalisation bug.
+          * WARN - the broker's own scrip master does not list the index at
+            all (TradeSmart's NSE file carries only NIFTY, BANKNIFTY,
+            FINNIFTY and INDIAVIX). Nothing to normalise; it is recorded by
+            name, and flagged where the index has derivatives but no spot row
+            (option chain and Greeks need the spot quote).
+        """
         headline = {
             "NSE_INDEX": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "INDIAVIX"],
             "BSE_INDEX": ["SENSEX", "BANKEX", "SENSEX50"],
             "MCX_INDEX": ["MCXBULLDEX", "MCXCOMDEX"],
         }
-        missing = []
+        # Broker display names an index is known to arrive under, compared
+        # after normalise() (case, spaces and punctuation folded).
+        aliases = {
+            "NIFTY": ["NIFTY 50", "NIFTY INDEX"],
+            "BANKNIFTY": ["NIFTY BANK"],
+            "FINNIFTY": ["NIFTY FIN SERVICE", "NIFTY FINANCIAL SERVICES", "NIFTY FIN SERVICES"],
+            "MIDCPNIFTY": ["NIFTY MID SELECT", "NIFTY MIDCAP SELECT"],
+            "NIFTYNXT50": ["NIFTY NEXT 50"],
+            "INDIAVIX": ["INDIA VIX"],
+            "SENSEX": ["BSE SENSEX", "S&P BSE SENSEX"],
+            "BANKEX": ["BSE BANKEX", "S&P BSE BANKEX"],
+            "SENSEX50": ["SENSEX 50", "SNSX50", "BSE SENSEX 50", "S&P BSE SENSEX 50"],
+            "MCXBULLDEX": ["BULLDEX", "MCX BULLDEX"],
+            "MCXCOMDEX": ["COMDEX", "MCX COMDEX"],
+        }
+        parent = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE", "MCX_INDEX": "MCX"}
+        deriv = {"NSE_INDEX": ("NFO",), "BSE_INDEX": ("BFO",), "MCX_INDEX": ("MCX",)}
+        misnamed, absent = [], []
         with run.db() as c:
             for ex, syms in headline.items():
                 if ex not in ex_list:
                     continue
                 have = {r[0] for r in c.execute(
                     "select symbol from symtoken where exchange=?", (ex,))}
-                missing += [f"{s}@{ex}" for s in syms if s not in have]
-        if missing:
-            run.note_quirk("Missing headline index symbols", ", ".join(missing))
-            raise AssertionError(f"missing index symbols: {missing}")
+                # symbol/brsymbol/name on the index exchange; symbol/brsymbol
+                # on the cash exchange (an index row never moved off it)
+                seen = {}
+                for s, b, n in c.execute(
+                        "select symbol, brsymbol, name from symtoken where exchange=?", (ex,)):
+                    for v in (s, b, n):
+                        seen.setdefault(normalise(v), f"{s}@{ex}")
+                for s, b in c.execute(
+                        "select symbol, brsymbol from symtoken where exchange=? "
+                        "and instrumenttype in ('EQ','INDEX','')", (parent[ex],)):
+                    for v in (s, b):
+                        seen.setdefault(normalise(v), f"{s}@{parent[ex]}")
+                for s in syms:
+                    if s in have:
+                        continue
+                    hit = next((seen[normalise(a)] for a in aliases.get(s, [])
+                                if normalise(a) in seen), None)
+                    if hit:
+                        misnamed.append(f"{s}@{ex} stored as {hit}")
+                        continue
+                    q = ",".join("?" * len(deriv[ex]))
+                    n_der = c.execute(
+                        f"select count(*) from symtoken where name=? and exchange in ({q}) "
+                        "and instrumenttype in ('FUT','CE','PE')", (s, *deriv[ex])).fetchone()[0]
+                    absent.append(f"{s}@{ex}"
+                                  + (f" ({n_der} derivative rows, no spot)" if n_der else ""))
+        if absent:
+            run.note_quirk("Headline index not in the broker's scrip master", ", ".join(absent))
+        need(not misnamed, f"index present under a non-canonical name or exchange: {misnamed}")
+        if absent:
+            raise Warn(f"broker's scrip master does not list: {absent}")
 
     run.check("MC-07", index_norm, endpoint="symtoken", expected="headline index per exchange")
 
@@ -414,11 +469,21 @@ def sec_master(run: Runner) -> None:
                         "limit 3", (ex, it)):
                         if not rx.match(s):
                             bad.append(f"{s}@{ex} ({it})")
-                for (s,) in c.execute(
-                    "select symbol from symtoken where exchange=? and instrumenttype in ('EQ','') "
-                    "limit 3", (ex,)):
-                    if re.search(r"\d{2}[A-Z]{3}\d{2}", s):
-                        bad.append(f"{s}@{ex} (EQ carries an expiry block)")
+                # A cash row is wrong only when it is really a derivative typed
+                # EQ: it carries an expiry, or its symbol is a full FUT/CE/PE
+                # shape. A date-like run inside the symbol is not enough -
+                # exchange debt scrip IDs carry one legitimately (BSE group F
+                # 0360OAM27, G-secs GS23DEC43, NSE N*/Y*/GS series).
+                for s, exp in c.execute(
+                    "select symbol, expiry from symtoken where exchange=? "
+                    "and instrumenttype in ('EQ','') "
+                    "and ((expiry is not null and expiry != '') "
+                    "or symbol like '%FUT' or symbol like '%CE' or symbol like '%PE')",
+                    (ex,)):
+                    if exp:
+                        bad.append(f"{s}@{ex} (EQ carries an expiry {exp})")
+                    elif any(rx.match(s) for rx in pat.values()):
+                        bad.append(f"{s}@{ex} (EQ symbol has a derivative shape)")
         need(not bad, f"symbols not in OpenAlgo format: {bad[:6]}")
 
     run.check("MC-06", mc_symbol_construction, endpoint="symtoken",
