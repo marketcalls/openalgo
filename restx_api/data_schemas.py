@@ -24,6 +24,8 @@ def validate_option_offset(data: str) -> bool:
     """
     Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
     """
+    if not isinstance(data, str):
+        raise ValidationError("Offset must be ATM, ITM1-ITM50, or OTM1-OTM50")
     data_upper = data.upper()
     if data_upper == "ATM":
         return True
