@@ -53,6 +53,7 @@ from .search import api as search_ns
 from .sector_rotation import api as sector_rotation_ns
 from .sip import api as sip_ns
 from .split_order import api as split_order_ns
+from .status import api as status_ns
 from .strategy import api as strategy_ns
 from .symbol import api as symbol_ns
 from .synthetic_future import api as synthetic_future_ns
@@ -99,6 +100,7 @@ api.add_namespace(multi_option_greeks_ns, path="/multioptiongreeks")
 api.add_namespace(synthetic_future_ns, path="/syntheticfuture")
 api.add_namespace(analyzer_ns, path="/analyzer")
 api.add_namespace(ping_ns, path="/ping")
+api.add_namespace(status_ns, path="/status")
 api.add_namespace(telegram_ns, path="/telegram")
 api.add_namespace(whatsapp_ns, path="/whatsapp")
 api.add_namespace(slack_ns, path="/slack")

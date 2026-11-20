@@ -113,6 +113,7 @@ The SIP frequency and sector-rotation option lists need no API key. All analysis
 | GET | `/chart` | [Read chart preferences](./chart-services/chart.md) |
 | POST | `/chart` | [Update chart preferences](./chart-services/chart.md) |
 | POST | `/ping` | [Authenticated ping](./utility-services/ping.md) |
+| POST | `/status` | [Active status](./utility-services/status.md) |
 
 There is no public `/api/v1/checkholiday` endpoint. Use `/market/timings` for a date; its response identifies holiday/closed sessions through the returned market schedule.
 
