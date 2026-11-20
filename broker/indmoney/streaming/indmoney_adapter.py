@@ -302,16 +302,17 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Args:
             symbol: Trading symbol (e.g., 'RELIANCE')
             exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
-            mode: Subscription mode - 1:LTP, 2:Quote
+            mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth (served from quote)
             depth_level: Market depth level (INDmoney only supports 1)
 
         Returns:
             Dict: Response with status and error message if applicable
         """
         # Validate the mode
-        if mode not in [1, 2]:
+        if not IndmoneyCapabilityRegistry.supports_mode(mode):
             return self._create_error_response(
-                "INVALID_MODE", f"Invalid mode {mode}. INDmoney supports only 1 (LTP) or 2 (Quote)"
+                "INVALID_MODE",
+                f"Invalid mode {mode}. INDmoney supports 1 (LTP), 2 (Quote) or 3 (Depth, as Quote)",
             )
 
         # Map symbol to token using symbol mapper
@@ -427,26 +428,37 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
-            # Drop any still-queued (not-yet-flushed) subscription for this
-            # instrument+mode so a subscribe→unsubscribe within the 500ms batch
-            # window doesn't end up subscribing after the unsubscribe.
-            self.subscription_queue = [
-                s
-                for s in self.subscription_queue
-                if not (
-                    s["instrument_token"] == instrument_token and s["mode"] == indmoney_mode
-                )
+            remaining = [
+                s for s in self.subscriptions.values() if s["instrument_token"] == instrument_token
             ]
+            # Quote and Depth share one INDmoney quote subscription; keep the
+            # broker feed while another OpenAlgo mode still needs it.
+            feed_still_needed = any(s["indmoney_mode"] == indmoney_mode for s in remaining)
+            if not feed_still_needed:
+                # Drop any still-queued (not-yet-flushed) subscription for this
+                # instrument+mode so a subscribe→unsubscribe within the 500ms batch
+                # window doesn't end up subscribing after the unsubscribe.
+                self.subscription_queue = [
+                    s
+                    for s in self.subscription_queue
+                    if not (
+                        s["instrument_token"] == instrument_token and s["mode"] == indmoney_mode
+                    )
+                ]
             # Check if all subscriptions are removed
             if len(self.subscriptions) == 0:
                 should_disconnect = True
-            # Clear cached values for this symbol
+            # Clear cached values once nothing subscribes to this symbol
             cache_key = f"{symbol}_{exchange}"
-            if cache_key in self.last_values:
+            if not remaining and cache_key in self.last_values:
                 del self.last_values[cache_key]
 
         # Unsubscribe if connected
-        if self.connected and self.ws_client:
+        if feed_still_needed:
+            self.logger.info(
+                f"Kept INDmoney {indmoney_mode} feed for {symbol}.{exchange}: another mode uses it"
+            )
+        elif self.connected and self.ws_client:
             try:
                 self.ws_client.unsubscribe(instruments=[instrument_token], mode=indmoney_mode)
                 self.logger.info(f"Unsubscribed from {symbol}.{exchange}")
@@ -488,9 +500,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
 
                 if mode in ("ltp", "quote"):
-                    groups.setdefault((mode, self._segment_of(instrument_token)), []).append(
-                        instrument_token
-                    )
+                    bucket = groups.setdefault((mode, self._segment_of(instrument_token)), [])
+                    if instrument_token not in bucket:
+                        bucket.append(instrument_token)
 
             # Resubscribe in batches
             try:
@@ -545,8 +557,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug(f"Parsing JSON string: {message[:100]}...")
                 message = json.loads(message)
 
-            # Log all incoming messages for debugging
-            self.logger.info(f">> RAW INDMONEY DATA: {message}")
+            self.logger.debug(f">> RAW INDMONEY DATA: {message}")
 
             # INDmoney sends data in JSON format
             # Expected format from API doc:
@@ -568,53 +579,49 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode = message.get("mode")
             data = message.get("data", {})
 
-            self.logger.info(f"[DATA] Instrument={instrument}, Mode={mode}, Data={data}")
+            self.logger.debug(f"[DATA] Instrument={instrument}, Mode={mode}, Data={data}")
 
             if not instrument or not mode:
                 self.logger.warning(f"[WARN] Message missing instrument or mode: {message}")
                 return
 
-            # Find the subscription that matches this instrument.
+            # Find the subscriptions that match this instrument.
             #
             # Ticks may carry either the full "SEGMENT:TOKEN" or just the bare
-            # token. A bare token is ambiguous - the docs define separate NSE:/
-            # BSE:/NFO:/BFO:/NIDX:/BIDX: prefixes precisely because token
-            # numbers are only unique *within* a segment - so match the full
-            # instrument token first and only fall back to the bare token, and
-            # then only when exactly one subscription claims it.
-            subscription = None
+            # token (observed: bare). A bare token is ambiguous - the docs define
+            # separate NSE:/BSE:/NFO:/BFO:/NIDX:/BIDX: prefixes precisely because
+            # token numbers are only unique *within* a segment - so match the
+            # full instrument token first and only fall back to the bare token,
+            # and then only when it resolves to exactly one instrument. One
+            # instrument may hold several subscriptions (one per OpenAlgo mode).
             with self.lock:
                 subs = list(self.subscriptions.values())
 
-            for sub in subs:
-                if sub["instrument_token"] == instrument:
-                    subscription = sub
-                    break
-
-            if subscription is None:
-                token_matches = [s for s in subs if s["token"] == instrument]
-                if len(token_matches) == 1:
-                    subscription = token_matches[0]
-                elif len(token_matches) > 1:
+            matches = [s for s in subs if s["instrument_token"] == instrument]
+            if not matches:
+                matches = [s for s in subs if s["token"] == instrument]
+                if len({s["instrument_token"] for s in matches}) > 1:
                     # Same token number subscribed on more than one segment;
                     # guessing would attribute the tick to the wrong symbol.
                     self.logger.warning(
                         f"Ambiguous tick for token {instrument}: subscribed on "
-                        f"{[s['exchange'] for s in token_matches]}. Dropping - the feed "
+                        f"{sorted({s['exchange'] for s in matches})}. Dropping - the feed "
                         "did not qualify it with a segment prefix."
                     )
                     return
 
-            if not subscription:
+            # Publish at the highest OpenAlgo mode this INDmoney stream serves;
+            # the proxy also delivers it to lower-mode subscribers.
+            matches = [s for s in matches if s["indmoney_mode"] == mode]
+            if not matches:
                 self.logger.debug(f"Received data for unsubscribed instrument: {instrument}")
                 return
+            subscription = max(matches, key=lambda s: s["mode"])
 
             # Create topic for ZeroMQ
             symbol = subscription["symbol"]
             exchange = subscription["exchange"]
-
-            # Map INDmoney mode to OpenAlgo mode string
-            mode_str = "LTP" if mode == "ltp" else "QUOTE"
+            mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[subscription["mode"]]
             topic = f"{exchange}_{symbol}_{mode_str}"
 
             # Normalize the data with caching for value retention
@@ -670,8 +677,11 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == "ltp":
             result = {"ltp": get_value("ltp"), "ltt": timestamp}
         elif mode == "quote":
+            # The quote stream sends only the day's running OHLCV
+            # ({"open","high","low","close","volume"}); its close is the last
+            # traded price, so use it when no ltp field is present.
             result = {
-                "ltp": get_value("ltp"),
+                "ltp": data.get("ltp") or data.get("close") or cached.get("ltp", 0),
                 "ltt": timestamp,
                 "open": get_value("open"),
                 "high": get_value("high"),
