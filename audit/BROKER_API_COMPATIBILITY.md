@@ -5,7 +5,7 @@
 > rerun the script instead. The previous hand-maintained version drifted
 > to 29 brokers while the tree carried 35, and never gained a GTT column.
 >
-> **Brokers**: 36
+> **Brokers**: 39
 > **Capabilities checked**: 23
 
 Support is determined the way the application determines it at runtime: by whether the broker module and function exist.
@@ -43,9 +43,12 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | motilal | Y | Y | Y | Y | Y | Y |
 | mstock | Y | Y | Y | Y | Y | Y |
 | nubra | Y | Y | Y | Y | Y | Y |
+| nuvama | Y | Y | Y | Y | Y | S |
 | paytm | Y | Y | Y | Y | Y | Y |
 | pocketful | Y | Y | Y | Y | Y | Y |
 | rmoney | Y | Y | Y | Y | Y | Y |
+| rupeezy | Y | Y | Y | Y | Y | Y |
+| sahi | Y | Y | Y | Y | Y | Y |
 | samco | Y | Y | Y | Y | Y | Y |
 | shoonya | Y | Y | Y | Y | Y | Y |
 | tradejini | Y | Y | Y | Y | Y | Y |
@@ -84,9 +87,12 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | motilal | - | - | - | - |
 | mstock | - | - | - | - |
 | nubra | - | - | - | - |
+| nuvama | - | - | - | - |
 | paytm | - | - | - | - |
-| pocketful | - | - | - | - |
+| pocketful | Y | Y | Y | Y |
 | rmoney | - | - | - | - |
+| rupeezy | Y | Y | Y | Y |
+| sahi | - | - | - | - |
 | samco | - | - | - | - |
 | shoonya | - | - | - | - |
 | tradejini | - | - | - | - |
@@ -125,9 +131,12 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | motilal | Y | Y | Y | Y | Y | Y | S |
 | mstock | Y | Y | Y | Y | Y | Y | Y |
 | nubra | Y | Y | Y | Y | Y | Y | Y |
+| nuvama | Y | Y | Y | Y | Y | Y | - |
 | paytm | Y | Y | Y | Y | Y | Y | S |
-| pocketful | Y | Y | Y | Y | Y | Y | S |
+| pocketful | Y | Y | Y | Y | Y | Y | Y |
 | rmoney | Y | Y | Y | Y | Y | Y | Y |
+| rupeezy | Y | Y | Y | Y | Y | Y | - |
+| sahi | Y | Y | Y | Y | Y | Y | Y |
 | samco | Y | Y | Y | Y | Y | Y | Y |
 | shoonya | Y | Y | Y | Y | Y | Y | Y |
 | tradejini | Y | Y | Y | Y | Y | Y | S |
@@ -166,9 +175,12 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | motilal | Y | Y | S | Y |
 | mstock | S | S | Y | Y |
 | nubra | Y | S | S | Y |
+| nuvama | Y | Y | Y | Y |
 | paytm | Y | Y | S | Y |
-| pocketful | Y | Y | S | S |
+| pocketful | Y | Y | Y | Y |
 | rmoney | Y | Y | Y | Y |
+| rupeezy | Y | Y | Y | Y |
+| sahi | Y | Y | S | Y |
 | samco | Y | Y | Y | Y |
 | shoonya | Y | Y | Y | Y |
 | tradejini | Y | Y | Y | Y |
@@ -199,7 +211,7 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 | fivepaisaxts | Y | - |
 | flattrade | Y | Y |
 | fyers | Y | Y |
-| groww | Y | - |
+| groww | Y | Y |
 | hdfcsecurities | Y | - |
 | hdfcsky | Y | - |
 | ibulls | Y | - |
@@ -211,12 +223,15 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 | motilal | Y | Y |
 | mstock | Y | - |
 | nubra | Y | Y |
+| nuvama | Y | Y |
 | paytm | Y | - |
-| pocketful | Y | - |
+| pocketful | Y | Y |
 | rmoney | Y | - |
+| rupeezy | Y | - |
+| sahi | Y | Y |
 | samco | Y | - |
 | shoonya | Y | Y |
-| tradejini | Y | - |
+| tradejini | Y | Y |
 | tradesmart | Y | Y |
 | upstox | Y | Y |
 | wisdom | Y | - |
@@ -252,12 +267,15 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 | motilal | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | mstock | IN_stock | false | NSE, BSE, NFO, BFO, CDS, NSE_INDEX, BSE_INDEX |
 | nubra | IN_stock | false | NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX |
+| nuvama | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NCDEX, NSE_INDEX, BSE_INDEX |
 | paytm | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
 | pocketful | IN_stock | false | NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX |
 | rmoney | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
+| rupeezy | IN_stock | false | NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX |
+| sahi | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
 | samco | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | shoonya | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
-| tradejini | IN_stock | false | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NSE_INDEX, BSE_INDEX |
+| tradejini | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | tradesmart | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | upstox | IN_stock | false | NSE, BSE, NFO, BFO, CDS, BCD, MCX, NSE_INDEX, BSE_INDEX, GLOBAL_INDEX |
 | wisdom | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
@@ -266,28 +284,28 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 
 ## Summary
 
-- **Place Order**: 36/36 brokers
-- **Smart Order**: 36/36 brokers
-- **Modify Order**: 36/36 brokers
-- **Cancel Order**: 36/36 brokers
-- **Cancel All**: 36/36 brokers
-- **Close Position**: 36/36 brokers
-- **Place GTT**: 5/36 brokers
-- **Modify GTT**: 5/36 brokers
-- **Cancel GTT**: 5/36 brokers
-- **GTT Book**: 5/36 brokers
-- **Orderbook**: 36/36 brokers
-- **Tradebook**: 36/36 brokers
-- **Positionbook**: 36/36 brokers
-- **Holdings**: 36/36 brokers
-- **Open Position**: 36/36 brokers
-- **Funds**: 36/36 brokers
-- **Margin**: 22/36 brokers, 13 stub
-- **Quotes**: 34/36 brokers, 2 stub
-- **Depth**: 34/36 brokers, 2 stub
-- **History**: 28/36 brokers, 8 stub
-- **Intervals**: 35/36 brokers, 1 stub
-- **Streaming: Market Data**: 35/36 brokers, 1 stub
-- **Streaming: Order/Trade Updates**: 18/36 brokers
+- **Place Order**: 39/39 brokers
+- **Smart Order**: 39/39 brokers
+- **Modify Order**: 39/39 brokers
+- **Cancel Order**: 39/39 brokers
+- **Cancel All**: 39/39 brokers
+- **Close Position**: 38/39 brokers, 1 stub
+- **Place GTT**: 7/39 brokers
+- **Modify GTT**: 7/39 brokers
+- **Cancel GTT**: 7/39 brokers
+- **GTT Book**: 7/39 brokers
+- **Orderbook**: 39/39 brokers
+- **Tradebook**: 39/39 brokers
+- **Positionbook**: 39/39 brokers
+- **Holdings**: 39/39 brokers
+- **Open Position**: 39/39 brokers
+- **Funds**: 39/39 brokers
+- **Margin**: 24/39 brokers, 12 stub
+- **Quotes**: 37/39 brokers, 2 stub
+- **Depth**: 37/39 brokers, 2 stub
+- **History**: 31/39 brokers, 8 stub
+- **Intervals**: 39/39 brokers
+- **Streaming: Market Data**: 38/39 brokers, 1 stub
+- **Streaming: Order/Trade Updates**: 23/39 brokers
 
-_Regenerated 06 September 2026._
+_Regenerated 20 November 2026._

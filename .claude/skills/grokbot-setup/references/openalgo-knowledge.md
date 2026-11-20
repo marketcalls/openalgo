@@ -64,8 +64,8 @@ installed package disagree, test against the package (section 18).
 
 - Free, open source (AGPL-3.0), self-hosted trading platform: Python Flask
   backend, React 19 frontend. Single user, one broker session per instance.
-- 36 broker plugin folders under `broker/` plus `dhan_sandbox` (37 codes in
-  `VALID_BROKERS`); docs.openalgo.in counts 34 securities brokers, the Dhan
+- 38 broker plugin folders under `broker/` plus `dhan_sandbox` (39 codes in
+  `VALID_BROKERS`, Nov 2026); docs.openalgo.in counted (Oct 2026) 34 securities brokers, the Dhan
   sandbox plugin and Delta Exchange (crypto). Credentials per broker:
   [brokers.md](brokers.md).
 - Several products in one instance, all sharing one broker session and one
@@ -504,6 +504,6 @@ Use the `openscript` skill to write, validate and install scripts.
 | Crypto perpetual suffix | some comments `BTCUSD.P` | served form `BTCUSDFUT` | Use `...FUT` |
 | `/tools` count | docs site may lag | README, CLAUDE.md 20 | 20 (registry) |
 | Flow node count | docs.openalgo.in 61 | openalgo.in 53 | Use the type list in section 14 |
-| Broker count | README 35 + Delta | docs 34 + Dhan sandbox + Delta; `VALID_BROKERS` 37 codes | Use [brokers.md](brokers.md) |
+| Broker count | README 35 + Delta | docs 34 + Dhan sandbox + Delta (Oct 2026); `VALID_BROKERS` 39 codes (Nov 2026) | Use [brokers.md](brokers.md) |
 | Login type labels | `BrokerSelect.tsx` marks Groww, AliceBlue, Zebu, Shoonya as `totp` | backend flow differs | Follow [brokers.md](brokers.md) |
 | Placeholder secrets | `.sample.env`: auto-rotated on first run | install scripts rotate too | Set explicitly before `/setup` anyway |
