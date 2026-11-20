@@ -29,7 +29,9 @@ set of controls from ``docs/design/55-agent/README.md``:
 
 * **The taint boundary.** The model's requested query never reaches a provider.
   The outgoing query is *constructed*: every whitespace-delimited token kept from
-  the model's string is provably a substring of the operator's own message, and
+  the model's string is provably a substring of what the operator typed (this
+  turn's message and their earlier ones in the conversation, so a follow-up like
+  "get the marketcap of it" keeps its company), and
   when nothing survives the operator's message is sent verbatim instead. A token
   the model invented, or lifted out of a poisoned tool result, cannot reach the
   network by construction rather than by pattern matching. With no operator
@@ -456,7 +458,9 @@ def _join_within(tokens: list[str], limit: int) -> str:
     return " ".join(out)
 
 
-def constrain_query(requested: Any, operator_message: Any) -> ConstrainedQuery:
+def constrain_query(
+    requested: Any, operator_message: Any, earlier_messages: Any = ""
+) -> ConstrainedQuery:
     """Build the outgoing query out of the operator's own words.
 
     The model's string is not filtered, it is used as a *selection* over the
@@ -467,12 +471,21 @@ def constrain_query(requested: Any, operator_message: Any) -> ConstrainedQuery:
     operator's message is sent verbatim, which is the worst case and still
     carries no attacker-chosen token.
 
-    Both strings are redacted first, so a credential in either one is gone before
+    The words may come from the operator's earlier messages in the same
+    conversation as well as this one, because a follow-up such as "get the
+    marketcap of it" names its company only earlier. They are still words the
+    operator typed, so nothing the model invented or lifted from a page can enter.
+    What is sent when nothing survives is still this turn's message alone.
+
+    Every string is redacted first, so a credential in any of them is gone before
     tokens are compared, and the redaction marker itself is never emitted.
 
     Args:
         requested: The query the model asked for.
-        operator_message: The operator's own message for this turn.
+        operator_message: The operator's own message for this turn. Required: with
+            none, nothing is sent.
+        earlier_messages: The operator's earlier messages in this conversation,
+            which only widen the words a token may be taken from.
 
     Returns:
         A :class:`ConstrainedQuery`. Its ``decision`` is
@@ -483,7 +496,7 @@ def constrain_query(requested: Any, operator_message: Any) -> ConstrainedQuery:
     if not operator:
         return ConstrainedQuery("", DECISION_BLOCKED)
 
-    haystack = operator.lower()
+    haystack = f"{operator}\n{redact(earlier_messages)}".lower()
     kept: list[str] = []
     seen: set[str] = set()
     dropped = 0
@@ -1923,6 +1936,24 @@ def _parse_perplexity_output(payload: Any) -> tuple[str, list[dict[str, Any]]]:
 # ---------------------------------------------------------------------------
 
 
+def operator_history(context: Any) -> str:
+    """Find the operator's earlier messages in this conversation.
+
+    Supplied by the surface alongside the turn's own message, under the
+    ``operator_history`` key. It holds only what the operator typed, never an
+    assistant reply or an attached file, and is bounded by the surface. Absent
+    means the words come from this turn's message alone, as before.
+
+    Args:
+        context: The run's tool context.
+
+    Returns:
+        The earlier messages joined by newlines, or an empty string.
+    """
+    value = context_value(context, "operator_history")
+    return value if isinstance(value, str) and value.strip() else ""
+
+
 def operator_message(context: Any) -> str:
     """Find the operator's own message for this turn.
 
@@ -2040,6 +2071,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
                 :data:`OPERATOR_MESSAGE_KEYS`.
         """
         self.operator_message = redact(operator_message(context))
+        self.operator_history = redact(operator_history(context))
         self.link_provider = _configured_provider()
         self.fetch_provider = _configured_fetch_provider()
         # Per run, like the rest of the toolkit: the URLs a search of this run
@@ -2131,6 +2163,19 @@ class WebSearchToolkit(OpenAlgoToolkit):
                 return answer
 
         return self._general_search(constrained, count, notices)
+
+    def _operator_words(self) -> str:
+        """Everything the operator typed that a URL may be built from or matched to.
+
+        Returns:
+            This turn's message followed by the earlier ones in the conversation,
+            or an empty string when this turn has no message of its own, which
+            keeps the rule that a run with nothing from the operator fetches
+            nothing the operator named.
+        """
+        if not self.operator_message:
+            return ""
+        return f"{self.operator_message}\n{self.operator_history}"
 
     def _remember_url(self, url: str) -> None:
         """Note a URL a search returned, exactly as returned, minus any fragment.
@@ -2291,29 +2336,54 @@ class WebSearchToolkit(OpenAlgoToolkit):
                 notices.append(note)
             provider = borrowed or PROVIDER_DUCKDUCKGO
 
-        outcome: ProviderOutcome | None = None
-
+        # The configured provider first, then every other keyed one that has a key,
+        # and DuckDuckGo only when none of them answered. A provider that fails
+        # (a rate limit, a timeout, a bad key) is a reason to try the next paid
+        # one, not to fall straight to the slow keyless scraper while a working
+        # key sits unused: measured here, DuckDuckGo took 22 seconds to answer
+        # the search that Firecrawl had just refused with a 429.
+        chain: list[tuple[str, str]] = []
         if provider in _LINK_SEARCH:
-            label = PROVIDER_LABELS[provider]
-            api_key = _provider_key(provider)
-            if not api_key:
-                message = (
-                    f"{label} is the configured provider but no {label} key is stored in the agent "
-                    "settings, so DuckDuckGo answered instead."
-                )
-                if message not in notices:
-                    notices.append(message)
-            else:
-                outcome = _LINK_SEARCH[provider](text, count, api_key)
-                if outcome.busy:
-                    return outcome, _busy_payload(outcome, notices)
-                if not outcome.ok:
-                    notices.append(f"{outcome.error} DuckDuckGo answered instead.")
-                    outcome = None
+            configured_key = _provider_key(provider)
+            if configured_key:
+                chain.append((provider, configured_key))
+        for name in KEYED_LINK_PROVIDERS:
+            if name != provider and name in _LINK_SEARCH:
+                other_key = _provider_key(name)
+                if other_key:
+                    chain.append((name, other_key))
 
-        if outcome is None:
-            outcome = _duckduckgo_search(text, count)
-        return outcome, None
+        if provider in _LINK_SEARCH and not (chain and chain[0][0] == provider):
+            label = PROVIDER_LABELS[provider]
+            instead = PROVIDER_LABELS[chain[0][0]] if chain else "DuckDuckGo"
+            message = (
+                f"{label} is the configured provider but no {label} key is stored in the agent "
+                f"settings, so {instead} answered instead."
+            )
+            if message not in notices:
+                notices.append(message)
+
+        for index, (name, api_key) in enumerate(chain):
+            outcome = _LINK_SEARCH[name](text, count, api_key)
+            if outcome.busy:
+                return outcome, _busy_payload(outcome, notices)
+            if outcome.ok:
+                return outcome, None
+            # The request went out and failed: it uses the turn's allowance, but
+            # not the daily cap, which counts only answers.
+            self.budget.record_attempt()
+            following = (
+                PROVIDER_LABELS[chain[index + 1][0]] if index + 1 < len(chain) else "DuckDuckGo"
+            )
+            notices.append(f"{outcome.error} {following} was tried instead.")
+
+        # The last notice said "tried instead"; when DuckDuckGo is what answers,
+        # say so in the words the operator and the model already know.
+        if chain and notices and notices[-1].endswith("DuckDuckGo was tried instead."):
+            notices[-1] = notices[-1].replace(
+                "DuckDuckGo was tried instead.", "DuckDuckGo answered instead."
+            )
+        return _duckduckgo_search(text, count), None
 
     def _general_search(self, constrained: ConstrainedQuery, count: int, notices: list[str]) -> str:
         """Search the open web and return the result block.
@@ -2484,7 +2554,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
         size, size_notice = self._validated_fetch_chars(max_chars)
         start = self._validated_offset(offset)
         check = check_fetch_url(
-            url, self.operator_message, self._seen_urls, tuple(self.preferred_sources)
+            url, self._operator_words(), self._seen_urls, tuple(self.preferred_sources)
         )
         if not check.allowed:
             logger.info("Web fetch refused: the address is not one the operator or a search gave")
@@ -2779,7 +2849,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
                 "it is empty.",
                 "Pass the operator's own question as plain text.",
             )
-        return constrain_query(text, self.operator_message)
+        return constrain_query(text, self.operator_message, self.operator_history)
 
     def _log_decision(
         self, tool: str, provider: str, constrained: ConstrainedQuery, results: int

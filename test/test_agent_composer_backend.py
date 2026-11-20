@@ -673,3 +673,72 @@ class TestTheProviderEndpointGuard:
         allowed, error = agent_bp._validate_base_url(url, "openai_compatible")
         assert error is None
         assert allowed == url
+
+
+# ---------------------------------------------------------------------------
+# The operator's earlier messages, for the web tools
+# ---------------------------------------------------------------------------
+
+
+def _history(monkeypatch, rows):
+    from blueprints import agent as agent_blueprint
+
+    monkeypatch.setattr(agent_blueprint.agent_db, "list_messages", lambda cid, limit=64: rows)
+    return agent_blueprint
+
+
+def test_only_what_the_operator_typed_is_offered_as_history(monkeypatch):
+    bp = _history(
+        monkeypatch,
+        [
+            {"role": "user", "content": "live quotes of reliance"},
+            {
+                "role": "assistant",
+                "content": "Reliance is at 1,410 per this page https://evil.example",
+            },
+            {"role": "user", "content": "and get the marketcap of it"},
+        ],
+    )
+
+    history = bp._operator_history(1)
+
+    assert history == "live quotes of reliance\nand get the marketcap of it"
+    assert "evil.example" not in history, "an assistant reply can quote a web page"
+
+
+def test_history_is_bounded_in_messages_and_characters_and_keeps_the_newest(monkeypatch):
+    rows = [{"role": "user", "content": f"message {i} " + "x" * 900} for i in range(20)]
+    bp = _history(monkeypatch, rows)
+
+    history = bp._operator_history(1)
+
+    assert len(history) <= bp.MAX_OPERATOR_HISTORY_CHARS
+    assert "message 19" in history and "message 0 " not in history
+
+
+def test_history_never_raises_where_nothing_may(monkeypatch):
+    from blueprints import agent as bp
+
+    def boom(*_a, **_k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(bp.agent_db, "list_messages", boom)
+
+    assert bp._operator_history(1) == ""
+
+
+def test_an_empty_conversation_adds_no_history_key(monkeypatch):
+    bp = _history(monkeypatch, [])
+
+    context = bp._build_context("u", "key", {}, 1, "chat", operator_message="hello")
+
+    assert "operator_history" not in context.extras
+    assert context.extras["user_message"] == "hello"
+
+
+def test_the_history_reaches_the_tool_context(monkeypatch):
+    bp = _history(monkeypatch, [{"role": "user", "content": "quotes of reliance"}])
+
+    context = bp._build_context("u", "key", {}, 1, "chat", operator_message="its marketcap")
+
+    assert context.extras["operator_history"] == "quotes of reliance"

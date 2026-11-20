@@ -1556,8 +1556,14 @@ process, to whichever MCP server is registered, and do not carry this envelope;
 
 - **The taint boundary applies here first.** The model's requested query never
   reaches the provider. The outgoing query is constructed so that every token in
-  it provably appears in the operator's own message, with a fallback to that
-  message verbatim. This is what stops injected tool output from exfiltrating
+  it provably appears in what the operator typed, with a fallback to this turn's
+  message verbatim. "What the operator typed" is this turn's message and their
+  earlier messages in the same conversation (the last eight, at most 4,000
+  characters, `blueprints/agent._operator_history`), because a follow-up such as
+  "get the marketcap of it" names its company only earlier. Only `user` rows
+  qualify: an assistant reply can quote a web page and an attached file is never
+  stored in them. A run with no message of its own sends nothing, whatever the
+  history holds, and history never widens the fallback. This is what stops injected tool output from exfiltrating
   account data inside a search string.
 - **Redaction runs before the construction**, not after, so patterns that depend
   on punctuation still match: emails, bearer tokens, provider-prefixed keys,

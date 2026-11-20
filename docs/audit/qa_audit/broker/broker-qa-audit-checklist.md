@@ -158,8 +158,8 @@ tested. Assertions are against the local `symtoken` table and
 | MC-03 | No duplicate `(symbol, exchange)` | Zero duplicates |
 | MC-04 | `instrumenttype` vocabulary | Only `EQ`, `FUT`, `CE`, `PE` (and `''`). **There is no `INDEX` type** — indices are `EQ` on `NSE_INDEX` / `BSE_INDEX` |
 | MC-05 | Expiry format | `DD-MMM-YY` uppercase (e.g. `30-JUN-26`); empty string for EQ and index rows. Checked for **FUT and OPT separately**, on every derivatives exchange |
-| MC-06 | Symbol construction per segment | EQ: bare base symbol. FUT: `{underlying}{DDMMMYY}FUT`. CE/PE: `{underlying}{DDMMMYY}{strike}{CE\|PE}` with decimals preserved (`187.5`) and `.0` dropped. Sampled 3 rows per segment per exchange against [`symbol-format.md`](../../../prompt/symbol-format.md) |
-| MC-07 | Index normalization | Every index symbol in the canonical `NSE_INDEX` / `BSE_INDEX` / `MCX_INDEX` lists in [`symbol-format.md`](../../../prompt/symbol-format.md) is present with the exact spelling; `brsymbol` holds the broker's display name (`NIFTY 50`) |
+| MC-06 | Symbol construction per segment | EQ: bare base symbol. FUT: `{underlying}{DDMMMYY}FUT`. CE/PE: `{underlying}{DDMMMYY}{strike}{CE\|PE}` with decimals preserved (`187.5`) and `.0` dropped. Sampled 3 rows per segment per exchange against [`symbol-format.md`](../../../prompt/symbol-format.md). An EQ row fails only when it carries an expiry or its symbol has a full FUT/CE/PE shape; exchange debt scrip IDs (BSE group F such as `0360OAM27`, G-secs such as `GS23DEC43`, NSE N\*/Y\*/GS/SG series) are kept as the exchange lists them and are not defects |
+| MC-07 | Index normalization | Every headline index the broker lists (NSE_INDEX: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50, INDIAVIX; BSE_INDEX: SENSEX, BANKEX, SENSEX50; MCX_INDEX: MCXBULLDEX, MCXCOMDEX) is stored under its own `*_INDEX` exchange with the canonical spelling from [`symbol-format.md`](../../../prompt/symbol-format.md); `brsymbol` holds the broker's display name (`NIFTY 50`). **FAIL** when the index is in the master under a non-canonical name (`NIFTY NEXT 50`) or left on the cash exchange: that is a normalisation defect OpenAlgo must fix. **WARN** when the broker's own scrip master does not list the index at all (TradeSmart's NSE file carries only NIFTY, BANKNIFTY, FINNIFTY and INDIAVIX): record it by name in `Quirks`, noting an index that has derivatives but no spot row, since option chain and Greeks need the spot quote. Never add a missing index with an invented token |
 | MC-08 | **Missing-symbol report** | Diff the canonical index lists and a reference symbol set against the broker's master. Every missing symbol is **listed by name** in the report — this is a named deliverable, not a pass/fail flag. A symbol missing because the listing was renamed or delisted is annotated, not counted as a defect |
 | MC-09 | `strike` is a float | Numeric; decimal strikes survive (`292.5`); non-options carry the sentinel (`0` or `-0.01`) consistently, not a mix |
 | MC-10 | Strike scaling per segment | Cross-check `strike` against the strike embedded in `brsymbol` for one row per segment. Currency derivatives commonly scale differently from equity/index |
@@ -252,7 +252,7 @@ bug the matrix exists to catch.
 | SYM-01 | `/symbol` | Equity lookup | All documented fields present; `brsymbol` is the broker tradingsymbol; `tick_size` and `lotsize` sane |
 | SYM-02 | `/symbol` | Futures lookup | `instrumenttype=FUT`, `expiry` in `DD-MMM-YY`, `freeze_qty` present for F&O |
 | SYM-03 | `/symbol` | Options lookup incl. `OPT_DECIMAL_STRIKE` | `strike` float preserved exactly |
-| SYM-04 | `/symbol` | Index lookup on `NSE_INDEX` / `BSE_INDEX` | Resolves; `exchange` echoed as the index exchange |
+| SYM-04 | `/symbol` | Index lookup on `NSE_INDEX` / `BSE_INDEX` | Resolves; `exchange` echoed as the index exchange. `tick_size` may be `0` or null: index spot rows are quote-only and never ordered (Kite sends `0`), the same exemption as MC-11 |
 | SYM-05 | `/symbol` | `EQ_SPECIAL` | Hyphen/ampersand/digit symbols resolve without mangling |
 | SYM-06 | `/symbol` | Unknown symbol | Clean 404/400 with a message; never 500 |
 | SYM-07 | `/search` | Plain symbol query | Returns matches; every row carries the full documented field set |
@@ -589,7 +589,7 @@ capability gate returns **501** and that 501 is itself the assertion.
 
 | ID | Check | Pass criteria |
 | --- | --- | --- |
-| GT-01 | Capability gate | Broker without GTT returns 501 with a clear message on all four endpoints |
+| GT-01 | Capability gate | First check whether the broker provides GTT at all (`broker/<name>/api/gtt_api.py`). If it does not, report a **WARN** "GTT is not provided by broker '<name>'" and skip GT-02..GT-23: in analyzer mode the sandbox answers every GTT endpoint before the broker gate is reached, so those checks would only test the sandbox. In live mode a broker without GTT returns 501 with a clear message on all four endpoints |
 | GT-02 | Place SINGLE, trigger **below** LTP via `triggerprice_sl` | `trigger_id` returned |
 | GT-03 | Place SINGLE, trigger **above** LTP via `triggerprice_tg` | `trigger_id` returned |
 | GT-04 | Place SINGLE with `pricetype=MARKET`, `price=0` | Accepted; where the broker only accepts LIMIT children, the MPP conversion is transparent to the caller |
