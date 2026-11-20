@@ -316,11 +316,24 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """Map PiConnect TradeBook rows to OpenAlgo's tradebook format.
+
+    PiConnect returns one row per fill, not per order. Each row carries the
+    order's quantity in "qty" and the order's running average in "avgprc", and
+    that fill's own quantity and price in "flqty" and "flprc". An order filled
+    in two parts therefore comes back as two rows that both say qty 120, so
+    reading "qty" counted it twice (#2464). Each row is mapped from its fill
+    fields; "qty" and "avgprc" are read only when a row has no fill field.
+    """
     transformed_data = []
     for trade in tradebook_data:
+        fill_qty = trade.get("flqty")
+        fill_price = trade.get("flprc")
+        quantity = _int_or_zero(trade.get("qty") if fill_qty is None else fill_qty)
         # Format numeric values to 2 decimal places for tradebook only
-        avg_price = round(float(trade.get("avgprc", 0)), 2)
-        quantity = int(trade.get("qty", 0))
+        avg_price = round(
+            _float_or_zero(trade.get("avgprc") if fill_price is None else fill_price), 2
+        )
         trade_value = round(avg_price * quantity, 2)
 
         transformed_trade = {
