@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from datetime import datetime, timedelta
 from datetime import time as dt_time
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -17,6 +18,7 @@ from broker.flattrade.api.rate_limit import (
     is_rate_limit_error,
     rate_limit_retry_delay,
 )
+from database.market_calendar_db import get_market_timings_for_date
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils import runtime
 from utils.broker_backpressure import BrokerBusyError
@@ -32,6 +34,8 @@ from utils.shared_executors import get_executor
 USE_ASYNC = not (runtime.is_monkey_patched() or runtime.gthread_active())
 
 logger = get_logger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
 
 #: Threads in the shared quote pool. Matches the multiquote batch size, which is
 #: the most one request fans out at a time.
@@ -83,6 +87,34 @@ def _candle_number(candle: dict, key: str) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+#: The open used when OpenAlgo's market calendar has no session for a day: the
+#: regular NSE/BSE open, which is what this module dropped bars before until
+#: the calendar was consulted.
+_REGULAR_OPEN = dt_time(9, 15)
+
+
+def _session_open(day, exchange: str, cache: dict) -> dt_time:
+    """IST time the exchange's session opens on `day`, from OpenAlgo's market calendar.
+
+    A special session (Muhurat 2026 opened at 14:20) answers its own open. A
+    day the calendar does not cover, or a read that fails, answers 09:15.
+    `cache` holds one answer per day for the length of one history request.
+    """
+    key = (day, exchange)
+    if key not in cache:
+        opened = _REGULAR_OPEN
+        try:
+            for row in get_market_timings_for_date(day) or []:
+                if row.get("exchange") == exchange and row.get("start_time"):
+                    stamp = datetime.fromtimestamp(int(row["start_time"]) / 1000, IST)
+                    opened = stamp.time().replace(second=0, microsecond=0)
+                    break
+        except Exception:
+            logger.exception(f"Market timings for {day} could not be read")
+        cache[key] = opened
+    return cache[key]
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
@@ -717,6 +749,7 @@ class BrokerData:
 
             # Convert response to DataFrame
             data = []
+            session_opens: dict = {}
             for candle in response:
                 if isinstance(candle, str):
                     candle = json.loads(candle)
@@ -770,12 +803,15 @@ class BrokerData:
                             logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
-                        # On NSE/BSE cash and F&O, TPSeries adds a 09:14 bar holding
-                        # the pre-open discovered price: flat OHLC, zero bar volume.
-                        # The session opens at 09:15, so drop it (QA HS-07).
-                        if (
-                            exchange in ("NSE", "BSE", "NFO", "BFO")
-                            and candle_dt.time() < dt_time(9, 15)
+                        # On NSE/BSE cash and F&O, TPSeries adds bars for the
+                        # pre-open before the session opens: a flat 09:14 bar
+                        # on a normal day (QA HS-07), and 14:05 to 14:19 on
+                        # Muhurat 2026, whose session opened at 14:20. Drop
+                        # them: a chart deriving 15m and up refuses the whole
+                        # page on one bar before the open ("Could not load
+                        # older history").
+                        if exchange in ("NSE", "BSE", "NFO", "BFO") and candle_dt.time() < (
+                            _session_open(candle_dt.date(), exchange, session_opens)
                         ):
                             continue
 
