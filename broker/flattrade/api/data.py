@@ -7,7 +7,6 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from datetime import datetime, timedelta
-from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -89,32 +88,98 @@ def _candle_number(candle: dict, key: str) -> float | None:
     return number if math.isfinite(number) else None
 
 
-#: The open used when OpenAlgo's market calendar has no session for a day: the
-#: regular NSE/BSE open, which is what this module dropped bars before until
-#: the calendar was consulted.
-_REGULAR_OPEN = dt_time(9, 15)
+#: Index history follows its exchange's session in the market calendar.
+_CALENDAR_EXCHANGE = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE"}
 
 
-def _session_open(day, exchange: str, cache: dict) -> dt_time:
-    """IST time the exchange's session opens on `day`, from OpenAlgo's market calendar.
+def _session_open(day, exchange: str, cache: dict) -> datetime | None:
+    """When the exchange's session opens on `day`, from OpenAlgo's market calendar.
 
-    A special session (Muhurat 2026 opened at 14:20) answers its own open. A
-    day the calendar does not cover, or a read that fails, answers 09:15.
-    `cache` holds one answer per day for the length of one history request.
+    Returned as a naive IST wall-clock datetime, the form TPSeries candle times
+    are parsed into. A special session answers its own open (Muhurat 2026:
+    14:20). None when the calendar has no session for the day or cannot be
+    read: no session time is assumed here. `cache` holds one answer per day
+    for the length of one history request.
     """
     key = (day, exchange)
     if key not in cache:
-        opened = _REGULAR_OPEN
+        opened = None
+        calendar_exchange = _CALENDAR_EXCHANGE.get(exchange, exchange)
         try:
             for row in get_market_timings_for_date(day) or []:
-                if row.get("exchange") == exchange and row.get("start_time"):
+                if row.get("exchange") == calendar_exchange and row.get("start_time"):
                     stamp = datetime.fromtimestamp(int(row["start_time"]) / 1000, IST)
-                    opened = stamp.time().replace(second=0, microsecond=0)
+                    opened = stamp.replace(tzinfo=None, second=0, microsecond=0)
                     break
         except Exception:
             logger.exception(f"Market timings for {day} could not be read")
         cache[key] = opened
     return cache[key]
+
+
+def _open_at_discovered_price(rows: list[dict], exchange: str, minutes: int) -> list[dict]:
+    """Start each session at the pre-open discovered price, without the pre-open bars.
+
+    TPSeries returns bars from before the session opens. On a normal day that
+    is a flat 09:14 bar at the pre-open discovered price; on Muhurat 2026
+    (session 14:20) it was 14:05 to 14:19: the previous close as a placeholder
+    (SBIN 1018.50, a 14:05 bar whose open sat above its high) and then the
+    discovered price (1023.20). None of them is a trade in the session, and
+    the chart refuses a whole page on one bar before the open ("Could not
+    load older history").
+
+    The discovered price is the exchange's opening price: Flattrade's daily
+    candle opens there (SBIN 8 Nov 1023.20, 9 Nov 1030.00), while its first
+    session bar opened at the first continuous trade (1023.70, 1027.60). So
+    each day's first session bar takes the last pre-open close as its open,
+    widening its high or low to hold it, and the pre-open bars are left out.
+    Their volume is not added: the matched quantity cannot be told apart from
+    the placeholder bars' volume.
+
+    A bar that starts before the open but runs past it holds session trades,
+    so it is moved to the open, not left out. A day the calendar does not
+    cover keeps every bar as sent.
+    """
+    opens: dict = {}
+    pre_close: dict = {}
+    kept: list[dict] = []
+    for row in rows:
+        day = row["dt"].date()
+        session_open = _session_open(day, exchange, opens)
+        if session_open is None or row["dt"] >= session_open:
+            kept.append(row)
+            continue
+        if row["dt"] + timedelta(minutes=minutes) <= session_open:
+            if day not in pre_close or row["dt"] > pre_close[day][0]:
+                pre_close[day] = (row["dt"], row["close"])
+            continue
+        kept.append({**row, "dt": session_open, "timestamp": int(session_open.timestamp())})
+
+    # A bar moved to the open can meet one TPSeries already put there.
+    merged: dict = {}
+    for row in sorted(kept, key=lambda r: r["dt"]):
+        same = merged.get(row["timestamp"])
+        if same is None:
+            merged[row["timestamp"]] = dict(row)
+            continue
+        same["high"] = max(same["high"], row["high"])
+        same["low"] = min(same["low"], row["low"])
+        same["close"] = row["close"]
+        same["volume"] += row["volume"]
+        same["oi"] = row["oi"]
+    kept = list(merged.values())
+
+    first_of_day: dict = {}
+    for row in kept:
+        first_of_day.setdefault(row["dt"].date(), row)
+    for day, (_, price) in pre_close.items():
+        first = first_of_day.get(day)
+        if first is None:
+            continue
+        first["open"] = price
+        first["high"] = max(first["high"], price)
+        first["low"] = min(first["low"], price)
+    return kept
 
 
 def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0):
@@ -749,7 +814,6 @@ class BrokerData:
 
             # Convert response to DataFrame
             data = []
-            session_opens: dict = {}
             for candle in response:
                 if isinstance(candle, str):
                     candle = json.loads(candle)
@@ -803,24 +867,13 @@ class BrokerData:
                             logger.info(f"Error parsing timestamp: {candle['time']}")
                             continue
 
-                        # On NSE/BSE cash and F&O, TPSeries adds bars for the
-                        # pre-open before the session opens: a flat 09:14 bar
-                        # on a normal day (QA HS-07), and 14:05 to 14:19 on
-                        # Muhurat 2026, whose session opened at 14:20. Drop
-                        # them: a chart deriving 15m and up refuses the whole
-                        # page on one bar before the open ("Could not load
-                        # older history").
-                        if exchange in ("NSE", "BSE", "NFO", "BFO") and candle_dt.time() < (
-                            _session_open(candle_dt.date(), exchange, session_opens)
-                        ):
-                            continue
-
                         # Skip candles with all zero values
                         if op == 0 and hi == 0 and lo == 0 and cl == 0:
                             continue
 
                         data.append(
                             {
+                                "dt": candle_dt,
                                 "timestamp": timestamp,
                                 "open": op,
                                 "high": hi,
@@ -840,6 +893,10 @@ class BrokerData:
                 except (KeyError, TypeError, ValueError) as e:
                     logger.error(f"Error parsing candle data: {e}, Candle: {candle}")
                     continue
+            if interval != "D":
+                data = _open_at_discovered_price(data, exchange, int(self.timeframe_map[interval]))
+                for row in data:
+                    del row["dt"]
             df = pd.DataFrame(data)
             if df.empty:
                 df = pd.DataFrame(
