@@ -33,6 +33,7 @@ from sqlalchemy import Float, inspect, select, type_coerce, update
 from database.sandbox_db import (
     SandboxFunds,
     SandboxHoldings,
+    SandboxOrders,
     SandboxPositions,
     db_session,
     get_config,
@@ -42,6 +43,32 @@ from utils.logging import get_logger
 from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
+
+
+def _resting_order_margin(user_id, populate=False):
+    """Margin still held by orders that rest unfilled.
+
+    The order manager blocks margin when an order is placed and moves it to
+    the position only as the order fills, so the unfilled share of a resting
+    order is a legitimate reservation, not a leak. Counted pro rata to the
+    unfilled quantity, since a fill has already moved its share.
+    """
+    query = SandboxOrders.query.filter(
+        SandboxOrders.user_id == user_id,
+        SandboxOrders.order_status.in_(("open", "trigger pending")),
+    )
+    if populate:
+        query = query.populate_existing()
+    total = Decimal("0")
+    for order in query.all():
+        blocked = Decimal(str(order.margin_blocked or 0))
+        quantity = Decimal(str(order.quantity or 0))
+        pending = order.pending_quantity if order.pending_quantity is not None else order.quantity
+        pending = Decimal(str(pending or 0))
+        if blocked > 0 and quantity > 0:
+            total += blocked * min(pending, quantity) / quantity
+    return total
+
 
 #: Every money column of a funds row. A write is applied only if none of them
 #: moved since it was read, so two writers can never both start from the same
@@ -1090,6 +1117,12 @@ def _reconcile_once(user_id, auto_fix):
 
     total_position_margin += total_gtt_margin
 
+    # Orders still resting hold their margin until they fill or are
+    # cancelled. Without counting them, the first fill of any other order
+    # auto-fixes their reservation away as "stuck", and cancelling them later
+    # fails with "Cannot release X: only Y is reserved".
+    total_position_margin += _resting_order_margin(user_id, populate=True)
+
     # used_margin as read above, fresh from the database: a copy read earlier
     # would decide the discrepancy on a balance that has since moved.
     current_used_margin = Decimal(str(snapshot.values["used_margin"] or 0))
@@ -1197,6 +1230,8 @@ def validate_margin_consistency(user_id):
             for pos in positions
             if pos.quantity != 0  # Only count open positions
         )
+        # Resting orders hold their margin too (see reconcile_margin).
+        total_position_margin += _resting_order_margin(user_id)
 
         # Get current used_margin from funds
         funds = SandboxFunds.query.filter_by(user_id=user_id).first()
