@@ -31,8 +31,9 @@ from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
 
-# Nuvama's "nothing in this book" answers (HTTP 222 with an error object).
-_EMPTY_BOOK_CODES = frozenset({"ETRD0002", "ETRD0004"})
+# Nuvama's "nothing in this book" answers (HTTP 222 with an error object):
+# ETRD0007 orders, ETRD0002 trades, ETRD0004 positions.
+_EMPTY_BOOK_CODES = frozenset({"ETRD0002", "ETRD0004", "ETRD0007"})
 
 
 class _OrderResponse:
