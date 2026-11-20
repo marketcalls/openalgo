@@ -192,6 +192,16 @@ Zerodha stores `api_key:access_token` (rewritten in `brlogin.py` after a
 successful auth). Most brokers store the bare token and need NO rewrite. Only
 add a rewrite branch if downstream API calls require a composite token.
 
+A value every call must send and that must match the session (an API key in a
+`Source` header, a client id) belongs in the stored token, not in a later
+environment read: a background caller (Flow, the scheduler) reads the process
+keys, which can be another broker's after a switch. Nuvama packs its API key
+into the token for that reason, and Pocketful stores
+`<client_id>:::<access_token>`. Never read identity from `flask.session` in
+broker code: Pocketful read `session["username"]`, which a session never
+carries, and an API, strategy or Flow order has no browser session at all. A
+login whose account lookup fails stores no session.
+
 ### NUANCE — feed_token / user_id brokers
 
 Brokers whose `authenticate_broker` returns 3 or 4 elements must be added to the
@@ -199,7 +209,7 @@ explicit list in `brlogin.py`, or the extra values are discarded:
 
 ```python
 if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan",
-              "motilal", "rmoney", "iiflcapital"]:
+              "motilal", "rmoney", "iiflcapital", "nuvama"]:
     return _complete_login(auth_token, session["user"], broker,
                            feed_token=feed_token, user_id=user_id)
 elif broker == "paytm":   # feed_token but no user_id
@@ -324,8 +334,8 @@ shapes:
 
 | Shape | Who | What to add |
 | --- | --- | --- |
-| **Backend callback** | ~26 brokers — angel, kotak, samco, aliceblue, iifl, shoonya, mstock, ... | the broker id in `CALLBACK_START_BROKERS`; `/<broker>/callback` then shows the form or redirects to the broker itself |
-| **Broker-hosted URL** | zerodha, fyers, upstox, flattrade, compositedge, arrow, hdfcsky, hdfcsecurities, paytm, pocketful, rupeezy | a branch in `login_url()` built from `keys.api_key` and `keys.redirect_url` |
+| **Backend callback** | about 25 brokers — angel, kotak, samco, aliceblue, iifl, shoonya, mstock, ... | the broker id in `CALLBACK_START_BROKERS`; `/<broker>/callback` then shows the form or redirects to the broker itself |
+| **Broker-hosted URL** | zerodha, fyers, upstox, flattrade, compositedge, arrow, hdfcsky, hdfcsecurities, paytm, pocketful, rupeezy, nuvama, rmoney | a branch in `login_url()` built from `keys.api_key` and `keys.redirect_url` |
 | **Dedicated backend initiator** | dhan | `login_url()` returns `/dhan/initiate-oauth` |
 
 ```python
@@ -360,8 +370,9 @@ not started from OpenAlgo", even though the broker itself accepted the login.
 Test a real login before calling the integration done.
 
 **3. `BrokerTOTP.tsx` — `brokerFields`.** Only for **form-login** brokers. The
-backend redirects to `/broker/<name>/totp` (8 brokers do this today: fivepaisa,
-angel, mstock, tradejini, firstock, nubra, motilal, kotak) and this page renders
+backend redirects to `/broker/<name>/totp` (11 brokers do this today: fivepaisa,
+angel, mstock, tradejini, firstock, nubra, motilal, kotak, indmoney, sahi,
+definedge) and this page renders
 the form. Brokers without an entry fall back to a `default` of userid +
 password + totp — which is why an unconfigured broker still renders
 *something*, just possibly the wrong fields. Its POST goes to the callback with

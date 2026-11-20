@@ -92,6 +92,11 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] strike scaling checked **per segment** (often differs for currency)
 - [ ] vectorized, not `iterrows()`; output diffed against a known-good run
 - [ ] `db_session.remove()` in a `finally` (runs in a background thread)
+- [ ] a failed or partial download keeps the old table and records an error (validate, then swap in one transaction)
+- [ ] every non-derivative row is `EQ`; no padded or series values in `instrumenttype`
+- [ ] expiry sentinels cleared together with the type; `name` never blank
+- [ ] `lotsize` in units, taken per contract row
+- [ ] derivative symbols built from columns; the underlying parse handles digits, `&` and `-`
 
 **Data**
 - [ ] price de-scaling (paise x100) in quotes/depth/history
@@ -103,6 +108,8 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] per-endpoint caps respected if LTP/OHLC/full differ (zerodha: 500 vs 1000)
 - [ ] per-category rate limits respected (quote limits are often far tighter than order limits)
 - [ ] `BrokerData.__init__` takes a second `feed_token` param only if the broker truly has one
+- [ ] history passes through a candle repair, drops bars outside the session, and tells an empty window from a failure
+- [ ] history request windows built in IST, never from the host clock
 
 **Orders and account**
 - [ ] `place_order_api` sets `response.status`
@@ -113,13 +120,33 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] `order_status` lowercased to open/complete/cancelled/rejected/trigger pending
 - [ ] margin: single -> order calculator, multi-leg -> basket calculator (Dhan pattern); never sum legs when a basket endpoint exists
 - [ ] `gtt_api.py` only if the broker supports GTT (the capability gate returns 501 otherwise)
+- [ ] status 200 only for a confirmed order id; an error envelope over 200 goes out non-200 (place, modify, cancel)
+- [ ] a lost or unreadable reply after a write -> tag lookup or 502; writes never retried
+- [ ] a unique order tag per order where the broker treats it as a client order id
+- [ ] an unknown pricetype refused; SL/SL-M send the trigger on place AND modify
+- [ ] empty-book codes mapped for the order, trade and position books (logged at debug)
+- [ ] trade book uses each fill's quantity and price; order ids kept as strings
+- [ ] smart order through `smart_order_guard` and `position_read`; a failed read places nothing; positions matched by instrument id
+- [ ] margin: post-hedge figure, existing usage excluded, a failed leg fails the basket
 
 **Streaming**
 - [ ] sync `websocket-client`, never asyncio
 - [ ] no `thread.join()` on daemon threads
 - [ ] `cleanup_zmq()` in `disconnect()`
 - [ ] fresh token re-read on reconnect (`bypass_cache=True`)
-- [ ] keepalive + data-stall watchdog
+- [ ] keepalive + data-stall watchdog; the stall clock reset only by market-data frames, started only after steady data
+- [ ] network outage retried indefinitely at the max delay; auth refusal has its own small budget and one log line
+- [ ] one reconnect owner; heartbeat and ping threads end with their socket
+- [ ] update frames merged into a per-(exchange, token) snapshot; no LTP de-duplication
+- [ ] absent fields omitted, never 0; no midpoint LTP; index depth is an empty book
+- [ ] `close` = previous close; `ltt` = exchange trade time, omitted when absent
+- [ ] depth ticks carry the full quote (the proxy sends them to Quote and LTP subscribers)
+- [ ] every subscribed mode gets the tick; the broker held at the highest mode needed
+- [ ] ticks and subscription state keyed on exchange AND token; no fallback routing
+- [ ] book snapshots replace; diffs applied by level index, on presence not truthiness
+- [ ] prices scaled by per-instrument precision (check CDS and BCD on the socket)
+- [ ] subscribes batched; an unsubscribe cancels a queued subscribe; resubscribe from a copy, after auth
+- [ ] no network wait under the adapter lock
 - [ ] binary offsets taken from the SDK, validated with synthetic `struct.pack` packets
 - [ ] order-update adapter registered in `services/order_update_service.py` `_BROKER_FACTORIES` (or broker added to `_POLLING_BROKERS`)
 - [ ] postback + broker feed deduplicated on `orderid` + `order_status` + `filled_quantity`
@@ -136,6 +163,10 @@ Then run the **`fd-audit`** skill on the whole change.
 - [ ] frontend: if form-login, a `brokerFields` entry **and** a `brokerNames` entry in `BrokerTOTP.tsx` (unconfigured brokers silently fall back to a userid/password/totp `default` that may be the wrong fields)
 - [ ] verified with one sweep: `grep -rn "<newbroker>" install/ start.sh .sample.env README.md frontend/src/pages/BrokerTOTP.tsx utils/broker_login.py utils/broker_keys.py utils/broker_setup_guide.py websocket_proxy/__init__.py`
 - [ ] no emojis or icons anywhere (repo-wide rule)
+- [ ] no log line carries a credential or any slice of one (`test/test_xts_credential_logging.py` extended)
+- [ ] the callback's credential parameter masked by `utils/url_redaction._QUERY_CREDENTIAL`
+- [ ] every module imports on a headless Linux Python (no stray editor auto-imports such as `from turtle import ...`)
+- [ ] Step 5b in `SKILL.md` applied; `test/test_gthread_*.py` green on Linux
 
 ## Live test plan (needs credentials + SEBI static-IP whitelisting)
 

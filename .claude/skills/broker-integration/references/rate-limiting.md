@@ -127,12 +127,31 @@ before concluding the header was undocumented. Copy that habit.
 
 Brokers signal rate limiting inconsistently: a 429, a 200 with an error body,
 or a broker-specific code (Dhan's error 805). An `is_rate_limited(status_code,
-message)` helper that checks both is worth having.
+message)` helper that checks both is worth having, for reads.
+
+**Retry reads only.** Never resend an order write (place, modify, cancel) on a
+429, a broker throttle code, a "try after some time" message or a dropped
+connection: none of them proves the order did not land. Answer once, saying it
+was not confirmed or resent and to check the order book. IIFL's message
+fallback matched its generic EC003 error, so one order could go out four times;
+Definedge and Rupeezy follow the same rule. Cap a server-sent `Retry-After`
+(`utils.broker_backpressure.cap_server_delay`).
+
+## Under gthread the pacer refuses instead of sleeping
+
+Under gthread a sleeping pacer holds one of 64 request threads. Before booking
+a slot, call `utils.broker_backpressure.check_queue_wait(wait, kind)`
+(`"order"` for writes): it raises `BrokerBusyError` when the wait is too long,
+and books nothing. That refusal must reach the caller as busy (429) through
+every generic `except`, never as an empty book, a flat position or zero quotes.
+Under eventlet and on the dev server the pacer sleeps as before. See Step 5b in
+`SKILL.md`.
 
 ## Where the limiter must be applied
 
-Only three plugins have a dedicated `api/rate_limiter.py` (fyers, iiflcapital,
-definedge); dhan and flattrade keep it inline at the top of `api/data.py`.
+Eleven plugins have a dedicated `api/rate_limiter.py` (aliceblue, definedge,
+deltaexchange, fyers, groww, iiflcapital, indmoney, rupeezy, sahi, tradesmart,
+upstox), flattrade has `api/rate_limit.py`, and dhan keeps it inline.
 Either is fine — what matters is that **every** call path goes through it,
 including `api/order_api.py` and `api/funds.py` when the broker uses a single
 global quota. A limiter that only guards `data.py` does not help when order
@@ -145,6 +164,8 @@ calls share the same budget.
 - [ ] Slot reserved inside the lock, sleep outside it
 - [ ] Paced below the documented cap for headroom
 - [ ] Applied to every call path sharing the quota, not just `data.py`
-- [ ] 429 handled reactively with `Retry-After` when present, exponential backoff otherwise
+- [ ] 429 on a read handled reactively with `Retry-After` when present, exponential backoff otherwise
+- [ ] Order writes never retried on a 429, a throttle reply or a dropped connection
+- [ ] Under gthread: `check_queue_wait` before booking a slot; `BrokerBusyError` passes through every handler as busy
 - [ ] Broker-specific rate-limit codes recognised (e.g. an error body returned with HTTP 200)
 - [ ] Verified with a realistic burst — a full option chain, or 45 parallel history fetches — not a single call
