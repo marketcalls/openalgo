@@ -846,8 +846,11 @@ class FundManager:
                 logger.error(f"Symbol {symbol} not found on {exchange}")
                 return None, "Symbol not found"
 
-            # Calculate trade value (quantity × price)
-            trade_value = quantity * price
+            # Calculate trade value (quantity × price × contract_value)
+            # contract_value: the units one quantity stands for (Dhan MCX quantity counts lots: CRUDEOIL 100 barrels;
+            # crypto perpetuals: a fraction of a coin). P&L already applies it (position_manager).
+            cv = getattr(symbol_obj, "contract_value", None)
+            trade_value = quantity * price * (Decimal(str(cv)) if cv else Decimal("1"))
 
             # Determine leverage based on action, product and symbol type
             leverage = self._get_leverage(exchange, product, symbol, action)

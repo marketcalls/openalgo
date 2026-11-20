@@ -62,6 +62,7 @@ def get_symbol_info_with_auth(
             "lotsize": result.lotsize,
             "instrumenttype": result.instrumenttype,
             "tick_size": result.tick_size,
+            "contract_value": getattr(result, "contract_value", None),
             "freeze_qty": freeze_qty,
         }
 
