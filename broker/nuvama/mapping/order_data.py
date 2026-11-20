@@ -3,7 +3,7 @@
 Every Nuvama book answers ``{"appID", "config", "msgID", "srvTm", "data": {...}}``
 with the rows under ``data.ord`` (orders), ``data.trade`` (trades),
 ``data.pos`` (net positions) or ``data.rmsHdg`` (holdings). An empty book is
-HTTP 222 with an ``error`` object (``ETRD0002``, ``ETRD0004``), which reads
+HTTP 222 with an ``error`` object (``ETRD0007``, ``ETRD0002``, ``ETRD0004``), which reads
 here as no rows. Each row's ``sym`` is the streaming symbol, the token in the
 master contract, so rows map back to OpenAlgo symbols through it.
 """
