@@ -10,8 +10,8 @@ import { onModeChange } from '@/stores/themeStore'
 interface MarginData {
   availablecash: string
   collateral: string
-  m2munrealized: string
-  m2mrealized: string
+  m2munrealized: string | null
+  m2mrealized: string | null
   utiliseddebits: string
 }
 
@@ -22,9 +22,9 @@ interface MasterContractStatus {
 }
 
 // Format number in Indian format with Cr/L suffixes
-function formatIndianNumber(value: string | number): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
-  if (Number.isNaN(num)) return '0.00'
+function formatIndianNumber(value: string | number | null | undefined): string {
+  const num = value == null ? NaN : Number(value)
+  if (!Number.isFinite(num)) return 'Unavailable'
 
   const isNegative = num < 0
   const absNum = Math.abs(num)
@@ -45,15 +45,15 @@ function formatIndianNumber(value: string | number): string {
 }
 
 // Get color class based on P&L value
-function getPnLColor(value: string | number): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
+function getPnLColor(value: string | number | null | undefined): string {
+  const num = value == null ? NaN : Number(value)
   if (num > 0) return 'text-green-600 dark:text-green-400'
   if (num < 0) return 'text-red-600 dark:text-red-400'
   return 'text-foreground'
 }
 
-function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' | 'secondary' {
-  const num = typeof value === 'string' ? parseFloat(value) : value
+function getPnLBadgeVariant(value: string | number | null | undefined): 'default' | 'destructive' | 'secondary' {
+  const num = value == null ? NaN : Number(value)
   if (num > 0) return 'default'
   if (num < 0) return 'destructive'
   return 'secondary'
@@ -96,9 +96,11 @@ export default function Dashboard() {
         setMarginData(data.data)
         setError(null)
       } else {
+        setMarginData(null)
         setError(data.message || 'Failed to fetch margin data')
       }
     } catch (_err) {
+      setMarginData(null)
       setError('Failed to fetch margin data')
     } finally {
       setIsLoading(false)
@@ -337,9 +339,7 @@ export default function Dashboard() {
               <p className="text-2xl font-bold text-primary">
                 {isLoading
                   ? '...'
-                  : marginData
-                    ? formatIndianNumber(marginData.availablecash)
-                    : '0.00'}
+                  : formatIndianNumber(marginData?.availablecash)}
               </p>
               <Badge variant="secondary" className="mt-2">
                 Cash Balance
@@ -356,9 +356,7 @@ export default function Dashboard() {
               <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">
                 {isLoading
                   ? '...'
-                  : marginData
-                    ? formatIndianNumber(marginData.collateral)
-                    : '0.00'}
+                  : formatIndianNumber(marginData?.collateral)}
               </p>
               <Badge variant="secondary" className="mt-2">
                 Total Collateral
@@ -380,9 +378,7 @@ export default function Dashboard() {
               >
                 {isLoading
                   ? '...'
-                  : marginData
-                    ? formatIndianNumber(marginData.m2munrealized)
-                    : '0.00'}
+                  : formatIndianNumber(marginData?.m2munrealized)}
               </p>
               <Badge
                 variant={marginData ? getPnLBadgeVariant(marginData.m2munrealized) : 'secondary'}
@@ -407,9 +403,7 @@ export default function Dashboard() {
               >
                 {isLoading
                   ? '...'
-                  : marginData
-                    ? formatIndianNumber(marginData.m2mrealized)
-                    : '0.00'}
+                  : formatIndianNumber(marginData?.m2mrealized)}
               </p>
               <Badge
                 variant={marginData ? getPnLBadgeVariant(marginData.m2mrealized) : 'secondary'}
@@ -429,9 +423,7 @@ export default function Dashboard() {
               <p className="text-2xl font-bold text-cyan-500 dark:text-cyan-400">
                 {isLoading
                   ? '...'
-                  : marginData
-                    ? formatIndianNumber(marginData.utiliseddebits)
-                    : '0.00'}
+                  : formatIndianNumber(marginData?.utiliseddebits)}
               </p>
               <Badge
                 variant="outline"

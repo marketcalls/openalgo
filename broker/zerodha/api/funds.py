@@ -1,6 +1,9 @@
-# api/funds.py
+"""Kite cash balances and P&L from the account's own position snapshot."""
 
-import os
+import math
+import time
+
+import httpx
 
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -8,142 +11,121 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _to_float(value, default=0.0):
-    """Coerce a Kite numeric field, tolerating nulls and strings."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+def _number(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite Kite amount")
+    return number
+
+
+def _get_data(client, path, headers, deadline):
+    url = f"https://api.kite.trade/{path}"
+    for attempt in range(2):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise httpx.ReadTimeout("Kite funds read budget expired")
+        try:
+            response = client.get(
+                url,
+                headers=headers,
+                timeout=min(1.0, remaining),
+                extensions={"openalgo_retry_read": False},
+            )
+            response.raise_for_status()
+            break
+        except httpx.HTTPStatusError as exc:
+            if attempt or exc.response.status_code not in (502, 503, 504):
+                raise
+        except (
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+        ):
+            if attempt:
+                raise
+    body = response.json()
+    if (
+        not isinstance(body, dict)
+        or body.get("status") != "success"
+        or not isinstance(body.get("data"), dict)
+    ):
+        raise ValueError("invalid Kite response")
+    return body["data"]
+
+
+def _position_pnl(positions):
+    if not isinstance(positions, list):
+        raise ValueError("missing Kite net positions")
+    realised = unrealised = 0.0
+    realised_known = True
+    for position in positions:
+        qty = _number(position["quantity"])
+        if qty == 0:
+            # Closed quantities have no open P&L. Both turnover fields are
+            # already in rupees, even for MCX contracts.
+            if position.get("pnl") is not None:
+                realised += _number(position["pnl"])
+            else:
+                realised += _number(position["sell_value"]) - _number(position["buy_value"])
+            continue
+
+        # The positions endpoint includes its own last price. Fetching /quote/ltp
+        # here requires a separate market-data entitlement. Multiplier is Kite's
+        # P&L multiplier (which can differ from the physical contract size).
+        last = _number(position["last_price"])
+        average = _number(position["average_price"])
+        raw_multiplier = position.get("multiplier")
+        multiplier = 1 if raw_multiplier is None else _number(raw_multiplier)
+        if last <= 0 or average <= 0 or multiplier <= 0:
+            raise ValueError("missing Kite position price or multiplier")
+        open_pnl = (last - average) * qty * multiplier
+        unrealised += open_pnl
+        # Net P&L includes any earlier partial close. Kite's 'realised' and
+        # 'unrealised' intraday fields do not split booked/open P&L this way.
+        if position.get("pnl") is None:
+            realised_known = False
+        else:
+            realised += _number(position["pnl"]) - open_pnl
+    return f"{realised:.2f}" if realised_known else None, f"{unrealised:.2f}"
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Zerodha's API using the provided auth token."""
-    api_key = os.getenv("BROKER_API_KEY")
-
-    # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-
     headers = {"X-Kite-Version": "3", "Authorization": f"token {auth_token}"}
-
+    # Interactive clients allow three seconds. Both GETs share one retry
+    # window and return promptly if the optional positions read runs out of it.
+    deadline = time.monotonic() + 2.4
     try:
-        # Make the GET request using the shared client
-        response = client.get("https://api.kite.trade/user/margins", headers=headers)
-        response.raise_for_status()  # Raises an exception for 4XX/5XX responses
-
-        # Parse the response
-        margin_data = response.json()
-    except Exception as e:
-        error_message = str(e)
-        try:
-            if hasattr(e, "response") and e.response is not None:
-                error_detail = e.response.json()
-                error_message = error_detail.get("message", str(e))
-        except Exception:
-            pass
-
-        logger.error(f"Error fetching margin data: {error_message}")
-        return {}
-
-    if margin_data.get("status") == "error":
-        logger.error(f"Error fetching margin data: {margin_data.get('errors')}")
+        margins = _get_data(client, "user/margins", headers, deadline)
+        segments = (margins["equity"], margins["commodity"])
+        used = sum(_number(s["utilised"]["debits"]) for s in segments)
+        collateral = sum(_number(s["available"]["collateral"]) for s in segments)
+        net = sum(_number(s["net"]) for s in segments)
+        # available.cash may be zero on funded accounts. Preserve the existing
+        # cash identity from Kite's net, debits and collateral (#1582).
+        cash = net + used - collateral
+    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+        logger.error("Kite margins unavailable (%s)", _error_kind(exc))
         return {}
 
     try:
-        # Calculate the sum of debits for used margin
-        total_used_margin = sum(
-            [
-                margin_data["data"]["commodity"]["utilised"]["debits"],
-                margin_data["data"]["equity"]["utilised"]["debits"],
-            ]
-        )
+        positions = _get_data(client, "portfolio/positions", headers, deadline)
+        realised, unrealised = _position_pnl(positions["net"])
+    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
+        logger.warning("Kite position P&L unavailable (%s)", _error_kind(exc))
+        realised = unrealised = None
 
-        # Calculate the sum of collateral values
-        total_collateral = sum(
-            [
-                margin_data["data"]["commodity"]["available"]["collateral"],
-                margin_data["data"]["equity"]["available"]["collateral"],
-            ]
-        )
+    return {
+        "availablecash": f"{cash:.2f}",
+        "collateral": f"{collateral:.2f}",
+        "m2munrealized": unrealised,
+        "m2mrealized": realised,
+        "utiliseddebits": f"{used:.2f}",
+    }
 
-        # "availablecash" must be the actual free cash balance, not total
-        # margin. Kite's own available.cash field has been observed to
-        # intermittently report 0 for a funded account even though the
-        # top-level "net" stays correct (see GitHub issue #1582 discussion).
-        # Kite defines net = cash + collateral - debits, so derive cash from
-        # the always-reliable net/debits/collateral instead of trusting
-        # available.cash directly -- mathematically identical when cash is
-        # healthy, and self-heals when it isn't.
-        total_net_margin = sum(
-            [margin_data["data"]["commodity"]["net"], margin_data["data"]["equity"]["net"]]
-        )
-        total_available_margin = total_net_margin + total_used_margin - total_collateral
 
-        # Fetch PnL from position book
-        total_realised = 0
-        total_unrealised = 0
-        try:
-            pos_response = client.get(
-                "https://api.kite.trade/portfolio/positions", headers=headers
-            )
-            pos_response.raise_for_status()
-            position_book = pos_response.json()
-
-            if position_book.get("status") == "success" and position_book.get("data"):
-                net_positions = position_book["data"].get("net", [])
-
-                # Collect open positions to fetch live LTP
-                open_positions = []
-                for p in net_positions:
-                    qty = p.get("quantity", 0)
-                    if qty == 0:
-                        # Fully closed position - PnL is realized
-                        total_realised += p.get("sell_value", 0) - p.get("buy_value", 0)
-                    else:
-                        open_positions.append(p)
-
-                # Fetch live LTP for open positions via quotes API
-                if open_positions:
-                    instruments = [
-                        f"{p['exchange']}:{p['tradingsymbol']}" for p in open_positions
-                    ]
-                    query = "&".join(f"i={inst}" for inst in instruments)
-                    quote_response = client.get(
-                        f"https://api.kite.trade/quote/ltp?{query}", headers=headers
-                    )
-                    quote_response.raise_for_status()
-                    quote_data = quote_response.json()
-                    ltp_map = {}
-                    if quote_data.get("status") == "success" and quote_data.get("data"):
-                        for key, val in quote_data["data"].items():
-                            ltp_map[key] = val.get("last_price", 0)
-
-                    for p in open_positions:
-                        # Kite's own position multiplier, NOT the physical
-                        # contract size. The two diverge whenever a commodity is
-                        # quoted in a different unit from the one it trades in:
-                        # GOLDGUINEA is 8 grams quoted per 8 grams (multiplier 1),
-                        # GOLDM is 100 grams quoted per 10 grams (multiplier 10),
-                        # GOLD is 1 kg quoted per 10 grams (multiplier 100).
-                        # Scaling by contract size instead would report a rupee
-                        # move on GOLDGUINEA as 8 rupees and on GOLDM as 100.
-                        qty = _to_float(p.get("quantity", 0))
-                        multiplier = _to_float(p.get("multiplier", 1), default=1.0) or 1.0
-                        avg_price = _to_float(p.get("average_price", 0))
-                        inst_key = f"{p['exchange']}:{p['tradingsymbol']}"
-                        live_ltp = _to_float(ltp_map.get(inst_key, p.get("last_price", 0)))
-                        total_unrealised += (live_ltp - avg_price) * qty * multiplier
-        except Exception as e:
-            logger.error(f"Error fetching positions for PnL: {e}")
-
-        # Construct and return the processed margin data
-        processed_margin_data = {
-            "availablecash": f"{total_available_margin:.2f}",
-            "collateral": f"{total_collateral:.2f}",
-            "m2munrealized": f"{total_unrealised:.2f}",
-            "m2mrealized": f"{total_realised:.2f}",
-            "utiliseddebits": f"{total_used_margin:.2f}",
-        }
-        return processed_margin_data
-    except KeyError:
-        # Return an empty dictionary in case of unexpected data structure
-        return {}
+def _error_kind(exc):
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__

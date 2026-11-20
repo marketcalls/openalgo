@@ -2353,16 +2353,12 @@ class TelegramBotService:
 
         funds = response.get("data", {})
 
-        # P&L values may arrive as strings from some brokers
+        # Missing broker P&L has no numeric value. Keep a real zero for a flat book.
         try:
-            realized_pnl = float(funds.get("m2mrealized", 0))
-        except (ValueError, TypeError):
-            realized_pnl = 0.0
-
-        try:
-            unrealized_pnl = float(funds.get("m2munrealized", 0))
-        except (ValueError, TypeError):
-            unrealized_pnl = 0.0
+            realized_pnl = float(funds["m2mrealized"])
+            unrealized_pnl = float(funds["m2munrealized"])
+        except (ValueError, TypeError, KeyError):
+            return "Position P&L unavailable"
 
         total_pnl = realized_pnl + unrealized_pnl
 

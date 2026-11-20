@@ -188,8 +188,6 @@ class TestValuationUsesKiteMultiplier:
                             },
                         }
                     )
-                if "quote/ltp" in url:
-                    return Resp({"status": "success", "data": {f"MCX:{tradingsymbol}": {"last_price": ltp}}})
                 raise AssertionError(f"unexpected url {url}")
 
             monkeypatch.setattr(funds, "get_httpx_client", lambda: SimpleNamespace(get=get))
