@@ -22,7 +22,7 @@ class IiflWebSocketClient:
 
     # Socket.IO endpoints - Updated based on XTS API documentation
 
-    SOCKET_PATH = "/apimarketdata/socket.io"
+    SOCKET_PATH = "/apibinarymarketdata/socket.io"
     API_BASE_URL = f"{MARKET_DATA_URL}/instruments/subscription"
     API_UNSUBSCRIBE_URL = (
         f"{MARKET_DATA_URL}/instruments/subscription"  # Same endpoint, different method
