@@ -303,7 +303,7 @@ Services read `status == 200` as placed, cancelled or modified, so:
 - **Count each trade by its own fill.** Noren repeats the order's `qty` and
   running `avgprc` on every fill row; the fill is `flqty` and `flprc`. Reading
   `qty` counted part-filled orders per fill and broke realised P&L (Flattrade
-  #2480; Shoonya, Zebu and TradeSmart share the shape).
+  #2480).
 - **One status map, applied per row, shared with the stream.** Map every
   transient OMS state (VALIDATION PENDING, MODIFY PENDING, CANCEL PENDING, AMO
   REQ RECEIVED ...) and never carry a previous row's status into an unmatched
