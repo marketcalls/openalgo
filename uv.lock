@@ -2934,7 +2934,7 @@ wheels = [
 
 [[package]]
 name = "openalgo"
-version = "2.0.5"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -2942,18 +2942,18 @@ dependencies = [
     { name = "pandas" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/11/924146f63ef8e1f67b05377fb224c141bd96da5bbe567d96dd6b6af62f62/openalgo-2.0.5.tar.gz", hash = "sha256:675d6eb592ef105e4647166d0abd30bb95d668cf7353403e31436b7ef6ced2d6", size = 186521, upload-time = "2026-09-11T06:41:33.581Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/56/26566f98ceee4fca0296b714acc4ff6e5bd3ebe0eff9f72e661907a89b52/openalgo-2.3.0.tar.gz", hash = "sha256:188053a932f6ddb56e2ff828ec004837f5bde65eec0a6616755f8334c5498a51", size = 1957379, upload-time = "2026-11-19T20:10:46.7Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/78/7be6d35e12c3951e14b93dbe231fca03bf6279edac8fe503a4b690b0ac18/openalgo-2.0.5-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c20b01e3a7413ed62b7c5d8342ecc6c01c200abf8cf13f8394e693e1ae84fc28", size = 466505, upload-time = "2026-09-11T06:41:25.172Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/3f/d36e1a868d4396cbcac5225702f05a49f29c8b83760abcb89c5436efebdd/openalgo-2.0.5-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:70303029bfccb31be58cae5036292a33eeeaae506654955586b432fab424fbe0", size = 448026, upload-time = "2026-09-11T06:41:27.322Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/d5/f758948d0e7346e446c00a4970014bf40bf288f24385a8eb08170e62e1df/openalgo-2.0.5-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:62458dd7d583640bd39e8a27062837d696e647bdeb262596f71abbfabbc4ba62", size = 460796, upload-time = "2026-09-11T06:41:29.05Z" },
-    { url = "https://files.pythonhosted.org/packages/bb/4e/09a829e646165728bec27c007df86294003e9e249245e2cc203c5b8a4c6c/openalgo-2.0.5-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:299b8c8745519aca2a8d7795b68b6d386d54f080aa0370a928117c3b634f63ba", size = 482003, upload-time = "2026-09-11T06:41:30.572Z" },
-    { url = "https://files.pythonhosted.org/packages/7f/b6/c9ae5eba70ace27524ac02a7d0054d5cea407a4a9af12cfacfa2d83f6c05/openalgo-2.0.5-cp39-abi3-win_amd64.whl", hash = "sha256:1fe20400e59bfaeea15877786fc5cc177b8fa8599167fbea69a3b801ad05b896", size = 424334, upload-time = "2026-09-11T06:41:32.254Z" },
+    { url = "https://files.pythonhosted.org/packages/59/46/15d8d49d3583310f8343a67da8f79091ed366bb48e06c02eee520d0d0ca5/openalgo-2.3.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d8b1ec3d499e74bfba8d82f49974b68a5ff9ef5b672a2af47458ac5d44c2ffd1", size = 2564205, upload-time = "2026-11-19T20:10:38.01Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/35/07c25de438e20fa8e7259802e2cd168cec575d75b21984faaa8e18ebf29b/openalgo-2.3.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:bbf99d4b7aa432a0631ee070b3659eca9c34d0ce9073bf934b289c24f918dacb", size = 2465864, upload-time = "2026-11-19T20:10:40.264Z" },
+    { url = "https://files.pythonhosted.org/packages/89/0d/d77bd999b84feaf413ed4661620327ec326a967570ba30afb0a577361b9b/openalgo-2.3.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b97e9e56e96ecd02465b71cd01df4f0737d84ead52ea0b7dba9fa7d8e0c07020", size = 2489820, upload-time = "2026-11-19T20:10:41.838Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/e5/75fdaacb0fb0e0731b039ab5d5e6e1ac443b5cf63b6f5d82c21781f52d2c/openalgo-2.3.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8c33f30efdd761155f63916a86b385fa53d65e9c4c0aecf3c51b53703a58fe0a", size = 2577052, upload-time = "2026-11-19T20:10:43.475Z" },
+    { url = "https://files.pythonhosted.org/packages/48/8b/96e95ccf234b84a727b9f4a998d58c697078d5f0e1852ef4badf822ab074/openalgo-2.3.0-cp39-abi3-win_amd64.whl", hash = "sha256:9c8bdd7273a0072a30f00b425a39e901a6aba6e43e7b1b22047a5a34f2fbc363", size = 2616736, upload-time = "2026-11-19T20:10:45.118Z" },
 ]
 
 [[package]]
 name = "openalgoui"
-version = "2.0.3.4"
+version = "2.0.3.5"
 source = { editable = "." }
 dependencies = [
     { name = "agno" },
@@ -3213,7 +3213,7 @@ requires-dist = [
     { name = "nbformat", specifier = "==5.11.1" },
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numpy", specifier = "==2.4.4" },
-    { name = "openalgo", specifier = "==2.0.5" },
+    { name = "openalgo", specifier = "==2.3.0" },
     { name = "opengreeks", specifier = ">=0.2.0" },
     { name = "openscript", specifier = "==0.8.1" },
     { name = "openstatz", specifier = "==0.4.1" },

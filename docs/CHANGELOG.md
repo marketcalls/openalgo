@@ -6,6 +6,41 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [2.0.3.5] - 2026-11-20
+
+### Python SDK 2.3.0 Release
+
+25 commits since 2.0.3.4, excluding automated frontend build commits and
+including this release. Full notes:
+[version-2.0.3.5-released.md](releases/version-2.0.3.5-released.md).
+No migration is needed.
+
+### Highlights
+
+- The pinned OpenAlgo Python SDK moves from 2.0.5 to 2.3.0.
+- The Pocketful plugin is rebuilt on its new API (#2467).
+- Order update streams for Tradejini, Groww and Sahi (#2477, #2474).
+- AI agent: web fetch, prompt caching for Claude models and search that falls
+  through the other keyed providers.
+- Sandbox feed subscribes no longer sit on the order path (#2192).
+- Broker fixes for Flattrade, Nuvama, Tradesmart, Aliceblue, XTS, Wisdom and
+  iBulls.
+
+### Dependencies
+
+- `openalgo` 2.0.5 to 2.3.0.
+- `litellm` to 1.110.1, with `pydantic` 2.14.3.
+
+### Contributors
+
+- **@marketcalls** - the AI agent work, the broker fixes, the dependency
+  updates and the release.
+- **@Kalaiviswa** - broker order streams and fixes (#2473 to #2480).
+- **@jackiectl2 (Tianlang (Jackie) Chen)** - WebSocket reconnect (#2277).
+- **@samadarsh (Adarsh)** - sandbox feed subscribe (#2192).
+- **@Mystery01092000 (Pranav Tomar)** - scalping partial exit P&L (#2437).
+- **@Mr-Neutr0n** - contributing guide (#2457).
+
 ## [2.0.3.4] - 2026-11-17
 
 ### Alert Channels and Nuvama Release

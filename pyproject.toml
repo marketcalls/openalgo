@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "2.0.3.4"
+version = "2.0.3.5"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -82,7 +82,7 @@ dependencies = [
   "nbformat==5.11.1",
   "nest-asyncio==1.6.0",
   "numpy==2.4.4",
-  "openalgo==2.0.5",
+  "openalgo==2.3.0",
   # The engine that runs a compiled OpenScript strategy, in this language.
   # The compiler is the npm package the frontend holds, and the production
   # image carries no JavaScript runtime, which is the whole reason a second
