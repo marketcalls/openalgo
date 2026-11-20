@@ -314,6 +314,12 @@ export function OpenAlgoChart({
       } catch {
         // A user module that will not import must not cost the built-in tier.
       }
+      try {
+        const { loadOpenScriptStudies } = await import('@/lib/trading/openscriptStudies')
+        await loadOpenScriptStudies()
+      } catch {
+        // A user script compile failure must not prevent the chart from loading.
+      }
       if (cancelled) return
 
       const theme = useThemeStore.getState()
