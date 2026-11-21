@@ -498,7 +498,14 @@ def get_option_chain(
         # Step 5: Find ATM and get strikes around it
         atm_strike = find_atm_strike_from_actual(underlying_ltp, available_strikes)
         if atm_strike is None:
-            return False, {"status": "error", "message": "Failed to determine ATM strike"}, 500
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"No price for {quote_symbol} from the broker yet. Try again in a minute.",
+                },
+                503,
+            )
 
         strikes_with_labels = get_strikes_with_labels(available_strikes, atm_strike, strike_count)
         logger.info(
