@@ -105,7 +105,7 @@ class TestProtectedPrice:
         [
             ("RELIANCE", 1400, 0.1, 1407.0, 1393.0),  # > 500: 0.5%
             ("REDTAPE", 108.5, 0.05, 109.6, 107.4),  # 100-500: 1%
-            ("DEFENCE", 78.0, 0.05, 79.55, 76.45),  # < 100: 2%
+            ("DEFENCE", 78.0, 0.05, 79.60, 76.40),  # < 100: 2% (79.56 / 76.44, rounded away from the LTP)
         ],
     )
     def test_cash_symbols_get_equity_buffer(self, symbol, ltp, tick, buy, sell):

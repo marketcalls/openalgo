@@ -5,27 +5,52 @@ import os
 
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import (
+    calculate_protected_price,
+    calculate_stop_limit_price,
+    get_instrument_type_from_symbol,
+)
 
 logger = get_logger(__name__)
+
+
+def _slm_limit_price(data, action):
+    """Protective limit for an SL-M sent as SL-LMT, priced off its trigger price."""
+    try:
+        info = get_symbol_info(data["symbol"], data["exchange"])
+    except Exception:
+        logger.exception(
+            f"MPP: symbol info lookup failed for {data['symbol']}; SL-M limit = trigger"
+        )
+        info = None
+    return calculate_stop_limit_price(
+        trigger_price=float(data.get("trigger_price") or 0),
+        action=action,
+        instrument_type=get_instrument_type_from_symbol(data["symbol"], data["exchange"]),
+        tick_size=getattr(info, "tick_size", None) if info else None,
+    )
 
 
 def transform_data(data, token, auth_token=None):
     """
     Transforms the OpenAlgo API request to Firstock's V1 /placeOrder structure.
 
-    For MARKET and SL-M orders, applies client-side Market Price Protection
-    (MPP): fetch LTP, compute a protected price via the OpenAlgo MPP slab,
-    convert the order type to LMT / SL-LMT. Also sets mkt_protection="0" so
-    Firstock's server-side MPP (V1.7+) is a no-op on the already-protected
-    price. Mirrors the pattern in broker/shoonya and broker/flattrade.
+    Applies client-side Market Price Protection (MPP) and sets
+    mkt_protection="0" so Firstock's server-side MPP (V1.7+) is a no-op on the
+    already-protected price. Mirrors broker/shoonya and broker/flattrade:
+
+    - MARKET: fetch the LTP, add the MPP slab buffer and send LMT.
+    - SL-M: send SL-LMT with the limit the slab buffer beyond the trigger
+      price, using the tick size from the local master contract (the trigger
+      itself when there is none). No quote is fetched, so no auth token is
+      needed. An SL-M without a trigger price raises ValueError.
 
     Args:
         data: Order data dictionary (OpenAlgo format).
         token: Instrument token (accepted for signature parity).
-        auth_token: Firstock jKey. Required for MPP — if absent, MARKET/SL-M
-                    flows through unchanged and Firstock's server-side MPP
-                    handles it.
+        auth_token: Firstock jKey, used for the MARKET quote. If absent, a
+                    MARKET order flows through unchanged and Firstock's
+                    server-side MPP handles it.
     """
     # Derive userId: prefer the apikey supplied in the request, fall back to
     # the BROKER_API_KEY env var (same source place_order_api uses to
@@ -45,7 +70,15 @@ def transform_data(data, token, auth_token=None):
     action = data["action"].upper()
 
     # Apply MPP for MARKET and SL-M orders (V1.7 supports SL-MKT->SL-LMT too).
-    if data["pricetype"] in ("MARKET", "SL-M"):
+    if data["pricetype"] == "SL-M":
+        # The SL-LMT limit is priced off the trigger, where the stop fires, not the LTP.
+        order_type = "SL-LMT"
+        price = str(_slm_limit_price(data, action))
+        logger.info(
+            f"MPP: SL-M->SL-LMT for Symbol={data['symbol']}, "
+            f"Trigger={data.get('trigger_price')}, Limit={price}"
+        )
+    elif data["pricetype"] == "MARKET":
         original_type = data["pricetype"]
         logger.info(
             f"MPP: {original_type} order detected for Symbol={data['symbol']}, "
@@ -88,7 +121,7 @@ def transform_data(data, token, auth_token=None):
                         tick_size=tick_size,
                     )
                     price = str(protected_price)
-                    order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+                    order_type = "LMT"
                     logger.info(
                         f"MPP Conversion Complete: Symbol={data['symbol']}, "
                         f"OrderType={original_type}->{order_type}, FinalPrice={protected_price}"
@@ -182,6 +215,17 @@ def transform_modify_order_data(data, token, auth_token=None):
                 f"server-side MPP with mkt_protection=1"
             )
             mkt_protection = "1"
+        elif original_type == "SL-M":
+            try:
+                price = str(_slm_limit_price(data, action))
+                order_type = "SL-LMT"
+                logger.info(f"Modify MPP: SL-M->SL-LMT off the trigger, Limit={price}")
+            except Exception as e:
+                logger.warning(
+                    f"Modify MPP: cannot price SL-M off the trigger for {oa_symbol} ({e}); "
+                    f"sending SL-M with mkt_protection=1"
+                )
+                mkt_protection = "1"
         else:
             try:
                 if auth_token:
@@ -210,7 +254,7 @@ def transform_modify_order_data(data, token, auth_token=None):
                             tick_size=tick_size,
                         )
                         price = str(protected_price)
-                        order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+                        order_type = "LMT"
                         logger.info(
                             f"Modify MPP Conversion Complete: {original_type}->"
                             f"{order_type}, FinalPrice={protected_price}"
