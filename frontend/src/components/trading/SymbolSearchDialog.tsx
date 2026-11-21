@@ -3,9 +3,11 @@ import { isPlainSymbol, parseExpression } from 'openalgo-charts/transform'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import { parseExpiryDate } from '@/lib/strategyMath'
 import { SEARCH_INPUT_ATTR } from '@/lib/trading/quickEntry'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { isDerivativeExchange } from '@/types/strategy_module'
 
 /**
  * The operator keypad, in the order it is drawn. `1/` wraps the whole box
@@ -160,6 +162,41 @@ function matchScore(symbol: string, q: string): number {
   return 3
 }
 
+/**
+ * A derivative symbol split at its `DDMMMYY` expiry: the underlying before it,
+ * and the expiry as a timestamp (Infinity when there is none, so it sorts last).
+ *
+ * The day is always two digits in OpenAlgo symbology. Allowing one would read
+ * NIFTY18AUG26 as the underlying NIFTY1 expiring on 8 AUG.
+ */
+function contractOf(symbol: string): { underlying: string; expiry: number } {
+  const match = /^(.*?)(\d{2}[A-Z]{3}\d{2})/.exec(symbol.toUpperCase())
+  const expiry = match ? parseExpiryDate(match[2]) : null
+  if (!match || !expiry) return { underlying: symbol.toUpperCase(), expiry: Infinity }
+  return { underlying: match[1], expiry: expiry.getTime() }
+}
+
+/**
+ * Order two derivative rows by underlying, then by nearest expiry (#1754).
+ *
+ * The underlying has to come first. Comparing expiry first sorted a broad
+ * search such as `NIFTY FUT` by date across every underlying, so NIFTY,
+ * FINNIFTY, BANKNIFTY and MIDCPNIFTY contracts came out interleaved. Without
+ * the expiry step, contracts of one underlying sorted on the day digits:
+ * 23NOV26, 27OCT26, 29SEP26. Shorter underlyings rank first, the same rule
+ * the length tie-break below applies to whole symbols.
+ */
+function compareContracts(a: string, b: string): number {
+  const ca = contractOf(a)
+  const cb = contractOf(b)
+  const lenDiff = ca.underlying.length - cb.underlying.length
+  if (lenDiff) return lenDiff
+  const nameDiff = ca.underlying.localeCompare(cb.underlying)
+  if (nameDiff) return nameDiff
+  if (ca.expiry === cb.expiry) return 0
+  return ca.expiry < cb.expiry ? -1 : 1
+}
+
 /** Rank rows so Index surfaces above Cash, which surfaces above F&O/Currency/Commodity. */
 function compareRows(a: SearchRow, b: SearchRow, q: string): number {
   // A row whose name is exactly what was typed comes first, ahead of category.
@@ -181,6 +218,10 @@ function compareRows(a: SearchRow, b: SearchRow, q: string): number {
   if (scoreDiff) return scoreDiff
   const exDiff = (EXCHANGE_RANK[exA] ?? 9) - (EXCHANGE_RANK[exB] ?? 9)
   if (exDiff) return exDiff
+  if (isDerivativeExchange(exA) && isDerivativeExchange(exB)) {
+    const contractDiff = compareContracts(String(a.symbol), String(b.symbol))
+    if (contractDiff) return contractDiff
+  }
   const lenDiff = String(a.symbol).length - String(b.symbol).length
   if (lenDiff) return lenDiff
   return String(a.symbol).localeCompare(String(b.symbol))
