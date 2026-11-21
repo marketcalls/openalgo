@@ -1,6 +1,7 @@
 import { Search } from 'lucide-react'
 import { isPlainSymbol, parseExpression } from 'openalgo-charts/transform'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { SEARCH_INPUT_ATTR } from '@/lib/trading/quickEntry'
@@ -63,6 +64,32 @@ function splitLeg(query: string): { prefix: string; leg: string } {
   }
   return { prefix: '', leg: query }
 }
+
+/**
+ * The names in a box that holds a list of symbols, or null when it holds one.
+ *
+ * A list needs a comma or a semicolon. Whitespace alone does not make one,
+ * because a company name is searched with spaces in it: TATA MOTORS is one
+ * search, not two symbols. Once it is a list, whitespace separates names too,
+ * matching services/watchlist_service.py, so the count shown here is the
+ * count the server will look up: names are upper-cased, stripped of quotes,
+ * repeated ones dropped, and `###SECTION` markers ignored.
+ */
+export function symbolListNames(text: string): string[] | null {
+  if (!/[,;]/.test(text)) return null
+  const names = [
+    ...new Set(
+      text
+        .split(/[,;\s]+/)
+        .map((part) => part.replace(/^['"]+|['"]+$/g, '').toUpperCase())
+        .filter((part) => part !== '' && !part.startsWith('#'))
+    ),
+  ]
+  return names.length >= 2 ? names : null
+}
+
+/** How many names the list preview draws before it says "and N more". */
+const LIST_PREVIEW = 40
 
 function isExpression(text: string): boolean {
   const q = text.trim()
@@ -244,6 +271,14 @@ interface Props {
   mode?: 'symbol' | 'comparison'
   title?: string
   container?: HTMLElement | null
+  /**
+   * Takes a list of symbols whole, when the user confirms it with Enter.
+   *
+   * Only a caller that can add many at once passes this (the watchlist).
+   * Without it a comma is ordinary text, which is what a chart's search
+   * wants: a comma there is part of an expression.
+   */
+  onAddList?: (text: string) => void
 }
 
 export function SymbolSearchDialog({
@@ -256,6 +291,7 @@ export function SymbolSearchDialog({
   mode = 'symbol',
   title = 'Symbol Search',
   container,
+  onAddList,
 }: Props) {
   const { allExchanges } = useSupportedExchanges()
   const [query, setQuery] = useState('')
@@ -313,6 +349,17 @@ export function SymbolSearchDialog({
    * onto the end of `BAJAJ-` and leaving a box that can never recover, which is
    * the state this was reported in.
    */
+  /**
+   * The names to add, when the box holds a list and the caller can take one.
+   *
+   * Checked before the expression below and wins over it: a comma is also an
+   * expression operator, and in the watchlist's box a list is what it means.
+   */
+  const listNames = useMemo(
+    () => (onAddList && mode === 'symbol' ? symbolListNames(query) : null),
+    [onAddList, mode, query]
+  )
+
   const expression = useMemo(
     () => mode === 'symbol' && isExpression(query) && !rows.some(namesWholeBox),
     // biome-ignore lint/correctness/useExhaustiveDependencies: namesWholeBox reads `query`
@@ -368,7 +415,10 @@ export function SymbolSearchDialog({
     // and the whole box is the only one that finds a name with an operator
     // character inside it.
     const whole = query.trim()
-    const queries = [...new Set([leg.trim(), whole].filter((one) => one.length > 0))]
+    // A list is confirmed, not searched: no single row could stand for it.
+    const queries = listNames
+      ? []
+      : [...new Set([leg.trim(), whole].filter((one) => one.length > 0))]
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (queries.length === 0) {
       setRows([])
@@ -400,7 +450,7 @@ export function SymbolSearchDialog({
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [leg, query, open, search])
+  }, [leg, query, open, search, listNames])
 
   useLayoutEffect(() => {
     if (caretRef.current === null) return
@@ -446,6 +496,13 @@ export function SymbolSearchDialog({
     caretRef.current = next.length
   }
 
+  /** Hand the whole list over and close. Nothing is added before this. */
+  const addList = () => {
+    if (!onAddList || !listNames) return
+    onAddList(query)
+    onOpenChange(false)
+  }
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -455,6 +512,10 @@ export function SymbolSearchDialog({
       setSel((s) => Math.max(s - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
+      if (listNames) {
+        addList()
+        return
+      }
       // Arithmetic wins over the result list: the rows below are matches for
       // the last leg the user typed, and loading one of those would silently
       // discard the expression they built. `expression` is already false when
@@ -493,6 +554,25 @@ export function SymbolSearchDialog({
             {...{ [SEARCH_INPUT_ATTR]: '' }}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onPaste={(e) => {
+              // A one-line box drops the line breaks of a pasted column, which
+              // runs the names together. Written back comma-separated instead,
+              // so the box shows the list it is about to add. Adding still
+              // waits for Enter.
+              if (!onAddList) return
+              const text = e.clipboardData.getData('text')
+              if (!/[\r\n\t]/.test(text)) return
+              const names = symbolListNames(text.replace(/[\r\n\t]+/g, ','))
+              if (!names) return
+              e.preventDefault()
+              const node = e.currentTarget
+              const start = node.selectionStart ?? query.length
+              const end = node.selectionEnd ?? start
+              const before = query.slice(0, start).replace(/[,;\s]*$/, '')
+              const pasted = `${before ? `${before}, ` : ''}${names.join(', ')}`
+              setQuery(pasted + query.slice(end))
+              caretRef.current = pasted.length
+            }}
             onKeyDown={onKeyDown}
             placeholder={
               mode === 'comparison'
@@ -564,7 +644,30 @@ export function SymbolSearchDialog({
 
         {/* Results */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
-          {filtered.length === 0 ? (
+          {listNames ? (
+            // What Enter will add, before anything is added. The names are
+            // as written: each is resolved to an exchange when it is added.
+            <div className="flex flex-col gap-3 px-5 py-4">
+              <ul className="flex flex-wrap gap-1.5" aria-label="Symbols to add">
+                {listNames.slice(0, LIST_PREVIEW).map((name) => (
+                  <li
+                    key={name}
+                    className="rounded bg-muted px-2 py-0.5 text-xs font-medium text-foreground"
+                  >
+                    {name}
+                  </li>
+                ))}
+                {listNames.length > LIST_PREVIEW && (
+                  <li className="px-1 py-0.5 text-xs text-muted-foreground">
+                    and {listNames.length - LIST_PREVIEW} more
+                  </li>
+                )}
+              </ul>
+              <Button size="sm" className="self-start" onClick={addList}>
+                Add {listNames.length} symbols
+              </Button>
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="px-5 py-10 text-center text-sm text-muted-foreground">
               {loading
                 ? 'Searching…'
@@ -601,7 +704,12 @@ export function SymbolSearchDialog({
         </div>
 
         <div className="border-t px-5 py-2.5 text-center text-xs text-muted-foreground">
-          {expression ? (
+          {listNames ? (
+            <>
+              Press Enter to add all {listNames.length} symbols. A name without an exchange is
+              looked up on NSE first, then BSE.
+            </>
+          ) : expression ? (
             <>
               Press Enter to chart{' '}
               <span className="font-medium text-foreground">{query.trim()}</span>. A computed chart
@@ -609,6 +717,8 @@ export function SymbolSearchDialog({
             </>
           ) : mode === 'comparison' ? (
             'Search and select a symbol to compare with the current chart.'
+          ) : onAddList ? (
+            'Search and press Enter to add, or paste a list of symbols separated by commas to add them all.'
           ) : (
             'Start typing to search, then press Enter to load the highlighted symbol. Operators build an expression.'
           )}

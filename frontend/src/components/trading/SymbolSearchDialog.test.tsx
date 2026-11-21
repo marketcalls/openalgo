@@ -539,4 +539,45 @@ describe('an instrument whose name contains an operator character', () => {
     await user.type(await focusedBox(), 'BAJAJHLDNG/BAJAJ')
     await waitFor(() => expect(spy.asked).toContain('BAJAJ'))
   })
+
+  it('keeps a comma as ordinary text in a chart search, which has no list to add to', async () => {
+    const asked: string[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async (q) => {
+          asked.push(q)
+          return ROWS
+        }}
+        onPick={() => {}}
+      />
+    )
+    await userEvent.type(await focusedBox(), 'TCS, INFY')
+
+    // Searched as usual, and no list preview: only the watchlist passes onAddList.
+    await waitFor(() => expect(asked).toContain('TCS, INFY'))
+    expect(screen.queryByLabelText('Symbols to add')).toBeNull()
+    expect(screen.queryByText('Press Enter to add all', { exact: false })).toBeNull()
+  })
+
+  it('previews a list when the caller can add one', async () => {
+    const added: string[] = []
+    render(
+      <SymbolSearchDialog
+        open
+        onOpenChange={() => {}}
+        search={async () => ROWS}
+        onPick={() => {}}
+        onAddList={(text) => added.push(text)}
+      />
+    )
+    await userEvent.type(await focusedBox(), "tcs; 'infy', ###IT, tcs")
+
+    // Upper-cased, quotes stripped, the repeat and the section marker dropped:
+    // the same names the server will look up.
+    expect(screen.getByLabelText('Symbols to add')).toHaveTextContent('TCSINFY')
+    expect(screen.getByRole('button', { name: 'Add 2 symbols' })).toBeInTheDocument()
+    expect(added).toEqual([])
+  })
 })

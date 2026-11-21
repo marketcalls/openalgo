@@ -22,7 +22,13 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type Watchlist, type WatchlistItem, watchlistApi, watchlistError } from '@/api/watchlist'
+import {
+  type BulkAddResult,
+  type Watchlist,
+  type WatchlistItem,
+  watchlistApi,
+  watchlistError,
+} from '@/api/watchlist'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -211,6 +217,43 @@ function symbolTint(symbol: string): string {
   let hash = 0
   for (let i = 0; i < symbol.length; i++) hash = (hash * 31 + symbol.charCodeAt(i)) | 0
   return `hsl(${Math.abs(hash) % 360} 55% 45%)`
+}
+
+/** How many unknown names a summary spells out before it says "and N more". */
+const NOT_FOUND_SHOWN = 8
+
+/**
+ * One sentence per outcome of a pasted list, and how loudly to say it.
+ *
+ * Every name the user pasted is accounted for. A forty-name paste that quietly
+ * lost three leaves a list the user believes is complete, so the names the
+ * broker did not recognise are spelled out rather than only counted.
+ */
+export function bulkAddSummary(
+  result: BulkAddResult,
+  listName: string
+): { tone: 'success' | 'warning' | 'error'; text: string } {
+  const parts: string[] = []
+  const added = result.added.length
+  if (added > 0) parts.push(`Added ${added} ${added === 1 ? 'symbol' : 'symbols'} to ${listName}.`)
+  if (result.existing.length > 0) {
+    parts.push(
+      `${result.existing.length} ${result.existing.length === 1 ? 'was' : 'were'} already in the list.`
+    )
+  }
+  if (result.over_limit.length > 0) {
+    parts.push(`The list is full, so ${result.over_limit.length} could not be added.`)
+  }
+  if (result.not_found.length > 0) {
+    const shown = result.not_found.slice(0, NOT_FOUND_SHOWN).join(', ')
+    const more = result.not_found.length - NOT_FOUND_SHOWN
+    parts.push(`Not found with your broker: ${shown}${more > 0 ? ` and ${more} more` : ''}.`)
+  }
+  if (added === 0 && parts.length === 0) parts.push('Nothing to add.')
+
+  const problems = result.not_found.length + result.over_limit.length
+  const tone = problems === 0 ? 'success' : added > 0 ? 'warning' : 'error'
+  return { tone, text: parts.join(' ') }
 }
 
 /** The row and its column header share this, so the two cannot drift apart. */
@@ -543,6 +586,18 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
       await refresh(active.id)
     } catch (error) {
       showToast.error(watchlistError(error, 'Could not add the instrument'))
+    }
+  }
+
+  const addSymbolList = async (text: string) => {
+    if (!active) return
+    try {
+      const result = await watchlistApi.addMany(active.id, text)
+      if (result.added.length > 0) await refresh(active.id)
+      const { tone, text: summary } = bulkAddSummary(result, active.name)
+      showToast[tone](summary)
+    } catch (error) {
+      showToast.error(watchlistError(error, 'Could not add those symbols'))
     }
   }
 
@@ -1034,6 +1089,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         onOpenChange={setSearchOpen}
         search={search}
         onPick={(row) => void addSymbol(row)}
+        onAddList={(text) => void addSymbolList(text)}
       />
 
       {/* Create / rename / copy */}
