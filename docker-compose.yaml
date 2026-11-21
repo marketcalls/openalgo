@@ -4,6 +4,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Baked-in version stamps for /system-update (the image has no .git
+        # and no git binary). host_update_watcher.sh exports these before a
+        # web-triggered rebuild; plain local builds get "unknown".
+        GIT_SHA: ${GIT_SHA:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
+        GIT_REMOTE: ${GIT_REMOTE:-unknown}
 
     container_name: openalgo-web
     ports:

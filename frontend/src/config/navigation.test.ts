@@ -10,7 +10,7 @@ import {
 describe('Navigation Config', () => {
   describe('navItems', () => {
     it('contains the expected main navigation items', () => {
-      expect(navItems).toHaveLength(9)
+      expect(navItems).toHaveLength(10)
 
       const labels = navItems.map((item) => item.label)
       expect(labels).toContain('Dashboard')
@@ -20,11 +20,20 @@ describe('Navigation Config', () => {
       expect(labels).toContain('Platforms')
       expect(labels).toContain('Trading')
       expect(labels).toContain('Strategies')
+      expect(labels).toContain('System Update')
 
       // Strategies sits directly after Platforms. Asserting the position, not
       // just its presence, is the point: it is where the user expects to find
       // it, and a later insertion that pushed it elsewhere should fail here.
       expect(labels.indexOf('Strategies')).toBe(labels.indexOf('Platforms') + 1)
+    })
+
+    it('serves System Update as a full-page link', () => {
+      const item = navItems.find((entry) => entry.label === 'System Update')
+      expect(item?.href).toBe('/system-update')
+      // Flask serves the page, so it must not go through client-side routing.
+      expect(item?.external).toBe(true)
+      expect(item?.collapseBelow).toBe('xl')
     })
 
     it('all items have required properties', () => {
