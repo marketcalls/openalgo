@@ -32,6 +32,7 @@ import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import {
   ATM_OFFSETS,
+  ATM_PERCENT_VALUES,
   allowedProductsForLegs,
   batchQuantityLabelFor,
   convertLegKind,
@@ -296,6 +297,7 @@ function LegCard({
                   option_type: segment === 'options' ? (leg.option_type ?? 'CE') : null,
                   strike_mode: strikeMode,
                   atm_offset: strikeMode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
+                  atm_percent: strikeMode === 'atm_percent' ? (leg.atm_percent ?? 0.5) : null,
                   strike: strikeMode === 'strike' ? (leg.strike ?? null) : null,
                 })
               }}
@@ -409,30 +411,24 @@ function LegCard({
 
             <div className="space-y-1.5">
               <Label className="text-xs uppercase">Strike mode</Label>
-              <div className="flex h-9 overflow-hidden rounded-md border border-input">
-                {(['atm', 'strike'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() =>
-                      onChange({
-                        ...leg,
-                        strike_mode: mode,
-                        atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
-                        strike: mode === 'strike' ? (leg.strike ?? null) : null,
-                      })
-                    }
-                    className={cn(
-                      'flex-1 text-sm font-medium transition-colors',
-                      leg.strike_mode === mode
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-background hover:bg-muted'
-                    )}
-                  >
-                    {mode === 'atm' ? 'ATM-relative' : 'Direct strike'}
-                  </button>
-                ))}
-              </div>
+              <select
+                value={leg.strike_mode ?? 'atm'}
+                onChange={(event) => {
+                  const mode = event.target.value as 'atm' | 'atm_percent' | 'strike'
+                  onChange({
+                    ...leg,
+                    strike_mode: mode,
+                    atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
+                    atm_percent: mode === 'atm_percent' ? (leg.atm_percent ?? 0.5) : null,
+                    strike: mode === 'strike' ? (leg.strike ?? null) : null,
+                  })
+                }}
+                className={SELECT_CLASS_SM}
+              >
+                <option value="atm">ATM-relative</option>
+                <option value="atm_percent">ATM %</option>
+                <option value="strike">Direct strike</option>
+              </select>
             </div>
 
             {leg.strike_mode === 'atm' ? (
@@ -446,6 +442,22 @@ function LegCard({
                   {ATM_OFFSETS.map((offset) => (
                     <option key={offset} value={offset}>
                       {offset}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : leg.strike_mode === 'atm_percent' ? (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs uppercase">ATM +/- percentage</Label>
+                <select
+                  value={leg.atm_percent ?? 0.5}
+                  onChange={(event) => update('atm_percent', Number(event.target.value))}
+                  className={SELECT_CLASS_SM}
+                >
+                  {ATM_PERCENT_VALUES.map((percent) => (
+                    <option key={percent} value={percent}>
+                      ATM{percent > 0 ? '+' : ''}
+                      {percent}%
                     </option>
                   ))}
                 </select>
@@ -1352,6 +1364,13 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
         if (leg.strike == null || leg.strike <= 0) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
         }
+      }
+      if (
+        leg.segment === 'options' &&
+        leg.strike_mode === 'atm_percent' &&
+        (leg.atm_percent == null || !ATM_PERCENT_VALUES.includes(leg.atm_percent))
+      ) {
+        return `Leg ${leg.id}: select an ATM percentage between -5% and +5% in 0.5% steps`
       }
       // Shares on cash, lots on a derivative. They are not the same number.
       const cap = maxBatchQuantityFor(leg.segment)

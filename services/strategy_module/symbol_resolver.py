@@ -60,12 +60,13 @@ EXPIRY_RANKS = ("weekly", "next_week", "monthly", "next_month", "current", "next
 SEGMENTS = ("cash", "futures", "options")
 
 #: How an option leg names its strike.
-STRIKE_MODES = ("atm", "strike")
+STRIKE_MODES = ("atm", "atm_percent", "strike")
 
 #: Offsets from the money, in strike steps. Bounded at five because a basket
 #: that reaches further than that is nearly always a typo, and an unbounded
 #: offset silently walks off the end of a thin chain.
 ATM_OFFSET_PATTERN = re.compile(r"^(ATM|ITM[1-5]|OTM[1-5])$")
+ATM_PERCENT_VALUES = tuple(value / 2 for value in range(-10, 11) if value != 0)
 
 #: Exchanges that list derivatives under their own code. An exchange already in
 #: this set is used as given rather than being run through the underlying to
@@ -184,6 +185,15 @@ def _is_positive_number(value: Any) -> bool:
         return False
     try:
         return math.isfinite(value) and value > 0
+    except (TypeError, OverflowError, ValueError):
+        return False
+
+
+def _is_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
     except (TypeError, OverflowError, ValueError):
         return False
 
@@ -841,6 +851,27 @@ def _resolve_atm_strike(
     return atm_strike, target, None, None
 
 
+def _resolve_atm_percent_strike(
+    base_symbol: str,
+    option_exchange: str,
+    expiry_symbol: str,
+    option_type: str,
+    percent: float,
+    ltp: float,
+) -> tuple[float | None, float | None, str | None, str | None]:
+    strikes = option_symbol_service.get_available_strikes(
+        base_symbol, expiry_symbol, option_type, option_exchange
+    )
+    if not strikes:
+        return None, None, "No listed strikes were found.", "no_strikes"
+    atm_strike = option_symbol_service.find_atm_strike_from_actual(ltp, strikes)
+    if atm_strike is None:
+        return None, None, "Could not derive the ATM strike.", "no_atm_strike"
+    raw_target = atm_strike * (1 + percent / 100)
+    target = min(sorted(strikes), key=lambda strike: (abs(strike - raw_target), strike))
+    return atm_strike, target, None, None
+
+
 def resolve_leg(
     leg: Mapping[str, Any],
     underlying: str,
@@ -1132,7 +1163,7 @@ def _resolve_options_leg(
         # float(), never int(): VEDL25APR24292.5CE is a real contract, and
         # truncating its strike names one that does not exist.
         target_strike = float(declared)
-    else:
+    elif strike_mode == "atm":
         offset_raw = _leg_value(leg, "atm_offset", "atmOffset", "offset") or "ATM"
         offset = str(offset_raw).strip().upper()
         if not ATM_OFFSET_PATTERN.match(offset):
@@ -1146,6 +1177,42 @@ def _resolve_options_leg(
                 **context,
             )
         detail["atm_offset"] = offset
+
+        percent = None
+
+        if underlying_ltp is not None:
+            if not _is_positive_number(underlying_ltp):
+                return _fail_leg("no_ltp", "Unusable underlying price.", **context)
+            ltp = float(underlying_ltp)
+        else:
+            quote = resolve_underlying_ltp(base_symbol, underlying_exchange, api_key)
+            if not quote.ok:
+                return _fail_leg(quote.code or "no_ltp", quote.error or "", **context)
+            ltp = quote.ltp
+            detail["quote_symbol"] = quote.symbol
+            detail["quote_exchange"] = quote.exchange
+
+        atm_strike, target_strike, error, code = _resolve_atm_strike(
+            base_symbol=base_symbol,
+            option_exchange=exchange,
+            expiry_symbol=expiry.expiry_symbol,
+            option_type=option_type,
+            offset=offset,
+            ltp=ltp,
+            strike_int=_leg_value(leg, "strike_int", "strikeInt", "strike_interval"),
+        )
+        if target_strike is None:
+            return _fail_leg(code or "no_strikes", error or "", **context)
+    else:
+        percent_raw = _leg_value(leg, "atm_percent", "atmPercent")
+        if not _is_number(percent_raw) or float(percent_raw) not in ATM_PERCENT_VALUES:
+            return _fail_leg(
+                "invalid_atm_percent",
+                "ATM percentage must be a half-percent step from -5 to +5, excluding zero.",
+                **context,
+            )
+        percent = float(percent_raw)
+        detail["atm_percent"] = percent
 
         if underlying_ltp is not None:
             if not _is_positive_number(underlying_ltp):
@@ -1173,14 +1240,13 @@ def _resolve_options_leg(
             detail["quote_symbol"] = quote.symbol
             detail["quote_exchange"] = quote.exchange
 
-        atm_strike, target_strike, error, code = _resolve_atm_strike(
+        atm_strike, target_strike, error, code = _resolve_atm_percent_strike(
             base_symbol=base_symbol,
             option_exchange=exchange,
             expiry_symbol=expiry.expiry_symbol,
             option_type=option_type,
-            offset=offset,
+            percent=percent,
             ltp=ltp,
-            strike_int=_leg_value(leg, "strike_int", "strikeInt", "strike_interval"),
         )
         if target_strike is None:
             return _fail_leg(
