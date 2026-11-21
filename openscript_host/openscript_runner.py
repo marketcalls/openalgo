@@ -556,7 +556,9 @@ def _calls_in(text: str) -> frozenset:
     if not isinstance(functions, list):
         return frozenset()
     return frozenset(
-        one["name"] for one in functions if isinstance(one, dict) and isinstance(one.get("name"), str)
+        one["name"]
+        for one in functions
+        if isinstance(one, dict) and isinstance(one.get("name"), str)
     )
 
 
@@ -1926,9 +1928,7 @@ class Session:
         now_ms = int(time.time() * 1000)
         anchor = self._times[-1] if self._times else None
         fresh = [
-            Candle(*bar)
-            for bar in self.live.closed(now_ms)
-            if anchor is None or bar[0] > anchor
+            Candle(*bar) for bar in self.live.closed(now_ms) if anchor is None or bar[0] > anchor
         ]
         moving_bar = self.live.forming(now_ms)
         if not fresh and moving_bar is None:
@@ -2144,9 +2144,7 @@ class Session:
         opened = None
         if self._sessions_known:
             opened = self._opening(candle.time)
-            facts[self.engine.session_first] = (
-                opened is not None and opened != self._last_opening
-            )
+            facts[self.engine.session_first] = opened is not None and opened != self._last_opening
         self.serving.at_bar(facts, index == 0)
 
         result = self.run.execute_bar(
@@ -2430,7 +2428,9 @@ class Session:
                 and str(getattr(earlier, "product", "")) == str(getattr(later, "product", ""))
             )
         except Exception:
-            logger_say = "Two orders on this bar could not be compared, so each was sent on its own."
+            logger_say = (
+                "Two orders on this bar could not be compared, so each was sent on its own."
+            )
             say(logger_say)
             return False
 

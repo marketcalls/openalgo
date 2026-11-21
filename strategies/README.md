@@ -79,6 +79,7 @@ EXCHANGE = os.getenv(
     os.getenv('EXCHANGE', 'NSE'),
 )
 API_KEY  = os.getenv('OPENALGO_API_KEY', '')
+HISTORY_SOURCE = os.getenv('HISTORY_SOURCE', 'api').strip().lower()
 # HOST_SERVER is the canonical name in OpenAlgo's .env (inherited).
 # OPENALGO_HOST is a fallback alias the platform setdefaults to 127.0.0.1:5000.
 API_HOST = os.getenv('HOST_SERVER') or os.getenv('OPENALGO_HOST', 'http://127.0.0.1:5000')
@@ -116,6 +117,21 @@ if __name__ == "__main__":
 
 ## Environment Variables
 
+### Restart recovery contract
+
+The host injects `OPENALGO_RUN_ID` as the stable identity for one run and
+`OPENALGO_RESUME=1` when recovering that same run after an OpenAlgo restart.
+Fresh starts receive `OPENALGO_RESUME=0`.
+
+Use `strategies.recovery.AtomicStrategyState` to persist JSON state atomically
+and track completed action IDs. On resume, each strategy must compare its saved
+legs and broker order IDs with current broker positions and pending orders
+before sending another order.
+
+Optional strategy-config policies are `resume` (default), `manual`, and
+`never`. Automatic recovery is restricted to the same IST trading date and the
+active schedule/market session.
+
 ### Injected by the platform
 
 These are set directly on each strategy subprocess (only the ones below — the host does not inject host/port/websocket vars; see next section):
@@ -148,6 +164,26 @@ Strategies are launched with `os.environ.copy()`, so they inherit **every** vari
 > ```
 >
 > Note: there is **no `HOST_URL` variable** anywhere in OpenAlgo. Only `HOST_SERVER` (REST), `OPENALGO_HOST` (injected fallback alias), and `WEBSOCKET_URL` (WS).
+
+Strategy candle history defaults to the broker API so a newly installed example
+works before Historify has been populated. For frequent scans, configure and
+populate Historify, then set `HISTORY_SOURCE=db` to avoid repeated broker history
+requests:
+
+```python
+df = client.history(
+    symbol=SYMBOL,
+    exchange=EXCHANGE,
+    interval="1m",
+    start_date=start_date,
+    end_date=end_date,
+    source=os.getenv("HISTORY_SOURCE", "api"),
+)
+```
+
+Historify must already contain the requested symbol, interval, and date range.
+Use the OpenAlgo WebSocket for live prices; `source="db"` is for stored candle
+history, not live LTP.
 
 ### Per-strategy parameters
 
