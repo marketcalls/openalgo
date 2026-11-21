@@ -267,4 +267,39 @@ describe('historical calendar ranges', () => {
     resetSessionHours()
     vi.unstubAllGlobals()
   })
+
+  it('gives years before 2020 an empty holiday list instead of requesting them', async () => {
+    const { prepareSessionHours, sessionCalendar } = await import('./sessionHours')
+    resetSessionHours()
+    const years: number[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.includes('holidays')) {
+          const year = JSON.parse(String(init.body)).year
+          years.push(year)
+          // The endpoint serves 2020 onwards only.
+          if (year < 2020)
+            return { ok: false, status: 400, json: async () => ({ status: 'error' }) }
+        }
+        const data = url.includes('holidays') ? [] : TIMINGS
+        return { ok: true, status: 200, json: async () => ({ status: 'success', data }) }
+      })
+    )
+    const request = {
+      symbol: 'NIFTY',
+      exchange: 'NSE',
+      interval: 'D',
+      from: secs(ist('2016-11-01', 0, 0)),
+      to: secs(ist('2021-02-01', 0, 0)),
+    }
+    await prepareSessionHours('key', request)
+    expect(years.filter((year) => year < 2020)).toEqual([])
+    expect(years).toEqual(expect.arrayContaining([2020, 2021]))
+    const calendar = sessionCalendar(request)
+    expect(calendar).not.toBeNull()
+    expect(calendar?.phaseAt(secs(ist('2017-03-15', 12, 0)))).toBe('regular')
+    resetSessionHours()
+    vi.unstubAllGlobals()
+  })
 })
