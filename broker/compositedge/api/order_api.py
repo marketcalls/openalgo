@@ -122,22 +122,56 @@ def _invalidate_position_cache(auth):
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-
+    token = get_token(tradingsymbol, exchange)
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
 
+    # Map exchange from OpenAlgo format to XTS format
+    exchange_mapping = {
+        "NSE": "NSECM",
+        "BSE": "BSECM",
+        "NFO": "NSEFO",
+        "BFO": "BSEFO",
+        "MCX": "MCXFO",
+        "CDS": "NSECD",
+    }
+    xts_exchange = exchange_mapping.get(exchange, exchange)
+
     net_qty = "0"
 
-    if positions_data and positions_data.get("status") and positions_data.get("data"):
-        for position in positions_data["data"]:
-            if (
-                position.get("tradingsymbol") == tradingsymbol
-                and position.get("exchange") == exchange
-                and position.get("producttype") == producttype
-            ):
-                net_qty = position.get("Quantity", "0")
-                # logger.debug(f"Net Quantity: {net_qty}")
-                break  # Assuming you need the first match
+    logger.debug(
+        f"Looking for position: symbol={tradingsymbol}, exchange={xts_exchange}, product={producttype}"
+    )
+
+    # XTS returns {"type": "success", "result": [...]} (flat list)
+    # or {"type": "success", "result": {"positionList": [...]}} depending on endpoint
+    if positions_data and positions_data.get("type") == "success":
+        result = positions_data.get("result", [])
+        # Handle both flat list and positionList wrapper
+        if isinstance(result, dict):
+            position_list = result.get("positionList", [])
+        elif isinstance(result, list):
+            position_list = result
+        else:
+            position_list = []
+
+        for position in position_list:
+            pos_symbol = position.get("TradingSymbol", "")
+            pos_token = position.get("ExchangeInstrumentID", position.get("ExchangeInstrumentId"))
+            pos_exchange = position.get("ExchangeSegment", "")
+            pos_product = position.get("ProductType", "")
+            # XTS names a position its own way ("NIFTY 27OCT2026 CE 22400"), not as the
+            # contract list does ("NIFTY26OCT22400CE"): match the instrument, as the
+            # position book and close all do, and the name only when the position
+            # carries no instrument id.
+            if pos_token not in (None, "") and token:
+                same_instrument = str(pos_token) == str(token)
+            else:
+                same_instrument = pos_symbol == tradingsymbol
+            if same_instrument and pos_exchange == xts_exchange and pos_product == producttype:
+                net_qty = str(position.get("Quantity", 0))
+                logger.debug(f"Found matching position. Net Quantity: {net_qty}")
+                break
 
     return net_qty
 
