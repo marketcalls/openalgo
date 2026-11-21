@@ -87,13 +87,15 @@ function chart() {
 
 function helper(
   getBars = vi.fn(async (_request: BarsRequest) => [bar(60, 200), bar(120, 220), bar(180, 240)]),
-  bucketStart?: (request: BarsRequest, time: number) => number | null
+  bucketStart?: (request: BarsRequest, time: number) => number | null,
+  legendOffset?: { top?: number; left?: number }
 ) {
   const sockets: Socket[] = []
   const onChange = vi.fn()
   const instance = new TerminalComparisons({
     feed: { getBars },
     bucketStart,
+    legendOffset,
     now: () => 240,
     onChange,
     ws: {
@@ -586,6 +588,29 @@ describe('comparison scales, legend rows and retry', () => {
     click('cmp:other::close')
     expect(instance.specs()).toHaveLength(0)
     expect(onChange).toHaveBeenCalled()
+  })
+
+  it('starts its legend rows under the corner the host readout covers', async () => {
+    // The chart moves only its indicator rows by `legendOffset`. A comparison
+    // row is the host's, so unless it is handed the same offset it keeps the
+    // default top and draws over the symbol's OHLC readout in that corner.
+    const legendTop = async (legendOffset?: { top?: number; left?: number }) => {
+      const { instance } = helper(undefined, undefined, legendOffset)
+      const target = chart()
+      const added: unknown[] = []
+      const addPrimitive = target.addPrimitive.bind(target)
+      vi.spyOn(target, 'addPrimitive').mockImplementation((primitive, where) => {
+        added.push(primitive)
+        addPrimitive(primitive, where)
+      })
+      await instance.replace([spec()], 'percent')
+      await instance.bind(target, context)
+      const legend = added.find((item): item is PaneLegend => item instanceof PaneLegend)
+      return legend?.options()
+    }
+    expect(await legendTop({ top: 80 })).toMatchObject({ top: 80, left: 8 })
+    expect(await legendTop({ top: 80, left: 20 })).toMatchObject({ top: 80, left: 20 })
+    expect(await legendTop()).toMatchObject({ top: 6, left: 8 })
   })
 
   it('loads a failed comparison again on retry', async () => {
