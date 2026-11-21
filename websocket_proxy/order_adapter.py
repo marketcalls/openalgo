@@ -443,12 +443,31 @@ class PollingOrderUpdateAdapter:
             f"(interval {self.poll_interval}s)"
         )
 
+        waiting_for_login = False
+
         while self._is_current(generation):
             try:
                 auth_token = get_auth_token(self.user_id)
                 if not auth_token:
                     self.logger.debug("No auth token available; skipping poll cycle")
+                elif not self._session_is_current():
+                    # The stored token predates today's rollover, so the broker
+                    # has already expired it. The before_request revoke needs a
+                    # browser request, so nothing else stops this loop.
+                    if not waiting_for_login:
+                        self.logger.info(
+                            f"Order updates for {self.broker_name}/{self.user_id} paused: "
+                            "no login since today's session rollover. They resume at the "
+                            "next broker login."
+                        )
+                        waiting_for_login = True
+                    baseline = None
                 else:
+                    if waiting_for_login:
+                        self.logger.info(
+                            f"Order updates for {self.broker_name}/{self.user_id} resumed"
+                        )
+                        waiting_for_login = False
                     success, response, _ = get_orderbook(
                         auth_token=auth_token, broker=self.broker_name
                     )
@@ -486,6 +505,14 @@ class PollingOrderUpdateAdapter:
                 slept += 0.5
 
         self.logger.info(f"Order-update poller stopped for {self.broker_name}/{self.user_id}")
+
+    def _session_is_current(self) -> bool:
+        """Whether the stored broker token belongs to the current trading session."""
+        from utils.session import has_login_this_trading_session, is_session_expiry_disabled
+
+        if is_session_expiry_disabled():
+            return True
+        return has_login_this_trading_session(self.user_id)
 
     def _publish_order(self, order: dict) -> None:
         try:

@@ -59,7 +59,19 @@ def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
 
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.request(method, url, content=payload, headers=headers)
-    parsed = json.loads(response.text)
+    try:
+        parsed = json.loads(response.text)
+    except ValueError:
+        # Seen from the daily session cutover until the next login: the
+        # expired token gets an empty or HTML body instead of a Not_Ok.
+        logger.debug(
+            f"Flattrade {endpoint} answered HTTP {response.status_code} with a body "
+            f"that is not JSON: {response.text[:200]!r}"
+        )
+        return {
+            "stat": "Not_Ok",
+            "emsg": "Flattrade did not return data. If this continues, log in to the broker again.",
+        }
 
     # Pacing alone is not enough: an account provisioned below the configured
     # cap only reveals its real ceiling in the rejection text, so learn from it
@@ -323,8 +335,19 @@ def close_all_positions(current_api_key, auth):
 
     positions_response = get_positions(AUTH_TOKEN)
 
+    # PiConnect answers an empty book with {"stat": "Not_Ok", "emsg": "no data"};
+    # any other Not_Ok (an expired session, say) is a failed read, not a flat book.
+    if isinstance(positions_response, dict):
+        emsg = str(positions_response.get("emsg", "")).strip()
+        if positions_response.get("stat") == "Not_Ok" and "no data" in emsg.lower():
+            return {"message": "No Open Positions Found"}, 200
+        return {
+            "status": "error",
+            "message": f"Flattrade did not return your positions: {emsg or 'unexpected response'}",
+        }, 502
+
     # Check if the positions data is null or empty
-    if positions_response is None or positions_response[0]["stat"] == "Not_Ok":
+    if not positions_response or positions_response[0].get("stat") == "Not_Ok":
         return {"message": "No Open Positions Found"}, 200
 
     refused = 0
@@ -475,7 +498,9 @@ def cancel_all_orders_api(data, auth):
 
     order_book_response = get_order_book(AUTH_TOKEN)
     # logger.debug(f"{order_book_response}")
-    if order_book_response is None:
+    # None, or a Not_Ok dict (an empty book, or a failed read such as an expired
+    # session), has no orders to cancel.
+    if not isinstance(order_book_response, list):
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     # Filter orders still working at the exchange (OPEN / PENDING / TRIGGER_PENDING)
