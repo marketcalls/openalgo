@@ -28,11 +28,22 @@
  */
 
 import { notifyIfHidden } from './alertNotify'
+import {
+  type AlertSoundDuration,
+  type AlertSoundName,
+  alertSoundManager,
+  readyAudioContext,
+} from './alertSoundManager'
+
+export type { AlertSoundName, AlertSoundDuration }
 
 /** How a trader asked to be told, stored with the alert itself. */
 export interface AlertDelivery {
   /** A short tone. On by default: it is the one that works with the tab behind another window. */
   readonly sound: boolean
+  readonly soundName?: AlertSoundName
+  readonly soundVolume?: number
+  readonly soundDuration?: AlertSoundDuration
   /** The operating system's own notification, shown only while the page is hidden. */
   readonly notify: boolean
   readonly telegram: boolean
@@ -63,7 +74,14 @@ export function deliveryOf(payload: unknown): AlertDelivery {
   const held = (payload as { deliver?: Partial<AlertDelivery> } | undefined)?.deliver
   if (held === undefined || held === null || typeof held !== 'object') return DEFAULT_DELIVERY
   const flag = (name: keyof AlertDelivery): boolean =>
-    typeof held[name] === 'boolean' ? (held[name] as boolean) : DEFAULT_DELIVERY[name]
+    typeof held[name] === 'boolean' ? (held[name] as boolean) : (DEFAULT_DELIVERY[name] as boolean)
+
+  const soundName =
+    typeof held.soundName === 'string' ? (held.soundName as AlertSoundName) : undefined
+  const soundVolume = typeof held.soundVolume === 'number' ? held.soundVolume : undefined
+  const soundDuration =
+    typeof held.soundDuration === 'string' ? (held.soundDuration as AlertSoundDuration) : undefined
+
   return {
     sound: flag('sound'),
     notify: flag('notify'),
@@ -71,81 +89,39 @@ export function deliveryOf(payload: unknown): AlertDelivery {
     whatsapp: flag('whatsapp'),
     slack: flag('slack'),
     discord: flag('discord'),
+    ...(soundName !== undefined ? { soundName } : {}),
+    ...(soundVolume !== undefined ? { soundVolume } : {}),
+    ...(soundDuration !== undefined ? { soundDuration } : {}),
   }
 }
 
 /* ── the sound ──────────────────────────────────────────────────────────── */
 
 /**
- * One audio context for the page, built on the first sound and kept.
- *
- * A context per alert is a handle per alert, and a browser caps how many exist
- * before it refuses to make another: a chart left open all day firing a
- * repeating alert would stop making any sound at all, which is the failure mode
- * nobody would connect to the cause.
- */
-let context: AudioContext | null = null
-
-function audio(): AudioContext | null {
-  if (typeof window === 'undefined') return null
-  const Ctor =
-    window.AudioContext ??
-    (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (typeof Ctor !== 'function') return null
-  try {
-    context ??= new Ctor()
-    return context
-  } catch {
-    return null
-  }
-}
-
-/**
- * Let a sound be made later, from the click that is happening now.
- *
- * A browser starts an audio context suspended and only resumes it inside a user
- * gesture, so the first alert to fire hours later cannot start one: the tone
- * would be silently dropped and the trader would believe the alert never fired.
- * Arming an alert is a click, and it is the gesture this borrows.
+ * Prepares the audio subsystem inside a user interaction gesture so later
+ * background alert notifications can ring without browser autoplay blocks.
  */
 export function readySound(): void {
-  const ctx = audio()
-  if (ctx && ctx.state === 'suspended') void ctx.resume().catch(() => {})
+  readyAudioContext()
 }
 
 /**
- * Two short tones, the second higher than the first.
- *
- * Synthesised rather than played from a file. A file is a request that can fail
- * exactly when it is needed, on a page that may have been open since before the
- * network went away, and it is one more asset to serve from an origin that must
- * not be assumed.
+ * Procedurally synthesize or persistently loop the alert sound pattern.
  */
-export function playAlertSound(): boolean {
-  const ctx = audio()
-  if (!ctx) return false
-  try {
-    if (ctx.state === 'suspended') void ctx.resume().catch(() => {})
-    const at = ctx.currentTime
-    for (const [index, hz] of [880, 1174].entries()) {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = 'sine'
-      osc.frequency.value = hz
-      // Shaped rather than switched: a square edge on a sine is a click, and a
-      // click is what a broken speaker sounds like.
-      const start = at + index * 0.18
-      gain.gain.setValueAtTime(0.0001, start)
-      gain.gain.exponentialRampToValueAtTime(0.2, start + 0.01)
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16)
-      osc.connect(gain).connect(ctx.destination)
-      osc.start(start)
-      osc.stop(start + 0.18)
-    }
-    return true
-  } catch {
-    return false
-  }
+export function playAlertSound(options?: {
+  id?: string
+  title?: string
+  soundName?: AlertSoundName
+  volume?: number
+  duration?: AlertSoundDuration
+}): boolean {
+  return alertSoundManager.trigger({
+    id: options?.id ?? 'alert',
+    title: options?.title ?? 'Alert',
+    soundName: options?.soundName ?? 'chime',
+    volume: options?.volume ?? 0.8,
+    duration: options?.duration ?? 'once',
+  })
 }
 
 /* ── the messages ───────────────────────────────────────────────────────── */
@@ -226,7 +202,18 @@ export async function deliverAlert(
   // which is a different thing from the alert not firing.
   const accepted: string[] = []
 
-  if (delivery.sound && playAlertSound()) accepted.push('sound')
+  if (
+    delivery.sound &&
+    playAlertSound({
+      id: notice.tag,
+      title: notice.title,
+      soundName: delivery.soundName,
+      volume: delivery.soundVolume,
+      duration: delivery.soundDuration,
+    })
+  ) {
+    accepted.push('sound')
+  }
   if (delivery.notify && notifyIfHidden(notice)) accepted.push('notification')
 
   const message =

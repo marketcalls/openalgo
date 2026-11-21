@@ -40,6 +40,7 @@ const WatchlistPanel = lazy(() =>
 )
 
 import type { MagnetMode } from 'openalgo-charts/draw'
+import { ActiveAlertBanner } from '@/components/trading/ActiveAlertBanner'
 import { BacktestPanel } from '@/components/trading/BacktestPanel'
 import {
   BOTTOM_BAR_PX,
@@ -1522,6 +1523,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
             <AccountControls variant="toolbar" />
           </div>
         </div>
+        <ActiveAlertBanner />
         <main className="flex min-h-0 flex-1" inert={workspace.pending ? true : undefined}>
           {apiKey && wsUrl && (
             <DrawingRail

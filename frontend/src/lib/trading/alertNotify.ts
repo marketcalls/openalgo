@@ -25,18 +25,18 @@
  * error, it is an answer.
  */
 
+import { alertSoundManager } from './alertSoundManager'
+
 /** What a fired alert says, in the two lines a notification has room for. */
 export interface AlertNotice {
   readonly title: string
   readonly body: string
   /**
    * Collapses repeats of the same alert into one notification.
-   *
-   * An alert that fires on every bar of a fast interval would otherwise stack a
-   * notification per bar, and the trader would dismiss a column of them to find
-   * out that all of them said the same thing.
    */
   readonly tag: string
+  /** Optional callback to focus or activate the relevant chart symbol when clicked. */
+  readonly onOpenChart?: () => void
 }
 
 /**
@@ -112,6 +112,10 @@ export function notifyIfHidden(notice: AlertNotice): boolean {
       try {
         window.focus()
         shown.close()
+        if (notice.tag) {
+          alertSoundManager.dismiss(notice.tag)
+        }
+        notice.onOpenChart?.()
       } catch {
         // A browser that refuses to focus is not a failure worth reporting:
         // the trader has already been told what they needed to know.
