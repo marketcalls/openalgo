@@ -90,6 +90,9 @@ class _BrokerTransport(httpx.HTTPTransport):
             if request.method not in _READ_METHODS:
                 self._record_unanswered(request, e)
                 raise
+            # A caller with an end-to-end GET retry budget owns every attempt.
+            if request.extensions.get("openalgo_retry_read") is False:
+                raise
             logger.warning(f"{request.method} to {request.url.host} failed ({e}), retrying once")
             return super().handle_request(request)
         except httpx.TransportError as e:

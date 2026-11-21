@@ -62,8 +62,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/funds \
 |-------|------|-------------|
 | availablecash | string | Available cash for trading |
 | collateral | string | Collateral margin (pledged holdings) |
-| m2mrealized | string | Realized Mark-to-Market profit/loss |
-| m2munrealized | string | Unrealized Mark-to-Market profit/loss |
+| m2mrealized | string or null | Realized Mark-to-Market profit/loss |
+| m2munrealized | string or null | Unrealized Mark-to-Market profit/loss |
 | utiliseddebits | string | Margin utilized for positions |
 
 ## Understanding Funds
@@ -81,7 +81,9 @@ curl -X POST http://127.0.0.1:5000/api/v1/funds \
 - Values are returned as **strings** for precision
 - **availablecash** is the amount available for new orders
 - **collateral** is margin from pledged holdings (varies by broker)
-- M2M values update in real-time with market prices
+- Zerodha uses the last price and net P&L from the same Kite position snapshot. A partial exit contributes to realized P&L. An empty position book returns `"0.00"` for both P&L fields.
+- If Kite supplies cash but the position snapshot or prices are unavailable, the P&L fields are `null`. If only the position total is missing, realized P&L is `null` and open P&L is still returned.
+- If Kite cannot supply the margin balance, the endpoint returns HTTP 502 with `status: "error"`.
 - Total margin = availablecash + collateral
 
 ---
