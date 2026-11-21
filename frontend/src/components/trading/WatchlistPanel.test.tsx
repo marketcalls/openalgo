@@ -303,4 +303,57 @@ describe('WatchlistPanel', () => {
     const grids = container.querySelectorAll('[style*="grid-template-columns"]')
     expect((grids[0] as HTMLElement).style.gridTemplateColumns).toBe('1fr 64px 16px')
   })
+  it('shows the sort direction in words, says it in the label, and restores manual order', async () => {
+    liveData = {
+      items: [
+        { symbol: 'RELIANCE', exchange: 'NSE', ltp: 1287 },
+        { symbol: 'BANKNIFTY', exchange: 'NSE_INDEX', ltp: 55600 },
+      ],
+      quotes: new Map([
+        ['NSE:RELIANCE', { ltp: 1287, prev_close: 1282.2 }],
+        ['NSE_INDEX:BANKNIFTY', { ltp: 55600, prev_close: 55500 }],
+      ]),
+    }
+    const { container } = renderPanel()
+    await screen.findByText('RELIANCE')
+    const order = () => {
+      const text = container.textContent ?? ''
+      return text.indexOf('RELIANCE') < text.indexOf('BANKNIFTY')
+        ? 'RELIANCE first'
+        : 'BANKNIFTY first'
+    }
+    const user = userEvent.setup()
+    // Manual order: RELIANCE was dragged above BANKNIFTY.
+    expect(order()).toBe('RELIANCE first')
+    expect(screen.getByRole('button', { name: 'Last, not sorted' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Last, not sorted' }))
+    const header = screen.getByRole('button', { name: 'Last, sorted ascending' })
+    expect(header).toHaveAttribute('aria-pressed', 'true')
+    expect(header).toHaveTextContent('Lastasc')
+    expect(order()).toBe('RELIANCE first')
+
+    await user.click(header)
+    expect(screen.getByRole('button', { name: 'Last, sorted descending' })).toHaveTextContent(
+      'Lastdesc'
+    )
+    expect(order()).toBe('BANKNIFTY first')
+
+    await user.click(screen.getByRole('button', { name: 'Last, sorted descending' }))
+    expect(screen.getByRole('button', { name: 'Last, not sorted' })).toHaveTextContent(/^Last$/)
+    expect(order()).toBe('RELIANCE first')
+  })
+
+  it('draws no icon in the column header', async () => {
+    renderPanel()
+    await screen.findByText('RELIANCE')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Symbol, not sorted' }))
+    for (const name of ['Symbol, sorted ascending', 'Last, not sorted']) {
+      expect(screen.getByRole('button', { name }).querySelector('svg')).toBeNull()
+    }
+  })
 })
