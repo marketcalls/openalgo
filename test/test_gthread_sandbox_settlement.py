@@ -224,6 +224,33 @@ def test_t1_settlement_runs_once(monkeypatch):
     assert funds["available"] == CAPITAL - 170000
 
 
+def test_t1_moves_the_margin_each_buy_reserved():
+    """Fills away from their quotes leave no margin behind at T+1.
+
+    The figures of 6 Nov 2026: BOSCHLTD reserved at its 51,240 quote and filled
+    at 51,270; ETERNAL reserved at 357.15 and filled at 357.10. Moving quantity
+    times the fill average took 871,590 for BOSCHLTD, left 897,722.25 for
+    ETERNAL's 898,106.50, refused that, and stranded the 897,722.25.
+    """
+    from database.sandbox_db import SandboxHoldings, db_session
+    from sandbox.holdings_manager import HoldingsManager
+
+    _seed_position("BOSCHLTD", "NSE", "CNC", 17, "51270", "50700", "871080")
+    _seed_position("ETERNAL", "NSE", "CNC", 2515, "357.10", "363.15", "898232.25")
+    _block("1769312.25")
+
+    ok, message = HoldingsManager(USER).process_t1_settlement()
+    assert ok, message
+
+    funds = funds_of(USER)
+    assert funds["used"] == Decimal("0.00")
+    assert funds["available"] == CAPITAL - Decimal("1769312.25")
+    db_session.remove()
+    held = {h.symbol: h.quantity for h in SandboxHoldings.query.filter_by(user_id=USER)}
+    db_session.remove()
+    assert held == {"BOSCHLTD": 17, "ETERNAL": 2515}
+
+
 def test_a_stale_mis_position_is_settled_once(monkeypatch):
     """Two login catch-ups settle yesterday's MIS position once."""
     from database import token_db
