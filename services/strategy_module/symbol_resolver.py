@@ -60,7 +60,9 @@ EXPIRY_RANKS = ("weekly", "next_week", "monthly", "next_month", "current", "next
 SEGMENTS = ("cash", "futures", "options")
 
 #: How an option leg names its strike.
-STRIKE_MODES = ("atm", "strike")
+STRIKE_MODES = ("atm", "strike", "premium")
+PREMIUM_COMPARISONS = ("closest", "higher", "lower")
+PREMIUM_STRIKE_FILTERS = ("none", "liquid")
 
 #: Offsets from the money, in strike steps. Bounded at five because a basket
 #: that reaches further than that is nearly always a typo, and an unbounded
@@ -841,6 +843,84 @@ def _resolve_atm_strike(
     return atm_strike, target, None, None
 
 
+def _resolve_premium_strike(
+    *,
+    base_symbol: str,
+    option_exchange: str,
+    expiry_symbol: str,
+    option_type: str,
+    target_premium: float,
+    comparison: str,
+    strike_filter: str,
+    api_key: str | None,
+) -> tuple[float | None, float | None, str | None, str | None]:
+    """Choose one listed strike from a single bulk snapshot of its chain."""
+    strikes = option_symbol_service.get_available_strikes(
+        base_symbol, expiry_symbol, option_type, option_exchange
+    )
+    if strike_filter == "liquid":
+        step = {"NIFTY": 100, "BANKNIFTY": 500}.get(base_symbol.upper())
+        if step is None:
+            return (
+                None,
+                None,
+                f"Liquid-multiple premium selection is supported only for NIFTY "
+                f"(100-point strikes) and BANKNIFTY (500-point strikes), not {base_symbol}.",
+                "unsupported_premium_filter",
+            )
+        strikes = [strike for strike in strikes if math.isclose(float(strike) % step, 0.0, abs_tol=1e-9)]
+
+    symbols = [
+        {
+            "symbol": option_symbol_service.construct_option_symbol(
+                base_symbol, expiry_symbol, float(strike), option_type
+            ),
+            "exchange": option_exchange,
+        }
+        for strike in strikes
+    ]
+    if not symbols:
+        return None, None, "No eligible strikes were found for premium selection.", "no_strikes"
+
+    success, response, _status = quotes_service.get_multiquotes(symbols=symbols, api_key=api_key)
+    if not success:
+        return (
+            None,
+            None,
+            (response or {}).get("message") or "Could not fetch option-chain premiums.",
+            "premium_quotes_failed",
+        )
+
+    quote_by_symbol: dict[str, float] = {}
+    for result in (response or {}).get("results", []):
+        data = result.get("data", result)
+        premium = data.get("ltp") if isinstance(data, Mapping) else None
+        if result.get("symbol") and _is_positive_number(premium):
+            quote_by_symbol[result["symbol"]] = float(premium)
+
+    candidates: list[tuple[float, float]] = []
+    for strike, item in zip(strikes, symbols, strict=True):
+        premium = quote_by_symbol.get(item["symbol"])
+        if premium is None:
+            continue
+        if comparison == "higher" and premium <= target_premium:
+            continue
+        if comparison == "lower" and premium >= target_premium:
+            continue
+        candidates.append((float(strike), premium))
+
+    if not candidates:
+        return (
+            None,
+            None,
+            f"No {option_type} strike has a live premium {comparison} than {target_premium:g}.",
+            "no_matching_premium",
+        )
+
+    strike, premium = min(candidates, key=lambda item: (abs(item[1] - target_premium), item[0]))
+    return strike, premium, None, None
+
+
 def resolve_leg(
     leg: Mapping[str, Any],
     underlying: str,
@@ -862,11 +942,16 @@ def resolve_leg(
                             literal date ("28-MAY-26" or "28MAY26"). Futures
                             and options only; default "current".
             ``option_type`` "CE" or "PE". Options only.
-            ``strike_mode`` "atm" or "strike". Options only, default "atm".
+            ``strike_mode`` "atm", "strike" or "premium". Options only,
+                            default "atm".
             ``atm_offset``  "ATM", "ITM1".."ITM5", "OTM1".."OTM5", default
                             "ATM". Used when ``strike_mode`` is "atm".
             ``strike``      An absolute strike, fractional allowed. Used when
                             ``strike_mode`` is "strike".
+            ``premium``     Desired option LTP. Used in premium mode.
+            ``premium_comparison`` "closest", "higher" or "lower".
+            ``premium_strike_filter`` "none" or "liquid" (NIFTY 100-point
+                            and BANKNIFTY 500-point strikes only).
             ``strike_int``  Optional strike interval. Supplying it switches the
                             ATM calculation from the listed strikes to plain
                             arithmetic.
@@ -1111,6 +1196,7 @@ def _resolve_options_leg(
     ltp: float | None = None
     atm_strike: float | None = None
     offset: str | None = None
+    selected_premium: float | None = None
     detail: dict[str, Any] = {
         "expiry_rank": expiry.rank,
         "expiry_fallback": expiry.fallback,
@@ -1132,7 +1218,7 @@ def _resolve_options_leg(
         # float(), never int(): VEDL25APR24292.5CE is a real contract, and
         # truncating its strike names one that does not exist.
         target_strike = float(declared)
-    else:
+    elif strike_mode == "atm":
         offset_raw = _leg_value(leg, "atm_offset", "atmOffset", "offset") or "ATM"
         offset = str(offset_raw).strip().upper()
         if not ATM_OFFSET_PATTERN.match(offset):
@@ -1193,6 +1279,68 @@ def _resolve_options_leg(
                 atm_strike=atm_strike,
                 **context,
             )
+    else:
+        declared_premium = _leg_value(leg, "premium")
+        if not _is_positive_number(declared_premium):
+            return _fail_leg(
+                "invalid_premium",
+                f"Premium {declared_premium!r} on a {base_symbol} option leg must be positive.",
+                exchange=exchange,
+                expiry=expiry.expiry,
+                expiry_symbol=expiry.expiry_symbol,
+                **context,
+            )
+        comparison = str(
+            _leg_value(leg, "premium_comparison", "premiumComparison") or "closest"
+        ).strip().lower()
+        strike_filter = str(
+            _leg_value(leg, "premium_strike_filter", "premiumStrikeFilter") or "none"
+        ).strip().lower()
+        if comparison not in PREMIUM_COMPARISONS:
+            return _fail_leg(
+                "invalid_premium_comparison",
+                f"Unknown premium comparison {comparison!r}.",
+                exchange=exchange,
+                expiry=expiry.expiry,
+                expiry_symbol=expiry.expiry_symbol,
+                **context,
+            )
+        if strike_filter not in PREMIUM_STRIKE_FILTERS:
+            return _fail_leg(
+                "invalid_premium_strike_filter",
+                f"Unknown premium strike filter {strike_filter!r}.",
+                exchange=exchange,
+                expiry=expiry.expiry,
+                expiry_symbol=expiry.expiry_symbol,
+                **context,
+            )
+        target_strike, selected_premium, error, code = _resolve_premium_strike(
+            base_symbol=base_symbol,
+            option_exchange=exchange,
+            expiry_symbol=expiry.expiry_symbol,
+            option_type=option_type,
+            target_premium=float(declared_premium),
+            comparison=comparison,
+            strike_filter=strike_filter,
+            api_key=api_key,
+        )
+        if target_strike is None:
+            return _fail_leg(
+                code or "no_matching_premium",
+                error or "No strike matched the requested premium.",
+                exchange=exchange,
+                expiry=expiry.expiry,
+                expiry_symbol=expiry.expiry_symbol,
+                **context,
+            )
+        detail.update(
+            {
+                "target_premium": float(declared_premium),
+                "selected_premium": selected_premium,
+                "premium_comparison": comparison,
+                "premium_strike_filter": strike_filter,
+            }
+        )
 
     symbol = option_symbol_service.construct_option_symbol(
         base_symbol, expiry.expiry_symbol, target_strike, option_type

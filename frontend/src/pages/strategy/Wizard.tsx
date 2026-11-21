@@ -297,6 +297,11 @@ function LegCard({
                   strike_mode: strikeMode,
                   atm_offset: strikeMode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
                   strike: strikeMode === 'strike' ? (leg.strike ?? null) : null,
+                  premium: strikeMode === 'premium' ? (leg.premium ?? null) : null,
+                  premium_comparison:
+                    strikeMode === 'premium' ? (leg.premium_comparison ?? 'closest') : null,
+                  premium_strike_filter:
+                    strikeMode === 'premium' ? (leg.premium_strike_filter ?? 'none') : null,
                 })
               }}
               className={SELECT_CLASS_SM}
@@ -410,7 +415,7 @@ function LegCard({
             <div className="space-y-1.5">
               <Label className="text-xs uppercase">Strike mode</Label>
               <div className="flex h-9 overflow-hidden rounded-md border border-input">
-                {(['atm', 'strike'] as const).map((mode) => (
+                {(['atm', 'strike', 'premium'] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -420,6 +425,11 @@ function LegCard({
                         strike_mode: mode,
                         atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
                         strike: mode === 'strike' ? (leg.strike ?? null) : null,
+                        premium: mode === 'premium' ? (leg.premium ?? null) : null,
+                        premium_comparison:
+                          mode === 'premium' ? (leg.premium_comparison ?? 'closest') : null,
+                        premium_strike_filter:
+                          mode === 'premium' ? (leg.premium_strike_filter ?? 'none') : null,
                       })
                     }
                     className={cn(
@@ -429,7 +439,11 @@ function LegCard({
                         : 'bg-background hover:bg-muted'
                     )}
                   >
-                    {mode === 'atm' ? 'ATM-relative' : 'Direct strike'}
+                    {mode === 'atm'
+                      ? 'ATM-relative'
+                      : mode === 'strike'
+                        ? 'Direct strike'
+                        : 'By premium'}
                   </button>
                 ))}
               </div>
@@ -450,7 +464,7 @@ function LegCard({
                   ))}
                 </select>
               </div>
-            ) : (
+            ) : leg.strike_mode === 'strike' ? (
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs uppercase">Strike value</Label>
                 <div className="flex gap-2">
@@ -468,6 +482,63 @@ function LegCard({
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Filtered by underlying + resolved expiry rank ({leg.expiry}).
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:col-span-2 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">Premium value</Label>
+                  <Input
+                    type="number"
+                    min={0.01}
+                    step={0.05}
+                    value={leg.premium ?? ''}
+                    onChange={(event) =>
+                      update(
+                        'premium',
+                        event.target.value === '' ? null : Number(event.target.value)
+                      )
+                    }
+                    className="h-9 font-mono"
+                    placeholder="e.g. 100"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">Premium match</Label>
+                  <select
+                    value={leg.premium_comparison ?? 'closest'}
+                    onChange={(event) =>
+                      update(
+                        'premium_comparison',
+                        event.target.value as NonNullable<typeof leg.premium_comparison>
+                      )
+                    }
+                    className={SELECT_CLASS_SM}
+                  >
+                    <option value="closest">Closest to</option>
+                    <option value="higher">Higher than</option>
+                    <option value="lower">Lower than</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">Strike selection</Label>
+                  <select
+                    value={leg.premium_strike_filter ?? 'none'}
+                    onChange={(event) =>
+                      update(
+                        'premium_strike_filter',
+                        event.target.value as NonNullable<typeof leg.premium_strike_filter>
+                      )
+                    }
+                    className={SELECT_CLASS_SM}
+                  >
+                    <option value="none">All strikes</option>
+                    <option value="liquid">Liquid multiples</option>
+                  </select>
+                </div>
+                <p className="text-xs text-muted-foreground sm:col-span-3">
+                  Scans the selected expiry's live option chain. Liquid multiples restricts NIFTY to
+                  100-point and BANKNIFTY to 500-point strikes.
                 </p>
               </div>
             )}
@@ -1351,6 +1422,11 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       if (leg.segment === 'options' && leg.strike_mode === 'strike') {
         if (leg.strike == null || leg.strike <= 0) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
+        }
+      }
+      if (leg.segment === 'options' && leg.strike_mode === 'premium') {
+        if (leg.premium == null || leg.premium <= 0) {
+          return `Leg ${leg.id}: enter a premium greater than zero`
         }
       }
       // Shares on cash, lots on a derivative. They are not the same number.
