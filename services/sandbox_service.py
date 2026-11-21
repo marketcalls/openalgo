@@ -539,7 +539,7 @@ def _place_smart_order_locked(
         "quantity": quantity,
         "price": order_data.get("price", 0),
         "trigger_price": order_data.get("trigger_price", 0),
-        "price_type": order_data.get("price_type", "MARKET"),
+        "price_type": order_data.get("pricetype") or order_data.get("price_type", "MARKET"),
         "product": product,
         "strategy": order_data.get("strategy", ""),
     }
