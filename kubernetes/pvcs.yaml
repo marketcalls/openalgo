@@ -1,0 +1,85 @@
+---
+# Database storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openalgo-db
+  namespace: openalgo
+  labels:
+    app: openalgo
+    component: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path  # Change to your storage class
+---
+# Application logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openalgo-logs
+  namespace: openalgo
+  labels:
+    app: openalgo
+    component: logs
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+# Trading strategies
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openalgo-strategies
+  namespace: openalgo
+  labels:
+    app: openalgo
+    component: strategies
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path
+---
+# API keys and certificates
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openalgo-keys
+  namespace: openalgo
+  labels:
+    app: openalgo
+    component: keys
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  storageClassName: local-path
+---
+# Temporary files
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openalgo-tmp
+  namespace: openalgo
+  labels:
+    app: openalgo
+    component: temp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path
