@@ -15,6 +15,8 @@
 
 import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { buildChartTheme } from '@/lib/trading/chartTheme'
+import { useThemeStore } from '@/stores/themeStore'
 import { ScalpChart } from './ScalpChart'
 
 const IST = 19800
@@ -33,6 +35,9 @@ interface ChartStub {
   series: SeriesStub[]
   crosshair: Array<(e: { time: number | null }) => void>
   destroyed: number
+  lines: Array<Record<string, unknown>>
+  addPriceLine: ReturnType<typeof vi.fn>
+  removePrimitive: ReturnType<typeof vi.fn>
 }
 
 const harness = vi.hoisted(() => {
@@ -43,6 +48,15 @@ const harness = vi.hoisted(() => {
       series: [],
       crosshair: [],
       destroyed: 0,
+      lines: [],
+      addPriceLine: vi.fn((opts: Record<string, unknown>) => {
+        const line = { ...opts }
+        chart.lines.push(line)
+        return line
+      }),
+      removePrimitive: vi.fn((line: Record<string, unknown>) => {
+        chart.lines = chart.lines.filter((l) => l !== line)
+      }),
       addSeries: (type: string, opts?: Record<string, unknown>) => {
         const series: SeriesStub = {
           type,
@@ -197,4 +211,119 @@ describe('ScalpChart', () => {
     unmount()
     expect(built.destroyed).toBe(1)
   })
+
+  describe('average-price line (#2284)', () => {
+    const CE = 'NIFTY28OCT2525000CE'
+
+    it('draws nothing without an open position', () => {
+      render(<ScalpChart symbol={CE} exchange="NFO" interval="1m" averagePrice={null} />)
+      expect(chart().addPriceLine).not.toHaveBeenCalled()
+    })
+
+    it('draws a dotted line at the average of a long position, in the up colour', () => {
+      render(
+        <ScalpChart
+          symbol={CE}
+          exchange="NFO"
+          interval="1m"
+          averagePrice={{ price: 112.35, quantity: 75 }}
+        />
+      )
+      expect(chart().lines).toEqual([
+        expect.objectContaining({
+          id: 'average-price',
+          price: 112.35,
+          color: currentTheme().upColor,
+          lineStyle: 'dotted',
+          label: 'AVG 112.35',
+        }),
+      ])
+      expect(chart().addPriceLine).toHaveBeenCalledWith(expect.anything(), 0)
+    })
+
+    it('marks a short position in the down colour', () => {
+      render(
+        <ScalpChart
+          symbol={CE}
+          exchange="NFO"
+          interval="1m"
+          averagePrice={{ price: 98.2, quantity: -150 }}
+        />
+      )
+      expect(chart().lines).toEqual([
+        expect.objectContaining({ price: 98.2, color: currentTheme().downColor, label: 'AVG 98.20' }),
+      ])
+    })
+
+    it('moves when the average changes and goes when the position closes', () => {
+      const { rerender } = render(
+        <ScalpChart
+          symbol={CE}
+          exchange="NFO"
+          interval="1m"
+          averagePrice={{ price: 100, quantity: 75 }}
+        />
+      )
+      rerender(
+        <ScalpChart
+          symbol={CE}
+          exchange="NFO"
+          interval="1m"
+          averagePrice={{ price: 104, quantity: 150 }}
+        />
+      )
+      expect(chart().lines).toEqual([expect.objectContaining({ price: 104, label: 'AVG 104.00' })])
+
+      rerender(<ScalpChart symbol={CE} exchange="NFO" interval="1m" averagePrice={null} />)
+      expect(chart().lines).toEqual([])
+    })
+
+    it('takes the new theme colour when the theme switches with a position open', () => {
+      useThemeStore.setState({ mode: 'light', appMode: 'live' })
+      render(
+        <ScalpChart
+          symbol={CE}
+          exchange="NFO"
+          interval="1m"
+          averagePrice={{ price: 100, quantity: 75 }}
+        />
+      )
+      act(() => useThemeStore.setState({ mode: 'dark' }))
+      const dark = buildChartTheme('dark', 'live').upColor
+      expect(dark).not.toBe(buildChartTheme('light', 'live').upColor)
+      expect(chart().lines).toEqual([expect.objectContaining({ color: dark })])
+    })
+
+    it('labels a currency derivative to four decimals', () => {
+      render(
+        <ScalpChart
+          symbol="USDINR28OCT25FUT"
+          exchange="CDS"
+          interval="1m"
+          averagePrice={{ price: 88.4625, quantity: 1 }}
+        />
+      )
+      expect(chart().lines).toEqual([expect.objectContaining({ label: 'AVG 88.4625' })])
+    })
+
+    it('draws on the new chart when the symbol changes', () => {
+      const avg = { price: 100, quantity: 75 }
+      const { rerender } = render(
+        <ScalpChart symbol={CE} exchange="NFO" interval="1m" averagePrice={avg} />
+      )
+      const first = chart()
+      rerender(
+        <ScalpChart symbol="NIFTY28OCT2525100CE" exchange="NFO" interval="1m" averagePrice={avg} />
+      )
+      expect(first.destroyed).toBe(1)
+      expect(first.removePrimitive).not.toHaveBeenCalled()
+      expect(chart()).not.toBe(first)
+      expect(chart().lines).toEqual([expect.objectContaining({ price: 100 })])
+    })
+  })
 })
+
+function currentTheme() {
+  const { mode, appMode } = useThemeStore.getState()
+  return buildChartTheme(mode, appMode)
+}

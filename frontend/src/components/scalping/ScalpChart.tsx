@@ -33,6 +33,7 @@ import { type Chart, compactVolume, createChart, type SeriesApi } from 'openalgo
 import { useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { useMarketData } from '@/hooks/useMarketData'
+import type { OpenAverage } from '@/lib/scalpingAveragePrice'
 import { priceDecimals } from '@/lib/scalpingPrice'
 import { buildChartTheme, quietVolumeStyle } from '@/lib/trading/chartTheme'
 import { buildChartLegend, legendHtml } from '@/lib/trading/legend'
@@ -68,11 +69,14 @@ export function ScalpChart({
   exchange,
   interval,
   title,
+  averagePrice,
 }: {
   symbol: string
   exchange: string
   interval: string
   title?: string
+  /** The open position on this symbol, drawn as a dotted line at its average price. */
+  averagePrice?: OpenAverage | null
 }) {
   const mode = useThemeStore((s) => s.mode)
   const appMode = useThemeStore((s) => s.appMode)
@@ -214,6 +218,36 @@ export function ScalpChart({
       volRef.current = null
     }
   }, [symbol, exchange, enabled])
+
+  // The open position's average price as a dotted line across the chart,
+  // coloured by side from the chart's theme. Its label sits in the price axis
+  // tag: a badge at the line's left end would sit on the oldest candles.
+  // Re-added when the chart is recreated for a new symbol, moved when the
+  // average changes, removed when the position closes.
+  const avgPrice = averagePrice?.price
+  const avgQty = averagePrice?.quantity
+  // biome-ignore lint/correctness/useExhaustiveDependencies: symbol/exchange/enabled recreate the chart, which drops the line
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart || avgPrice == null || !avgQty) return
+    // Built from the current mode rather than read from the chart: on a theme
+    // switch this effect runs before the one that re-themes the chart.
+    const theme = buildChartTheme(mode, appMode)
+    const line = chart.addPriceLine(
+      {
+        id: 'average-price',
+        price: avgPrice,
+        color: avgQty > 0 ? theme.upColor : theme.downColor,
+        lineStyle: 'dotted',
+        label: `AVG ${avgPrice.toFixed(priceDecimals(exchange))}`,
+      },
+      0
+    )
+    return () => {
+      // A new symbol destroys the chart first, taking the line with it.
+      if (chartRef.current === chart) chart.removePrimitive(line)
+    }
+  }, [avgPrice, avgQty, symbol, exchange, enabled, mode, appMode])
 
   // Load history for the selected interval and run the reconcile loop. Re-runs
   // on timeframe change (instant flip; chart instance reused).
