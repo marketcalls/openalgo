@@ -298,7 +298,7 @@ API). Downloaded after each broker login.
 
 ## 11. `openalgo.ta` indicators
 
-`from openalgo import ta`; 127 public names; Rust core, no JIT warm-up. Inputs:
+`from openalgo import ta`; 128 public names; Rust core, no JIT warm-up. Inputs:
 NumPy array, pandas Series or list; output matches the input type; multi-output
 returns a tuple. Full signatures: `/workspace/reference/openalgo-indicators.md`
 and `docs/prompt/indicators/`.
@@ -330,8 +330,8 @@ Gotchas:
   `(pivot, r1, s1, r2, s2, r3, s3)`.
 - `frama(high, low, period)` takes high and low, not close.
 - `supertrend` direction: -1 = uptrend, 1 = downtrend. `psar` returns SAR only.
-- `rvi` is the Relative Vigor Index (OHLC in). Relative Volatility Index is not
-  on `ta`.
+- `rvi` is the Relative Vigor Index (OHLC in). The Relative Volatility Index
+  is `rvi_volatility(data, stdev_period=10, rsi_period=14)`, close in.
 - The 13 signal helpers (crossover, crossunder, cross, highest, lowest, change,
   roc, stdev, rising, falling, exrem, flip, valuewhen) always return NumPy
   arrays: index with `[-1]` or wrap in `pd.Series(x, index=df.index)`.

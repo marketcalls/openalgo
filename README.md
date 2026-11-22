@@ -185,7 +185,7 @@ Direct webhook integration for scanner alerts:
 A built-in LLM agent, on the full page and as a right-side panel on the `/trading` chart:
 - Reads quotes, depth, history, option chains and Greeks through OpenAlgo's own services, never a third-party data feed
 - Draws candles with the charting library, option analytics with Plotly, and marks levels, trendlines and zones onto your chart
-- Computes 127 indicators with the Rust-backed `openalgo.ta`, and generates Python strategies using the OpenAlgo SDK
+- Computes 128 indicators with the Rust-backed `openalgo.ta`, and generates Python strategies using the OpenAlgo SDK
 - **Every order pauses for your approval**, showing the exact arguments before anything is sent, with the risk limits applied after you approve
 - Any provider LiteLLM supports, a ChatGPT Plus or Pro subscription over OAuth, or a local model through Ollama
 - Keys are encrypted in your own database and never written to a configuration file

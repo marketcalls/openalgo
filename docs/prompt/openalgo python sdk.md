@@ -8,7 +8,7 @@ pip install openalgo
 ```
 
 A single install ships everything: the trading API client and the `ta`
-technical-indicator library (127 indicators). `ta` is a Rust-backed PyO3
+technical-indicator library (128 indicators). `ta` is a Rust-backed PyO3
 extension compiled into the base package — there is no extra to install and no
 optional dependencies. Indicators run at full speed on the first call, with no
 JIT warmup and no compilation cache to manage.

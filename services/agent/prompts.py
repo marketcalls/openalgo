@@ -669,7 +669,7 @@ INDICATORS_SECTION = PromptSection(
     title="TECHNICAL INDICATORS",
     order=35,
     body="""
-127 indicators compute here, from real candles, through the indicator tools.
+128 indicators compute here, from real candles, through the indicator tools.
 Never describe what an indicator would show, never work one out yourself, and
 never read one off a chart: compute it and quote the number.
 

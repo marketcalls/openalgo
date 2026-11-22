@@ -6,6 +6,37 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Changed
+
+- The pinned OpenAlgo Python SDK moves from 2.3.0 to 2.4.0. A Python strategy
+  can now run several strategies on one account, in a backtest or a live
+  session, including two on one symbol. It also adds optional daily limits
+  (trades per day, profit target, order value), an audit record of every live
+  order and custom tearsheets. A single strategy's backtest gives the same
+  figures as on 2.3.0, and the SDK's own dependencies are unchanged.
+- Upgrade while no `bt.live` session is running. A live session that 2.3.0
+  saved earlier the same day cannot be resumed by 2.4.0, so start it fresh
+  after the upgrade.
+- Now refused in a live session: a resting reversal order, and a resting
+  order against a position its stop already closes. Both are stopped before
+  they reach the broker, where both could fill. Use `target=` on the entry, or
+  MARKET orders. A trade closed by the account's daily loss limit now records
+  the exit reason `account_loss_limit` instead of `manual`.
+
+### Fixed
+
+- The AI agent's indicator tools and its chart tools load again. Since the
+  move to SDK 2.3.0 in 2.0.3.5, both were skipped at startup, so the agent
+  could neither compute an indicator nor read or draw on the chart. The SDK
+  had added the Relative Volatility Index (`ta.rvi_volatility`, from SDK
+  2.1.0) and the agent's indicator catalogue did not list it. The catalogue
+  now holds all 128 indicators, the new one included. `ta.rvi` is still the
+  Relative Vigor Index.
+- The indicator docs called the Relative Volatility Index as `ta.rvi(close)`,
+  which raises an error. They now show `ta.rvi_volatility(close)`.
+
 ## [2.0.3.5] - 2026-11-20
 
 ### Python SDK 2.3.0 Release

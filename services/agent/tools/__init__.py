@@ -412,7 +412,7 @@ TOOLKITS: list[ToolkitSpec] = [
         surfaces=ALL_SURFACES,
         order=25,
         description=(
-            "Compute any of the 127 openalgo.ta indicators over real candles, several in "
+            "Compute any of the 128 openalgo.ta indicators over real candles, several in "
             "one call, or screen a list of instruments for one condition."
         ),
     ),
