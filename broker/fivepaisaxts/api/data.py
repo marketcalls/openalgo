@@ -567,9 +567,10 @@ class BrokerData:
 
             dfs = []
             current_start = from_date
+            chunk = timedelta(days=365)
 
             while current_start <= to_date:
-                current_end = min(current_start + timedelta(days=6), to_date)
+                current_end = min(current_start + chunk - timedelta(seconds=1), to_date)
 
                 # FivepaisaXTS expects MMM DD YYYY HHMMSS in IST
                 from_str = current_start.strftime("%b %d %Y %H%M%S")
@@ -608,7 +609,7 @@ class BrokerData:
                 raw_data = response.get("result", {}).get("dataReponse", "")
                 if not raw_data:
                     logger.warning(f"No data returned for period {from_str} to {to_str}")
-                    current_start = current_end + timedelta(days=1)
+                    current_start = current_end + timedelta(seconds=1)
                     continue
 
                 rows = raw_data.strip().split(",")
@@ -636,7 +637,7 @@ class BrokerData:
                     df = pd.DataFrame(data)
                     dfs.append(df)
 
-                current_start = current_end + timedelta(days=1)
+                current_start = current_end + timedelta(seconds=1)
 
             if not dfs:
                 if compression_value == "D" and to_date.date() == datetime.now().date():
