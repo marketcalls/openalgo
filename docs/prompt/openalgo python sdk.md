@@ -15,7 +15,7 @@ JIT warmup and no compilation cache to manage.
 
 ### Version and client contracts
 
-This application pins **`openalgo==2.0.5`** in `pyproject.toml`. The platform version and SDK version are independent. For a reproducible external client matching this checkout, install `pip install openalgo==2.0.5` (Python 3.12 or newer). The examples below describe that SDK; `pip install -U openalgo` can install a later version.
+This application pins **`openalgo==2.4.1`** in `pyproject.toml`. The platform version and SDK version are independent. For a reproducible external client matching this checkout, install `pip install openalgo==2.4.1` (Python 3.12 or newer). The examples below describe that SDK; `pip install -U openalgo` can install a later version.
 
 Use `price_type` on the regular order SDK methods; the SDK sends the REST field `pricetype`. REST request dictionaries and internal service arguments are separate contracts. Check the returned `status`; a method returning a dictionary does not imply it succeeded.
 

@@ -66,15 +66,36 @@ fix, live in [docs/releases](releases/).
 
 ### Changed
 
-- The pinned OpenAlgo Python SDK moves from 2.3.0 to 2.4.0. A Python strategy
+- The pinned OpenAlgo Python SDK moves from 2.3.0 to 2.4.1. A Python strategy
   can now run several strategies on one account, in a backtest or a live
   session, including two on one symbol. It also adds optional daily limits
   (trades per day, profit target, order value), an audit record of every live
-  order and custom tearsheets. A single strategy's backtest gives the same
-  figures as on 2.3.0, and the SDK's own dependencies are unchanged.
+  order and custom tearsheets. The SDK's own dependencies are unchanged.
+- Backtest figures for equity change with SDK 2.4.1. A backtest, and the cost
+  figures of a `bt.live` session, now charge the standard brokerage unless you
+  choose another: delivery 2.5 percent of the order value or Rs 20 per
+  executed order, whichever is lower (it was free), and intraday 0.1 percent
+  or Rs 20, whichever is lower (it was 0.03 percent or Rs 20). Futures and
+  options brokerage is as before. This is the brokerage the sandbox plan above
+  starts with, so a backtest and a sandbox run now begin from the same plan.
+  A delivery order of Rs 800 or more pays Rs 23.60 more (Rs 20 and the GST on
+  it), and an intraday order below about Rs 66,667 pays more as well. The
+  trades a backtest takes do not change. The earlier brokerage is still in the
+  SDK as a named preset: the SDK's 2.4.1 changelog gives the argument that
+  selects it.
+- New SDK methods: `client.charges(...)` prices one order through the Charges
+  API above before it is placed, and `client.discord(message)` and
+  `client.slack(message)` send an alert through the webhook saved on
+  `/discord` or `/slack`, while that channel is switched on at `/alerts`.
+- A backtest can now cost MCX options on non-agri commodities and NSE currency
+  futures and options, and the SDK's cost helpers take a quantity in lots.
+  Currency derivatives are backtest-only for now: a `bt.live` session refuses
+  a strategy on CDS or BCD when it starts.
 - Upgrade while no `bt.live` session is running. A live session that 2.3.0
-  saved earlier the same day cannot be resumed by 2.4.0, so start it fresh
-  after the upgrade.
+  saved earlier the same day cannot be resumed by 2.4.0 or later, so start it
+  fresh after the upgrade. A strategy class that holds a nested ABC, Protocol
+  or Flag gets a new version id with SDK 2.4.1, so a restart on the day of
+  the upgrade reports a version change for it.
 - Now refused in a live session: a resting reversal order, and a resting
   order against a position its stop already closes. Both are stopped before
   they reach the broker, where both could fill. Use `target=` on the entry, or

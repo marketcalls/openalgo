@@ -82,7 +82,7 @@ dependencies = [
   "nbformat==5.11.1",
   "nest-asyncio==1.6.0",
   "numpy==2.4.4",
-  "openalgo==2.4.0",
+  "openalgo==2.4.1",
   # The engine that runs a compiled OpenScript strategy, in this language.
   # The compiler is the npm package the frontend holds, and the production
   # image carries no JavaScript runtime, which is the whole reason a second
