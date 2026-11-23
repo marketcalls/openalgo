@@ -28,7 +28,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/charges
   "action": "BUY",
   "product": "CNC",
   "quantity": 50,
-  "price": 2500
+  "price": 1350
 }
 ```
 
@@ -44,7 +44,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/charges \
   "action": "BUY",
   "product": "CNC",
   "quantity": 50,
-  "price": 2500
+  "price": 1350
 }'
 ```
 
@@ -59,22 +59,22 @@ curl -X POST http://127.0.0.1:5000/api/v1/charges \
     "product": "CNC",
     "action": "BUY",
     "quantity": 50,
-    "price": 2500.0,
+    "price": 1350.0,
     "segment": "Equity Delivery",
-    "trade_value": 125000.0,
+    "trade_value": 67500.0,
     "charges": {
-      "total": 172.28,
+      "total": 104.13,
       "brokerage": 20.0,
       "taxes": {
-        "gst": 4.31,
-        "stt": 125.0,
-        "stamp_duty": 19.0
+        "gst": 3.99,
+        "stt": 68.0,
+        "stamp_duty": 10.0
       },
       "other_charges": {
-        "transaction": 3.71,
+        "transaction": 2.0,
         "clearing": 0.0,
-        "ipft": 0.13,
-        "sebi_turnover": 0.13
+        "ipft": 0.07,
+        "sebi_turnover": 0.07
       }
     }
   }
@@ -169,9 +169,9 @@ dates below are only examples.
 
 | Order | Exchange | Product | Segment | Trade value | Brokerage | STT or CTT | Stamp duty | Exchange, IPFT and SEBI | GST | Total |
 |-------|----------|---------|---------|-------------|-----------|------------|------------|-------------------------|-----|-------|
-| BUY 50 RELIANCE at 2500 | NSE | CNC | Equity Delivery | 125000.00 | 20.00 | 125.00 | 19.00 | 3.97 | 4.31 | **172.28** |
-| SELL 50 RELIANCE at 2600 | NSE | CNC | Equity Delivery | 130000.00 | 20.00 | 130.00 | 0.00 | 4.12 | 4.34 | **158.46** |
-| BUY 50 RELIANCE at 2500 | BSE | CNC | Equity Delivery | 125000.00 | 20.00 | 125.00 | 19.00 | 4.82 | 4.47 | **173.29** |
+| BUY 50 RELIANCE at 1350 | NSE | CNC | Equity Delivery | 67500.00 | 20.00 | 68.00 | 10.00 | 2.14 | 3.99 | **104.13** |
+| SELL 50 RELIANCE at 1380 | NSE | CNC | Equity Delivery | 69000.00 | 20.00 | 69.00 | 0.00 | 2.19 | 3.99 | **95.18** |
+| BUY 50 RELIANCE at 1350 | BSE | CNC | Equity Delivery | 67500.00 | 20.00 | 68.00 | 10.00 | 2.60 | 4.07 | **104.67** |
 | BUY 400 SBIN at 1000 | NSE | MIS | Equity Intraday | 400000.00 | 20.00 | 0.00 | 12.00 | 12.68 | 5.88 | **50.56** |
 | SELL 400 SBIN at 1100 | NSE | MIS | Equity Intraday | 440000.00 | 20.00 | 110.00 | 0.00 | 13.95 | 6.11 | **150.06** |
 | BUY 65 NIFTY29DEC26FUT at 26000 | NFO | NRML | F&O Futures | 1690000.00 | 20.00 | 0.00 | 34.00 | 32.62 | 9.47 | **96.09** |
@@ -190,8 +190,8 @@ What the table shows:
   both sides, and on currency, which pays none.
 - **An option is charged on its premium**, so its trade value is the premium
   times the quantity, not the strike.
-- **The exchange decides the rate.** The same delivery buy pays 3.71 in
-  transaction charges and 0.13 in IPFT levy on NSE, and 4.69 with no
+- **The exchange decides the rate.** The same delivery buy pays 2.00 in
+  transaction charges and 0.07 in IPFT levy on NSE, and 2.53 with no
   levy on BSE.
 - **STT is rounded to the rupee and CTT is not.** The option sell pays
   13.00 and the commodity sell pays 58.23.
