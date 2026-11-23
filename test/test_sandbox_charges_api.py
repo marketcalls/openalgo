@@ -11,10 +11,11 @@ from __future__ import annotations
 import csv
 import inspect
 import io
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 import pytest
+import pytz
 from test_gthread_sandbox_support import (
     CAPITAL,
     configs_restored,
@@ -146,6 +147,30 @@ def _fill(action, quantity, price, *, symbol="RELIANCE", exchange="NSE", product
     )
     assert ok, response
     return response["orderid"]
+
+
+def _ist_today() -> date:
+    """The day a fill made now is reported under.
+
+    A fill is stamped with the IST wall clock and the report counts IST days.
+    The machine's own date is a day behind that from midnight to 05:30 IST on a
+    server kept on UTC, so a test must not take "today" from the machine.
+    """
+    return datetime.now(pytz.timezone("Asia/Kolkata")).date()
+
+
+class _ServerClockOnUtc(datetime):
+    """04:35 IST on 24 November 2026, as a server kept on UTC reads it.
+
+    Asked for the time with no zone it gives its own wall clock, 23:05 on the
+    23rd. Asked for the time in a zone it answers for that zone, as the real
+    clock does.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        instant = datetime(2026, 11, 23, 23, 5, tzinfo=UTC)
+        return instant.astimezone(tz) if tz is not None else instant.replace(tzinfo=None)
 
 
 def _trades():
@@ -580,7 +605,7 @@ def test_the_report_totals_are_what_the_fills_paid():
     _three_fills()
     trades = _trades()
     paid = sum(trade["total"] for trade in trades)
-    today = datetime.now().date().isoformat()
+    today = _ist_today().isoformat()
 
     payload, status, _ = _request("api_cost_report")
 
@@ -641,7 +666,7 @@ def test_the_list_is_cut_but_the_totals_never_are():
 
     _three_fills()
     paid = sum(trade["total"] for trade in _trades())
-    today = datetime.now().date()
+    today = _ist_today()
 
     report = cost_report(USER, today, today, limit=1)
     release_sessions()
@@ -649,6 +674,32 @@ def test_the_list_is_cut_but_the_totals_never_are():
     assert report["trades_listed"] == 1 and len(report["trades"]) == 1
     assert report["trades_total"] == 3
     assert D(str(report["totals"]["total_charges"])) == paid
+
+
+def test_a_fill_before_0530_ist_is_reported_under_its_ist_day(monkeypatch):
+    """A server kept on UTC is a day behind IST from midnight to 05:30 IST.
+
+    The fill and the report must both go by the IST day and never by the
+    server's own date. Two tests above once took "today" from the machine and
+    failed in CI at 23:04 UTC, which is 04:34 IST the next day. This one holds
+    the clock at that hour, so it says the same thing whenever it runs.
+    """
+    from sandbox import charge_manager, execution_engine
+
+    monkeypatch.setattr(execution_engine, "datetime", _ServerClockOnUtc)
+    monkeypatch.setattr(charge_manager, "datetime", _ServerClockOnUtc)
+    assert _ServerClockOnUtc.now().date() == date(2026, 11, 23)
+
+    _fill("BUY", 50, D("2500"))
+
+    by_default = _request("api_cost_report")[0]["data"]
+    ist_day = _request("api_cost_report", query="?from=2026-11-24&to=2026-11-24")[0]["data"]
+    server_day = _request("api_cost_report", query="?from=2026-11-23&to=2026-11-23")[0]["data"]
+
+    assert by_default["to"] == "2026-11-24"
+    assert [day["date"] for day in by_default["by_day"]] == ["2026-11-24"]
+    assert ist_day["trades_total"] == 1
+    assert server_day["trades_total"] == 0
 
 
 def test_a_range_is_whole_ist_days_and_trades_outside_it_are_left_out():
