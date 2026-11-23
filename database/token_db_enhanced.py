@@ -1080,6 +1080,10 @@ def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
                 lotsize=sym_token.lotsize,
                 instrumenttype=sym_token.instrumenttype,
                 tick_size=sym_token.tick_size,
+                # As the cached path carries it. Left out, a crypto contract
+                # looked up before the cache loads reads as a multiplier of 1,
+                # and its value, P&L and charges come out 1000 times too large.
+                contract_value=getattr(sym_token, "contract_value", None),
             )
         else:
             return None

@@ -1,0 +1,2097 @@
+{
+  "read_on": "2026-11-23",
+  "source": "A published brokerage calculator, read from the live page. Each trade was entered as a buy price, a sell price and a quantity, and 'shown' is every line the page displayed for it. 'flat' and 'percent' are the brokerage plan that calculator prices under. Quantities are in units: the page takes lots, and the units are the lots times the lot size its turnover line confirms.",
+  "lines": {
+    "brokerage": "Brokerage for the two orders",
+    "stt": "STT total, or CTT on commodities",
+    "exchange_charges": "Exchange transaction charge, the investor protection levy included",
+    "gst": "GST",
+    "sebi_charges": "SEBI charges",
+    "stamp_duty": "Stamp duty",
+    "total": "Total tax and charges"
+  },
+  "trades": [
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1100",
+      "quantity": "400",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "110",
+        "exchange_charges": "25.79",
+        "gst": "11.99",
+        "sebi_charges": "0.84",
+        "stamp_duty": "12",
+        "total": "200.62"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "100",
+      "sell": "101",
+      "quantity": "7",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "0.42",
+        "stt": "0",
+        "exchange_charges": "0.04",
+        "gst": "0.08",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "0.54"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "100",
+      "sell": "100",
+      "quantity": "60",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "3.6",
+        "stt": "2",
+        "exchange_charges": "0.37",
+        "gst": "0.72",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "6.7"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1001",
+      "quantity": "50",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "30.01",
+        "stt": "13",
+        "exchange_charges": "3.07",
+        "gst": "5.97",
+        "sebi_charges": "0.1",
+        "stamp_duty": "2",
+        "total": "54.15"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1002",
+      "quantity": "49",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "29.43",
+        "stt": "12",
+        "exchange_charges": "3.01",
+        "gst": "5.86",
+        "sebi_charges": "0.1",
+        "stamp_duty": "1",
+        "total": "51.4"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "333",
+      "sell": "334",
+      "quantity": "10",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "2",
+        "stt": "1",
+        "exchange_charges": "0.21",
+        "gst": "0.4",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "3.62"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1010",
+      "quantity": "5",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "3.01",
+        "stt": "1",
+        "exchange_charges": "0.31",
+        "gst": "0.6",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "4.93"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1003",
+      "quantity": "25",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "15.02",
+        "stt": "6",
+        "exchange_charges": "1.54",
+        "gst": "2.99",
+        "sebi_charges": "0.05",
+        "stamp_duty": "1",
+        "total": "26.6"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "120",
+      "sell": "135",
+      "quantity": "75",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "5.74",
+        "stt": "3",
+        "exchange_charges": "0.59",
+        "gst": "1.14",
+        "sebi_charges": "0.02",
+        "stamp_duty": "0",
+        "total": "10.49"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "2456.35",
+      "sell": "2461.8",
+      "quantity": "137",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "84",
+        "exchange_charges": "20.68",
+        "gst": "11.04",
+        "sebi_charges": "0.67",
+        "stamp_duty": "10",
+        "total": "166.39"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "87.65",
+      "sell": "86.9",
+      "quantity": "2350",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "51",
+        "exchange_charges": "12.59",
+        "gst": "9.54",
+        "sebi_charges": "0.41",
+        "stamp_duty": "6",
+        "total": "119.54"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "15234.5",
+      "sell": "15301.25",
+      "quantity": "15",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "57",
+        "exchange_charges": "14.06",
+        "gst": "9.81",
+        "sebi_charges": "0.46",
+        "stamp_duty": "7",
+        "total": "128.33"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "0.85",
+      "sell": "1.15",
+      "quantity": "6500",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "3.9",
+        "stt": "2",
+        "exchange_charges": "0.4",
+        "gst": "0.78",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "7.09"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "642.4",
+      "sell": "650.05",
+      "quantity": "925",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "150",
+        "exchange_charges": "36.71",
+        "gst": "14.02",
+        "sebi_charges": "1.2",
+        "stamp_duty": "18",
+        "total": "259.93"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "18.75",
+      "sell": "19.2",
+      "quantity": "12000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "58",
+        "exchange_charges": "13.99",
+        "gst": "9.8",
+        "sebi_charges": "0.46",
+        "stamp_duty": "7",
+        "total": "129.25"
+      }
+    },
+    {
+      "segment": "equity_intraday",
+      "exchange": "NSE",
+      "buy": "3499.95",
+      "sell": "3421.1",
+      "quantity": "33",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "28",
+        "exchange_charges": "7.01",
+        "gst": "8.5",
+        "sebi_charges": "0.23",
+        "stamp_duty": "3",
+        "total": "86.74"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1100",
+      "quantity": "400",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "840",
+        "exchange_charges": "25.79",
+        "gst": "4.79",
+        "sebi_charges": "0.84",
+        "stamp_duty": "60",
+        "total": "931.42"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "100",
+      "sell": "101",
+      "quantity": "7",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "1",
+        "exchange_charges": "0.04",
+        "gst": "0.01",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "1.05"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "100",
+      "sell": "100",
+      "quantity": "60",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "12",
+        "exchange_charges": "0.37",
+        "gst": "0.07",
+        "sebi_charges": "0.01",
+        "stamp_duty": "1",
+        "total": "13.45"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1001",
+      "quantity": "50",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "100",
+        "exchange_charges": "3.07",
+        "gst": "0.57",
+        "sebi_charges": "0.1",
+        "stamp_duty": "8",
+        "total": "111.74"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1002",
+      "quantity": "49",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "98",
+        "exchange_charges": "3.01",
+        "gst": "0.56",
+        "sebi_charges": "0.1",
+        "stamp_duty": "7",
+        "total": "108.67"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "333",
+      "sell": "334",
+      "quantity": "10",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "7",
+        "exchange_charges": "0.21",
+        "gst": "0.04",
+        "sebi_charges": "0.01",
+        "stamp_duty": "1",
+        "total": "8.26"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1010",
+      "quantity": "5",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "10",
+        "exchange_charges": "0.31",
+        "gst": "0.06",
+        "sebi_charges": "0.01",
+        "stamp_duty": "1",
+        "total": "11.38"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "1000",
+      "sell": "1003",
+      "quantity": "25",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "50",
+        "exchange_charges": "1.54",
+        "gst": "0.29",
+        "sebi_charges": "0.05",
+        "stamp_duty": "4",
+        "total": "55.88"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "120",
+      "sell": "135",
+      "quantity": "75",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "19",
+        "exchange_charges": "0.59",
+        "gst": "0.11",
+        "sebi_charges": "0.02",
+        "stamp_duty": "1",
+        "total": "20.72"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "2456.35",
+      "sell": "2461.8",
+      "quantity": "137",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "674",
+        "exchange_charges": "20.68",
+        "gst": "3.84",
+        "sebi_charges": "0.67",
+        "stamp_duty": "50",
+        "total": "749.19"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "87.65",
+      "sell": "86.9",
+      "quantity": "2350",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "410",
+        "exchange_charges": "12.59",
+        "gst": "2.34",
+        "sebi_charges": "0.41",
+        "stamp_duty": "31",
+        "total": "456.34"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "15234.5",
+      "sell": "15301.25",
+      "quantity": "15",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "458",
+        "exchange_charges": "14.06",
+        "gst": "2.61",
+        "sebi_charges": "0.46",
+        "stamp_duty": "34",
+        "total": "509.13"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "0.85",
+      "sell": "1.15",
+      "quantity": "6500",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "13",
+        "exchange_charges": "0.4",
+        "gst": "0.07",
+        "sebi_charges": "0.01",
+        "stamp_duty": "1",
+        "total": "14.48"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "642.4",
+      "sell": "650.05",
+      "quantity": "925",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "1196",
+        "exchange_charges": "36.71",
+        "gst": "6.82",
+        "sebi_charges": "1.2",
+        "stamp_duty": "89",
+        "total": "1329.73"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "18.75",
+      "sell": "19.2",
+      "quantity": "12000",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "455",
+        "exchange_charges": "13.99",
+        "gst": "2.6",
+        "sebi_charges": "0.46",
+        "stamp_duty": "34",
+        "total": "506.05"
+      }
+    },
+    {
+      "segment": "equity_delivery",
+      "exchange": "NSE",
+      "buy": "3499.95",
+      "sell": "3421.1",
+      "quantity": "33",
+      "flat": "0",
+      "percent": "0",
+      "shown": {
+        "brokerage": "0",
+        "stt": "228",
+        "exchange_charges": "7.01",
+        "gst": "1.3",
+        "sebi_charges": "0.23",
+        "stamp_duty": "17",
+        "total": "253.54"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1100",
+      "quantity": "400",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "220",
+        "exchange_charges": "15.37",
+        "gst": "10.12",
+        "sebi_charges": "0.84",
+        "stamp_duty": "8",
+        "total": "294.33"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "100",
+      "sell": "101",
+      "quantity": "7",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "0.42",
+        "stt": "0",
+        "exchange_charges": "0.02",
+        "gst": "0.08",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "0.52"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "100",
+      "sell": "100",
+      "quantity": "60",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "3.6",
+        "stt": "3",
+        "exchange_charges": "0.22",
+        "gst": "0.69",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "7.52"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1001",
+      "quantity": "50",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "30.01",
+        "stt": "25",
+        "exchange_charges": "1.83",
+        "gst": "5.75",
+        "sebi_charges": "0.1",
+        "stamp_duty": "1",
+        "total": "63.69"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1002",
+      "quantity": "49",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "29.43",
+        "stt": "25",
+        "exchange_charges": "1.8",
+        "gst": "5.64",
+        "sebi_charges": "0.1",
+        "stamp_duty": "1",
+        "total": "62.97"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "333",
+      "sell": "334",
+      "quantity": "10",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "2",
+        "stt": "2",
+        "exchange_charges": "0.13",
+        "gst": "0.39",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "4.53"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1010",
+      "quantity": "5",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "3.01",
+        "stt": "3",
+        "exchange_charges": "0.18",
+        "gst": "0.58",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "6.78"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1003",
+      "quantity": "25",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "15.02",
+        "stt": "13",
+        "exchange_charges": "0.92",
+        "gst": "2.88",
+        "sebi_charges": "0.05",
+        "stamp_duty": "1",
+        "total": "32.87"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "120",
+      "sell": "135",
+      "quantity": "75",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "5.74",
+        "stt": "5",
+        "exchange_charges": "0.35",
+        "gst": "1.1",
+        "sebi_charges": "0.02",
+        "stamp_duty": "0",
+        "total": "12.21"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "2456.35",
+      "sell": "2461.8",
+      "quantity": "137",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "169",
+        "exchange_charges": "12.33",
+        "gst": "9.54",
+        "sebi_charges": "0.67",
+        "stamp_duty": "7",
+        "total": "238.54"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "87.65",
+      "sell": "86.9",
+      "quantity": "2350",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "102",
+        "exchange_charges": "7.51",
+        "gst": "8.63",
+        "sebi_charges": "0.41",
+        "stamp_duty": "4",
+        "total": "162.55"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "15234.5",
+      "sell": "15301.25",
+      "quantity": "15",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "115",
+        "exchange_charges": "8.38",
+        "gst": "8.79",
+        "sebi_charges": "0.46",
+        "stamp_duty": "5",
+        "total": "177.63"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "0.85",
+      "sell": "1.15",
+      "quantity": "6500",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "3.9",
+        "stt": "4",
+        "exchange_charges": "0.23",
+        "gst": "0.75",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "8.89"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "642.4",
+      "sell": "650.05",
+      "quantity": "925",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "301",
+        "exchange_charges": "21.88",
+        "gst": "11.35",
+        "sebi_charges": "1.2",
+        "stamp_duty": "12",
+        "total": "387.43"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "18.75",
+      "sell": "19.2",
+      "quantity": "12000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "115",
+        "exchange_charges": "8.34",
+        "gst": "8.78",
+        "sebi_charges": "0.46",
+        "stamp_duty": "5",
+        "total": "177.58"
+      }
+    },
+    {
+      "segment": "fno_futures",
+      "exchange": "NFO",
+      "buy": "3499.95",
+      "sell": "3421.1",
+      "quantity": "33",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "stt": "56",
+        "exchange_charges": "4.18",
+        "gst": "7.99",
+        "sebi_charges": "0.23",
+        "stamp_duty": "2",
+        "total": "110.4"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1100",
+      "quantity": "400",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "660",
+        "exchange_charges": "298.45",
+        "gst": "61.07",
+        "sebi_charges": "0.84",
+        "stamp_duty": "12",
+        "total": "1072.36"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "100",
+      "sell": "101",
+      "quantity": "7",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "1",
+        "exchange_charges": "0.5",
+        "gst": "7.29",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "48.79"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "100",
+      "sell": "100",
+      "quantity": "60",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "9",
+        "exchange_charges": "4.26",
+        "gst": "7.97",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "61.24"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1001",
+      "quantity": "50",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "75",
+        "exchange_charges": "35.55",
+        "gst": "13.62",
+        "sebi_charges": "0.1",
+        "stamp_duty": "2",
+        "total": "166.27"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1002",
+      "quantity": "49",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "74",
+        "exchange_charges": "34.85",
+        "gst": "13.49",
+        "sebi_charges": "0.1",
+        "stamp_duty": "1",
+        "total": "163.44"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "333",
+      "sell": "334",
+      "quantity": "10",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "5",
+        "exchange_charges": "2.37",
+        "gst": "7.63",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "55.01"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1010",
+      "quantity": "5",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "8",
+        "exchange_charges": "3.57",
+        "gst": "7.84",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "59.42"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "1000",
+      "sell": "1003",
+      "quantity": "25",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "38",
+        "exchange_charges": "17.79",
+        "gst": "10.41",
+        "sebi_charges": "0.05",
+        "stamp_duty": "1",
+        "total": "107.25"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "120",
+      "sell": "135",
+      "quantity": "75",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "15",
+        "exchange_charges": "6.8",
+        "gst": "8.43",
+        "sebi_charges": "0.02",
+        "stamp_duty": "0",
+        "total": "70.25"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "2456.35",
+      "sell": "2461.8",
+      "quantity": "137",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "506",
+        "exchange_charges": "239.4",
+        "gst": "50.41",
+        "sebi_charges": "0.67",
+        "stamp_duty": "10",
+        "total": "846.48"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "87.65",
+      "sell": "86.9",
+      "quantity": "2350",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "306",
+        "exchange_charges": "145.74",
+        "gst": "33.51",
+        "sebi_charges": "0.41",
+        "stamp_duty": "6",
+        "total": "531.66"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "15234.5",
+      "sell": "15301.25",
+      "quantity": "15",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "344",
+        "exchange_charges": "162.74",
+        "gst": "36.58",
+        "sebi_charges": "0.46",
+        "stamp_duty": "7",
+        "total": "590.78"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "0.85",
+      "sell": "1.15",
+      "quantity": "6500",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "11",
+        "exchange_charges": "4.62",
+        "gst": "8.03",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "63.66"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "642.4",
+      "sell": "650.05",
+      "quantity": "925",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "902",
+        "exchange_charges": "424.77",
+        "gst": "83.87",
+        "sebi_charges": "1.2",
+        "stamp_duty": "18",
+        "total": "1469.84"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "18.75",
+      "sell": "19.2",
+      "quantity": "12000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "346",
+        "exchange_charges": "161.81",
+        "gst": "36.41",
+        "sebi_charges": "0.46",
+        "stamp_duty": "7",
+        "total": "591.68"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "NFO",
+      "buy": "3499.95",
+      "sell": "3421.1",
+      "quantity": "33",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "169",
+        "exchange_charges": "81.15",
+        "gst": "21.85",
+        "sebi_charges": "0.23",
+        "stamp_duty": "3",
+        "total": "315.23"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "1000",
+      "sell": "1100",
+      "quantity": "400",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "660",
+        "exchange_charges": "273",
+        "gst": "56.49",
+        "sebi_charges": "0.84",
+        "stamp_duty": "12",
+        "total": "1042.33"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "100",
+      "sell": "101",
+      "quantity": "7",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "1",
+        "exchange_charges": "0.46",
+        "gst": "7.28",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "48.74"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "100",
+      "sell": "100",
+      "quantity": "60",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "9",
+        "exchange_charges": "3.9",
+        "gst": "7.9",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "60.81"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "1000",
+      "sell": "1001",
+      "quantity": "50",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "75",
+        "exchange_charges": "32.52",
+        "gst": "13.07",
+        "sebi_charges": "0.1",
+        "stamp_duty": "2",
+        "total": "162.69"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "1000",
+      "sell": "1002",
+      "quantity": "49",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "74",
+        "exchange_charges": "31.88",
+        "gst": "12.96",
+        "sebi_charges": "0.1",
+        "stamp_duty": "1",
+        "total": "159.94"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "333",
+      "sell": "334",
+      "quantity": "10",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "5",
+        "exchange_charges": "2.17",
+        "gst": "7.59",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "54.77"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "1000",
+      "sell": "1010",
+      "quantity": "5",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "8",
+        "exchange_charges": "3.27",
+        "gst": "7.79",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "59.07"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "1000",
+      "sell": "1003",
+      "quantity": "25",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "38",
+        "exchange_charges": "16.27",
+        "gst": "10.14",
+        "sebi_charges": "0.05",
+        "stamp_duty": "1",
+        "total": "105.46"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "120",
+      "sell": "135",
+      "quantity": "75",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "15",
+        "exchange_charges": "6.22",
+        "gst": "8.32",
+        "sebi_charges": "0.02",
+        "stamp_duty": "0",
+        "total": "69.56"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "2456.35",
+      "sell": "2461.8",
+      "quantity": "137",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "506",
+        "exchange_charges": "218.98",
+        "gst": "46.74",
+        "sebi_charges": "0.67",
+        "stamp_duty": "10",
+        "total": "822.39"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "87.65",
+      "sell": "86.9",
+      "quantity": "2350",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "306",
+        "exchange_charges": "133.31",
+        "gst": "31.27",
+        "sebi_charges": "0.41",
+        "stamp_duty": "6",
+        "total": "516.99"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "15234.5",
+      "sell": "15301.25",
+      "quantity": "15",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "344",
+        "exchange_charges": "148.86",
+        "gst": "34.08",
+        "sebi_charges": "0.46",
+        "stamp_duty": "7",
+        "total": "574.4"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "0.85",
+      "sell": "1.15",
+      "quantity": "6500",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "11",
+        "exchange_charges": "4.22",
+        "gst": "7.96",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "63.19"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "642.4",
+      "sell": "650.05",
+      "quantity": "925",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "902",
+        "exchange_charges": "388.54",
+        "gst": "77.35",
+        "sebi_charges": "1.2",
+        "stamp_duty": "18",
+        "total": "1427.09"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "18.75",
+      "sell": "19.2",
+      "quantity": "12000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "346",
+        "exchange_charges": "148",
+        "gst": "33.92",
+        "sebi_charges": "0.46",
+        "stamp_duty": "7",
+        "total": "575.38"
+      }
+    },
+    {
+      "segment": "fno_options",
+      "exchange": "BFO",
+      "buy": "3499.95",
+      "sell": "3421.1",
+      "quantity": "33",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "stt": "169",
+        "exchange_charges": "74.23",
+        "gst": "20.6",
+        "sebi_charges": "0.23",
+        "stamp_duty": "3",
+        "total": "307.06"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "CDS",
+      "buy": "88.33",
+      "sell": "88.3525",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.71",
+        "gst": "7.34",
+        "sebi_charges": "0.18",
+        "stamp_duty": "0",
+        "total": "48.14"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "CDS",
+      "buy": "88.33",
+      "sell": "88.3525",
+      "quantity": "10000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "7.06",
+        "gst": "8.63",
+        "sebi_charges": "1.77",
+        "stamp_duty": "1",
+        "total": "57.58"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "CDS",
+      "buy": "84.1275",
+      "sell": "84.2",
+      "quantity": "37000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "24.91",
+        "gst": "12.25",
+        "sebi_charges": "6.23",
+        "stamp_duty": "3",
+        "total": "83.28"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "CDS",
+      "buy": "92.5",
+      "sell": "92.43",
+      "quantity": "250000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "184.93",
+        "gst": "44.65",
+        "sebi_charges": "46.23",
+        "stamp_duty": "23",
+        "total": "315.69"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "CDS",
+      "buy": "88.0025",
+      "sell": "88.01",
+      "quantity": "3000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "2.11",
+        "gst": "7.63",
+        "sebi_charges": "0.53",
+        "stamp_duty": "0",
+        "total": "50.01"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "CDS",
+      "buy": "83.1",
+      "sell": "83.9",
+      "quantity": "1200000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "801.6",
+        "gst": "169.52",
+        "sebi_charges": "200.4",
+        "stamp_duty": "100",
+        "total": "1211.32"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "BCD",
+      "buy": "88.33",
+      "sell": "88.3525",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.8",
+        "gst": "7.38",
+        "sebi_charges": "0.18",
+        "stamp_duty": "0",
+        "total": "48.36"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "BCD",
+      "buy": "88.33",
+      "sell": "88.3525",
+      "quantity": "10000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "7.95",
+        "gst": "8.95",
+        "sebi_charges": "1.77",
+        "stamp_duty": "1",
+        "total": "59.67"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "BCD",
+      "buy": "84.1275",
+      "sell": "84.2",
+      "quantity": "37000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "28.03",
+        "gst": "13.37",
+        "sebi_charges": "6.23",
+        "stamp_duty": "3",
+        "total": "90.63"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "BCD",
+      "buy": "92.5",
+      "sell": "92.43",
+      "quantity": "250000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "208.05",
+        "gst": "52.97",
+        "sebi_charges": "46.23",
+        "stamp_duty": "23",
+        "total": "370.25"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "BCD",
+      "buy": "88.0025",
+      "sell": "88.01",
+      "quantity": "3000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "2.38",
+        "gst": "7.72",
+        "sebi_charges": "0.53",
+        "stamp_duty": "0",
+        "total": "50.63"
+      }
+    },
+    {
+      "segment": "currency_futures",
+      "exchange": "BCD",
+      "buy": "83.1",
+      "sell": "83.9",
+      "quantity": "1200000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "901.8",
+        "gst": "205.6",
+        "sebi_charges": "200.4",
+        "stamp_duty": "100",
+        "total": "1447.8"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "CDS",
+      "buy": "0.25",
+      "sell": "0.3",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.18",
+        "gst": "7.23",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "47.41"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "CDS",
+      "buy": "0.1525",
+      "sell": "0.21",
+      "quantity": "40000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "4.8",
+        "gst": "8.07",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "52.88"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "CDS",
+      "buy": "1.2",
+      "sell": "1.05",
+      "quantity": "125000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "93.1",
+        "gst": "24.01",
+        "sebi_charges": "0.28",
+        "stamp_duty": "0",
+        "total": "157.39"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "CDS",
+      "buy": "0.0375",
+      "sell": "0.05",
+      "quantity": "500000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "14.49",
+        "gst": "9.82",
+        "sebi_charges": "0.04",
+        "stamp_duty": "0",
+        "total": "64.35"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "CDS",
+      "buy": "2.4075",
+      "sell": "2.5",
+      "quantity": "7000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "11.37",
+        "gst": "9.25",
+        "sebi_charges": "0.03",
+        "stamp_duty": "0",
+        "total": "60.65"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "CDS",
+      "buy": "88.33",
+      "sell": "88.3525",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "58.48",
+        "gst": "17.76",
+        "sebi_charges": "0.18",
+        "stamp_duty": "0",
+        "total": "116.42"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "BCD",
+      "buy": "0.25",
+      "sell": "0.3",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.01",
+        "gst": "7.2",
+        "sebi_charges": "0",
+        "stamp_duty": "0",
+        "total": "47.21"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "BCD",
+      "buy": "0.1525",
+      "sell": "0.21",
+      "quantity": "40000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.15",
+        "gst": "7.23",
+        "sebi_charges": "0.01",
+        "stamp_duty": "0",
+        "total": "47.39"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "BCD",
+      "buy": "1.2",
+      "sell": "1.05",
+      "quantity": "125000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "2.81",
+        "gst": "7.76",
+        "sebi_charges": "0.28",
+        "stamp_duty": "0",
+        "total": "50.85"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "BCD",
+      "buy": "0.0375",
+      "sell": "0.05",
+      "quantity": "500000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.44",
+        "gst": "7.29",
+        "sebi_charges": "0.04",
+        "stamp_duty": "0",
+        "total": "47.77"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "BCD",
+      "buy": "2.4075",
+      "sell": "2.5",
+      "quantity": "7000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.34",
+        "gst": "7.27",
+        "sebi_charges": "0.03",
+        "stamp_duty": "0",
+        "total": "47.64"
+      }
+    },
+    {
+      "segment": "currency_options",
+      "exchange": "BCD",
+      "buy": "88.33",
+      "sell": "88.3525",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "1.77",
+        "gst": "7.55",
+        "sebi_charges": "0.18",
+        "stamp_duty": "0",
+        "total": "49.5"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "MCX",
+      "buy": "250",
+      "sell": "252",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "10.54",
+        "gst": "9.19",
+        "stt": "25.2",
+        "sebi_charges": "0.5",
+        "stamp_duty": "5",
+        "total": "90.43"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "MCX",
+      "buy": "812.35",
+      "sell": "815.6",
+      "quantity": "2000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "68.37",
+        "gst": "20.09",
+        "stt": "163.12",
+        "sebi_charges": "3.26",
+        "stamp_duty": "32",
+        "total": "326.84"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "MCX",
+      "buy": "5425",
+      "sell": "5460",
+      "quantity": "3000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "685.75",
+        "gst": "136.51",
+        "stt": "1638",
+        "sebi_charges": "32.66",
+        "stamp_duty": "326",
+        "total": "2858.92"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "MCX",
+      "buy": "5425.5",
+      "sell": "5391",
+      "quantity": "11000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "2498.61",
+        "gst": "478.37",
+        "stt": "5930.1",
+        "sebi_charges": "118.98",
+        "stamp_duty": "1194",
+        "total": "10260.06"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "MCX",
+      "buy": "71250",
+      "sell": "71310",
+      "quantity": "1000",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "2993.76",
+        "gst": "571.74",
+        "stt": "7131",
+        "sebi_charges": "142.56",
+        "stamp_duty": "1425",
+        "total": "12304.06"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "NCO",
+      "buy": "250",
+      "sell": "252",
+      "quantity": "100",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "15.06",
+        "exchange_charges": "0.05",
+        "gst": "2.73",
+        "stt": "2.52",
+        "sebi_charges": "0.05",
+        "stamp_duty": "1",
+        "total": "21.41"
+      }
+    },
+    {
+      "segment": "commodity_futures",
+      "exchange": "NCO",
+      "buy": "5425",
+      "sell": "5460",
+      "quantity": "300",
+      "flat": "20",
+      "percent": "0.03",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "3.27",
+        "gst": "8.38",
+        "stt": "163.8",
+        "sebi_charges": "3.27",
+        "stamp_duty": "33",
+        "total": "251.72"
+      }
+    },
+    {
+      "segment": "commodity_options",
+      "exchange": "MCX",
+      "buy": "100",
+      "sell": "110",
+      "quantity": "2500",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "219.45",
+        "gst": "46.8",
+        "stt": "137.5",
+        "sebi_charges": "0.53",
+        "stamp_duty": "8",
+        "total": "452.28"
+      }
+    },
+    {
+      "segment": "commodity_options",
+      "exchange": "MCX",
+      "buy": "142.3",
+      "sell": "150.9",
+      "quantity": "10000",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "1225.58",
+        "gst": "228.33",
+        "stt": "754.5",
+        "sebi_charges": "2.93",
+        "stamp_duty": "43",
+        "total": "2294.34"
+      }
+    },
+    {
+      "segment": "commodity_options",
+      "exchange": "MCX",
+      "buy": "12.5",
+      "sell": "9.8",
+      "quantity": "62500",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "582.59",
+        "gst": "112.32",
+        "stt": "306.25",
+        "sebi_charges": "1.39",
+        "stamp_duty": "23",
+        "total": "1065.55"
+      }
+    },
+    {
+      "segment": "commodity_options",
+      "exchange": "MCX",
+      "buy": "850",
+      "sell": "910",
+      "quantity": "2500",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "1839.2",
+        "gst": "339.05",
+        "stt": "1137.5",
+        "sebi_charges": "4.4",
+        "stamp_duty": "64",
+        "total": "3424.15"
+      }
+    },
+    {
+      "segment": "commodity_options",
+      "exchange": "MCX",
+      "buy": "4.35",
+      "sell": "5.1",
+      "quantity": "7500",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "29.63",
+        "gst": "12.55",
+        "stt": "19.12",
+        "sebi_charges": "0.07",
+        "stamp_duty": "1",
+        "total": "102.37"
+      }
+    },
+    {
+      "segment": "commodity_options",
+      "exchange": "NCO",
+      "buy": "100",
+      "sell": "110",
+      "quantity": "100",
+      "flat": "20",
+      "percent": "0",
+      "shown": {
+        "brokerage": "40",
+        "exchange_charges": "0.21",
+        "gst": "7.24",
+        "stt": "5.5",
+        "sebi_charges": "0.02",
+        "stamp_duty": "0",
+        "total": "52.97"
+      }
+    }
+  ]
+}

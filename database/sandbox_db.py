@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime
+from decimal import Decimal
 
 import pytz
 
@@ -132,6 +133,18 @@ class SandboxTrades(Base):
     strategy = Column(String(100), nullable=True)
     trade_timestamp = Column(DateTime, nullable=False, default=func.now())
 
+    # What this fill was charged, each rounded to the paisa (sandbox/charges.py).
+    # Written in the same commit as the trade and the debit from the funds row,
+    # so a trade never shows a charge the balance did not pay. Zero on every
+    # trade from before charges existed: those fills were never debited.
+    brokerage = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
+    stt = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")  # STT or CTT
+    exchange_charges = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
+    sebi_charges = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
+    stamp_duty = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
+    gst = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
+    total_charges = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
+
     __table_args__ = (
         Index("idx_user_symbol", "user_id", "symbol"),
         Index("idx_orderid", "orderid"),
@@ -228,6 +241,16 @@ class SandboxFunds(Base):
     unrealized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Unrealized P&L from open positions
     total_pnl = Column(DECIMAL(15, 2), default=0.00)  # Total P&L (realized + unrealized)
 
+    # Brokerage and statutory charges paid on fills. Already taken out of
+    # available_balance; kept apart from the P&L columns, which stay gross so
+    # they agree with the position book, as a broker's do.
+    total_charges = Column(
+        DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00"
+    )  # Since the last funds reset
+    today_charges = Column(
+        DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00"
+    )  # Today only (resets daily with today_realized_pnl)
+
     # Reset tracking
     last_reset_date = Column(DateTime, nullable=False, default=func.now())
     reset_count = Column(Integer, default=0)  # Number of times reset has occurred
@@ -255,6 +278,10 @@ class SandboxDailyPnL(Base):
 
     # Total MTM = Realized + Unrealized
     total_mtm = Column(DECIMAL(15, 2), default=0.00)
+
+    # Brokerage and statutory charges paid that day. total_mtm above is gross;
+    # the day's net result is total_mtm - charges.
+    charges = Column(DECIMAL(15, 2), default=Decimal("0.00"), server_default="0.00")
 
     # Portfolio value at EOD
     available_balance = Column(DECIMAL(15, 2), default=0.00)
@@ -438,9 +465,61 @@ def init_db():
 
     _migrate_add_gtt_trigger_direction()
     _migrate_add_order_gtt_leg_id()
+    _migrate_add_charge_columns()
 
     # Initialize default configuration
     init_default_config()
+
+
+#: The columns brokerage and statutory charges added, by table. The funds
+#: columns are read by every balance change (sandbox/fund_manager.py compares
+#: all money columns on each write), so an install that restarts without
+#: running the upgrade script must still get them here, before the first order.
+#: upgrade/migrate_sandbox_charges.py adds the same set; a test holds the two
+#: and the models above to one list.
+CHARGE_COLUMNS_BY_TABLE = {
+    "sandbox_trades": (
+        "brokerage",
+        "stt",
+        "exchange_charges",
+        "sebi_charges",
+        "stamp_duty",
+        "gst",
+        "total_charges",
+    ),
+    "sandbox_funds": ("total_charges", "today_charges"),
+    "sandbox_daily_pnl": ("charges",),
+}
+
+
+def _migrate_add_charge_columns():
+    """Add the charge columns to databases created without them.
+
+    Existing rows read 0.00, which is the true figure and not a placeholder:
+    no trade made before this release was charged anything, and no balance had
+    a charge taken from it.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            added = []
+            for table, columns in CHARGE_COLUMNS_BY_TABLE.items():
+                existing = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+                if not existing:
+                    continue
+                for column in columns:
+                    if column in existing:
+                        continue
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} DECIMAL(15, 2) DEFAULT 0.00")
+                    )
+                    added.append(f"{table}.{column}")
+            if added:
+                conn.commit()
+                logger.info(f"Added sandbox charge columns: {', '.join(added)}")
+    except Exception as e:
+        logger.exception(f"Could not add the sandbox charge columns: {e}")
 
 
 def _migrate_add_order_gtt_leg_id():
@@ -633,6 +712,12 @@ def init_default_config():
         },
     ]
 
+    # The brokerage plan and the charges switch. The defaults come from the
+    # module that applies them, so the seed cannot drift from the calculation.
+    from sandbox.charges import default_config_rows
+
+    default_configs.extend(default_config_rows())
+
     for config in default_configs:
         try:
             existing = SandboxConfig.query.filter_by(config_key=config["config_key"]).first()
@@ -680,6 +765,69 @@ def set_config(config_key, config_value, description=None):
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error setting config {config_key}: {e}")
+        return False
+
+
+def get_configs(config_keys):
+    """Read several configuration values in one query.
+
+    One query is one consistent read: a caller that needs settings which belong
+    together (a segment's brokerage and the charges switch) never sees half of
+    a save that :func:`set_configs` is committing.
+
+    Returns:
+        ``{config_key: config_value}`` for the keys that exist. Empty on error.
+    """
+    try:
+        keys = list(config_keys)
+        if not keys:
+            return {}
+        rows = (
+            db_session.query(SandboxConfig.config_key, SandboxConfig.config_value)
+            .filter(SandboxConfig.config_key.in_(keys))
+            .all()
+        )
+        return {row.config_key: row.config_value for row in rows}
+    except Exception as e:
+        logger.exception(f"Error fetching configs: {e}")
+        return {}
+
+
+def set_configs(values, descriptions=None):
+    """Write several configuration values in one commit: all of them or none.
+
+    Args:
+        values: ``{config_key: config_value}``.
+        descriptions: Optional ``{config_key: description}`` for keys that are
+            being created.
+
+    Returns:
+        True when every value was stored.
+    """
+    descriptions = descriptions or {}
+    try:
+        existing = {
+            row.config_key: row
+            for row in SandboxConfig.query.filter(SandboxConfig.config_key.in_(list(values))).all()
+        }
+        for config_key, config_value in values.items():
+            row = existing.get(config_key)
+            if row is not None:
+                row.config_value = str(config_value)
+            else:
+                db_session.add(
+                    SandboxConfig(
+                        config_key=config_key,
+                        config_value=str(config_value),
+                        description=descriptions.get(config_key),
+                    )
+                )
+        db_session.commit()
+        logger.info(f"Updated {len(values)} sandbox config values")
+        return True
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error setting configs: {e}")
         return False
 
 

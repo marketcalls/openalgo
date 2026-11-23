@@ -49,6 +49,7 @@ need → drill into the specific file. Don't load everything at once.
 | Agent (`/agent`) and voice | [design/55-agent/README.md](design/55-agent/README.md) · [design/56-voice-agent/README.md](design/56-voice-agent/README.md) |
 | The 20 options and portfolio tools, including Strike Profile and Sector Rotation | [userguide/31-tools/README.md](userguide/31-tools/README.md) |
 | Portfolio, SIP and sector-rotation REST APIs | [api/README.md](api/README.md#portfolio-sip-and-sector-analysis) |
+| Sandbox brokerage and statutory charges, the brokerage calculator and the charges API | [prd/sandbox-charges.md](prd/sandbox-charges.md) · [api/account-services/charges.md](api/account-services/charges.md) |
 | Python strategy hosting and Flow workflows | [Python](userguide/20-python-strategies/README.md) · [Flow](userguide/21-flow-visual-builder/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner design proposal (external service, not shipped) | [scanner-architecture.md](scanner-architecture.md) |

@@ -145,7 +145,7 @@ response = client.optionsorder(
       offset="ATM",
       option_type="CE",
       action="BUY",
-      quantity=75,
+      quantity=65,
       pricetype="MARKET",
       product="NRML",
       splitsize = 0
@@ -180,7 +180,7 @@ response = client.optionsorder(
       offset="ITM4",
       option_type="PE",
       action="BUY",
-      quantity=75,
+      quantity=65,
       pricetype="MARKET",
       product="NRML",
       splitsize = 0
@@ -215,7 +215,7 @@ response = client.optionsorder(
       offset="OTM5",
       option_type="CE",
       action="BUY",
-      quantity=75,
+      quantity=65,
       pricetype="MARKET",
       product="NRML",
       splitsize = 0
@@ -251,10 +251,10 @@ response = client.optionsmultiorder(
     exchange="NSE_INDEX",
     expiry_date="25AUG26",
     legs=[
-        {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 75},
-        {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 75}
+        {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 65},
+        {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 65},
+        {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 65},
+        {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 65}
     ]
 )
 
@@ -322,8 +322,8 @@ response = client.optionsmultiorder(
       underlying="NIFTY",
       exchange="NSE_INDEX",
       legs=[
-          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "29SEP26"},
-          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25AUG26"}
+          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 65, "expiry_date": "29SEP26"},
+          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 65, "expiry_date": "25AUG26"}
       ]
   )
 
@@ -1133,7 +1133,7 @@ Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set
                 "prev_close": 388.25,
                 "volume": 2841075,
                 "oi": 4218300,
-                "lotsize": 75,
+                "lotsize": 65,
                 "tick_size": 0.05,
                 "implied_volatility": 15.33,
                 "delta": 0.5739,
@@ -1155,7 +1155,7 @@ Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set
                 "prev_close": 236.0,
                 "volume": 3162450,
                 "oi": 5104275,
-                "lotsize": 75,
+                "lotsize": 65,
                 "tick_size": 0.05,
                 "implied_volatility": 15.33,
                 "delta": -0.4261,
@@ -1180,7 +1180,7 @@ Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set
                 "prev_close": 324.05,
                 "volume": 2841075,
                 "oi": 4218300,
-                "lotsize": 75,
+                "lotsize": 65,
                 "tick_size": 0.05,
                 "implied_volatility": 14.92,
                 "delta": 0.5221,
@@ -1202,7 +1202,7 @@ Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set
                 "prev_close": 273.15,
                 "volume": 3162450,
                 "oi": 5104275,
-                "lotsize": 75,
+                "lotsize": 65,
                 "tick_size": 0.05,
                 "implied_volatility": 14.92,
                 "delta": -0.4779,
@@ -1227,7 +1227,7 @@ Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set
                 "prev_close": 269.45,
                 "volume": 2841075,
                 "oi": 4218300,
-                "lotsize": 75,
+                "lotsize": 65,
                 "tick_size": 0.05,
                 "implied_volatility": 14.71,
                 "delta": 0.4679,
@@ -1249,7 +1249,7 @@ Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set
                 "prev_close": 319.25,
                 "volume": 3162450,
                 "oi": 5104275,
-                "lotsize": 75,
+                "lotsize": 65,
                 "tick_size": 0.05,
                 "implied_volatility": 14.71,
                 "delta": -0.5321,
@@ -1285,7 +1285,7 @@ print(response)
     "freeze_qty": 1800,
     "id": 57900,
     "instrumenttype": "FUT",
-    "lotsize": 75,
+    "lotsize": 65,
     "name": "NIFTY",
     "strike": 0,
     "symbol": "NIFTY25AUG26FUT",
@@ -1315,7 +1315,7 @@ print(response)
       "expiry": "25-AUG-26",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
-      "lotsize": 75,
+      "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
       "symbol": "NIFTY25AUG2626000CE",
@@ -1329,7 +1329,7 @@ print(response)
       "expiry": "29-DEC-26",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
-      "lotsize": 75,
+      "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
       "symbol": "NIFTY29DEC2626000CE",
@@ -1343,7 +1343,7 @@ print(response)
       "expiry": "26-DEC-28",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
-      "lotsize": 75,
+      "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
       "symbol": "NIFTY26DEC2826000CE",
@@ -1357,7 +1357,7 @@ print(response)
       "expiry": "28-DEC-27",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
-      "lotsize": 75,
+      "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
       "symbol": "NIFTY28DEC2726000CE",
@@ -1385,7 +1385,7 @@ print(response)
       "expiry": "24-DEC-29",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
-      "lotsize": 75,
+      "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
       "symbol": "NIFTY24DEC2926000CE",
@@ -1399,7 +1399,7 @@ print(response)
       "expiry": "23-DEC-25",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
-      "lotsize": 75,
+      "lotsize": 65,
       "name": "NIFTY",
       "strike": 26000,
       "symbol": "NIFTY23DEC2526000CE",
@@ -1435,7 +1435,7 @@ print(response)
   "status": "success",
   "symbol": "NIFTY25AUG2625950CE",
   "exchange": "NFO",
-  "lotsize": 75,
+  "lotsize": 65,
   "tick_size": 5,
   "freeze_qty": 1800,
   "underlying_ltp": 25966.4
@@ -1463,7 +1463,7 @@ print(response)
   "status": "success",
   "symbol": "NIFTY25AUG2626100PE",
   "exchange": "NFO",
-  "lotsize": 75,
+  "lotsize": 65,
   "tick_size": 5,
   "freeze_qty": 1800,
   "underlying_ltp": 25966.4
@@ -1491,7 +1491,7 @@ print(response)
   "status": "success",
   "symbol": "NIFTY25AUG2626150CE",
   "exchange": "NFO",
-  "lotsize": 75,
+  "lotsize": 65,
   "tick_size": 5,
   "freeze_qty": 1800,
   "underlying_ltp": 25966.4
@@ -1781,7 +1781,7 @@ response = client.margin(positions=[
           "action": "BUY",
           "product": "NRML",
           "pricetype": "MARKET",
-          "quantity": "75"
+          "quantity": "65"
       },
       {
           "symbol": "NIFTY25AUG2625500CE",
@@ -1789,7 +1789,7 @@ response = client.margin(positions=[
           "action": "SELL",
           "product": "NRML",
           "pricetype": "MARKET",
-          "quantity": "75"
+          "quantity": "65"
       }
   ])
 ```
@@ -2389,7 +2389,7 @@ StrategyOrders Response:
       "symbol": "NIFTY04SEP2624500CE",
       "exchange": "NFO",
       "action": "SELL",
-      "qty": 75,
+      "qty": 65,
       "product": "NRML",
       "pricetype": "MARKET",
       "price": 0.0,
@@ -2397,7 +2397,7 @@ StrategyOrders Response:
       "placed_at": "2026-08-30T03:50:11.610224+00:00",
       "filled_at": "2026-08-30T03:50:12.004881+00:00",
       "avg_fill_price": 142.35,
-      "filled_qty": 75,
+      "filled_qty": 65,
       "reject_reason": null
     }
   ]

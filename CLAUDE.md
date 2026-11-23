@@ -22,7 +22,8 @@ single broker session and WebSocket feed:
 | Scalping Terminal | `/scalping` | Keyboard-driven options scalping (`blueprints/scalping.py` resolves underlying/expiry/strike; index options only — NRML/MIS, never CNC) |
 
 All surfaces share the Sandbox engine (1 Crore sandbox capital, exchange-aligned
-auto square-off) and support Telegram alerts.
+auto square-off, brokerage and statutory charges on every fill) and support
+Telegram alerts.
 
 Repository: https://github.com/marketcalls/openalgo
 Documentation: https://docs.openalgo.in
@@ -378,6 +379,66 @@ all sit on it.
   marked `PORTED DEFECT`.
 
 Full reference: [`docs/prompt/strategy_rms_documentation.md`](docs/prompt/strategy_rms_documentation.md).
+
+### Sandbox charges live in sandbox/charges.py and land in the fill's own commit
+
+Every sandbox fill pays brokerage (the trader's plan, per segment) and
+statutory charges (STT or CTT, exchange, SEBI, stamp duty, GST). The plan and
+the transaction cost report are at `/sandbox/commissions`, the brokerage
+calculator at `/sandbox/calculator`, and `POST /api/v1/charges` prices one
+order. Full reference: [`docs/prd/sandbox-charges.md`](docs/prd/sandbox-charges.md).
+
+- **`sandbox/charges.py` performs no I/O**, by the same rule as
+  `services/risk/`. The fill, the calculator, the report and the API all call
+  it. The frontend never works a charge out: it sends a trade and shows what
+  comes back.
+- **A charge is staged inside the fill's transaction, after the claim.**
+  `_execute_order` claims the order, adds the trade with its charge columns,
+  stages the debit (`FundManager.stage_charges`, a compare-and-set) and commits
+  once. Before the claim, a thread that loses the order would still charge it;
+  in a commit of its own, a fill that then fails would keep the charge.
+- **P&L stays gross.** A charge comes out of the available balance and goes to
+  its own totals. It never touches realized P&L (which must keep agreeing with
+  the position book) or used margin (which margin reconciliation compares with
+  the positions).
+- **A new funds money column needs both upgrade paths.** `_MONEY_COLUMNS` is
+  compared on every balance write, so a database missing one refuses every
+  sandbox order. It has to arrive from the startup hook in
+  `database/sandbox_db.py` and from a script in `upgrade/`.
+- **Statutory rates are code, the brokerage plan is the trader's data.** A rate
+  change edits `SEGMENTS`, moves `STATUTORY_SCHEDULE_AS_OF` and adds the case
+  to `test/sandbox/test_charges.py`: no migration, and trades already made keep
+  what they paid. The plan lives in `sandbox_config`, and a migration only ever
+  inserts a key that is missing.
+- **Crypto is all zeros until the trader enters a fee**, and nothing is added
+  to that fee. A crypto venue prices differently from an Indian exchange, so
+  none of the Indian schedule is applied to it.
+- **One market per broker, decided by the server.** A broker on the Indian
+  exchanges is shown the Indian plan, calculator and report columns; a crypto
+  venue is shown the crypto ones; never both on one page.
+  `blueprints/sandbox._charge_market` reads the logged-in broker's
+  `broker_type`, the settings endpoint sends that market's segments alone, and
+  the estimate endpoint refuses a segment of the other. A page renders what it
+  is sent and keeps no list of markets.
+- **Rounding is a contract note's, and the published figures are the test.**
+  STT and stamp duty go to the nearest rupee, CTT and every other line to the
+  paisa, the exchange charge and its levy are rounded apart and added, and the
+  total is the sum of the lines. A fill is one note; the calculator prices a
+  buy and a sell as one note for the two. `test/sandbox/charges_reference.json`
+  holds 117 trades read from a published brokerage calculator, and
+  `test_charges.py` names the fourteen that differ and why. The first version
+  rounded every line to the paisa per fill and matched 8 of them.
+- **A segment's exchanges are sent as a list, main exchange first.** The rates
+  travel as a JSON object and the server sorts its keys, so a page that reads
+  the codes off the rates opens every calculator card on BSE and BFO. The page
+  tests' fixture sorts its rates the same way for that reason.
+- **No broker is named** in this feature's code, tests, pages or docs. The
+  rates are "the published rates" and the comparison is with "a published
+  brokerage calculator".
+- **The margin and race suites run with charges off**
+  (`prepare_databases()` in `test/test_gthread_sandbox_support.py`), because
+  they assert balances to the paisa. A test that wants charges switches them
+  on, as `test/test_gthread_sandbox_charges.py` does.
 
 ### An order path decides once, under the lock, and never on a global switch
 

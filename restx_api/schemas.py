@@ -358,6 +358,37 @@ class MarginCalculatorSchema(Schema):
     )
 
 
+class ChargesSchema(Schema):
+    """Schema for the charges request: one order, as it would be placed"""
+
+    apikey = fields.Str(
+        required=True, validate=validate.Length(min=1, max=256, error="API key must be between 1 and 256 characters.")
+    )
+    symbol = fields.Str(
+        required=True,
+        validate=validate.Length(
+            min=1, max=50, error="Symbol must be between 1 and 50 characters."
+        ),
+    )
+    exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    product = fields.Str(required=True, validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    quantity = fields.Float(
+        required=True,
+        validate=validate.Range(min=0, min_inclusive=False, error="Quantity must be a positive number."),
+    )
+    # Required and above zero: charges are a share of the trade value, so a
+    # MARKET order is priced at the price it is expected to trade at.
+    price = fields.Float(
+        required=True,
+        validate=validate.Range(min=0, min_inclusive=False, error="Price must be a positive number."),
+    )
+
+    @post_load
+    def coerce_quantity(self, data, **kwargs):
+        return _coerce_quantity_to_int(data)
+
+
 # -----------------------------------------------------------------------------
 # GTT (Good Till Triggered) Schemas
 # -----------------------------------------------------------------------------

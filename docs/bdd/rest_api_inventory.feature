@@ -16,6 +16,7 @@ Feature: Registered REST API v1 inventory
       | POST | /cancelallorder | cancel_all_order.py |
       | POST | /cancelgttorder | cancel_gtt_order.py |
       | POST | /cancelorder | cancel_order.py |
+      | POST | /charges | charges.py |
       | GET | /chart | chart_api.py |
       | POST | /chart | chart_api.py |
       | POST | /closeposition | close_position.py |

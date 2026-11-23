@@ -53,12 +53,19 @@ RESET_KEYS = [
 ]
 
 
+def _reset_keys():
+    """RESET_KEYS plus the brokerage plan, which the reset also puts back."""
+    from sandbox.charges import config_keys
+
+    return RESET_KEYS + list(config_keys())
+
+
 @pytest.fixture(autouse=True)
 def fresh_account():
     prepare_databases()
     reset_user(USER)
     release_sessions()
-    with configs_restored(RESET_KEYS):
+    with configs_restored(_reset_keys()):
         yield
     release_sessions()
 
