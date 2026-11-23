@@ -263,6 +263,7 @@ class BrokerData:
                 "prev_close": quote.get("ohlc", {}).get("close", 0),
                 "volume": quote.get("volume", 0),
                 "oi": quote.get("oi", 0),
+                "last_trade_time": quote.get("last_trade_time"),
             }
 
         except ZerodhaPermissionError as e:
@@ -446,6 +447,7 @@ class BrokerData:
                     "prev_close": quote.get("ohlc", {}).get("close", 0),
                     "volume": quote.get("volume", 0),
                     "oi": quote.get("oi", 0),
+                    "last_trade_time": quote.get("last_trade_time"),
                 },
             }
             results.append(result_item)

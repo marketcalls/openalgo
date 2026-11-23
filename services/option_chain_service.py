@@ -676,6 +676,7 @@ def get_option_chain(
                     "prev_close": ce_quote.get("prev_close", 0),
                     "volume": ce_quote.get("volume", 0),
                     "oi": ce_quote.get("oi", 0),
+                    "last_trade_time": ce_quote.get("last_trade_time"),
                     "lotsize": item["ce"]["lotsize"],
                     "tick_size": item["ce"]["tick_size"],
                 }
@@ -700,6 +701,7 @@ def get_option_chain(
                     "prev_close": pe_quote.get("prev_close", 0),
                     "volume": pe_quote.get("volume", 0),
                     "oi": pe_quote.get("oi", 0),
+                    "last_trade_time": pe_quote.get("last_trade_time"),
                     "lotsize": item["pe"]["lotsize"],
                     "tick_size": item["pe"]["tick_size"],
                 }
