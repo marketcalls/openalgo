@@ -1171,7 +1171,10 @@ class PositionManager:
             for trade in trades:
                 price = float(trade.price)
                 quantity = abs(trade.quantity)  # Use absolute value for trade_value calculation
-                trade_value = round(price * quantity, 2)  # Round to 2 decimal places
+                # contract_value = units per quantity (Dhan MCX quantity is in lots, e.g. 100 for
+                # CRUDEOIL), as the positions P&L already applies.
+                cv = float(self._get_contract_value(trade.symbol, trade.exchange))
+                trade_value = round(price * quantity * cv, 2)  # Round to 2 decimal places
 
                 tradebook.append(
                     {
