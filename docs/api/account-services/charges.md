@@ -156,3 +156,355 @@ there is nothing to work out without it. For options, send the premium.
   entered with nothing added.
 - **Not included:** depository (DP) charges on a delivery sell, and STT on an
   option that is exercised at expiry.
+
+## Examples
+
+Every response in this section is what a running OpenAlgo server answered to
+the request shown, under the default brokerage plan (20 per executed order, or
+a percentage of the trade value where that is lower). The symbol has to be in
+your own master contract, so use a contract that is listed for you: the expiry
+dates below are only examples.
+
+### What twelve orders cost
+
+| Order | Exchange | Product | Segment | Trade value | Brokerage | STT or CTT | Stamp duty | Exchange, IPFT and SEBI | GST | Total |
+|-------|----------|---------|---------|-------------|-----------|------------|------------|-------------------------|-----|-------|
+| BUY 50 RELIANCE at 2500 | NSE | CNC | Equity Delivery | 125000.00 | 20.00 | 125.00 | 19.00 | 3.97 | 4.31 | **172.28** |
+| SELL 50 RELIANCE at 2600 | NSE | CNC | Equity Delivery | 130000.00 | 20.00 | 130.00 | 0.00 | 4.12 | 4.34 | **158.46** |
+| BUY 50 RELIANCE at 2500 | BSE | CNC | Equity Delivery | 125000.00 | 20.00 | 125.00 | 19.00 | 4.82 | 4.47 | **173.29** |
+| BUY 400 SBIN at 1000 | NSE | MIS | Equity Intraday | 400000.00 | 20.00 | 0.00 | 12.00 | 12.68 | 5.88 | **50.56** |
+| SELL 400 SBIN at 1100 | NSE | MIS | Equity Intraday | 440000.00 | 20.00 | 110.00 | 0.00 | 13.95 | 6.11 | **150.06** |
+| BUY 75 NIFTY29DEC26FUT at 26000 | NFO | NRML | F&O Futures | 1950000.00 | 20.00 | 0.00 | 39.00 | 37.64 | 10.38 | **107.02** |
+| SELL 75 NIFTY29DEC26FUT at 26100 | NFO | NRML | F&O Futures | 1957500.00 | 20.00 | 979.00 | 0.00 | 37.78 | 10.40 | **1047.18** |
+| BUY 75 NIFTY29DEC2626000CE at 120 | NFO | NRML | F&O Options | 9000.00 | 20.00 | 0.00 | 0.00 | 3.21 | 4.18 | **27.39** |
+| SELL 75 NIFTY29DEC2626000CE at 135.5 | NFO | NRML | F&O Options | 10162.50 | 20.00 | 15.00 | 0.00 | 3.62 | 4.25 | **42.87** |
+| BUY 1000 USDINR29DEC26FUT at 88.5 | CDS | NRML | Currency Futures | 88500.00 | 20.00 | 0.00 | 0.00 | 0.44 | 3.68 | **24.12** |
+| SELL 100 CRUDEOIL18DEC26FUT at 5823 | MCX | NRML | Commodity Futures | 582300.00 | 20.00 | 58.23 | 0.00 | 12.81 | 5.91 | **96.95** |
+| BUY 1 BTCUSDFUT at 60000 | CRYPTO | NRML | Crypto Futures and Spot | 60.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | **0.00** |
+
+What the table shows:
+
+- **Stamp duty is charged on a buy only**, to the nearest rupee, so on a small
+  buy it is 0.00 (the option and the currency rows).
+- **STT is charged on a sell**, except on equity delivery, which pays it on
+  both sides, and on currency, which pays none.
+- **An option is charged on its premium**, so its trade value is the premium
+  times the quantity, not the strike.
+- **The exchange decides the rate.** The same delivery buy pays 3.71 in
+  transaction charges and 0.13 in IPFT levy on NSE, and 4.69 with no
+  levy on BSE.
+- **STT is rounded to the rupee and CTT is not.** The option sell pays
+  15.00 and the commodity sell pays 58.23.
+- **Crypto pays nothing** until a venue fee is entered on
+  `/sandbox/commissions`.
+
+### An intraday trade, both orders
+
+One request prices one order, so a round trip is two requests. The buy:
+
+Request:
+
+```json
+{
+  "apikey": "<your_app_apikey>",
+  "symbol": "SBIN",
+  "exchange": "NSE",
+  "action": "BUY",
+  "product": "MIS",
+  "quantity": 400,
+  "price": 1000
+}
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "product": "MIS",
+    "action": "BUY",
+    "quantity": 400,
+    "price": 1000.0,
+    "segment": "Equity Intraday",
+    "trade_value": 400000.0,
+    "charges": {
+      "total": 50.56,
+      "brokerage": 20.0,
+      "taxes": {
+        "gst": 5.88,
+        "stt": 0.0,
+        "stamp_duty": 12.0
+      },
+      "other_charges": {
+        "transaction": 11.88,
+        "clearing": 0.0,
+        "ipft": 0.4,
+        "sebi_turnover": 0.4
+      }
+    }
+  }
+}
+```
+
+The sell:
+
+Request:
+
+```json
+{
+  "apikey": "<your_app_apikey>",
+  "symbol": "SBIN",
+  "exchange": "NSE",
+  "action": "SELL",
+  "product": "MIS",
+  "quantity": 400,
+  "price": 1100
+}
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "product": "MIS",
+    "action": "SELL",
+    "quantity": 400,
+    "price": 1100.0,
+    "segment": "Equity Intraday",
+    "trade_value": 440000.0,
+    "charges": {
+      "total": 150.06,
+      "brokerage": 20.0,
+      "taxes": {
+        "gst": 6.11,
+        "stt": 110.0,
+        "stamp_duty": 0.0
+      },
+      "other_charges": {
+        "transaction": 13.07,
+        "clearing": 0.0,
+        "ipft": 0.44,
+        "sebi_turnover": 0.44
+      }
+    }
+  }
+}
+```
+
+The two orders cost 50.56 + 150.06 = **200.62**. The gross profit is
+(1100 - 1000) x 400 = 40000, so the trade keeps 39799.38. The brokerage
+calculator at `/sandbox/calculator` shows the same figures for this trade.
+
+### Selling an option
+
+STT on an option is charged on the sell, on the premium (0.15% of 10162.50
+is 15.24, which is 15.00 to the nearest rupee):
+
+Request:
+
+```json
+{
+  "apikey": "<your_app_apikey>",
+  "symbol": "NIFTY29DEC2626000CE",
+  "exchange": "NFO",
+  "action": "SELL",
+  "product": "NRML",
+  "quantity": 75,
+  "price": 135.5
+}
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "symbol": "NIFTY29DEC2626000CE",
+    "exchange": "NFO",
+    "product": "NRML",
+    "action": "SELL",
+    "quantity": 75,
+    "price": 135.5,
+    "segment": "F&O Options",
+    "trade_value": 10162.5,
+    "charges": {
+      "total": 42.87,
+      "brokerage": 20.0,
+      "taxes": {
+        "gst": 4.25,
+        "stt": 15.0,
+        "stamp_duty": 0.0
+      },
+      "other_charges": {
+        "transaction": 3.56,
+        "clearing": 0.0,
+        "ipft": 0.05,
+        "sebi_turnover": 0.01
+      }
+    }
+  }
+}
+```
+
+### A commodity futures sell
+
+On a commodity exchange `taxes.stt` carries the Commodities Transaction Tax,
+kept to the paisa, and there is no IPFT levy:
+
+Request:
+
+```json
+{
+  "apikey": "<your_app_apikey>",
+  "symbol": "CRUDEOIL18DEC26FUT",
+  "exchange": "MCX",
+  "action": "SELL",
+  "product": "NRML",
+  "quantity": 100,
+  "price": 5823
+}
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "symbol": "CRUDEOIL18DEC26FUT",
+    "exchange": "MCX",
+    "product": "NRML",
+    "action": "SELL",
+    "quantity": 100,
+    "price": 5823.0,
+    "segment": "Commodity Futures",
+    "trade_value": 582300.0,
+    "charges": {
+      "total": 96.95,
+      "brokerage": 20.0,
+      "taxes": {
+        "gst": 5.91,
+        "stt": 58.23,
+        "stamp_duty": 0.0
+      },
+      "other_charges": {
+        "transaction": 12.23,
+        "clearing": 0.0,
+        "ipft": 0.0,
+        "sebi_turnover": 0.58
+      }
+    }
+  }
+}
+```
+
+### A crypto order
+
+`trade_value` is the price times the quantity times the contract multiplier of
+the symbol (60000 x 1 x 0.001 here). Every charge is zero until a venue fee is
+entered on `/sandbox/commissions`:
+
+Request:
+
+```json
+{
+  "apikey": "<your_app_apikey>",
+  "symbol": "BTCUSDFUT",
+  "exchange": "CRYPTO",
+  "action": "BUY",
+  "product": "NRML",
+  "quantity": 1,
+  "price": 60000
+}
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "symbol": "BTCUSDFUT",
+    "exchange": "CRYPTO",
+    "product": "NRML",
+    "action": "BUY",
+    "quantity": 1,
+    "price": 60000.0,
+    "segment": "Crypto Futures and Spot",
+    "trade_value": 60.0,
+    "charges": {
+      "total": 0.0,
+      "brokerage": 0.0,
+      "taxes": {
+        "gst": 0.0,
+        "stt": 0.0,
+        "stamp_duty": 0.0
+      },
+      "other_charges": {
+        "transaction": 0.0,
+        "clearing": 0.0,
+        "ipft": 0.0,
+        "sebi_turnover": 0.0
+      }
+    }
+  }
+}
+```
+
+### When a request is refused
+
+A key that is not valid (HTTP 403):
+
+```json
+{
+  "status": "error",
+  "message": "Invalid openalgo apikey"
+}
+```
+
+A symbol that is not in the master contract (HTTP 400):
+
+```json
+{
+  "status": "error",
+  "message": "Symbol NOSUCHSYMBOL not found on NSE"
+}
+```
+
+An index, which cannot be traded (HTTP 400):
+
+```json
+{
+  "status": "error",
+  "message": "Orders cannot be placed on NSE_INDEX, so no charges apply to it"
+}
+```
+
+A request with no `price` (HTTP 400):
+
+```json
+{
+  "status": "error",
+  "message": "{'price': ['Missing data for required field.']}"
+}
+```
+
+A price of zero (HTTP 400):
+
+```json
+{
+  "status": "error",
+  "message": "{'price': ['Price must be a positive number.']}"
+}
+```
+
+`apikey` is read from the request body. A request that sends the key only in
+a header is answered as a request with no key.
