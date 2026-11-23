@@ -90,7 +90,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/charges \
 | exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX, NCDEX, NCO, CRYPTO | Mandatory | - |
 | action | BUY or SELL | Mandatory | - |
 | product | Product type: MIS, CNC, NRML | Mandatory | - |
-| quantity | Order quantity, in units. One lot of 75 is 75 | Mandatory | - |
+| quantity | Order quantity, in units. One lot of 65 is 65 | Mandatory | - |
 | price | The price the order would trade at. For a MARKET order, send the last traded price | Mandatory | - |
 
 `price` must be above zero. Every charge is a share of the trade value, so
@@ -174,10 +174,10 @@ dates below are only examples.
 | BUY 50 RELIANCE at 2500 | BSE | CNC | Equity Delivery | 125000.00 | 20.00 | 125.00 | 19.00 | 4.82 | 4.47 | **173.29** |
 | BUY 400 SBIN at 1000 | NSE | MIS | Equity Intraday | 400000.00 | 20.00 | 0.00 | 12.00 | 12.68 | 5.88 | **50.56** |
 | SELL 400 SBIN at 1100 | NSE | MIS | Equity Intraday | 440000.00 | 20.00 | 110.00 | 0.00 | 13.95 | 6.11 | **150.06** |
-| BUY 75 NIFTY29DEC26FUT at 26000 | NFO | NRML | F&O Futures | 1950000.00 | 20.00 | 0.00 | 39.00 | 37.64 | 10.38 | **107.02** |
-| SELL 75 NIFTY29DEC26FUT at 26100 | NFO | NRML | F&O Futures | 1957500.00 | 20.00 | 979.00 | 0.00 | 37.78 | 10.40 | **1047.18** |
-| BUY 75 NIFTY29DEC2626000CE at 120 | NFO | NRML | F&O Options | 9000.00 | 20.00 | 0.00 | 0.00 | 3.21 | 4.18 | **27.39** |
-| SELL 75 NIFTY29DEC2626000CE at 135.5 | NFO | NRML | F&O Options | 10162.50 | 20.00 | 15.00 | 0.00 | 3.62 | 4.25 | **42.87** |
+| BUY 65 NIFTY29DEC26FUT at 26000 | NFO | NRML | F&O Futures | 1690000.00 | 20.00 | 0.00 | 34.00 | 32.62 | 9.47 | **96.09** |
+| SELL 65 NIFTY29DEC26FUT at 26100 | NFO | NRML | F&O Futures | 1696500.00 | 20.00 | 848.00 | 0.00 | 32.75 | 9.50 | **910.25** |
+| BUY 65 NIFTY29DEC2626000CE at 120 | NFO | NRML | F&O Options | 7800.00 | 20.00 | 0.00 | 0.00 | 2.78 | 4.10 | **26.88** |
+| SELL 65 NIFTY29DEC2626000CE at 135.5 | NFO | NRML | F&O Options | 8807.50 | 20.00 | 13.00 | 0.00 | 3.14 | 4.17 | **40.31** |
 | BUY 1000 USDINR29DEC26FUT at 88.5 | CDS | NRML | Currency Futures | 88500.00 | 20.00 | 0.00 | 0.00 | 0.44 | 3.68 | **24.12** |
 | SELL 100 CRUDEOIL18DEC26FUT at 5823 | MCX | NRML | Commodity Futures | 582300.00 | 20.00 | 58.23 | 0.00 | 12.81 | 5.91 | **96.95** |
 | BUY 1 BTCUSDFUT at 60000 | CRYPTO | NRML | Crypto Futures and Spot | 60.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | **0.00** |
@@ -194,7 +194,7 @@ What the table shows:
   transaction charges and 0.13 in IPFT levy on NSE, and 4.69 with no
   levy on BSE.
 - **STT is rounded to the rupee and CTT is not.** The option sell pays
-  15.00 and the commodity sell pays 58.23.
+  13.00 and the commodity sell pays 58.23.
 - **Crypto pays nothing** until a venue fee is entered on
   `/sandbox/commissions`.
 
@@ -304,8 +304,8 @@ calculator at `/sandbox/calculator` shows the same figures for this trade.
 
 ### Selling an option
 
-STT on an option is charged on the sell, on the premium (0.15% of 10162.50
-is 15.24, which is 15.00 to the nearest rupee):
+STT on an option is charged on the sell, on the premium (0.15% of 8807.50
+is 13.21, which is 13.00 to the nearest rupee):
 
 Request:
 
@@ -316,7 +316,7 @@ Request:
   "exchange": "NFO",
   "action": "SELL",
   "product": "NRML",
-  "quantity": 75,
+  "quantity": 65,
   "price": 135.5
 }
 ```
@@ -331,22 +331,22 @@ Response:
     "exchange": "NFO",
     "product": "NRML",
     "action": "SELL",
-    "quantity": 75,
+    "quantity": 65,
     "price": 135.5,
     "segment": "F&O Options",
-    "trade_value": 10162.5,
+    "trade_value": 8807.5,
     "charges": {
-      "total": 42.87,
+      "total": 40.31,
       "brokerage": 20.0,
       "taxes": {
-        "gst": 4.25,
-        "stt": 15.0,
+        "gst": 4.17,
+        "stt": 13.0,
         "stamp_duty": 0.0
       },
       "other_charges": {
-        "transaction": 3.56,
+        "transaction": 3.09,
         "clearing": 0.0,
-        "ipft": 0.05,
+        "ipft": 0.04,
         "sebi_turnover": 0.01
       }
     }

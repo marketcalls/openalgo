@@ -40,7 +40,7 @@ const INDIAN_TABS: { key: string; label: string; groups: string[] }[] = [
 ]
 
 const INDIAN_NOTE =
-  'Quantity is in units, as on an order: one lot of 75 is 75. For options, the prices are the premium. A buy and a sell are priced together, as one contract note: STT and stamp duty to the nearest rupee, the other lines to the paisa. Each order is charged on its own when it fills, so the two fills can come to a paisa more or less than the figure here.'
+  'Quantity is in units, as on an order: one lot of 65 is 65. For options, the prices are the premium. A buy and a sell are priced together, as one contract note: STT and stamp duty to the nearest rupee, the other lines to the paisa. Each order is charged on its own when it fills, so the two fills can come to a paisa more or less than the figure here.'
 
 const CRYPTO_NOTE =
   'A crypto trade is charged only the venue fee you enter on the Venue Fee page, with nothing added to it. Until you enter one, trades cost nothing here.'
