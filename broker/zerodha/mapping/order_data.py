@@ -131,6 +131,12 @@ def map_order_data(order_data):
             # Convert before the symbol is rewritten -- both forms resolve the
             # same underlying, but keeping the two rewrites together makes the
             # boundary obvious.
+            if "filled_quantity" in order:
+                # Kite reports integer counts. Validate before MCX conversion can
+                # truncate a malformed fraction. Missing evidence is not zero.
+                filled, total = order["filled_quantity"], order.get("quantity")
+                if type(filled) is not int or type(total) is not int or not 0 <= filled <= total:
+                    del order["filled_quantity"]
             _to_openalgo_quantities(order, _ORDER_QTY_FIELDS)
 
             # Check if a symbol was found; if so, update the trading_symbol in the current order
@@ -224,6 +230,8 @@ def transform_order_data(orders):
             "timestamp": order.get("order_timestamp", ""),
         }
 
+        if "filled_quantity" in order:
+            transformed_order["filled_quantity"] = order["filled_quantity"]
         transformed_orders.append(transformed_order)
 
     return transformed_orders
