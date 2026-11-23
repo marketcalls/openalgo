@@ -116,6 +116,7 @@ GROUPS: tuple[Group, ...] = (
             Endpoint("HOLDINGS", "Holdings", ("holdings",)),
             Endpoint("FUNDS", "Funds", ("funds",)),
             Endpoint("MARGIN", "Margin", ("margin",)),
+            Endpoint("CHARGES", "Charges", ("charges",)),
             Endpoint("GTT_ORDERBOOK", "GTT order book", ("gtt_orderbook",)),
         ),
     ),

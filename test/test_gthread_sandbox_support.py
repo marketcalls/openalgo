@@ -70,28 +70,81 @@ CAPITAL = Decimal("10000000.00")
 _prepared = False
 
 
-def prepare_databases() -> None:
-    """Create the sandbox tables and seed the symbol master, once per process."""
-    global _prepared
-    if _prepared:
-        return
-    from database.sandbox_db import init_db as init_sandbox_db
+def set_charges(enabled: bool) -> None:
+    """Switch sandbox brokerage and statutory charges on or off in the test database."""
+    from database.sandbox_db import db_session, set_configs
+    from sandbox.charges import CHARGES_ENABLED_KEY
+
+    assert set_configs({CHARGES_ENABLED_KEY: "true" if enabled else "false"})
+    db_session.remove()
+
+
+def seed_symbols(specs=None) -> None:
+    """Make sure the symbol master holds the instruments these tests trade.
+
+    Checked on every call, not once per process. The symbol table is shared by
+    the whole suite and other tests clear it (the master contract guard tests
+    delete every row), so a sandbox test that ran after one of them found no
+    RELIANCE and every order was refused with "Symbol not found": it passed
+    alone and failed in a full run.
+    """
     from database.symbol import SymToken
     from database.symbol import db_session as symbol_session
-    from database.symbol import init_db as init_symbol_db
 
-    try:
-        init_symbol_db()
-    except Exception:
-        pass
-    init_sandbox_db()
-    for spec in SYMBOLS:
+    for spec in SYMBOLS if specs is None else specs:
         exists = SymToken.query.filter_by(symbol=spec["symbol"], exchange=spec["exchange"]).first()
         if exists is None:
             symbol_session.add(SymToken(**spec))
     symbol_session.commit()
     symbol_session.remove()
-    _prepared = True
+
+
+def remove_symbols(specs) -> None:
+    """Take a test's own instruments back out of the shared symbol master.
+
+    A test that adds an instrument has to remove it, and should not name it
+    after a real underlying. The charge tests once left a NIFTY option with a
+    lot of 75 behind, and three strategy tests that read NIFTY's lot size
+    afterwards got 75 where they expect 65. Only the row with the test's own
+    token is removed, so another test's row of the same name is left alone.
+    """
+    from database.symbol import SymToken
+    from database.symbol import db_session as symbol_session
+
+    for spec in specs:
+        SymToken.query.filter_by(
+            symbol=spec["symbol"], exchange=spec["exchange"], token=spec["token"]
+        ).delete()
+    symbol_session.commit()
+    symbol_session.remove()
+
+
+def prepare_databases() -> None:
+    """Create the sandbox tables once per process, and put the shared state right.
+
+    Every call also reseeds the symbol master (see :func:`seed_symbols`) and
+    switches charges off. These suites pin margin and P&L arithmetic under
+    races, to the paisa, and a fill that also pays brokerage would move every
+    balance they assert on. With the switch off a fill must leave exactly the
+    figures it left before charges existed, which is itself worth holding.
+    ``test_gthread_sandbox_charges.py`` switches them on. It is done on every
+    call, not once, because the test database is a file that outlives the run
+    and a test that resets the sandbox settings puts the switch back to its
+    default.
+    """
+    global _prepared
+    if not _prepared:
+        from database.sandbox_db import init_db as init_sandbox_db
+        from database.symbol import init_db as init_symbol_db
+
+        try:
+            init_symbol_db()
+        except Exception:
+            pass
+        init_sandbox_db()
+        _prepared = True
+    seed_symbols()
+    set_charges(False)
 
 
 def reset_user(user_id: str, capital: Decimal = CAPITAL) -> None:
@@ -142,6 +195,8 @@ def funds_of(user_id: str) -> dict:
         "today": row.today_realized_pnl,
         "total_capital": row.total_capital,
         "total_pnl": row.total_pnl,
+        "charges": row.total_charges,
+        "today_charges": row.today_charges,
     }
     db_session.remove()
     return values

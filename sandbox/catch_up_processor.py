@@ -211,6 +211,8 @@ def catch_up_daily_pnl_reset():
     Called after master contract download completes
     """
     try:
+        from sqlalchemy import and_, or_
+
         from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
         from sandbox.session_boundary import last_session_expiry_utc
 
@@ -225,9 +227,22 @@ def catch_up_daily_pnl_reset():
             SandboxPositions.updated_at < last_session_expiry,
         ).count()
 
+        # A funds row is stale when either of its two daily figures is still
+        # set: today's realized P&L, or today's charges. A day of buying only
+        # (delivery, or a position carried overnight) pays charges and
+        # realizes nothing, so testing the P&L alone would leave yesterday's
+        # charges showing as today's.
         funds_needing_reset = SandboxFunds.query.filter(
-            SandboxFunds.today_realized_pnl.is_not(None),
-            SandboxFunds.today_realized_pnl != Decimal("0.00"),
+            or_(
+                and_(
+                    SandboxFunds.today_realized_pnl.is_not(None),
+                    SandboxFunds.today_realized_pnl != Decimal("0.00"),
+                ),
+                and_(
+                    SandboxFunds.today_charges.is_not(None),
+                    SandboxFunds.today_charges != Decimal("0.00"),
+                ),
+            ),
             SandboxFunds.updated_at < last_session_expiry,
         ).count()
 
@@ -242,7 +257,7 @@ def catch_up_daily_pnl_reset():
             )
 
             SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_expiry).update(
-                {"today_realized_pnl": Decimal("0.00")}
+                {"today_realized_pnl": Decimal("0.00"), "today_charges": Decimal("0.00")}
             )
 
             db_session.commit()
@@ -284,11 +299,14 @@ def catch_up_daily_pnl_snapshot():
     try:
         from datetime import date, timedelta
 
+        from sqlalchemy import func
+
         from database.sandbox_db import (
             SandboxDailyPnL,
             SandboxFunds,
             SandboxHoldings,
             SandboxPositions,
+            SandboxTrades,
             db_session,
         )
 
@@ -335,8 +353,25 @@ def catch_up_daily_pnl_snapshot():
             positions_unrealized = Decimal("0.00")
             holdings_unrealized = Decimal("0.00")
 
-            # Only create snapshot if there was some activity
-            if yesterday_realized != 0 or all_time_realized != 0:
+            # Charges need no reconstruction: every trade carries what it
+            # paid, so yesterday's are the sum over yesterday's trades.
+            day_start = datetime.combine(yesterday, datetime.min.time())
+            yesterday_charges = Decimal(
+                str(
+                    db_session.query(func.coalesce(func.sum(SandboxTrades.total_charges), 0))
+                    .filter(
+                        SandboxTrades.user_id == user_id,
+                        SandboxTrades.trade_timestamp >= day_start,
+                        SandboxTrades.trade_timestamp < day_start + timedelta(days=1),
+                    )
+                    .scalar()
+                    or 0
+                )
+            )
+
+            # Only create snapshot if there was some activity. A day of buying
+            # only realizes nothing and still paid charges.
+            if yesterday_realized != 0 or all_time_realized != 0 or yesterday_charges != 0:
                 snapshot = SandboxDailyPnL(
                     user_id=user_id,
                     date=yesterday,
@@ -344,6 +379,7 @@ def catch_up_daily_pnl_snapshot():
                     positions_unrealized_pnl=positions_unrealized,
                     holdings_unrealized_pnl=holdings_unrealized,
                     total_mtm=yesterday_realized,  # Only realized since we don't know unrealized
+                    charges=yesterday_charges,
                     available_balance=funds.available_balance,
                     used_margin=funds.used_margin,
                     portfolio_value=funds.available_balance + funds.used_margin,

@@ -1,0 +1,23 @@
+meta {
+  name: Charges
+  type: http
+  seq: 71
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/charges
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "RELIANCE",
+      "exchange": "NSE",
+      "action": "BUY",
+      "product": "CNC",
+      "quantity": 50,
+      "price": 2500
+  }
+}

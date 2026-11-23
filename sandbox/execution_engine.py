@@ -34,6 +34,7 @@ from database.sandbox_db import (
     db_session,
 )
 from database.token_db import get_symbol_info
+from sandbox.charges import CHARGE_COLUMNS, NO_CHARGES
 from sandbox.fund_manager import FundManager, reconcile_margin, validate_margin_consistency
 from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
@@ -694,6 +695,10 @@ class ExecutionEngine:
                 )
                 return
 
+            # Brokerage and statutory charges for this fill, under the plan
+            # saved on /sandbox/commissions.
+            charges = self._charges_for_fill(order, execution_price)
+
             # Create trade record
             trade = SandboxTrades(
                 tradeid=tradeid,
@@ -707,12 +712,38 @@ class ExecutionEngine:
                 product=order.product,
                 strategy=order.strategy,
                 trade_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
+                **charges.as_columns(),
             )
 
             db_session.add(trade)
 
+            # The charge leaves the balance in the commit that records it on
+            # the trade. The claim above already holds the write transaction,
+            # so nothing can change the funds row between this read and the
+            # commit. If the balance cannot be debited the trade must not
+            # claim a charge nobody paid, so it is recorded as uncharged.
+            if charges.total > 0:
+                debited, reason = FundManager(order.user_id).stage_charges(
+                    charges.total, f"Order {order.orderid}: {order.symbol}", log=False
+                )
+                if not debited:
+                    for column in CHARGE_COLUMNS:
+                        setattr(trade, column, Decimal("0.00"))
+                    logger.warning(
+                        f"Order {order.orderid} filled without charges: {reason}. "
+                        f"The ₹{charges.total} it would have paid was not taken from the balance."
+                    )
+                    charges = NO_CHARGES
+
             db_session.commit()
             fill_committed = True
+
+            if charges.total > 0:
+                logger.info(
+                    f"Charged ₹{charges.total} on order {order.orderid} "
+                    f"(brokerage ₹{charges.brokerage}, statutory "
+                    f"₹{charges.total - charges.brokerage})"
+                )
 
             # Update position
             self._update_position(order, execution_price)
@@ -776,6 +807,31 @@ class ExecutionEngine:
             self._publish_order_update_event(
                 order, order_status="rejected", rejection_reason=rejection_reason
             )
+
+    @staticmethod
+    def _charges_for_fill(order, execution_price):
+        """Brokerage and statutory charges for filling ``order`` at this price.
+
+        Never raises. An order whose charges cannot be worked out still fills,
+        uncharged: _execute_order marks an order rejected on any exception, and
+        a trader must not lose a fill to a fault in the fee calculation.
+        """
+        try:
+            from sandbox.charge_manager import charges_for_fill
+
+            return charges_for_fill(
+                symbol=order.symbol,
+                exchange=order.exchange,
+                product=order.product,
+                action=order.action,
+                quantity=order.quantity,
+                price=execution_price,
+            )
+        except Exception:
+            logger.exception(
+                f"Could not work out the charges for order {order.orderid}; filling it uncharged"
+            )
+            return NO_CHARGES
 
     def _publish_order_update_event(self, order, order_status, rejection_reason=""):
         """Publish OrderUpdateEvent for a sandbox order transition that isn't

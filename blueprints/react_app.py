@@ -498,6 +498,18 @@ def react_sandbox_mypnl():
     return serve_react_app()
 
 
+# Sandbox brokerage plan and transaction cost report
+@react_bp.route("/sandbox/commissions", strict_slashes=False)
+def react_sandbox_commissions():
+    return serve_react_app()
+
+
+# Brokerage calculator
+@react_bp.route("/sandbox/calculator", strict_slashes=False)
+def react_sandbox_calculator():
+    return serve_react_app()
+
+
 # API Request Analyzer
 @react_bp.route("/analyzer")
 def react_analyzer():

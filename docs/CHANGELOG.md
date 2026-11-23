@@ -8,6 +8,62 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Added
+
+- Sandbox trades now pay brokerage and statutory charges. Each fill is charged
+  brokerage under your own plan, plus STT or CTT, exchange transaction charges,
+  SEBI fees, stamp duty and GST at the published rates. The charge is taken from
+  the available balance when the order fills, so sandbox funds and results will
+  be lower than before for the same trades. P&L is still shown before charges,
+  with the charges beside it.
+- `/sandbox/commissions`: set the brokerage for each segment (an amount per
+  executed order, a percentage of the trade value, or the lower of the two) and
+  switch charges on or off. Defaults: delivery 20 or 2.5%, intraday 20 or 0.1%,
+  futures 20 or 0.03%, options 20 per order. The same page has a transaction
+  cost report by trade, segment and day, with a CSV export.
+- `/sandbox/calculator`: a brokerage calculator. Enter a buy price, a sell price
+  and a quantity for any segment and exchange, and see every charge, the points
+  to breakeven and the net P&L. Its lines are the ones a published brokerage
+  calculator shows for the same trade: 117 trades were read from one and are
+  kept as a test (103 match on every line, 8 are one paisa apart on an exact
+  half paisa, and 6 are NSE currency futures, where that calculator leaves the
+  investor protection levy out of its own total).
+- A broker on the Indian exchanges is shown the Indian plan and calculator, and
+  a crypto venue is shown the crypto ones (as a venue fee and a fee calculator).
+  The two are never shown together.
+- `POST /api/v1/charges`: the charges for one order before it is placed, laid out
+  as total, brokerage, taxes and other charges. It is in the API playground and
+  documented under `docs/api/account-services/charges.md`.
+- `/sandbox/mypnl` shows today's and lifetime charges and the net figures, and a
+  charges column on the day-wise and trade tables. The day-wise and trades CSV
+  exports gain charges columns at the end.
+
+### Upgrade notes
+
+- Charges are on after the upgrade, for new and existing installs. To keep the
+  old behaviour, switch them off on `/sandbox/commissions`.
+- Charges apply from the first sandbox trade after the upgrade. Trades already
+  made are not charged, and no balance is changed by the upgrade itself.
+- Run `cd upgrade && uv run migrate_all.py` as usual. It adds the charge columns
+  to the sandbox database and the default brokerage plan. An install that only
+  restarts gets the same columns at startup.
+- A sandbox balance can now go below zero: a trade that fills with too little
+  cash left to cover its charges still pays them, as a broker's ledger would.
+- Resetting the sandbox from `/sandbox` also puts the brokerage plan back to its
+  defaults.
+- Not charged: depository (DP) charges on a delivery sell; STT on an option that
+  is exercised at expiry (a position settled at expiry pays nothing); a delivery
+  buy and sell on the same day pays delivery rates on both sides; agricultural
+  commodities and NCDEX use the MCX rates for other commodities.
+- Rounding follows a contract note: STT and stamp duty to the nearest rupee,
+  CTT and every other line to the paisa. Each trade is rounded on its own, where
+  a contract note rounds STT and stamp duty once on the day's total, so a day of
+  many small trades can differ from it by a rupee or two.
+- Crypto is charged nothing by default. Every crypto value is zero until a venue
+  fee is entered on `/sandbox/commissions`, and nothing is added to that fee.
+  One fee applies to every executed order: maker and taker rates are not told
+  apart.
+
 ### Changed
 
 - The pinned OpenAlgo Python SDK moves from 2.3.0 to 2.4.0. A Python strategy
@@ -27,6 +83,10 @@ fix, live in [docs/releases](releases/).
 
 ### Fixed
 
+- A crypto contract looked up before the symbol cache had loaded was valued at
+  1000 times its worth, because that lookup dropped the contract multiplier.
+  Sandbox P&L for such a contract was wrong by the same factor. The multiplier
+  is now carried on that path as it is on the cached one.
 - The AI agent's indicator tools and its chart tools load again. Since the
   move to SDK 2.3.0 in 2.0.3.5, both were skipped at startup, so the agent
   could neither compute an indicator nor read or draw on the chart. The SDK
