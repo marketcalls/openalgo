@@ -5,7 +5,8 @@ from the v2 API host (``https://v2api.tradesmartonline.in/<EXCH>_symbols.txt.zip
 in the standard Noren ``*_symbols.txt.zip`` layout. See ``tradesmart_urls`` below.
 
 Symbol conventions enforced here (verified against the live zerodha symtoken):
-  * instrumenttype is one of EQ / FUT / CE / PE / INDEX
+  * instrumenttype is one of EQ / FUT / CE / PE; index rows are EQ on the
+    NSE_INDEX / BSE_INDEX exchange, as Kite types them
   * indices live on NSE_INDEX / BSE_INDEX
   * expiry formatted as DD-MMM-YY uppercase, empty for EQ/index
   * special equity symbols keep their hyphen/ampersand (BAJAJ-AUTO, M&M) after
@@ -161,9 +162,14 @@ def process_tradesmart_nse_data(output_path):
     df["brexchange"] = df["exchange"]
     df["expiry"] = ""
     df["strike"] = -1
-    df["instrumenttype"] = df["instrumenttype"].apply(lambda x: "EQ" if x in ["EQ", "BE"] else x)
+    # The Noren "Instrument" column on NSE holds the series (EQ, BE, SG, N0, GB,
+    # SM, MF, ...), not a type. Every row in this file is a cash instrument, and
+    # index rows are told apart by the NSE_INDEX exchange set above, so all of
+    # them are EQ, as Kite types its cash and index rows (QA MC-04).
+    df["instrumenttype"] = "EQ"
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100  # paise -> rupees
+    # TradeSmart's NSE file already gives TickSize in rupees (RELIANCE 0.1, MRF 5)
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")
 
     columns_to_keep = [
         "symbol", "brsymbol", "name", "exchange", "brexchange", "token",
@@ -343,6 +349,14 @@ def process_tradesmart_bse_data(output_path):
         usecols=["Exchange", "Token", "LotSize", "Symbol", "TradingSymbol", "Instrument", "TickSize"],
     )
     df.columns = ["exchange", "token", "lotsize", "name", "brsymbol", "instrumenttype", "tick_size"]
+    # TradeSmart lists a few non-equity rows (WEAL/MFLS/INVE) with TickSize 0 and
+    # a placeholder TradingSymbol "12:" shared across tokens. They cannot be
+    # traded or addressed by symbol, so drop them instead of storing duplicates.
+    tick = pd.to_numeric(df["tick_size"], errors="coerce")
+    untradable = ~(tick > 0)
+    if untradable.any():
+        logger.info(f"Skipping {int(untradable.sum())} BSE rows with zero tick size")
+        df = df[~untradable].copy()
     df["symbol"] = df["brsymbol"]
     df["exchange"] = "BSE"
     df["brexchange"] = df["exchange"]
@@ -350,7 +364,7 @@ def process_tradesmart_bse_data(output_path):
     df["strike"] = -1
     df["instrumenttype"] = "EQ"
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce")  # already rupees
 
     columns_to_keep = [
         "symbol", "brsymbol", "name", "exchange", "brexchange", "token",
@@ -362,12 +376,12 @@ def process_tradesmart_bse_data(output_path):
         {
             "symbol": "SENSEX", "brsymbol": "SENSEX", "name": "SENSEX",
             "exchange": "BSE_INDEX", "brexchange": "BSE_INDEX", "token": "1",
-            "expiry": "", "strike": -1, "lotsize": 1, "instrumenttype": "INDEX", "tick_size": 0.05,
+            "expiry": "", "strike": -1, "lotsize": 1, "instrumenttype": "EQ", "tick_size": 0.05,
         },
         {
             "symbol": "BANKEX", "brsymbol": "BANKEX", "name": "BANKEX",
             "exchange": "BSE_INDEX", "brexchange": "BSE_INDEX", "token": "12",
-            "expiry": "", "strike": -1, "lotsize": 1, "instrumenttype": "INDEX", "tick_size": 0.05,
+            "expiry": "", "strike": -1, "lotsize": 1, "instrumenttype": "EQ", "tick_size": 0.05,
         },
     ]
     bse_index_df = pd.DataFrame(bse_index_data)
@@ -404,9 +418,18 @@ def process_tradesmart_bfo_data(output_path):
 
     import re
 
-    def extract_name(tradingsymbol):
-        match = re.match(r"([A-Za-z]+)", str(tradingsymbol))
-        return match.group(1) if match else tradingsymbol
+    def extract_name(tradingsymbol, expiry):
+        # The BFO Symbol column holds codes (BSXOPT, SX50FUT), so take the
+        # underlying from the TradingSymbol by stripping the expiry/strike/type
+        # suffix: monthly SENSEX5026NOVFUT, weekly SENSEX26D0389500PE. Keeps
+        # digits and punctuation in the name (SENSEX50, M&M, BAJAJ-AUTO, 360ONE),
+        # which a letters-only match truncated into duplicate symbols.
+        ts = str(tradingsymbol)
+        yy = expiry[-2:] if isinstance(expiry, str) and expiry else r"\d{2}"
+        match = re.match(
+            rf"^(.+?){yy}(?:[A-Z]{{3}}|[1-9OND]\d{{2}})(?:\d+(?:\.\d+)?)?(?:CE|PE|FUT)$", ts
+        )
+        return match.group(1) if match else ts
 
     def extract_instrument_type(tradingsymbol):
         ts = str(tradingsymbol)
@@ -418,7 +441,7 @@ def process_tradesmart_bfo_data(output_path):
             return "PE"
         return "UNKNOWN"
 
-    df["name"] = df["brsymbol"].apply(extract_name)
+    df["name"] = [extract_name(ts, exp) for ts, exp in zip(df["brsymbol"], df["expiry"], strict=True)]
     df["instrumenttype"] = df["brsymbol"].apply(extract_instrument_type)
     df["strike"] = df["strike"].apply(_handle_strike_price)
 

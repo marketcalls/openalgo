@@ -90,11 +90,11 @@ uv run python scripts/generate_indicator_reference.py
 | `nvi_with_ema` | `ta.nvi_with_ema(close, volume, ema_length=255)` | `close`, `volume` | `ema_length`=255 | `out0`, `out1` | `{"ema_length": 255}` |
 | `obv` | `ta.obv(close, volume)` | `close`, `volume` | - | `value` | `{}` |
 | `obv_smoothed` | `ta.obv_smoothed(close, volume, ma_type='None', ma_length=20)` | `close`, `volume` | `ma_type`='None', `ma_length`=20, `bb_length`=20, `bb_mult`=2.0 | `value` | `{"ma_type": "None", "ma_length": 20}` |
-| `pivot_points` | `ta.pivot_points(high, low, close)` | `high`, `low`, `close` | - | `out0`, `out1`, `out2`, `out3`, `out4`, `out5`, `out6` | `{}` |
+| `pivot_points` | `ta.pivot_points(high, low, close, anchor=None, timestamps=None)` | `high`, `low`, `close` | `anchor`=None, `timestamps`=None | `out0`, `out1`, `out2`, `out3`, `out4`, `out5`, `out6` | `{"anchor": null, "timestamps": null}` |
 | `plus_dm` | `ta.plus_dm(high, low, period=14)` | `high`, `low` | `period`=14 | `value` | `{"period": 14}` |
 | `po` | `ta.po(close, fast_period=10, slow_period=20)` | `close` | `fast_period`=10, `slow_period`=20, `ma_type`='SMA' | `value` | `{"fast_period": 10, "slow_period": 20}` |
 | `ppo` | `ta.ppo(close, fast_period=12, slow_period=26)` | `close` | `fast_period`=12, `slow_period`=26, `signal_period`=9 | `out0`, `out1`, `out2` | `{"fast_period": 12, "slow_period": 26}` |
-| `psar` | `ta.psar(high, low, acceleration=0.02, maximum=0.2)` | `high`, `low` | `acceleration`=0.02, `maximum`=0.2 | `value` | `{"acceleration": 0.02, "maximum": 0.2}` |
+| `psar` | `ta.psar(high, low, acceleration=0.02, maximum=0.2)` | `high`, `low` | `acceleration`=0.02, `maximum`=0.2, `return_trend`=False | `value` | `{"acceleration": 0.02, "maximum": 0.2}` |
 | `pvi` | `ta.pvi(close, volume, initial_value=100.0)` | `close`, `volume` | `initial_value`=100.0 | `value` | `{"initial_value": 100.0}` |
 | `pvi_with_signal` | `ta.pvi_with_signal(close, volume, initial_value=100.0, signal_type='EMA')` | `close`, `volume` | `initial_value`=100.0, `signal_type`='EMA', `signal_length`=255 | `out0`, `out1` | `{"initial_value": 100.0, "signal_type": "EMA"}` |
 | `pvt` | `ta.pvt(close, volume)` | `close`, `volume` | - | `value` | `{}` |
@@ -105,6 +105,7 @@ uv run python scripts/generate_indicator_reference.py
 | `rocr100` | `ta.rocr100(close, period=10)` | `close` | `period`=10 | `value` | `{"period": 10}` |
 | `rsi` | `ta.rsi(close, period=14)` | `close` | `period`=14 | `value` | `{"period": 14}` |
 | `rvi` | `ta.rvi(open, high, low, close, period=10)` | `open`, `high`, `low`, `close` | `period`=10 | `out0`, `out1` | `{"period": 10}` |
+| `rvi_volatility` | `ta.rvi_volatility(close, stdev_period=10, rsi_period=14)` | `close` | `stdev_period`=10, `rsi_period`=14 | `value` | `{"stdev_period": 10, "rsi_period": 14}` |
 | `rvol` | `ta.rvol(volume, period=20)` | `volume` | `period`=20 | `value` | `{"period": 20}` |
 | `rwi` | `ta.rwi(high, low, close, period=14)` | `high`, `low`, `close` | `period`=14 | `out0`, `out1` | `{"period": 14}` |
 | `sma` | `ta.sma(close, period=14)` | `close` | `period`=14 | `value` | `{"period": 14}` |
@@ -129,14 +130,14 @@ uv run python scripts/generate_indicator_reference.py
 | `vidya` | `ta.vidya(close, period=14, alpha=0.2)` | `close` | `period`=14, `alpha`=0.2 | `value` | `{"period": 14, "alpha": 0.2}` |
 | `volosc` | `ta.volosc(volume, short_length=5, long_length=10)` | `volume` | `short_length`=5, `long_length`=10, `check_volume_validity`=True | `value` | `{"short_length": 5, "long_length": 10}` |
 | `vroc` | `ta.vroc(volume, period=25)` | `volume` | `period`=25 | `value` | `{"period": 25}` |
-| `vwap` | `ta.vwap(high, low, close, volume, anchor='Session', source='hlc3')` | `high`, `low`, `close`, `volume` | `anchor`='Session', `source`='hlc3', `stdev_mult_1`=1.0, `stdev_mult_2`=2.0, `stdev_mult_3`=3.0, `percent_mult_1`=0.236, `percent_mult_2`=0.382, `percent_mult_3`=0.618 | `value` | `{"anchor": "Session", "source": "hlc3"}` |
+| `vwap` | `ta.vwap(high, low, close, volume, anchor='Session', source='hlc3')` | `high`, `low`, `close`, `volume` | `anchor`='Session', `source`='hlc3', `stdev_mult_1`=1.0, `stdev_mult_2`=2.0, `stdev_mult_3`=3.0, `percent_mult_1`=0.236, `percent_mult_2`=0.382, `percent_mult_3`=0.618, `timestamps`=None, `session_starts`=None | `value` | `{"anchor": "Session", "source": "hlc3"}` |
 | `vwma` | `ta.vwma(close, volume, period=14)` | `close`, `volume` | `period`=14 | `value` | `{"period": 14}` |
 | `wclprice` | `ta.wclprice(high, low, close)` | `high`, `low`, `close` | - | `value` | `{}` |
 | `williams_r` | `ta.williams_r(high, low, close, period=14)` | `high`, `low`, `close` | `period`=14 | `value` | `{"period": 14}` |
 | `wma` | `ta.wma(close, period=14)` | `close` | `period`=14 | `value` | `{"period": 14}` |
 | `zlema` | `ta.zlema(close, period=14)` | `close` | `period`=14 | `value` | `{"period": 14}` |
 
-**116 indicators**, all verified to compute.
+**117 indicators**, all verified to compute.
 
 ## Not available from the `indicator` node
 

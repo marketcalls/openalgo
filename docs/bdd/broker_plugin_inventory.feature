@@ -35,6 +35,7 @@ Feature: Broker plugin inventory
       | motilal | IN_stock |
       | mstock | IN_stock |
       | nubra | IN_stock |
+      | nuvama | IN_stock |
       | paytm | IN_stock |
       | pocketful | IN_stock |
       | rmoney | IN_stock |

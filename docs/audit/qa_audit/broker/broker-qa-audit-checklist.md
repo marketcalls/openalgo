@@ -73,6 +73,8 @@ Excluded by instruction; the script must not spend budget on them:
 | PRE-04 | Master contract status is `success` for today | `master_contract_status` table shows today's successful download |
 | PRE-05 | Market is open for each exchange under test | Equity/F&O and MCX have different sessions; skip-with-reason, never fail, outside session |
 | PRE-06 | Both modes reachable | `analyzer/toggle` flips live <-> sandbox and back cleanly |
+| PRE-07 | Every module imports on a headless Linux Python | `python -c 'import broker.<name>....'` for every file under `broker/<name>/` raises no `ModuleNotFoundError` (no tkinter: a stray `from turtle import ...` broke six XTS order books) |
+| PRE-08 | Worker class recorded | `utils.runtime` worker class written to the Environment sheet; gthread-only rows SKIP with reason on eventlet |
 
 ### 1.2 Run matrix
 
@@ -124,9 +126,13 @@ itself a finding (see MC-08).
 ### 1.5 Pacing
 
 Respect the broker's own per-category limits (quote limits are typically far
-tighter than order limits) and OpenAlgo's per-IP `API_RATE_LIMIT`. A 429 is a
-**harness defect**, not a broker finding — retry with backoff and flag the
-test as `RETRIED`, not `FAIL`.
+tighter than order limits) and OpenAlgo's per-IP `API_RATE_LIMIT`. A 429 on a
+**read** is a **harness defect**, not a broker finding — retry with backoff and
+flag the test as `RETRIED`, not `FAIL`. A 429 on an **order write** is never
+retried by the harness: reconcile against the order book first, because the
+broker may have accepted it. Under gthread a 429 carrying a busy sentence is
+OpenAlgo's designed refusal (the broker pacer refused before sending); record
+it as such.
 
 ### 1.6 Universal assertions (apply to every case)
 
@@ -157,14 +163,14 @@ tested. Assertions are against the local `symtoken` table and
 | MC-02 | Row count per exchange | Non-zero for **every** exchange in `supported_exchanges`; counts recorded for trend comparison against the previous run |
 | MC-03 | No duplicate `(symbol, exchange)` | Zero duplicates |
 | MC-04 | `instrumenttype` vocabulary | Only `EQ`, `FUT`, `CE`, `PE` (and `''`). **There is no `INDEX` type** — indices are `EQ` on `NSE_INDEX` / `BSE_INDEX` |
-| MC-05 | Expiry format | `DD-MMM-YY` uppercase (e.g. `30-JUN-26`); empty string for EQ and index rows. Checked for **FUT and OPT separately**, on every derivatives exchange |
-| MC-06 | Symbol construction per segment | EQ: bare base symbol. FUT: `{underlying}{DDMMMYY}FUT`. CE/PE: `{underlying}{DDMMMYY}{strike}{CE\|PE}` with decimals preserved (`187.5`) and `.0` dropped. Sampled 3 rows per segment per exchange against [`symbol-format.md`](../../../prompt/symbol-format.md) |
-| MC-07 | Index normalization | Every index symbol in the canonical `NSE_INDEX` / `BSE_INDEX` / `MCX_INDEX` lists in [`symbol-format.md`](../../../prompt/symbol-format.md) is present with the exact spelling; `brsymbol` holds the broker's display name (`NIFTY 50`) |
+| MC-05 | Expiry format | `DD-MMM-YY` uppercase (e.g. `30-JUN-26`); empty string for EQ and index rows. Checked for **FUT and OPT separately**, on every derivatives exchange. No expiry earlier than today on a FUT/CE/PE row, and no epoch-sentinel date (`01-JAN-70`, `31-DEC-79`) anywhere: a row whose expiry is a sentinel must be `EQ` or `''` (Kotak #2114) |
+| MC-06 | Symbol construction per segment | EQ: bare base symbol. FUT: `{underlying}{DDMMMYY}FUT`. CE/PE: `{underlying}{DDMMMYY}{strike}{CE\|PE}` with decimals preserved (`187.5`) and `.0` dropped. Sampled 3 rows per segment per exchange against [`symbol-format.md`](../../../prompt/symbol-format.md). An EQ row fails only when it carries an expiry or its symbol has a full FUT/CE/PE shape; exchange debt scrip IDs (BSE group F such as `0360OAM27`, G-secs such as `GS23DEC43`, NSE N\*/Y\*/GS/SG series) are kept as the exchange lists them and are not defects |
+| MC-07 | Index normalization | Every headline index the broker lists (NSE_INDEX: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50, INDIAVIX; BSE_INDEX: SENSEX, BANKEX, SENSEX50; MCX_INDEX: MCXBULLDEX, MCXCOMDEX) is stored under its own `*_INDEX` exchange with the canonical spelling from [`symbol-format.md`](../../../prompt/symbol-format.md); `brsymbol` holds the broker's display name (`NIFTY 50`). **FAIL** when the index is in the master under a non-canonical name (`NIFTY NEXT 50`) or left on the cash exchange: that is a normalisation defect OpenAlgo must fix. **WARN** when the broker's own scrip master does not list the index at all (TradeSmart's NSE file carries only NIFTY, BANKNIFTY, FINNIFTY and INDIAVIX): record it by name in `Quirks`, noting an index that has derivatives but no spot row, since option chain and Greeks need the spot quote. Never add a missing index with an invented token |
 | MC-08 | **Missing-symbol report** | Diff the canonical index lists and a reference symbol set against the broker's master. Every missing symbol is **listed by name** in the report — this is a named deliverable, not a pass/fail flag. A symbol missing because the listing was renamed or delisted is annotated, not counted as a defect |
 | MC-09 | `strike` is a float | Numeric; decimal strikes survive (`292.5`); non-options carry the sentinel (`0` or `-0.01`) consistently, not a mix |
 | MC-10 | Strike scaling per segment | Cross-check `strike` against the strike embedded in `brsymbol` for one row per segment. Currency derivatives commonly scale differently from equity/index |
 | MC-11 | `tick_size` present and correct per slab | Non-zero for every tradable row; in rupees, not paise. Asserted against the NSE slab tables and the named instrument matrix in §2.1 |
-| MC-12 | `lotsize` | Non-zero for all derivatives; index and stock lot sizes match [`LotSize.md`](../../../prompt/LotSize.md) for NIFTY / BANKNIFTY / SENSEX etc. Lot is consistent across every expiry of the same underlying. Commodity lot conventions vary by broker — record the observed convention in the `Quirks` sheet rather than asserting one |
+| MC-12 | `lotsize` | Non-zero for all derivatives; index and stock lot sizes match [`LotSize.md`](../../../prompt/LotSize.md) for NIFTY / BANKNIFTY / SENSEX etc. Lot size is in **units** on every exchange, MCX included (CRUDEOIL 100, never Kite's contract count of 1). Across the expiries of one underlying, at most one clean step from one lot to another (a revision applies to newly listed expiries only, so MCXBULLDEX 30 and 15 can live together); a lot that flips back and forth is a parser defect |
 | MC-13 | `brexchange` populated | Raw broker exchange code present on every row |
 | MC-14 | `name` column | Underlying for FUT/CE/PE; company name for EQ; display name for index |
 | MC-15 | `token` populated | Non-empty and unique within an exchange |
@@ -172,6 +178,8 @@ tested. Assertions are against the local `symtoken` table and
 | MC-17 | `/api/v1/instruments` JSON | Returns rows for each exchange; field names match the symtoken schema |
 | MC-18 | `/api/v1/instruments` CSV | `Content-Type: text/csv`, filename `instruments_<exchange>.csv`, row count matches the JSON form |
 | MC-19 | `/api/v1/instruments` invalid exchange | Clean 400, not a 500 |
+| MC-20 | Refresh failure keeps the old contract | Force one segment's download to fail (block its URL or remove the file mid-run). symtoken row count is unchanged, `master_contract_status` records an error, and `/search` and `/quotes` never see an empty or partial table (Fyers #2108, Kotak and Shoonya #2235, Flattrade #2198) |
+| MC-21 | Underlyings with digits, `&` and `-` | For M&M, BAJAJ-AUTO, 360ONE and SENSEX50 futures and options, `name` is the full underlying and the symbol starts with it; no SENSEX50 contract appears as SENSEX (TradeSmart #2475, #2206) |
 
 ### 2.1 Tick size — the standard slabs and the instrument matrix
 
@@ -252,7 +260,7 @@ bug the matrix exists to catch.
 | SYM-01 | `/symbol` | Equity lookup | All documented fields present; `brsymbol` is the broker tradingsymbol; `tick_size` and `lotsize` sane |
 | SYM-02 | `/symbol` | Futures lookup | `instrumenttype=FUT`, `expiry` in `DD-MMM-YY`, `freeze_qty` present for F&O |
 | SYM-03 | `/symbol` | Options lookup incl. `OPT_DECIMAL_STRIKE` | `strike` float preserved exactly |
-| SYM-04 | `/symbol` | Index lookup on `NSE_INDEX` / `BSE_INDEX` | Resolves; `exchange` echoed as the index exchange |
+| SYM-04 | `/symbol` | Index lookup on `NSE_INDEX` / `BSE_INDEX` | Resolves; `exchange` echoed as the index exchange. `tick_size` may be `0` or null: index spot rows are quote-only and never ordered (Kite sends `0`), the same exemption as MC-11 |
 | SYM-05 | `/symbol` | `EQ_SPECIAL` | Hyphen/ampersand/digit symbols resolve without mangling |
 | SYM-06 | `/symbol` | Unknown symbol | Clean 404/400 with a message; never 500 |
 | SYM-07 | `/search` | Plain symbol query | Returns matches; every row carries the full documented field set |
@@ -283,6 +291,8 @@ bug the matrix exists to catch.
 | QT-09 | Price de-scaling | Quoted `ltp` matches the depth `ltp` and the last history candle close to within a tick — catches paise-vs-rupee (x100) errors |
 | QT-10 | Unsupported exchange | Fails fast with a clear message |
 | QT-11 | Unknown symbol | Clean 404/400 |
+| QT-12 | Concurrent quote and depth for one instrument (brokers whose REST quote is served from the WebSocket: AliceBlue, Pocketful, Motilal, Nubra, Tradejini; SKIP with reason otherwise) | 8 parallel `/quotes` plus `/depth` for one symbol all return data; none times out because another request unsubscribed it |
+| QT-13 | Early return (same brokers) | A quote for a liquid instrument returns well under the old fixed wait (around 0.2 to 0.5 s, not 2 s); record it under the latency section |
 
 ### 4.2 MultiQuotes
 
@@ -340,6 +350,12 @@ not just the presence of a value.
 | HS-17 | Unsupported interval | Clean 400 naming the supported set |
 | HS-18 | Inverted date range | Clean 400 |
 | HS-19 | Future-dated range | Clean empty success or clean 400 — never a 500 |
+| HS-20 | Host time zone | Rerun HS-02, HS-03, HS-07 and HS-09 with the server process `TZ=UTC`: identical results (Angel #2176, #2290) |
+| HS-21 | Per-bar volume | Summed 1m volume over a session is within a few percent of that day's daily volume, and successive 1m volumes are not monotonically rising (a running total, Groww #2194) |
+| HS-22 | Multi-day vs single-day | For 5m and 1h over 3 sessions, each day's last bar equals the same bar fetched with `start == end` for that day (Shoonya #2360) |
+| HS-23 | No bar outside the session, bars on the grid | No intraday bar starts at or after the exchange's close from the market calendar (Dhan #2308) or before the open (no 09:14 pre-open bar); every 1m and 5m bar starts on the 09:15 grid, and /trading derived 45m and 2h load without a boundary error (Nuvama #2461) |
+| HS-24 | Failure vs empty | An invalid symbol, or a request under a revoked token, is a clean error, never an empty success. A holiday-only window is an empty success, returned quickly with no retries visible in the latency (Fyers #2438) |
+| HS-25 | Lookback horizon | A range starting beyond the broker's maximum lookback returns the available part or an empty success, never a 400 or 500 (Kotak #2094) |
 
 ---
 
@@ -399,6 +415,8 @@ Dimensions to cross: `action` x `pricetype` x `product` x `exchange`.
 | OD-18 | LIMIT with `price=0` | Clean 400 |
 | OD-19 | SL without `trigger_price` | Clean 400 |
 | OD-20 | Price not on a tick boundary | Either snapped or cleanly rejected — never silently accepted and rejected by the exchange later |
+| OD-21 | Broker refuses the order at its API | `status: error`, non-200, the broker's reason in `message`; never `success` with a null `orderid` (Tradejini #2444) |
+| OD-22 | Several orders back to back in one session | Each is accepted. A fixed client order tag rejects every order after the first (Kotak #2178) |
 
 ### 7.2 `/placesmartorder`
 
@@ -417,6 +435,9 @@ Drive the documented position-matching table. Each row is a case; assert the
 | SO-08 | -1 | SELL 1 / -2 | Sells 1 |
 | SO-09 | any | Position already at target | No duplicate order on a repeated call |
 | SO-10 | any | Symbol with no position, `position_size=0` | Places the raw quantity |
+| SO-11 | +1 lot of `OPT_CHEAP` | Rerun SO-03, SO-06 and SO-07 on the option | Same net effect as on equity; a position matched by broker display name finds nothing (RMoney #2292) |
+| SO-12 | any, position book unreadable (offline mock: HTTP error, error envelope over 200, unparsable body) | BUY 1 / 1 | **No order placed** and a refusal sentence returned; a failed read never sizes against flat |
+| SO-13 | 0 on two symbols | Smart orders on both within 1 s, then a third on the first symbol after its fill | The third sizes against the post-fill position; no repeated or skipped exit (stale position cache) |
 
 Quantities are 1 so the suite can run live on `EQ_CHEAP` at minimum risk, per
 the safety rails in §1.4. The arithmetic is what is under test, not the size —
@@ -512,6 +533,8 @@ where nothing is actually sent to the exchange at size.
 | LC-18 | `/closeposition` with no positions | `"No open positions to close"`, status `success` |
 | LC-19 | `/closeposition` across mixed exchanges and products | MIS and NRML positions on different exchanges all closed |
 | LC-20 | Full lifecycle trace | For one order: place -> open -> modify -> cancel, with every transition visible in the orderbook **and** on the `/websocket/order` stream (see §11) |
+| LC-21 | Modify the `trigger_price` of an SL and an SL-M order | `/orderstatus` and the broker's own book show the new trigger; a success reply alone is not a pass (Angel #2279) |
+| LC-22 | Cancel and modify every order id shape the book returns | Including ids with characters reserved in URLs; never "order not found" for an id the book lists (Rupeezy) |
 
 ---
 
@@ -522,7 +545,7 @@ where nothing is actually sent to the exchange at size.
 | ID | Check | Pass criteria |
 | --- | --- | --- |
 | OB-01 | Contains every order placed in this run | Order id ledger fully reconciled |
-| OB-02 | **All five `order_status` values observed**: `open`, `complete`, `cancelled`, `rejected`, `trigger pending` | Each state deliberately produced (a rejection via a deliberate circuit/price breach or invalid product) and each appears with the exact **lowercase** OpenAlgo vocabulary — no broker-native words leaking through |
+| OB-02 | **All five `order_status` values observed**: `open`, `complete`, `cancelled`, `rejected`, `trigger pending` | Each state deliberately produced (a rejection via a deliberate circuit/price breach or invalid product) and each appears with the exact **lowercase** OpenAlgo vocabulary — no broker-native words leaking through. Known exception: Zerodha's REST order book shows `trigger pending` as `open` by design (its stream keeps `trigger pending`); record it in `Quirks` |
 | OB-03 | **Timestamp format is IST** | Matches the documented shape (e.g. `08-Apr-2025 13:58:03`), is in IST, and is within the current session. A UTC timestamp is a FAIL even though the string parses |
 | OB-04 | All order types present in the book | MARKET, LIMIT, SL, SL-M each appear with the correct `pricetype` |
 | OB-05 | All exchanges represented | Every exchange in `supported_exchanges` **except CDS** (excluded by instruction) has at least one row |
@@ -531,6 +554,8 @@ where nothing is actually sent to the exchange at size.
 | OB-08 | `statistics` block | `total_buy_orders`, `total_sell_orders`, `total_completed_orders`, `total_open_orders`, `total_rejected_orders` all present, and each **reconciles against a count of the `orders[]` array** |
 | OB-09 | `action` and `product` vocabulary | `BUY`/`SELL`; `MIS`/`CNC`/`NRML` |
 | OB-10 | Empty book | Clean success with empty arrays and zeroed statistics |
+| OB-11 | Order id exactness | Every `orderid` in the order book and trade book string-equals the id placement returned, and ids are unique; no float rounding (XTS #2468) |
+| OB-12 | In-flight states | An order with a pending modify or cancel shows `open`, never `cancelled`, until the broker confirms (Nuvama) |
 
 ### 9.2 TradeBook
 
@@ -543,6 +568,7 @@ where nothing is actually sent to the exchange at size.
 | TB-05 | Timestamp IST | Documented shape, within the session |
 | TB-06 | Partial fills | A partially filled order produces multiple trade rows that sum to the filled quantity |
 | TB-07 | `orderid` linkage | Every trade's `orderid` exists in the orderbook |
+| TB-08 | Empty trade book | Clean success with an empty array; not an error, and no repeated WARNING in the logs |
 
 ### 9.3 PositionBook
 
@@ -557,6 +583,7 @@ where nothing is actually sent to the exchange at size.
 | PB-07 | Closed positions retained | Squared-off positions still appear with quantity 0 and today's realized P&L |
 | PB-08 | 2-decimal rounding | `average_price`, `ltp`, `pnl` all rounded |
 | PB-09 | Product and exchange | Correct per position; F&O positions align to lot size |
+| PB-10 | Empty position book | Clean success with an empty array; a broker "no positions" code is not an error (Nuvama #2479, Flattrade #2249) |
 
 ### 9.4 Holdings
 
@@ -579,6 +606,7 @@ where nothing is actually sent to the exchange at size.
 | FN-02 | Values are numeric strings | Parse as floats; no thousands separators, no currency symbols |
 | FN-03 | Plausibility | **`availablecash` may legitimately be negative** — a debit balance, an MTM loss or margin utilised beyond the cash balance all produce one, and so do `m2mrealized` and `m2munrealized`. Assert the value parses and is present, never that it is `>= 0`. What is asserted is that the numbers **move consistently**: placing an order that blocks margin increases `utiliseddebits` and decreases `availablecash` by a comparable amount, and squaring off reverses it |
 | FN-04 | 2-decimal formatting | Consistent |
+| FN-05 | Funds vs position book | `m2mrealized + m2munrealized` equals the position book's summed P&L to 2 dp; no double count after a partial close |
 
 ---
 
@@ -589,7 +617,7 @@ capability gate returns **501** and that 501 is itself the assertion.
 
 | ID | Check | Pass criteria |
 | --- | --- | --- |
-| GT-01 | Capability gate | Broker without GTT returns 501 with a clear message on all four endpoints |
+| GT-01 | Capability gate | First check whether the broker provides GTT at all (`broker/<name>/api/gtt_api.py`). If it does not, report a **WARN** "GTT is not provided by broker '<name>'" and skip GT-02..GT-23: in analyzer mode the sandbox answers every GTT endpoint before the broker gate is reached, so those checks would only test the sandbox. In live mode a broker without GTT returns 501 with a clear message on all four endpoints |
 | GT-02 | Place SINGLE, trigger **below** LTP via `triggerprice_sl` | `trigger_id` returned |
 | GT-03 | Place SINGLE, trigger **above** LTP via `triggerprice_tg` | `trigger_id` returned |
 | GT-04 | Place SINGLE with `pricetype=MARKET`, `price=0` | Accepted; where the broker only accepts LIMIT children, the MPP conversion is transparent to the caller |
@@ -626,13 +654,13 @@ capability gate returns **501** and that 501 is itself the assertion.
 | WS-05 | Control-frame keepalive | Connection survives beyond `WS_PING_INTERVAL` (default 20s) with no traffic |
 | WS-06 | **Subscribe LTP, single symbol** | `market_data` frames with `mode: 1`, `ltp`, `timestamp` |
 | WS-07 | **Subscribe LTP, multiple symbols in one message** | Frames for every symbol |
-| WS-08 | **Subscribe Quote, single and multiple** | `mode: 2` frames with `ltp`, `open`, `high`, `low`, `close`, `volume`, `timestamp` |
+| WS-08 | **Subscribe Quote, single and multiple** | `mode: 2` frames with `ltp` and, where the broker's feed carries them, `open`, `high`, `low`, `close`, `volume`, `timestamp`. A field the feed lacks is absent (see `websockets-format.md`, Field availability); a field sent as 0 is a fail |
 | WS-09 | **Subscribe Depth, single and multiple**, `depth: 5` | `mode: 3` frames with 5 buy + 5 sell levels, `totalbuyqty`, `totalsellqty` |
 | WS-10 | Depth levels 20 / 30 / 50 | Only for levels `get_supported_depth_levels()` claims. An over-declared level surfaces as a client-side `UNSUPPORTED_DEPTH_LEVEL`; an under-declared one means a working feature is unreachable. Both are findings |
 | WS-11 | **Every exchange in `supported_exchanges`** | LTP, Quote and Depth each verified per exchange |
 | WS-12 | **Indices — `NSE_INDEX` and `BSE_INDEX`** | Subscribe succeeds and frames arrive. Index streaming frequently uses a separate broker exchange code from index REST quotes |
-| WS-13 | **Quote frame sanity — no zero values** | `bid`, `ask`, `open`, `high`, `low`, `close`, `volume` are non-zero for a liquid instrument. A `close` of `0.02` or similar is the classic binary-offset bug |
-| WS-14 | **Quote frame timestamp** | Epoch milliseconds; converts to an IST wall-clock time inside the current session; monotonic across frames |
+| WS-13 | **Quote frame sanity — no zero values** | Every field present in the frame is non-zero for a liquid instrument; absent is a pass when the feed lacks the field, 0 is a fail. A `close` of `0.02` or similar is the classic binary-offset bug |
+| WS-14 | **Quote frame timestamp** | Epoch milliseconds; converts to an IST wall-clock time inside the current session; monotonic across frames. Pair with WS-34: a wall clock passes this row |
 | WS-15 | Streamed LTP vs REST quote | Agree to within a tick |
 | WS-16 | **Batch subscription** | A single subscribe with a large symbol list (50+, then the broker's cap) succeeds; record the observed cap and whether it degrades cleanly |
 | WS-17 | Partial subscription result | A batch containing one invalid symbol returns `status: "partial"` with per-symbol `status`/`message`; valid symbols still stream |
@@ -647,6 +675,20 @@ capability gate returns **501** and that 501 is itself the assertion.
 | WS-26 | Token rollover | Adapter re-reads a fresh token on reconnect rather than reusing a stale one |
 | WS-27 | Data-stall watchdog | A stalled feed is detected and the adapter reconnects rather than sitting silent |
 | WS-28 | `broker` field on every frame | Names the broker under test |
+| WS-29 | **Same token on two exchanges** | Subscribe one company on NSE and BSE (and a cash/F&O pair whose broker tokens collide). Each symbol's frames match its own exchange's REST quote and both stream (mStock #2383, Samco and HDFC Sky #2396) |
+| WS-30 | **`close` is the previous close** | Stream `close` equals REST `prev_close`; `change` is about `ltp - close` and `change_percent` matches. A `close` near the LTP intraday is today's candle; 0 all session is Day Close (#2377) |
+| WS-31 | **No invented values** | A field the feed does not carry is absent, never 0. An index Quote has no 0 volume; an index Depth frame is an empty book with the real LTP; a Depth `ltp` is a traded price, not the bid/ask midpoint (#2323, #2376) |
+| WS-32 | **Depth frames carry the quote** | With Depth subscribed (5 and every claimed deeper level), each depth frame carries ltp, OHLC, volume and `ltt` once the quote has arrived. A Quote client on the same symbol never receives a frame with these blank or 0 |
+| WS-33 | **Index Quote content** | `NSE_INDEX` and `BSE_INDEX` Quote frames carry ltp, open, high, low, close and change, not LTP only (Zerodha #2361) |
+| WS-34 | **Exchange trade time** | On an illiquid instrument `ltt`/`timestamp` does not advance between frames that carry no new trade, and an index frame never carries 1970 |
+| WS-35 | **Mode downgrade and fan-out** | Subscribe Depth, then Quote, then LTP on one symbol: Depth keeps its book. Unsubscribe Quote: LTP and Depth continue. With Depth subscribed first, a Quote subscriber still gets frames (Definedge #2383) |
+| WS-36 | **Unsubscribed stays unsubscribed** | Subscribe and unsubscribe within 0.5 s, then force a reconnect: the symbol does not stream afterwards. Unsubscribing the last symbol leaves the feed connected for the next subscribe (Wisdom #2469) |
+| WS-37 | **No reconnect churn outside hours** | Connect and subscribe outside the session and watch for 10 minutes: no data-stall reconnects in the log (Flattrade #2089) |
+| WS-38 | **Long outage** | Block the broker host for more than 10 minutes, then restore it: ticks resume with no restart (Flattrade #2359) |
+| WS-39 | **Expired token** | With a revoked token the adapter logs one warning asking for a new login and does not flood the log; it streams again after a fresh login |
+| WS-40 | **Reconnect leaves nothing behind** | After 5 forced reconnects and 10 re-initialisations, feed and heartbeat thread counts and the open FD count return to baseline (Pocketful, Groww #2312, Nuvama) |
+| WS-41 | **Currency precision on the stream** | A CDS and a BCD instrument's streamed LTP equals the REST LTP; 100x or 1e5x larger is a fixed-divisor bug (Fyers #2235, Angel #2377) |
+| WS-42 | **Subscribe burst** | 500 or more subscribes in under 1 s all tick; no symbol dropped (batching, set-replacing feeds) |
 
 ---
 
@@ -672,6 +714,9 @@ asserted on the stream.
 | OU-13 | `mode` field | `live` in live mode, `analyze` in sandbox |
 | OU-14 | Latency to first update | Time from `/placeorder` response to the first matching `order_update` recorded (see §13) |
 | OU-15 | `unsubscribe_orders` | Acknowledged; updates stop |
+| OU-16 | Token refused by the order stream | After a forced logout or expiry the adapter stops reconnecting, logs one idle line, and resumes on the next login (Tradejini close 4001, #2477) |
+| OU-17 | Order stream coexists with market data | Both streams stay up for 5 minutes with orders flowing; no eviction or flapping (5paisa allows one socket per session) |
+| OU-18 | Stop during connect | Log out and in 10 times quickly: exactly one `order_update` per transition, no duplicates, adapter thread count back to baseline (IIFL Capital) |
 
 ---
 
@@ -731,7 +776,14 @@ is identical, and it lets the script exercise lifecycles that are unsafe live.
 | NG-07 | Every endpoint under an expired token | Clean 401/403 with a re-login hint; no silent empty success |
 | NG-08 | Concurrent identical requests | No duplicate orders from a single logical request |
 | NG-09 | `log/errors.jsonl` sweep | Any new error logged during the run is attached to the report, even for passing cases — five broken UI tools have traced back to one shared 400 before |
-| NG-10 | No credential leakage anywhere | Response bodies and logs swept for the API key, auth token and feed token |
+| NG-10 | No credential leakage anywhere | Response bodies, `log/errors.jsonl`, `log/*.log` and DEBUG output swept for the API key, auth token and feed token, and for any 4+ character prefix or suffix of each, not only the full value; `test/test_xts_credential_logging.py` passes (#2313) |
+| NG-11 | Order write whose reply is lost (offline: transport error raised after send) | 502 "may have been placed" with exactly one outgoing POST, or the order recovered by its tag (#2305) |
+| NG-12 | Order write answered with 429 or a throttle / "try after some time" reply (offline mock) | Exactly one outgoing write and a "not confirmed, check the order book" message |
+| NG-13 | Pacer saturation (gthread) | A burst beyond the broker's cap returns 429 with a trader sentence; reads never come back as empty successes and option-chain zeros are never shown as success |
+| NG-14 | Refused reads during writes (gthread) | A refused positions read during a smart order is 429 with no order sent; a refused order-book read during cancel-all or close-all is 429 naming how many were not cancelled or closed, never success |
+| NG-15 | Feed-wait cap (WebSocket-sourced quote brokers, gthread) | 20 concurrent depth requests: the excess is refused or answered from REST; no request thread held past the ceiling |
+| NG-16 | Thread and FD stability | 50 option-chain refreshes: thread count and FDs return to baseline; no per-call pools under gthread |
+| NG-17 | Credentials in logged callback URLs | The broker's callback credential parameter is masked in logs (`utils/url_redaction._QUERY_CREDENTIAL`) |
 
 ---
 
@@ -809,6 +861,9 @@ Rules the report must follow:
 | MG-09 | Non-JSON broker reply | Surfaces as 502, not an unhandled exception |
 | MG-10 | Broker error payload sent with HTTP 200 | Normalised into a 400 rather than being read as success |
 | MG-11 | Broker without margin support | Clean, documented failure |
+| MG-12 | Margin with an open position or resting order on the account | The same single and basket figures as on a flat account: existing usage is excluded (Flattrade and Kotak #2436) |
+| MG-13 | Basket with one unresolvable leg (wrong expiry, or an `NSE_INDEX` symbol) | Error naming the leg, nothing priced; never success priced on the remaining legs |
+| MG-14 | Basket with MARKET and SL-M legs on `OPT_CHEAP` | Succeeds; protected prices are tick-valid and SL-M is priced off its trigger |
 
 ---
 

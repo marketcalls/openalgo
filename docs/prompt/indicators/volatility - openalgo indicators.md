@@ -254,12 +254,14 @@ print(df[['close', 'NATR', 'NATR_21']].tail())
 
 ### Relative Volatility Index (RVI)
 
-RVI applies the RSI calculation to standard deviation instead of price changes, measuring volatility momentum.
+RVI applies the RSI calculation to standard deviation instead of price changes, measuring volatility momentum. It smooths with Wilder's average, as the RSI does, and the first value is at bar `stdev_period + rsi_period - 2`.
+
+It is `ta.rvi_volatility`, available from openalgo 2.1.0. `ta.rvi` is a different indicator, the Relative Vigor Index, which takes open, high, low and close.
 
 #### Usage
 
 ```python
-rvi_result = ta.rvi(data, stdev_period=10, rsi_period=14)
+rvi_result = ta.rvi_volatility(data, stdev_period=10, rsi_period=14)
 ```
 
 #### Parameters
@@ -276,11 +278,11 @@ rvi_result = ta.rvi(data, stdev_period=10, rsi_period=14)
 
 ```python
 # Calculate RVI
-rvi = ta.rvi(df['close'])
+rvi = ta.rvi_volatility(df['close'])
 df['RVI'] = rvi
 
 # Custom parameters
-rvi_custom = ta.rvi(df['close'], stdev_period=14, rsi_period=21)
+rvi_custom = ta.rvi_volatility(df['close'], stdev_period=14, rsi_period=21)
 df['RVI_Custom'] = rvi_custom
 
 print(df[['close', 'RVI', 'RVI_Custom']].tail())

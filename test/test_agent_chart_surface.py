@@ -619,7 +619,7 @@ class TestTheDrawingToolsDraw:
 class TestTheIndicatorToolsKnowWhichTierANameLivesIn:
     """Two catalogues share a domain and neither contains the other.
 
-    `openalgo-charts` draws 112 and the Python `openalgo.ta` computes 127, with
+    `openalgo-charts` draws 112 and the Python `openalgo.ta` computes 128, with
     only 40 names in common. Asked to add AlphaTrend the agent consulted the
     only list it had, the Python one, and told the operator the chart did not
     have it. It does. Everything here exists so a refusal names the right tier.

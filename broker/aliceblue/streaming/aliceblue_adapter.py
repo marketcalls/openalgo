@@ -317,9 +317,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # fixed sleep — returns immediately on success and gives a clean
             # timeout signal on failure.
             if not self._auth_event.wait(timeout=10):
-                self.logger.warning(
-                    "Timed out waiting for AliceBlue auth confirmation"
-                )
+                self.logger.warning("Timed out waiting for AliceBlue auth confirmation")
                 return False
 
             return bool(self.ws_client.sock and self.ws_client.sock.connected)
@@ -550,9 +548,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # returned via a different path (e.g. running flag) make sure
                 # auth has actually settled.
                 if not self._auth_event.wait(timeout=5):
-                    self.logger.warning(
-                        "Auth handshake did not complete in time after reconnect"
-                    )
+                    self.logger.warning("Auth handshake did not complete in time after reconnect")
                     return self._create_error_response(
                         "RECONNECT_TIMEOUT", "Auth handshake timeout after reconnect"
                     )
@@ -660,72 +656,124 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Error subscribing to {symbol}: {e}")
             return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
+    # Price fields: AliceBlue sends 0 for an unchanged price, so a 0 keeps the cached value.
+    SNAPSHOT_PRICE_FIELDS = (
+        "ltp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "average_price",
+        "upper_circuit",
+        "lower_circuit",
+    )
+    # Quantities can legitimately be 0 (e.g. at market open).
+    SNAPSHOT_QUANTITY_FIELDS = (
+        "volume",
+        "total_buy_quantity",
+        "total_sell_quantity",
+        "last_quantity",
+        "total_oi",
+    )
+    SNAPSHOT_OTHER_FIELDS = (
+        "change_percent",
+        "change_value",
+        "timestamp",
+        "last_trade_time",
+        "symbol",
+        "exchange",
+        "token",
+    )
+
     def _update_market_snapshot(self, symbol_key: str, data: dict[str, Any]) -> dict[str, Any]:
         """
-        Update market snapshot for value retention.
-        Only updates non-zero values to retain previous valid data.
-        AliceBlue sends 0 for unchanged values, so we need to preserve the last known valid values.
+        Merge a parsed tick or depth message into the per-(exchange, token) snapshot.
+
+        tf/df messages are incremental: only the fields they carry change. A
+        field never sent is left out of the snapshot (no 0 placeholder). Depth
+        levels merge per level and per field, so a df that changes sq1 alone
+        keeps sp1, so1 and every other level.
         """
-        # Get existing snapshot or create empty one
         snapshot = self.market_snapshots.get(symbol_key, {})
 
-        # Fields to check and merge
-        price_fields = ["ltp", "open", "high", "low", "close", "average_price"]
-        volume_fields = ["volume", "total_buy_quantity", "total_sell_quantity"]
-        other_fields = ["total_oi", "change_percent", "timestamp", "symbol", "exchange", "token"]
+        for field in self.SNAPSHOT_PRICE_FIELDS:
+            value = data.get(field)
+            if isinstance(value, (int, float)) and value != 0:
+                snapshot[field] = value
 
-        # Update price fields - only if non-zero
-        for field in price_fields:
-            if field in data:
-                value = data[field]
-                # Only update if value is not 0 (AliceBlue sends 0 for unchanged)
-                if isinstance(value, (int, float)) and value != 0:
-                    snapshot[field] = value
-                # If it's 0 and we don't have a previous value, set it to 0
-                elif field not in snapshot:
-                    snapshot[field] = 0
+        for field in self.SNAPSHOT_QUANTITY_FIELDS:
+            value = data.get(field)
+            if isinstance(value, (int, float)) and value >= 0:
+                snapshot[field] = value
 
-        # Update volume fields - can be 0 at market open
-        for field in volume_fields:
-            if field in data:
-                value = data[field]
-                # Volume can legitimately be 0 at market open, but not negative
-                if isinstance(value, (int, float)) and value >= 0:
-                    snapshot[field] = value
-                elif field not in snapshot:
-                    snapshot[field] = 0
-
-        # Update other fields - always update if present
-        for field in other_fields:
-            if field in data and data[field] is not None:
+        for field in self.SNAPSHOT_OTHER_FIELDS:
+            if data.get(field) is not None:
                 snapshot[field] = data[field]
 
-        # Handle depth data specially
-        if "bids" in data or "asks" in data:
-            # Update bids if present and non-empty
-            if "bids" in data and isinstance(data["bids"], list):
-                # Filter out entries with 0 price (invalid)
-                valid_bids = [bid for bid in data["bids"] if bid.get("price", 0) != 0]
-                if valid_bids:
-                    snapshot["bids"] = valid_bids
-                elif "bids" not in snapshot:
-                    snapshot["bids"] = []
+        for side in ("bid_levels", "ask_levels"):
+            levels = data.get(side)
+            if not isinstance(levels, dict):
+                continue
+            cached_levels = snapshot.setdefault(side, {})
+            for level, fields in levels.items():
+                cached_levels.setdefault(level, {}).update(fields)
 
-            # Update asks if present and non-empty
-            if "asks" in data and isinstance(data["asks"], list):
-                # Filter out entries with 0 price (invalid)
-                valid_asks = [ask for ask in data["asks"] if ask.get("price", 0) != 0]
-                if valid_asks:
-                    snapshot["asks"] = valid_asks
-                elif "asks" not in snapshot:
-                    snapshot["asks"] = []
-
-        # Store updated snapshot
         self.market_snapshots[symbol_key] = snapshot
-
-        self.logger.debug(f"Updated snapshot for {symbol_key}: {snapshot}")
-
         return snapshot
+
+    @staticmethod
+    def _feed_time(snapshot: dict[str, Any]):
+        """Exchange feed time (ft, epoch seconds) as an int, or None when not sent."""
+        try:
+            return int(float(snapshot["timestamp"]))
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    @classmethod
+    def _quote_fields(cls, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Quote fields known for the instrument, under OpenAlgo's key names."""
+        out = {}
+        ltt = cls._feed_time(snapshot)
+        if "ltp" in snapshot:
+            out["ltp"] = snapshot["ltp"]
+        if ltt is not None:
+            out["ltt"] = ltt
+        for key in (
+            "volume",
+            "open",
+            "high",
+            "low",
+            "close",
+            "change_percent",
+            "average_price",
+            "total_oi",
+            "last_quantity",
+            "last_trade_time",
+            "total_buy_quantity",
+            "total_sell_quantity",
+            "upper_circuit",
+            "lower_circuit",
+        ):
+            if key in snapshot:
+                out[key] = snapshot[key]
+        # Reference key names next to AliceBlue's historical ones.
+        if "change_percent" in snapshot:
+            out["percent_change"] = snapshot["change_percent"]
+        if "total_oi" in snapshot:
+            out["oi"] = snapshot["total_oi"]
+        return out
+
+    @staticmethod
+    def _depth_side(levels: dict) -> list[dict[str, Any]]:
+        side = []
+        for level in sorted(levels or {}):
+            fields = levels[level]
+            entry = {}
+            for key in ("price", "quantity", "orders"):
+                if key in fields:
+                    entry[key] = fields[key]
+            side.append(entry)
+        return side
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
@@ -1064,9 +1112,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"Resubscribed {len(unique_keys)} tokens with feed type '{feed_type}'"
                 )
             except Exception as e:
-                self.logger.error(
-                    f"Error resubscribing batch for feed type '{feed_type}': {e}"
-                )
+                self.logger.error(f"Error resubscribing batch for feed type '{feed_type}': {e}")
 
     def is_connected(self) -> bool:
         """Check if WebSocket is connected"""
@@ -1202,7 +1248,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )  # Default to LTP if not found
 
             # Determine what data we have
-            has_depth = "bids" in parsed_data or "asks" in parsed_data or "depth" in parsed_data
+            has_depth = "bid_levels" in parsed_data or "ask_levels" in parsed_data
             has_quote = any(k in parsed_data for k in ["open", "high", "low", "close", "volume"])
             has_ltp = "ltp" in parsed_data
 
@@ -1227,87 +1273,31 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 mode_map = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
                 topics_to_publish.append((mode_map[max_mode], max_mode))
 
-            # Publish to all applicable topics
-            for mode_name, mode_num in topics_to_publish:
-                topic = f"{exchange}_{symbol}_{mode_name}"
-                self.logger.debug(f"Publishing {msg_type} to {topic}")
-
-            # Add timestamp if not present
-            if "timestamp" not in parsed_data:
-                parsed_data["timestamp"] = int(time.time() * 1000)
-
-            # Publish to all applicable topics
+            # Publish from the merged snapshot. ltt is the exchange feed time
+            # (ft, epoch seconds) and is left out when the feed has not sent it.
             for mode_name, mode_num in topics_to_publish:
                 topic = f"{exchange}_{symbol}_{mode_name}"
 
-                # Prepare data based on mode
                 if mode_num == 1:  # LTP mode
-                    # For LTP mode, only send minimal data
-                    publish_data = {
-                        "ltp": parsed_data.get("ltp", 0.0),
-                        "ltt": parsed_data.get("timestamp", ""),  # Last traded time
-                    }
+                    publish_data = {}
+                    if "ltp" in snapshot_data:
+                        publish_data["ltp"] = snapshot_data["ltp"]
+                    ltt = self._feed_time(snapshot_data)
+                    if ltt is not None:
+                        publish_data["ltt"] = ltt
                 elif mode_num == 2:  # QUOTE mode
-                    # For QUOTE mode, send price and volume data
-                    publish_data = {
-                        "ltp": parsed_data.get("ltp", 0.0),
-                        "ltt": parsed_data.get("timestamp", ""),
-                        "volume": parsed_data.get("volume", 0),
-                        "open": parsed_data.get("open", 0.0),
-                        "high": parsed_data.get("high", 0.0),
-                        "low": parsed_data.get("low", 0.0),
-                        "close": parsed_data.get("close", 0.0),
-                        "change_percent": parsed_data.get("change_percent", 0.0),
-                        "average_price": parsed_data.get("average_price", 0.0),
-                        "total_oi": parsed_data.get("total_oi", 0),
+                    publish_data = self._quote_fields(snapshot_data)
+                else:  # DEPTH mode: every quote field plus the merged book
+                    publish_data = self._quote_fields(snapshot_data)
+                    ltt = self._feed_time(snapshot_data)
+                    if ltt is not None:
+                        publish_data["timestamp"] = ltt
+                    publish_data["depth"] = {
+                        "buy": self._depth_side(snapshot_data.get("bid_levels")),
+                        "sell": self._depth_side(snapshot_data.get("ask_levels")),
                     }
-                else:  # DEPTH mode
-                    # For DEPTH mode, format data to match expected client format
-                    if (
-                        parsed_data.get("type") == "market_depth"
-                        or "bids" in parsed_data
-                        or "asks" in parsed_data
-                    ):
-                        # Convert bids/asks arrays to buy/sell format expected by client
-                        depth_data = {"buy": [], "sell": []}
 
-                        # Convert bids to buy array
-                        for bid in parsed_data.get("bids", []):
-                            depth_data["buy"].append(
-                                {
-                                    "price": bid.get("price", 0),
-                                    "quantity": bid.get("quantity", 0),
-                                    "orders": 0,  # AliceBlue doesn't provide order count
-                                }
-                            )
-
-                        # Convert asks to sell array
-                        for ask in parsed_data.get("asks", []):
-                            depth_data["sell"].append(
-                                {
-                                    "price": ask.get("price", 0),
-                                    "quantity": ask.get("quantity", 0),
-                                    "orders": 0,  # AliceBlue doesn't provide order count
-                                }
-                            )
-
-                        publish_data = {
-                            "ltp": parsed_data.get("ltp", 0),
-                            "timestamp": parsed_data.get("timestamp", ""),
-                            "depth": depth_data,
-                        }
-                    else:
-                        # Fallback for other data types
-                        publish_data = {
-                            k: v
-                            for k, v in parsed_data.items()
-                            if k not in ["message_type", "type"]
-                        }
-
-                # Debug logging for data publishing
                 self.logger.debug(f"Publishing {msg_type} to topic {topic}")
-
-                # Publish to ZMQ - this sends data to frontend
                 self.publish_market_data(topic, publish_data)
 
         except Exception as e:

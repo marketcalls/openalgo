@@ -567,21 +567,39 @@ def update_env_values(path: str, updates: dict) -> None:
 PLACEHOLDER_FERNET_SALT = "OPENALGO_PLACEHOLDER_FERNET_SALT_REGENERATE_BEFORE_USE"
 
 
-def _warn_fernet_write_failed(reason: str, error: BaseException) -> None:
+# What a failed write leaves in effect when no salt could be saved at all.
+_FERNET_LEGACY_IN_USE = (
+    "Continuing with the legacy static salt: the app will boot, but the\n"
+    "per-install salt rotation is deferred until .env becomes writable.\n"
+)
+
+# What it leaves in effect when a valid salt only could not be moved: that
+# salt, read from .env, so nothing a trader stored is affected.
+_FERNET_VALUE_IN_USE = (
+    "The FERNET_SALT value from .env is in use, so stored credentials are\n"
+    "unaffected. Only the line's place could not be saved: every start tries\n"
+    "again to put it directly below API_KEY_PEPPER, until .env becomes\n"
+    "writable or you move the line there yourself.\n"
+)
+
+
+def _warn_fernet_write_failed(
+    reason: str, error: BaseException, in_effect: str = _FERNET_LEGACY_IN_USE
+) -> None:
     """Print a warning when FERNET_SALT can't be persisted to .env.
 
-    The migration is non-fatal — when the file write fails (typically
-    because the container's appuser can't write the bind-mounted .env,
-    or /app itself is root-owned), the app falls back to the legacy
-    static salt so it still boots. The security upgrade is *deferred*
-    until the operator fixes the permissions, but service is preserved.
+    The write is non-fatal: when it fails (typically because the container's
+    appuser can't write the bind-mounted .env, or /app itself is root-owned),
+    the app still boots. ``in_effect`` says which salt that leaves in use,
+    because it differs by case: a salt that could not be written leaves the
+    legacy static salt in effect until the operator fixes the permissions,
+    while a valid salt that only could not be moved stays in use from .env.
     See marketcalls/openalgo#1394.
     """
     sys.stderr.write(
         "\n\033[93m\033[1m[OpenAlgo Fernet salt]\033[0m "
         f"\033[93m{reason}: {error}\n"
-        "Continuing with the legacy static salt — the app will boot, but the\n"
-        "per-install salt rotation is deferred until .env becomes writable.\n"
+        f"{in_effect}"
         "\n"
         "Common causes inside Docker:\n"
         "  - container's appuser UID does not match the host .env owner\n"
@@ -739,7 +757,9 @@ def _ensure_fernet_salt(env_path: str) -> None:
             with ENV_WRITE_LOCK:
                 _atomic_replace_text(env_path, new_content)
         except OSError as e:
-            _warn_fernet_write_failed("Could not relocate FERNET_SALT line in .env", e)
+            _warn_fernet_write_failed(
+                "Could not move the FERNET_SALT line in .env", e, _FERNET_VALUE_IN_USE
+            )
             os.environ["FERNET_SALT"] = existing_value
             return
         os.environ["FERNET_SALT"] = existing_value

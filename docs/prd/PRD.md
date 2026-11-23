@@ -157,7 +157,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 
 ## Broker Support
 
-Current broker count is 38, including Rupeezy and Sahi added in October 2026. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules are present for Angel One, Dhan, Fyers, Rupeezy, Upstox and Zerodha; each broker retains its own supported trigger/product semantics. Trace: `broker/*/plugin.json`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
+Current broker count is 39, including Rupeezy and Sahi added in October 2026 and Nuvama in November 2026. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules are present for Angel One, Dhan, Fyers, Rupeezy, Upstox and Zerodha; each broker retains its own supported trigger/product semantics. Trace: `broker/*/plugin.json`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
 
 | Broker key | Plugin name | Type | Leverage config | Exchanges |
 |---|---|---|---|---|
@@ -239,10 +239,10 @@ OpenAlgo is configured as a self-hosted application with session routes and API-
 
 ## Out Of Scope And Known Gaps
 
-- Broker-specific response payload shapes are not exhaustively verified for all 38 brokers.
+- Broker-specific response payload shapes are not exhaustively verified for all 39 brokers.
 - Static route inventory may differ from runtime registration when Remote MCP is disabled or `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in implementation need review before one env var is documented as authoritative.
-- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 38 plugin directories.
+- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 39 plugin directories.
 - Blueprint-route BDD coverage remains representative rather than one scenario per route. The RESTX method/path inventory and broker-plugin inventory are explicitly covered by scenario outlines.
 - `/pnltracker/legacy` references a template that is absent from the current source tree and is not a supported fallback UI.
 - Telegram REST webhook dispatch and broadcast fan-out are registered placeholders, not completed delivery paths.

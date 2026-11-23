@@ -39,7 +39,7 @@ need → drill into the specific file. Don't load everything at once.
 | Optional gthread web server: fresh installs, switching on Ubuntu and Docker, verification and rollback | [gthread/README.md](gthread/README.md) |
 | Upgrade / SMTP / TOTP / forgot-password | [Upgrade](design/30-upgrade-procedure/README.md) · [SMTP](design/47-smtp-config/README.md) · [TOTP](design/50-totp-configuration/README.md) · [Password reset](design/48-password-reset/README.md) |
 | Desktop and companion apps on the public `/download` page | [Installation guide](userguide/04-installation/README.md) |
-| Broker integration (38 plugins, including Dhan Sandbox) | [broker-integration-guide.md](broker-integration-guide.md) |
+| Broker integration (39 plugins, including Dhan Sandbox) | [broker-integration-guide.md](broker-integration-guide.md) |
 | Release notes & changelog | [releases/](releases/) · [CHANGELOG.md](CHANGELOG.md) |
 
 ## Feature surfaces

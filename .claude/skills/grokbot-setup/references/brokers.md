@@ -1,11 +1,11 @@
 # Broker credentials and login types
 
-Sources, checked Oct 17, 2026:
+Sources, checked Oct 17, 2026 (Nuvama and Sahi rows added Nov 20, 2026 from the plugin code and `utils/broker_setup_guide.py`):
 
 - docs.openalgo.in broker pages, `https://docs.openalgo.in/connect-brokers/brokers/<page>.md`
   (index: `https://docs.openalgo.in/connect-brokers/brokers.md`); Delta Exchange
   at `https://docs.openalgo.in/crypto/exchanges/delta-exchange.md`
-- `VALID_BROKERS` in `.sample.env` (37 codes)
+- `VALID_BROKERS` in `.sample.env` (39 codes)
 - Login behaviour from the plugin code: `blueprints/brlogin.py` (`broker_callback`),
   `frontend/src/pages/BrokerSelect.tsx` (where Connect goes),
   `frontend/src/pages/BrokerTOTP.tsx` (fields on OpenAlgo's own login forms)
@@ -67,10 +67,12 @@ Where the docs are silent the table says **not documented**; do not guess.
 | `motilal` | Motilal Oswal | Indian | KEY client code; SECRET generated API key | OpenAlgo form | User ID, password, TOTP, date of birth (DD/MM/YYYY) | Yes | Yes (docs: copy the 32-character secret key) | |
 | `mstock` | mStock (Mirae Asset) | Indian | KEY client code; SECRET API key (Type B) | OpenAlgo form | Password, TOTP | Yes | Yes (docs: Generate TOTP; secret source not detailed) | |
 | `nubra` | Nubra | Indian | KEY registered mobile number; SECRET 6-digit MPIN | OTP form (SMS on Connect) | SMS OTP | Yes | No (docs: OpenAlgo forces the SMS path even with TOTP enrolled) | IP via Resources, Update Static IP |
+| `nuvama` | Nuvama (API Connect) | Indian | KEY API Key; SECRET API Secret | OAuth redirect (`www.nuvamawealth.com/api-connect/login`) | Login id, password, OTP on Nuvama's page (from the setup guide; OTP delivery not documented) | Yes | Unverified | Register the exact redirect URL on the API key. The callback reads `request_id`; Nuvama also reports the account on login. IP whitelisting not documented |
 | `paytm` | Paytm Money | Indian | KEY API Key; SECRET API Secret | OAuth redirect (`login.paytmmoney.com`) | Broker page, not documented | Yes | Unverified | |
 | `pocketful` | Pocketful | Indian | KEY App ID; SECRET App Secret | OAuth redirect (`trade.pocketful.in/oauth2/auth`) | Broker page, not documented | Yes | Unverified | |
 | `rmoney` | RMoney (XTS) | Indian | KEY, SECRET (Interactive); `_MARKET` pair | OAuth redirect (XTS hosted login, from code) | Broker page, not documented | Yes | Unverified | Docs say leave the portal redirect empty, yet the code redirects to the XTS login; unclear |
 | `rupeezy` | Rupeezy (Vortex) | Indian | KEY Application ID; SECRET Vortex API Key | OAuth redirect (`flow.rupeezy.in`) | Broker page, not documented | Yes | Unverified | Only client codes whitelisted at app creation can log in. IP. Missing from the brokers index page list |
+| `sahi` | Sahi | Indian | KEY API key id (starts `pk_`, Sahi web, Profile, API Dashboard, created with Full access); SECRET the secret shown once (starts `sahi_sk_`) | OpenAlgo form (one optional field) | TOTP key: the code from the authenticator app. Regular key: nothing, but the key must be approved in Sahi's API Dashboard once each trading day first | Yes | Yes with a TOTP key (secret source not documented); No with a Regular key (daily approval in Sahi's dashboard) | Static IP required: Sahi refuses orders from any other address |
 | `samco` | Samco | Indian | KEY API Key (emailed); SECRET API Secret (shown once) | Key and secret (`/broker/samco/auth`) | None | Yes | Not needed | IP whitelist; Connect also checks the IP |
 | `shoonya` | Shoonya (Finvasia) | Indian | KEY `userid:::client_id`; SECRET secret code | OAuth redirect (`api.shoonya.com`) | Broker page, not documented | Yes | Unverified | Docs use `https://openalgo.local/shoonya/callback`. `BrokerTOTP.tsx` still has a form entry; backend redirects |
 | `tradejini` | Tradejini (CubePlus) | Indian | KEY app API Key; SECRET blank | OpenAlgo form | CubePlus PIN, 2FA (`totp` or `otp`) | Yes | Yes with `totp` | Docs: individual apps accept requests only from the whitelisted IP; login fails with 401 otherwise. Likely unusable from the box |
@@ -80,7 +82,7 @@ Where the docs are silent the table says **not documented**; do not guess.
 | `zebu` | Zebu (MYNT) | Indian | KEY `userid:::client_id` (quote once as a whole); SECRET secret code | OAuth redirect (`go.mynt.in`) | Broker page, not documented | Yes | Unverified | `BrokerSelect.tsx` labels it `totp`; backend redirects |
 | `zerodha` | Zerodha (Kite) | Indian | KEY API Key; SECRET API Secret | OAuth redirect (`kite.trade/connect/login`) | Kite user ID, password, External TOTP | Yes | Yes, verified on the box Oct 17, 2026 | Kite page may not auto-submit; click Continue |
 
-37 codes: 36 Indian (including the Dhan Sandbox plugin) and 1 crypto.
+39 codes: 38 Indian (including the Dhan Sandbox plugin) and 1 crypto.
 
 ## Where the docs are unclear
 

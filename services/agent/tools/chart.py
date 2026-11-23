@@ -309,7 +309,7 @@ class ChartToolkit(OpenAlgoToolkit):
 
         Reach for it only when you need those lists. The instrument, the
         interval, the viewport and the last price are already stated in your
-        THIS SESSION instructions.
+        RIGHT NOW instructions.
 
         Returns:
             JSON with the instrument and timeframe, the viewport, the indicators
@@ -782,7 +782,7 @@ class ChartToolkit(OpenAlgoToolkit):
         These are not the indicators that compute values. The chart draws with
         ``openalgo-charts``, a JavaScript library of 112 indicators, while
         ``compute_indicator`` and its siblings use the Rust-backed Python
-        library of 127. Only 40 indicators exist in both, four of them spelled
+        library of 128. Only 40 indicators exist in both, four of them spelled
         with a hyphen here and an underscore there (``aroon-oscillator`` is
         ``aroon_oscillator``), so AlphaTrend and HalfTrend
         can be drawn and never tabulated, and ``bbands`` and ``adxr`` can be
