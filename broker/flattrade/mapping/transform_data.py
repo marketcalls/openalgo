@@ -1,19 +1,82 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Flattrade Broking Parameters https://piconnect.flattrade.in/docs/
 
+import math
+from decimal import Decimal
+
 from broker.flattrade.api.data import BrokerData
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import (
+    calculate_protected_price,
+    get_instrument_type_from_symbol,
+    get_mpp_percentage,
+)
 
 logger = get_logger(__name__)
+
+SLM_NO_TRIGGER_MESSAGE = (
+    "A stop-loss market (SL-M) order needs a trigger price. "
+    "Set a trigger price above zero and place the order again."
+)
+
+
+class SLMOrderRefused(ValueError):
+    """An SL-M order that cannot be priced; refused before anything is sent."""
+
+
+def slm_trigger_price(data):
+    """Return the SL-M trigger price, refusing an order that has none."""
+    try:
+        trigger = float(data.get("trigger_price") or 0)
+    except (TypeError, ValueError):
+        trigger = 0.0
+    if not math.isfinite(trigger) or trigger <= 0:
+        raise SLMOrderRefused(SLM_NO_TRIGGER_MESSAGE)
+    return trigger
+
+
+def _snap_to_tick(value, tick, direction):
+    """Snap to a multiple of ``tick``: "floor" rounds down, "ceil" rounds up."""
+    ratio = round(value / tick, 6)  # tame float noise before the floor/ceil
+    steps = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    decimals = max(0, -Decimal(str(tick)).as_tuple().exponent)
+    return round(steps * tick, decimals)
+
+
+def slm_limit_from_trigger(trigger, action, symbol, tick_size):
+    """Protective limit for an SL-M sent as SL-LMT, priced off the trigger.
+
+    SELL goes below the trigger and BUY above it, by the MPP slab of the
+    trigger price and at least one tick, snapped away from the trigger so
+    rounding can never pull it back onto or across the trigger. Same rule as
+    broker/dhan and broker/kotak.
+
+    Without a tick size the limit cannot be snapped safely, so the trigger
+    itself (already tick-valid) is the limit. A SELL trigger within one tick
+    of zero has no valid price below it, so it also keeps the trigger.
+    """
+    try:
+        tick = float(tick_size) if tick_size else 0.0
+    except (TypeError, ValueError):
+        tick = 0.0
+    if not math.isfinite(tick) or tick <= 0:
+        return trigger
+
+    instrument_type = get_instrument_type_from_symbol(symbol)
+    pct = (get_mpp_percentage(trigger, instrument_type) or 0) / 100.0
+
+    if action == "SELL":
+        limit = _snap_to_tick(min(trigger * (1 - pct), trigger - tick), tick, "floor")
+        return limit if limit > 0 else trigger
+    return _snap_to_tick(max(trigger * (1 + pct), trigger + tick), tick, "ceil")
 
 
 def transform_data(data, token, auth_token=None):
     """
     Transforms the new API request structure to the current expected structure.
-    For MARKET and SL-M orders, fetches quotes and adjusts price using MPP
-    (Market Price Protection), then sends MARKET as LMT and SL-M as SL-LMT:
+    MARKET orders are sent as LMT priced off the LTP using MPP (Market Price
+    Protection); SL-M orders are sent as SL-LMT priced off the trigger price:
     - EQ/FUT: Price < 100: 2%, 100-500: 1%, > 500: 0.5%
     - OPT (CE/PE): Price < 10: 5%, 10-100: 3%, 100-500: 2%, > 500: 1%
 
@@ -32,11 +95,49 @@ def transform_data(data, token, auth_token=None):
     order_type = map_order_type(data["pricetype"])
     action = data["action"].upper()
 
-    # Apply Market Price Protection for MARKET and SL-M orders.
     # Flattrade runs the same Noren OMS as Shoonya, which blocks both MKT and
-    # SL-MKT price types for API orders, so SL-M has to go out as a protective
-    # SL-LMT priced off the LTP (keeping the caller's trigger price).
-    if data["pricetype"] in ("MARKET", "SL-M"):
+    # SL-MKT price types for API orders, so both are sent as protective limit
+    # orders.
+    #
+    # SL-M goes out as SL-LMT priced off the trigger, never the LTP: the limit
+    # only matters once the trigger is hit, so pricing it off the LTP put a
+    # SELL stop's limit above its trigger (or a BUY stop's below), and the
+    # triggered order rested away from the market. Issue #2390.
+    if data["pricetype"] == "SL-M":
+        trigger = slm_trigger_price(data)
+        tick_size = None
+        if auth_token:
+            try:
+                # Flattrade's quote carries the exchange tick ("ti").
+                tick_size = (
+                    BrokerData(auth_token)
+                    .get_quotes(data["symbol"], data["exchange"])
+                    .get("tick_size")
+                )
+            except Exception:
+                logger.exception(
+                    f"SL-M: quote for the tick size failed for Symbol={data['symbol']}; "
+                    f"using the master contract tick"
+                )
+        if not tick_size:
+            try:
+                info = get_symbol_info(data["symbol"], data["exchange"])
+                tick_size = getattr(info, "tick_size", None)
+            except Exception:
+                logger.exception(
+                    f"SL-M: master contract tick lookup failed for Symbol={data['symbol']}; "
+                    f"using the trigger as the limit"
+                )
+        limit = slm_limit_from_trigger(trigger, action, data["symbol"], tick_size)
+        price = str(limit)
+        order_type = "SL-LMT"
+        logger.info(
+            f"MPP SL-M->SL-LMT: Symbol={data['symbol']}, Action={action}, "
+            f"Trigger={trigger}, TickSize={tick_size}, Limit={limit}"
+        )
+
+    # Apply Market Price Protection for MARKET orders, priced off the LTP.
+    if data["pricetype"] == "MARKET":
         original_type = data["pricetype"]
         logger.info(
             f"MPP: {original_type} order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={action}"
@@ -76,13 +177,8 @@ def transform_data(data, token, auth_token=None):
                         tick_size=tick_size,
                     )
                     price = str(protected_price)
-
-                    if original_type == "MARKET":
-                        # Convert MARKET to LIMIT
-                        order_type = "LMT"
-                    else:
-                        # Convert SL-M to SL-LMT (keep trigger price)
-                        order_type = "SL-LMT"
+                    # Convert MARKET to LIMIT
+                    order_type = "LMT"
 
                     logger.info(
                         f"MPP Conversion Complete: Symbol={data['symbol']}, "
@@ -102,49 +198,6 @@ def transform_data(data, token, auth_token=None):
             logger.error(
                 f"MPP Error: Failed to apply MPP for Symbol={data['symbol']}, "
                 f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with regular {original_type} order."
-            )
-
-        # A missing auth token, a zero LTP or a quote exception must NOT leave an
-        # SL-M falling through as SL-MKT — that is the exact price type this OMS
-        # rejects for API orders, so the order would be dead on arrival. Unlike
-        # MARKET (which has no reference price without a quote), an SL-M always
-        # carries a trigger price, so derive the protective limit from the
-        # trigger and still send SL-LMT. Same fallback as
-        # broker/tradesmart/mapping/transform_data.py::_apply_mpp.
-        if original_type == "SL-M" and order_type != "SL-LMT":
-            order_type = "SL-LMT"
-            trigger = float(data.get("trigger_price") or 0)
-            if trigger > 0:
-                # The caller's trigger price is already tick-valid, so it is the
-                # safe limit. Add the MPP buffer on top only when the master
-                # contract yields a tick size: with tick_size=None,
-                # calculate_protected_price rounds to 2 decimals, which is
-                # off-tick on a 0.05-tick instrument — that would trade a
-                # rejection on price type for a rejection on price. No quote
-                # means no tick size from the API, so read it from SymToken.
-                price = str(trigger)
-                try:
-                    info = get_symbol_info(data["symbol"], data["exchange"])
-                    tick_size = getattr(info, "tick_size", None)
-                    if tick_size:
-                        price = str(
-                            calculate_protected_price(
-                                price=trigger,
-                                action=action,
-                                symbol=data["symbol"],
-                                instrument_type=get_instrument_type_from_symbol(data["symbol"]),
-                                tick_size=tick_size,
-                            )
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"MPP Fallback Error: could not protect off the trigger for "
-                        f"Symbol={data['symbol']}, Error={str(e)}. Using the trigger price as-is."
-                    )
-                    price = str(trigger)
-            logger.warning(
-                f"MPP Fallback: quote-based conversion did not run for Symbol={data['symbol']}; "
-                f"sending SL-M->SL-LMT priced off the trigger ({trigger}) at {price}"
             )
 
     # Basic mapping - ensure all numeric values are strings
