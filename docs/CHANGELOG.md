@@ -66,6 +66,21 @@ fix, live in [docs/releases](releases/).
 
 ### Changed
 
+- The watchlist on `/trading` now opens on four columns: Symbol, Last, Chg and
+  Chg%. Chg is the move from the previous close in price. It was an optional
+  column before, switched off, and easy to miss. A browser that still has the
+  earlier two columns gets Chg added once; a selection you made yourself is
+  left as it was. To hide it, open **Customise columns** (the three dots at
+  the top of the watchlist); that choice is remembered. (#2276)
+- Watchlist prices and moves are shown to the paisa at every size. A price
+  above a thousand used to lose a decimal, so 25,349.65 read 25,349.7 and a
+  move of -2,049.85 read -2,049.8. Currency contracts on CDS and BCD are shown
+  to four decimals. Not changed: an instrument quoted finer than two decimals
+  on any other exchange (some crypto contracts) is still shown to two, so its
+  Chg can read 0.00 while its Chg% shows the move.
+- The watchlist opens a little wider (392 px, it was 340) to hold the extra
+  column, and its narrowest width with the four columns is 342 px. A width you
+  have already dragged it to is kept, unless it is below that.
 - The pinned OpenAlgo Python SDK moves from 2.3.0 to 2.4.1. A Python strategy
   can now run several strategies on one account, in a backtest or a live
   session, including two on one symbol. It also adds optional daily limits
@@ -104,6 +119,15 @@ fix, live in [docs/releases](releases/).
 
 ### Fixed
 
+- An instrument sitting on its previous close is no longer shown as a gain in
+  the `/trading` watchlist. It read `+0.00%` in green. It now reads `0.00` and
+  `0.00%` with no sign and no colour.
+- Adding a column to the watchlist no longer cuts an instrument's name short
+  beside a whole exchange tag (NIFTY read "NI..." next to NSE_INDEX). The name
+  now gets the room first and the exchange shows where both fit. Hold the
+  pointer over a row for the full name and exchange.
+- On a watchlist long enough to scroll, each column label now sits over its
+  figures. The labels were offset to the right by the width of the scrollbar.
 - A crypto contract looked up before the symbol cache had loaded was valued at
   1000 times its worth, because that lookup dropped the contract multiplier.
   Sandbox P&L for such a contract was wrong by the same factor. The multiplier
