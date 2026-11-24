@@ -37,6 +37,19 @@ fix, live in [docs/releases](releases/).
 - `/sandbox/mypnl` shows today's and lifetime charges and the net figures, and a
   charges column on the day-wise and trade tables. The day-wise and trades CSV
   exports gain charges columns at the end.
+- **Pivot Points Standard on every chart.** `/trading`, Historify and the
+  strategy charts now use openalgo-charts 2.7.4 (from 2.7.3), which adds one
+  study and takes the built-in indicators to 113. It draws the pivot with up
+  to five support and resistance pairs, worked out from the last finished
+  period. Choose the type (Traditional, Fibonacci, Woodie, Classic, DeMark or
+  Camarilla) and the period: daily, weekly, monthly, quarterly, yearly, or
+  Auto, which takes the previous session on a chart of 15 minutes or less,
+  the previous week on other intraday charts, the previous month on a daily
+  chart and the previous year above that. The fourth and fifth pairs are
+  switched off to begin with, because they sit far from price. The levels
+  come from finished periods only, so they do not move during the session,
+  and nothing is drawn until the chart has loaded two full periods. The AI
+  agent can add the study to a chart as well.
 
 ### Upgrade notes
 
@@ -66,6 +79,20 @@ fix, live in [docs/releases](releases/).
 
 ### Changed
 
+- The timezone list on `/trading`, in the clock menu on the bottom bar and in
+  Chart settings, grows from 14 zones to 30. Every zone listed before is still
+  there, and the clock menu still finds any other zone by name.
+- A custom chart indicator in `strategies/indicators/` whose id is
+  `pivot-points` now replaces the new built-in study on every chart, as any
+  custom id that matches a built-in does. Rename its id if that is not what
+  you want.
+- Not part of this update: openalgo-charts 2.7.4 also adds, to its own
+  packaged menus and toolbar, moving a study to another pane from its
+  right-click menu, a full screen button and a switch between regular and
+  extended hours. OpenAlgo's charts draw their own menus and toolbar, so
+  these do not appear. Full screen is already on the `/trading` toolbar, no
+  broker feed here serves extended hours as a separate series, and moving a
+  study between panes from the menu is not available yet.
 - The watchlist on `/trading` now opens on four columns: Symbol, Last, Chg and
   Chg%. Chg is the move from the previous close in price. It was an optional
   column before, switched off, and easy to miss. A browser that still has the

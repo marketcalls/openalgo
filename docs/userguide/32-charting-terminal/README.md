@@ -4,8 +4,8 @@
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
 it. The terminal uses the pinned `openalgo-charts` package: a from-scratch canvas
-charting engine with 19 chart types, 112 built-in indicators plus any you write
-yourself, and 87 drawing tools, wired to the same broker session and market-data
+charting engine with 19 chart types, 113 built-in indicators plus any you write
+yourself, and 90 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
 Price updates arrive over the WebSocket feed. History refreshes reconcile bars
@@ -413,7 +413,7 @@ Pick a tool from the left rail. A group button selects whatever you last used
 from that group again; the small corner wedge opens the full list without
 changing the selected tool.
 
-The terminal exposes all 90 drawing tools from openalgo-charts 2.7.3. Each
+The terminal exposes all 90 drawing tools from openalgo-charts 2.7.4. Each
 tool's icon shows its drawing with an open ring at every point you place.
 Channels include regression and pitchfork variants; Fibonacci and Gann include
 fans, arcs, circles and squares. Patterns include XABCD, head and shoulders and

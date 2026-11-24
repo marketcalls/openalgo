@@ -224,8 +224,12 @@ never draws.
 ## 13. Reusing a built-in id overrides it
 
 Custom modules register after the built-in tier, so a duplicate id replaces the
-built-in for the whole app. There are 112 of them; `sma`, `rsi`, `macd`,
+built-in for the whole app. There are 113 of them; `sma`, `rsi`, `macd`,
 `supertrend`, `vwap`, `range-analysis` are all taken.
+
+**2.7.4 adds one more reserved id:** `pivot-points`. A custom pivot study
+written under the obvious id now replaces the built-in Pivot Points Standard;
+rename it unless the override is the point.
 
 **2.6.0 adds seven more reserved ids:** `elder-ray`, `schaff-trend-cycle`,
 `high-low-52-week`, `vidya`, `zigzag`, `zlema` and `volatility-squeeze`. A
