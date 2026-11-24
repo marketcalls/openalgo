@@ -68,6 +68,7 @@ class WebSocketProxy:
         self.subscriptions = {}  # Maps client_id to set of subscriptions
         self.broker_adapters = {}  # Maps user_id to broker adapter
         self.user_mapping = {}  # Maps client_id to user_id
+        self._invalidated_clients = set()  # Sockets awaiting a credential-change close
         self.user_broker_mapping = {}  # Maps user_id to broker_name
         self.running = False
 
@@ -632,8 +633,14 @@ class WebSocketProxy:
             client_id: Client ID to clean up
         """
         self.clients.pop(client_id, None)
+        invalidated_clients = getattr(self, "_invalidated_clients", None)
+        invalidated = invalidated_clients is not None and client_id in invalidated_clients
+        if invalidated_clients is not None:
+            invalidated_clients.discard(client_id)
         user_id = self.user_mapping.get(client_id)
-        adapter = self.broker_adapters.get(user_id) if user_id else None
+        # A replacement adapter may already exist for this user. The old socket
+        # never owned subscriptions on that adapter.
+        adapter = self.broker_adapters.get(user_id) if user_id and not invalidated else None
         release_failed = False
 
         parsed_subscriptions, rows_by_key = self._indexed_client_subscriptions(client_id)
@@ -1856,10 +1863,24 @@ class WebSocketProxy:
                     f"Error cleaning connection pools for user {user_id}: {pool_error}"
                 )
 
+            # Existing sockets still consider themselves authenticated, but their
+            # broker adapter has just been removed. Close them so clients can
+            # authenticate again with the new broker credentials.
+            for client_id, websocket in list(self.clients.items()):
+                if self.user_mapping.get(client_id) == user_id:
+                    self._invalidated_clients.add(client_id)
+                    aio.create_task(self._close_invalidated_client(client_id, websocket))
+
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse cache invalidation message: {e}")
         except Exception as e:
             logger.exception(f"Error processing cache invalidation: {e}")
+
+    async def _close_invalidated_client(self, client_id, websocket):
+        try:
+            await websocket.close(code=1012, reason="Broker credentials changed")
+        except Exception:
+            logger.exception("Error closing invalidated client %s", client_id)
 
     async def _handle_order_update(self, data_str: str):
         """

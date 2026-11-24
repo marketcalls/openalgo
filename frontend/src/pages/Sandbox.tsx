@@ -1,4 +1,4 @@
-import { BarChart3, RotateCcw, Save, Settings } from 'lucide-react'
+import { BarChart3, Calculator, ReceiptText, RotateCcw, Save, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -419,11 +419,23 @@ export default function Sandbox() {
           </h1>
           <p className="text-muted-foreground mt-1">Configure sandbox environment settings</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <Button asChild>
             <Link to="/sandbox/mypnl">
               <BarChart3 className="h-4 w-4 mr-2" />
               My P&L
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/sandbox/commissions">
+              <ReceiptText className="h-4 w-4 mr-2" />
+              Charges
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/sandbox/calculator">
+              <Calculator className="h-4 w-4 mr-2" />
+              Calculator
             </Link>
           </Button>
           <Button variant="destructive" onClick={() => setShowResetDialog(true)}>
@@ -479,7 +491,9 @@ export default function Sandbox() {
                   <ul className="list-disc list-inside space-y-1 ml-4 text-sm">
                     <li>Delete all orders, trades, positions, and holdings</li>
                     <li>Reset funds to starting capital (1.00 Crore)</li>
-                    <li>Reset all configuration values to defaults</li>
+                    <li>
+                      Reset all configuration values to defaults, including the brokerage plan
+                    </li>
                     <li>Clear all historical data</li>
                   </ul>
                 </div>

@@ -22,7 +22,36 @@ from .wisdom_mapping import WisdomCapabilityRegistry, WisdomExchangeMapper
 
 
 class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """Wisdom XTS specific implementation of the WebSocket adapter"""
+    """Wisdom XTS specific implementation of the WebSocket adapter
+
+    Connection lifecycle: connect() starts one feed thread (the only place a
+    connection thread is started, decided under self.lock). That thread
+    connects, waits until the connection ends, and reconnects with backoff
+    until disconnect() stops it. Close callbacks only record the close; they
+    start nothing. Each reconnect logs in to the market data API again, opens
+    a new socket after closing the old one, and replays every stored
+    subscription through the batch queue.
+
+    Subscriptions are sent by one batch sender thread, outside the lock, as
+    requests of up to MAX_INSTRUMENTS_PER_SUBSCRIBE instruments of one mode.
+    """
+
+    # Subscription batching. The XTS subscription request takes an array of
+    # instruments, and each request is a blocking HTTP POST, so one request
+    # per symbol made a 1000-symbol start, and every reconnect, 1000
+    # sequential round trips.
+    MAX_INSTRUMENTS_PER_SUBSCRIBE = WisdomWebSocketClient.MAX_INSTRUMENTS_PER_REQUEST
+    # Window opened by the first queued instrument before anything is sent,
+    # so a burst of single-symbol subscribes leaves as one request per mode.
+    SUBSCRIPTION_COLLECT_WINDOW = 0.5
+    # Gap between batch requests, only while more remain.
+    SUBSCRIPTION_DELAY = 0.5
+    # Consecutive failed sends after which the sender pauses. The queue is
+    # kept, and the next subscribe or reconnect starts the sender again.
+    MAX_SEND_FAILURES = 5
+    # How often the feed thread looks at a connection's transport while
+    # waiting for its close event.
+    CONNECTION_CHECK_INTERVAL = 30
 
     def __init__(self):
         super().__init__()
@@ -36,7 +65,17 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
-        self._reconnect_thread_active = False  # Guard against duplicate reconnect threads
+
+        # Connection lifecycle: one feed thread per connect(), stopped by its
+        # own event, and the event of the connection it is waiting on.
+        self._stop_event = threading.Event()
+        self._feed_thread = None
+        self._connection_ended = None
+
+        # Subscription batch queue: (mode, segment, instrument id) ->
+        # (mode, instrument), in arrival order, drained by one sender thread.
+        self.pending_subscriptions = {}
+        self._sender_thread = None
 
         # Log the ZMQ port being used
         self.logger.debug(f"Wisdom adapter initialized with ZMQ port: {self.zmq_port}")
@@ -91,6 +130,14 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raise ValueError("Missing required authentication data")
 
         self.logger.debug("Using configured API key for Wisdom XTS connection")
+
+        # Close a client left by an earlier initialize(), or its socket leaks
+        previous = self.ws_client
+        if previous is not None:
+            try:
+                previous.disconnect()
+            except Exception:
+                self.logger.exception("Error closing the previous Wisdom XTS client")
 
         # Create Wisdom WebSocket client with API credentials
         self.ws_client = WisdomWebSocketClient(
@@ -192,89 +239,136 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        self._start_feed_thread()
 
-    def _connect_with_retry(self) -> None:
-        """Connect to Wisdom XTS WebSocket with retry logic"""
+    def _start_feed_thread(self) -> None:
+        """Start the feed thread, unless one is already running.
+
+        The only place a connection thread is started. The check and the
+        start happen under the lock, so concurrent callers start one thread.
+        """
         with self.lock:
-            if self._reconnect_thread_active:
-                self.logger.info("Reconnect thread already active, skipping")
+            if not self.running:
                 return
-            self._reconnect_thread_active = True
+            if (
+                self._feed_thread is not None
+                and self._feed_thread.is_alive()
+                and not self._stop_event.is_set()
+            ):
+                self.logger.debug("Wisdom XTS feed thread already running")
+                return
+            # A fresh stop event per thread: a feed thread from before a
+            # disconnect() keeps its own set event and cannot be revived.
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+            self.reconnect_attempts = 0
+            self._feed_thread = threading.Thread(
+                target=self._maintain_connection,
+                args=(stop_event,),
+                name="wisdom-feed",
+                daemon=True,
+            )
+            self._feed_thread.start()
 
-        try:
-            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-                # Snapshot ws_client ref so disconnect() nulling it mid-call is safe
-                client = self.ws_client
-                if client is None:
-                    self.logger.info("ws_client is None, aborting reconnect")
+    def _reconnect_backoff(self) -> float:
+        return min(self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay)
+
+    def _maintain_connection(self, stop_event: threading.Event) -> None:
+        """Connect, wait for the connection to end, and reconnect, until stopped.
+
+        A connection that closes (a network drop, a close from the broker, or
+        a transport timeout) is replaced after reconnect_delay seconds. Failed
+        connects back off exponentially and give up after
+        max_reconnect_attempts in a row. Every wait wakes at once on
+        disconnect().
+        """
+        while self.running and not stop_event.is_set():
+            # Snapshot ws_client ref so disconnect() nulling it mid-call is safe
+            client = self.ws_client
+            if client is None:
+                break
+
+            try:
+                self.logger.debug(
+                    f"Connecting to Wisdom XTS WebSocket (attempt {self.reconnect_attempts + 1})"
+                )
+                ended = client.connect()
+            except Exception as e:
+                with self.lock:
+                    self.connected = False
+                if not self.running or stop_event.is_set():
                     break
-
-                try:
-                    self.logger.debug(
-                        f"Connecting to Wisdom XTS WebSocket (attempt {self.reconnect_attempts + 1})"
+                self.reconnect_attempts += 1
+                if self.reconnect_attempts >= self.max_reconnect_attempts:
+                    self.logger.error(
+                        f"Connection failed: {e}. Max reconnection attempts reached. Giving up."
                     )
-                    client.connect()
-
-                    # If disconnect() was called while connect() was in progress,
-                    # tear down the orphaned connection to prevent FD leak
-                    if not self.running:
-                        self.logger.info(
-                            "disconnect() called during connect - tearing down orphaned connection"
-                        )
-                        try:
-                            client.disconnect()
-                        except Exception:
-                            pass
-                        break
-
-                    with self.lock:
-                        self.reconnect_attempts = 0  # Reset attempts on successful connection
                     break
+                delay = self._reconnect_backoff()
+                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                if stop_event.wait(delay):
+                    break
+                continue
 
-                except Exception as e:
-                    with self.lock:
-                        self.reconnect_attempts += 1
-                        attempts = self.reconnect_attempts
-                    delay = min(
-                        self.reconnect_delay * (2**attempts), self.max_reconnect_delay
-                    )
-                    self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                    time.sleep(delay)
-
-            if self.reconnect_attempts >= self.max_reconnect_attempts:
-                self.logger.error("Max reconnection attempts reached. Giving up.")
-        finally:
+            # Publish the connection's end event under the lock disconnect()
+            # takes, so a disconnect() racing this point either sees it and
+            # sets it, or is seen here.
             with self.lock:
-                self._reconnect_thread_active = False
+                stopping = not self.running or stop_event.is_set()
+                if not stopping:
+                    self._connection_ended = ended
+            if stopping:
+                # client.disconnect() has closed, or will close, the socket.
+                break
+
+            self.reconnect_attempts = 0  # Reset attempts on successful connection
+            # The close event ends this wait. python-socketio raises no close
+            # event for a transport that drops before its connect() has
+            # returned, so look at the transport now and then as well.
+            while not ended.wait(self.CONNECTION_CHECK_INTERVAL):
+                if not client.transport_alive():
+                    self.logger.warning("Wisdom XTS connection closed without a close event")
+                    break
+
+            with self.lock:
+                if self._connection_ended is ended:
+                    self._connection_ended = None
+                if not self.running or stop_event.is_set():
+                    break
+                self.connected = False
+            self.logger.warning(
+                f"Wisdom XTS connection lost. Reconnecting in {self.reconnect_delay} seconds..."
+            )
+            if stop_event.wait(self.reconnect_delay):
+                break
 
     def disconnect(self) -> None:
         """Disconnect from Wisdom XTS WebSocket"""
         self.logger.debug("*** DISCONNECT CALLED - Starting Wisdom disconnect process ***")
 
-        # Set running to False to prevent reconnection attempts
-        self.running = False
-        self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
-        self.logger.debug(
-            "Set running=False and max reconnect attempts to prevent auto-reconnection"
-        )
+        # Stop the feed thread and the batch sender, wake whatever they are
+        # waiting on, and drop queued subscribes so none is sent to a client
+        # that is about to be released.
+        with self.lock:
+            self.running = False
+            self.connected = False
+            self._stop_event.set()
+            ended, self._connection_ended = self._connection_ended, None
+            self.pending_subscriptions.clear()
+            client, self.ws_client = self.ws_client, None
+        if ended is not None:
+            ended.set()
 
         # Disconnect and release Socket.IO client
-        if hasattr(self, "ws_client") and self.ws_client:
+        if client is not None:
             try:
                 self.logger.debug("Disconnecting Socket.IO client...")
-                self.ws_client.disconnect()
+                client.disconnect()
                 self.logger.debug("Socket.IO client disconnect call completed")
-            except Exception as e:
-                self.logger.error(f"Error during Socket.IO disconnect: {e}")
-            finally:
-                self.ws_client = None  # Release reference so socketio transport threads can be GC'd
+            except Exception:
+                self.logger.exception("Error during Socket.IO disconnect")
         else:
             self.logger.warning("No WebSocket client to disconnect")
-
-        # Set connected flag to False
-        self.connected = False
-        self.logger.debug("Set connected flag to False")
 
         # Clean up ZeroMQ resources
         self.logger.info("Starting cleanup of ZeroMQ resources...")
@@ -285,6 +379,196 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # cleanup_zmq() is inherited from BaseBrokerWebSocketAdapter which handles:
     # - idempotency (_zmq_cleaned_up flag), shared-ZMQ skip, _instance_count
     #   decrement, socket nulling, and shared context lifecycle.
+
+    @staticmethod
+    def _instrument_key(instrument: dict) -> tuple:
+        """Identity of an instrument, normalised to strings."""
+        return (
+            str(instrument.get("exchangeSegment")),
+            str(instrument.get("exchangeInstrumentID")),
+        )
+
+    def _queue_subscriptions_locked(self, items: list) -> None:
+        """Queue (mode, instrument) items and make sure the sender runs.
+
+        Caller holds self.lock. An instrument already queued in the same mode
+        is not queued twice: two depth levels of one token share a mode, and
+        a reconnect re-queues the whole book over anything still waiting.
+        """
+        for mode, instrument in items:
+            self.pending_subscriptions[(mode, *self._instrument_key(instrument))] = (
+                mode,
+                instrument,
+            )
+        if self._sender_thread is None and self.pending_subscriptions:
+            self._sender_thread = threading.Thread(
+                target=self._send_pending_subscriptions,
+                args=(self._stop_event,),
+                name="wisdom-subscribe",
+                daemon=True,
+            )
+            self._sender_thread.start()
+
+    def _take_batch_locked(self) -> tuple[int, list]:
+        """Remove and return up to MAX_INSTRUMENTS_PER_SUBSCRIBE queued
+        instruments of the mode at the head of the queue, in queue order.
+
+        Matching instruments are gathered from anywhere in the queue, since
+        callers interleave modes and a front-only scan would send one-item
+        requests. Caller holds self.lock.
+        """
+        batch_mode = next(iter(self.pending_subscriptions.values()))[0]
+        taken = []
+        for key, (mode, instrument) in self.pending_subscriptions.items():
+            if mode == batch_mode:
+                taken.append((key, instrument))
+                if len(taken) >= self.MAX_INSTRUMENTS_PER_SUBSCRIBE:
+                    break
+        for key, _ in taken:
+            del self.pending_subscriptions[key]
+        return batch_mode, [instrument for _, instrument in taken]
+
+    def _wanted_locked(self) -> set:
+        """(mode, segment, instrument id) of every stored subscription.
+        Caller holds self.lock."""
+        return {
+            (sub["mode"], *self._instrument_key(instrument))
+            for sub in self.subscriptions.values()
+            for instrument in sub["instruments"]
+        }
+
+    def _is_wanted(self, mode: int, instrument: dict) -> bool:
+        """Whether a stored subscription still asks for this instrument in this mode."""
+        key = self._instrument_key(instrument)
+        with self.lock:
+            return any(
+                sub["mode"] == mode
+                and any(self._instrument_key(i) == key for i in sub["instruments"])
+                for sub in self.subscriptions.values()
+            )
+
+    def _release_unwanted(self, client, mode: int, subscribed: list) -> None:
+        """Unsubscribe at the broker what a batch subscribed after it was dropped.
+
+        The sender takes a batch out of the queue before sending it, so an
+        unsubscribe() landing while one of the batch's requests is in flight
+        finds nothing queued to cancel; its own unsubscribe request can reach
+        the broker before the subscribe does. Whatever the batch subscribed
+        that is no longer in the book is unsubscribed here.
+
+        Every subscribe reaches the broker through the sender thread that
+        calls this: subscribe() and _resubscribe_all() only queue. So a
+        subscribe of the same instrument made after the check below is queued
+        behind this unsubscribe, sent after it, and never undone by it.
+        """
+        if not subscribed:
+            return
+        with self.lock:
+            if not self.running:
+                return  # disconnect() ends the whole session
+            wanted = self._wanted_locked()
+            dropped = [i for i in subscribed if (mode, *self._instrument_key(i)) not in wanted]
+        if not dropped:
+            return
+        self.logger.info(
+            f"Unsubscribing {len(dropped)} instrument(s) dropped while their subscribe was in flight"
+        )
+        try:
+            client.unsubscribe(mode, dropped)
+        except Exception:
+            self.logger.exception("Error unsubscribing instruments dropped during a subscribe")
+
+    def _send_pending_subscriptions(self, stop_event: threading.Event) -> None:
+        """Drain the queue into batched subscribe requests, outside the lock.
+
+        Every decision to stop happens under the lock that
+        _queue_subscriptions_locked() holds when it checks whether a sender
+        is running, so an instrument queued as this thread exits is never
+        left behind.
+
+        This is the only thread that sends subscribe requests, which is what
+        lets _release_unwanted() undo a dropped instrument without racing a
+        newer subscribe of it.
+        """
+        me = threading.current_thread()
+        failures = 0
+        try:
+            # Collect window: let the rest of a burst arrive (interruptible)
+            stop_event.wait(self.SUBSCRIPTION_COLLECT_WINDOW)
+
+            while True:
+                with self.lock:
+                    if (
+                        stop_event.is_set()
+                        or not self.running
+                        or not self.pending_subscriptions
+                        # Not connected: _on_open queues the whole book again
+                        # on the next connection and starts a new sender.
+                        or not (self.connected and self.ws_client)
+                    ):
+                        self._sender_thread = None
+                        return
+                    batch_mode, batch = self._take_batch_locked()
+                    client = self.ws_client
+
+                subscribed = []
+                error = None
+                try:
+                    client.subscribe_batch(
+                        batch_mode,
+                        batch,
+                        still_wanted=lambda i, m=batch_mode: self._is_wanted(m, i),
+                        subscribed=subscribed,
+                    )
+                except Exception as e:
+                    error = e
+                # On success and on failure: a request that raised may follow
+                # others the server had already confirmed.
+                self._release_unwanted(client, batch_mode, subscribed)
+
+                if error is None:
+                    failures = 0
+                    self.logger.debug(
+                        f"Sent batched subscription: {len(batch)} instruments in mode {batch_mode}"
+                    )
+                    delay = self.SUBSCRIPTION_DELAY
+                else:
+                    failures += 1
+                    done = {self._instrument_key(i) for i in subscribed}
+                    with self.lock:
+                        if stop_event.is_set() or not self.running:
+                            self._sender_thread = None
+                            return
+                        # Back to the front, unless unsubscribed meanwhile or
+                        # already confirmed before the failure
+                        wanted = self._wanted_locked()
+                        retry = {
+                            key: (batch_mode, i)
+                            for i in batch
+                            if (key := (batch_mode, *self._instrument_key(i))) in wanted
+                            and self._instrument_key(i) not in done
+                        }
+                        self.pending_subscriptions = {**retry, **self.pending_subscriptions}
+                        if failures >= self.MAX_SEND_FAILURES:
+                            self._sender_thread = None
+                            self.logger.error(
+                                f"Batch subscription failed {failures} times in a row: {error}. "
+                                f"Holding {len(self.pending_subscriptions)} instrument(s) "
+                                "until the next subscribe or reconnect."
+                            )
+                            return
+                    self.logger.error(f"Batch subscription failed (mode {batch_mode}): {error}")
+                    delay = self.SUBSCRIPTION_DELAY * 2
+
+                # Throttle only while more work remains
+                with self.lock:
+                    more = bool(self.pending_subscriptions)
+                if more and stop_event.wait(delay):
+                    continue  # the check at the top of the loop exits
+        finally:
+            with self.lock:
+                if self._sender_thread is me:
+                    self._sender_thread = None
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -388,22 +672,15 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "is_fallback": is_fallback,
             }
             # Don't log the actual token value for security, but log its type and length
-            token_info = (
-                f"type={type(token)}, len={len(str(token))}"
-                if token
-                else "None"
-            )
+            token_info = f"type={type(token)}, len={len(str(token))}" if token else "None"
             self.logger.debug(
                 f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}"
             )
 
-        # Subscribe if connected
-        if self.connected and self.ws_client:
-            try:
-                self.ws_client.subscribe(correlation_id, mode, instruments)
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+            # Queue for the batch sender. When not connected, _on_open
+            # queues every stored subscription on the next connection.
+            if self.connected and self.ws_client:
+                self._queue_subscriptions_locked([(mode, instruments[0])])
 
         # Return success with capability info
         return self._create_success_response(
@@ -469,42 +746,50 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        # Create instrument list for Wisdom XTS API
+        # Create instrument list for Wisdom XTS API. str() on the token to
+        # match what subscribe() stores, so the queued subscribe is found.
         instruments = [
             {
                 "exchangeSegment": WisdomExchangeMapper.get_exchange_type(brexchange),
-                "exchangeInstrumentID": token,
+                "exchangeInstrumentID": str(token) if token is not None else "",
             }
         ]
 
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Remove from subscriptions
+        # Remove from subscriptions, and cancel a subscribe still waiting in
+        # the batch queue, or the sender would subscribe it after this.
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
-                self.logger.debug(f"Removed {symbol}.{exchange} from subscription registry")
+            # subscribe() appends the depth level to a mode 3 id, so an exact
+            # match never found a depth subscription, and every reconnect
+            # resubscribed a symbol the user had dropped. Match the prefix.
+            for key in [
+                k
+                for k, sub in self.subscriptions.items()
+                if (k == correlation_id or k.startswith(f"{correlation_id}_"))
+                and sub.get("symbol") == symbol
+                and sub.get("exchange") == exchange
+            ]:
+                del self.subscriptions[key]
+                self.logger.debug(f"Removed {symbol}.{exchange} [{key}] from subscription registry")
+            self.pending_subscriptions.pop((mode, *self._instrument_key(instruments[0])), None)
+            client = self.ws_client if self.connected else None
 
         # Unsubscribe if connected
-        if self.connected and self.ws_client:
+        if client is not None:
             try:
                 self.logger.debug(
                     f"Sending unsubscribe request for {symbol}.{exchange} to XTS server"
                 )
-                self.ws_client.unsubscribe(correlation_id, mode, instruments)
+                client.unsubscribe(mode, instruments)
                 self.logger.info(f"Successfully sent unsubscribe request for {symbol}.{exchange}")
 
-                # Always disconnect and perform cleanup after unsubscription
-                self.logger.debug("Initiating disconnect and cleanup after unsubscription")
-                self.disconnect()
-
-                return self._create_success_response(
-                    f"Unsubscribed from {symbol}.{exchange} and disconnected from XTS server",
-                    symbol=symbol,
-                    exchange=exchange,
-                    mode=mode,
-                )
+                # Deliberately not disconnecting here. This used to call
+                # self.disconnect() after every unsubscribe, which stopped
+                # the feed for every other symbol on this connection, and
+                # nothing brought it back. The proxy disconnects the adapter
+                # itself when its last client goes away.
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
@@ -517,36 +802,50 @@ class WisdomWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
+        with self.lock:
+            if not self.running:
+                return
+            self.connected = True
         self.logger.info("Connected to Wisdom XTS WebSocket")
-        self.connected = True
 
         # Resubscribe to existing subscriptions if reconnecting
         self._resubscribe_all()
 
     def _resubscribe_all(self):
-        """Resubscribe to all stored subscriptions"""
+        """Resubscribe to all stored subscriptions
+
+        Copies the book under the lock and hands it to the batch sender,
+        which sends the HTTP requests outside the lock. This used to send one
+        blocking POST per subscription while holding the lock, on Socket.IO's
+        event thread, so a slow broker stalled every subscribe, unsubscribe
+        and tick lookup behind it.
+        """
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
-                    self.logger.debug(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            if not self.connected:
+                return
+            items = [
+                (sub["mode"], instrument)
+                for sub in self.subscriptions.values()
+                for instrument in sub["instruments"]
+            ]
+            self._queue_subscriptions_locked(items)
+        if items:
+            self.logger.info(f"Resubscribing {len(items)} instrument(s) in batches")
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
         self.logger.error(f"Wisdom XTS WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
-        """Callback when connection is closed"""
-        self.logger.info("Wisdom XTS WebSocket connection closed")
-        self.connected = False
+        """Callback when connection is closed
 
-        # Attempt to reconnect if we're still running
-        if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        Only records the close. The feed thread is waiting on this
+        connection and reconnects; nothing is started here, and the client
+        does not deliver the close of a connection it has already replaced.
+        """
+        self.logger.info("Wisdom XTS WebSocket connection closed")
+        with self.lock:
+            self.connected = False
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""

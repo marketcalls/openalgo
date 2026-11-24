@@ -39,7 +39,7 @@ need → drill into the specific file. Don't load everything at once.
 | Optional gthread web server: fresh installs, switching on Ubuntu and Docker, verification and rollback | [gthread/README.md](gthread/README.md) |
 | Upgrade / SMTP / TOTP / forgot-password | [Upgrade](design/30-upgrade-procedure/README.md) · [SMTP](design/47-smtp-config/README.md) · [TOTP](design/50-totp-configuration/README.md) · [Password reset](design/48-password-reset/README.md) |
 | Desktop and companion apps on the public `/download` page | [Installation guide](userguide/04-installation/README.md) |
-| Broker integration (38 plugins, including Dhan Sandbox) | [broker-integration-guide.md](broker-integration-guide.md) |
+| Broker integration (39 plugins, including Dhan Sandbox) | [broker-integration-guide.md](broker-integration-guide.md) |
 | Release notes & changelog | [releases/](releases/) · [CHANGELOG.md](CHANGELOG.md) |
 
 ## Feature surfaces
@@ -49,6 +49,7 @@ need → drill into the specific file. Don't load everything at once.
 | Agent (`/agent`) and voice | [design/55-agent/README.md](design/55-agent/README.md) · [design/56-voice-agent/README.md](design/56-voice-agent/README.md) |
 | The 20 options and portfolio tools, including Strike Profile and Sector Rotation | [userguide/31-tools/README.md](userguide/31-tools/README.md) |
 | Portfolio, SIP and sector-rotation REST APIs | [api/README.md](api/README.md#portfolio-sip-and-sector-analysis) |
+| Sandbox brokerage and statutory charges, the brokerage calculator and the charges API | [prd/sandbox-charges.md](prd/sandbox-charges.md) · [api/account-services/charges.md](api/account-services/charges.md) |
 | Python strategy hosting and Flow workflows | [Python](userguide/20-python-strategies/README.md) · [Flow](userguide/21-flow-visual-builder/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner design proposal (external service, not shipped) | [scanner-architecture.md](scanner-architecture.md) |

@@ -2,6 +2,7 @@ import json
 import os
 
 from broker.firstock.mapping.transform_data import (
+    SLMOrderRefused,
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -226,6 +227,18 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     return net_qty
 
 
+class _RejectedResponse:
+    """Stands in for a broker response to an order refused before sending.
+
+    The service layer reads ``.status`` and the message from the response
+    data, so the trader sees a 400 naming the problem instead of the
+    "internal error" an escaped exception would produce.
+    """
+
+    status = 400
+    status_code = 400
+
+
 def place_order_api(data, auth):
     """
     Place order through Firstock API
@@ -235,7 +248,12 @@ def place_order_api(data, auth):
     api_key = api_key[:-4]
 
     token = get_token(data["symbol"], data["exchange"])
-    transformed_data = transform_data(data, token, auth)
+    try:
+        transformed_data = transform_data(data, token, auth)
+    except SLMOrderRefused as refused:
+        # Refused before anything reached the broker; the message names the fix.
+        logger.warning(f"PlaceOrder refused: {refused}")
+        return _RejectedResponse(), {"status": "error", "message": str(refused)}, None
     transformed_data.update({"jKey": auth, "userId": api_key})
 
     safe_data = {k: v for k, v in transformed_data.items() if k != "jKey"}
@@ -565,7 +583,11 @@ def modify_order(data, auth):
     token = get_token(data["symbol"], data["exchange"])
 
     # Transform the data to Firstock format (auth passed for MPP quote fetch)
-    transformed_data = transform_modify_order_data(data, token, auth)
+    try:
+        transformed_data = transform_modify_order_data(data, token, auth)
+    except SLMOrderRefused as refused:
+        logger.warning(f"ModifyOrder refused: {refused}")
+        return {"status": "error", "message": str(refused)}, 400
     transformed_data.update({"jKey": auth, "userId": api_key})
 
     # Set up the request

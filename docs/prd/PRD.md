@@ -4,7 +4,7 @@ This document describes OpenAlgo as it exists in the current source tree. It is 
 
 ## Product Overview And Purpose
 
-OpenAlgo is a self-hosted trading application for retail algo traders. It exposes a Flask and Flask-RESTX backend, a React frontend when `frontend/dist` exists, broker plugins, REST APIs, webhook automation, a Flow workflow builder, Python strategy hosting, analyzer/sandbox mode, market data APIs, and a separate WebSocket proxy. The public REST surface currently has 76 registered method/path pairs under `/api/v1`. The larger session, feature and React route surface changes with modules and conditional registration; `restx_api/__init__.py` and blueprint decorators are authoritative. The [REST BDD inventory](../bdd/rest_api_inventory.feature) and [API reference](../api/README.md) track the current public contract. The phase-1 discovery map is a source-discovery snapshot, not a live route count.
+OpenAlgo is a self-hosted trading application for retail algo traders. It exposes a Flask and Flask-RESTX backend, a React frontend when `frontend/dist` exists, broker plugins, REST APIs, webhook automation, a Flow workflow builder, Python strategy hosting, analyzer/sandbox mode, market data APIs, and a separate WebSocket proxy. The public REST surface currently has 77 registered method/path pairs under `/api/v1`. The larger session, feature and React route surface changes with modules and conditional registration; `restx_api/__init__.py` and blueprint decorators are authoritative. The [REST BDD inventory](../bdd/rest_api_inventory.feature) and [API reference](../api/README.md) track the current public contract. The phase-1 discovery map is a source-discovery snapshot, not a live route count.
 
 Python `>=3.12` is required. Read application and pinned SDK versions from `pyproject.toml` and frontend versions from `frontend/package.json`/its lockfile instead of treating this PRD as a dependency lock. The RESTX Swagger UI is intentionally disabled with `doc=False`; `/api/docs` is not a supported surface and must not be enabled merely to satisfy documentation navigation.
 
@@ -157,7 +157,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 
 ## Broker Support
 
-Current broker count is 38, including Rupeezy and Sahi added in October 2026. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules are present for Angel One, Dhan, Fyers, Rupeezy, Upstox and Zerodha; each broker retains its own supported trigger/product semantics. Trace: `broker/*/plugin.json`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
+Current broker count is 39, including Rupeezy and Sahi added in October 2026 and Nuvama in November 2026. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules are present for Angel One, Dhan, Fyers, Rupeezy, Upstox and Zerodha; each broker retains its own supported trigger/product semantics. Trace: `broker/*/plugin.json`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
 
 | Broker key | Plugin name | Type | Leverage config | Exchanges |
 |---|---|---|---|---|
@@ -239,10 +239,10 @@ OpenAlgo is configured as a self-hosted application with session routes and API-
 
 ## Out Of Scope And Known Gaps
 
-- Broker-specific response payload shapes are not exhaustively verified for all 38 brokers.
+- Broker-specific response payload shapes are not exhaustively verified for all 39 brokers.
 - Static route inventory may differ from runtime registration when Remote MCP is disabled or `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in implementation need review before one env var is documented as authoritative.
-- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 38 plugin directories.
+- `docs/broker-integration-guide.md`, the code inventory, and `.sample.env` must stay aligned on the current 39 plugin directories.
 - Blueprint-route BDD coverage remains representative rather than one scenario per route. The RESTX method/path inventory and broker-plugin inventory are explicitly covered by scenario outlines.
 - `/pnltracker/legacy` references a template that is absent from the current source tree and is not a supported fallback UI.
 - Telegram REST webhook dispatch and broadcast fan-out are registered placeholders, not completed delivery paths.

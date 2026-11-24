@@ -94,6 +94,7 @@ BROKER_NAMES = {
     "kotak": "Kotak Securities",
     "mstock": "mStock by Mirae Asset",
     "nubra": "Nubra",
+    "nuvama": "Nuvama",
     "paytm": "Paytm Money",
     "pocketful": "Pocketful",
     "rmoney": "RMoney",

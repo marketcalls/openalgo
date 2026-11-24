@@ -1,29 +1,116 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Firstock V1 API Parameters https://api.firstock.in/V1/placeOrder
 
+import math
 import os
+from decimal import Decimal
 
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import (
+    calculate_protected_price,
+    get_instrument_type_from_symbol,
+    get_mpp_percentage,
+)
 
 logger = get_logger(__name__)
+
+SLM_NO_TRIGGER_MESSAGE = (
+    "A stop-loss market (SL-M) order needs a trigger price. "
+    "Set a trigger price above zero and place the order again."
+)
+
+
+class SLMOrderRefused(ValueError):
+    """An SL-M order that cannot be priced; refused before anything is sent."""
+
+
+def slm_trigger_price(data):
+    """Return the SL-M trigger price, refusing an order that has none."""
+    try:
+        trigger = float(data.get("trigger_price") or 0)
+    except (TypeError, ValueError):
+        trigger = 0.0
+    if not math.isfinite(trigger) or trigger <= 0:
+        raise SLMOrderRefused(SLM_NO_TRIGGER_MESSAGE)
+    return trigger
+
+
+def _snap_to_tick(value, tick, direction):
+    """Snap to a multiple of ``tick``: "floor" rounds down, "ceil" rounds up."""
+    ratio = round(value / tick, 6)  # tame float noise before the floor/ceil
+    steps = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    decimals = max(0, -Decimal(str(tick)).as_tuple().exponent)
+    return round(steps * tick, decimals)
+
+
+def slm_limit_from_trigger(trigger, action, symbol, tick_size):
+    """Protective limit for an SL-M sent as SL-LMT, priced off the trigger.
+
+    SELL goes below the trigger and BUY above it, by the MPP slab of the
+    trigger price and at least one tick, snapped away from the trigger so
+    rounding can never pull it back onto or across the trigger. Same rule as
+    broker/dhan and broker/kotak.
+
+    Without a tick size the limit cannot be snapped safely, so the trigger
+    itself (already tick-valid) is the limit. A SELL trigger within one tick
+    of zero has no valid price below it, so it also keeps the trigger.
+    """
+    try:
+        tick = float(tick_size) if tick_size else 0.0
+    except (TypeError, ValueError):
+        tick = 0.0
+    if not math.isfinite(tick) or tick <= 0:
+        return trigger
+
+    instrument_type = get_instrument_type_from_symbol(symbol)
+    pct = (get_mpp_percentage(trigger, instrument_type) or 0) / 100.0
+
+    if action == "SELL":
+        limit = _snap_to_tick(min(trigger * (1 - pct), trigger - tick), tick, "floor")
+        return limit if limit > 0 else trigger
+    return _snap_to_tick(max(trigger * (1 + pct), trigger + tick), tick, "ceil")
+
+
+def _slm_limit(data, action):
+    """SL-M -> SL-LMT limit price off the trigger, tick from the master contract.
+
+    Firstock's /getQuote omits the tick size, so the master contract is the
+    only source; no quote is fetched for an SL-M.
+    """
+    trigger = slm_trigger_price(data)
+    tick_size = None
+    try:
+        info = get_symbol_info(data["symbol"], data["exchange"])
+        tick_size = getattr(info, "tick_size", None)
+    except Exception:
+        logger.exception(
+            f"SL-M: master contract tick lookup failed for Symbol={data['symbol']}; "
+            f"using the trigger as the limit"
+        )
+    limit = slm_limit_from_trigger(trigger, action, data["symbol"], tick_size)
+    logger.info(
+        f"MPP SL-M->SL-LMT: Symbol={data['symbol']}, Action={action}, "
+        f"Trigger={trigger}, TickSize={tick_size}, Limit={limit}"
+    )
+    return limit
 
 
 def transform_data(data, token, auth_token=None):
     """
     Transforms the OpenAlgo API request to Firstock's V1 /placeOrder structure.
 
-    For MARKET and SL-M orders, applies client-side Market Price Protection
-    (MPP): fetch LTP, compute a protected price via the OpenAlgo MPP slab,
-    convert the order type to LMT / SL-LMT. Also sets mkt_protection="0" so
+    For MARKET orders, applies client-side Market Price Protection (MPP):
+    fetch LTP, compute a protected price via the OpenAlgo MPP slab, send LMT.
+    SL-M orders are sent as SL-LMT with the limit priced off the trigger
+    price, and refused when the trigger price is missing. Also sets mkt_protection="0" so
     Firstock's server-side MPP (V1.7+) is a no-op on the already-protected
     price. Mirrors the pattern in broker/shoonya and broker/flattrade.
 
     Args:
         data: Order data dictionary (OpenAlgo format).
         token: Instrument token (accepted for signature parity).
-        auth_token: Firstock jKey. Required for MPP — if absent, MARKET/SL-M
+        auth_token: Firstock jKey. Required for MARKET MPP — if absent, MARKET
                     flows through unchanged and Firstock's server-side MPP
                     handles it.
     """
@@ -44,8 +131,16 @@ def transform_data(data, token, auth_token=None):
     order_type = map_order_type(data["pricetype"])
     action = data["action"].upper()
 
-    # Apply MPP for MARKET and SL-M orders (V1.7 supports SL-MKT->SL-LMT too).
-    if data["pricetype"] in ("MARKET", "SL-M"):
+    # SL-M goes out as SL-LMT priced off the trigger, never the LTP: the limit
+    # only matters once the trigger is hit, so pricing it off the LTP put a
+    # SELL stop's limit above its trigger (or a BUY stop's below), and the
+    # triggered order rested away from the market. Issue #2390.
+    if data["pricetype"] == "SL-M":
+        price = str(_slm_limit(data, action))
+        order_type = "SL-LMT"
+
+    # Apply MPP for MARKET orders, priced off the LTP.
+    if data["pricetype"] == "MARKET":
         original_type = data["pricetype"]
         logger.info(
             f"MPP: {original_type} order detected for Symbol={data['symbol']}, "
@@ -88,7 +183,7 @@ def transform_data(data, token, auth_token=None):
                         tick_size=tick_size,
                     )
                     price = str(protected_price)
-                    order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+                    order_type = "LMT"
                     logger.info(
                         f"MPP Conversion Complete: Symbol={data['symbol']}, "
                         f"OrderType={original_type}->{order_type}, FinalPrice={protected_price}"
@@ -182,6 +277,10 @@ def transform_modify_order_data(data, token, auth_token=None):
                 f"server-side MPP with mkt_protection=1"
             )
             mkt_protection = "1"
+        elif original_type == "SL-M":
+            # Priced off the trigger, as in transform_data (issue #2390).
+            price = str(_slm_limit(data, action))
+            order_type = "SL-LMT"
         else:
             try:
                 if auth_token:
@@ -210,7 +309,7 @@ def transform_modify_order_data(data, token, auth_token=None):
                             tick_size=tick_size,
                         )
                         price = str(protected_price)
-                        order_type = "LMT" if original_type == "MARKET" else "SL-LMT"
+                        order_type = "LMT"
                         logger.info(
                             f"Modify MPP Conversion Complete: {original_type}->"
                             f"{order_type}, FinalPrice={protected_price}"

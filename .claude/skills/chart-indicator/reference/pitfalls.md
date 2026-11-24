@@ -224,8 +224,12 @@ never draws.
 ## 13. Reusing a built-in id overrides it
 
 Custom modules register after the built-in tier, so a duplicate id replaces the
-built-in for the whole app. There are 112 of them; `sma`, `rsi`, `macd`,
+built-in for the whole app. There are 113 of them; `sma`, `rsi`, `macd`,
 `supertrend`, `vwap`, `range-analysis` are all taken.
+
+**2.7.4 adds one more reserved id:** `pivot-points`. A custom pivot study
+written under the obvious id now replaces the built-in Pivot Points Standard;
+rename it unless the override is the point.
 
 **2.6.0 adds seven more reserved ids:** `elder-ray`, `schaff-trend-cycle`,
 `high-low-52-week`, `vidya`, `zigzag`, `zlema` and `volatility-squeeze`. A
@@ -445,6 +449,13 @@ inputs and computes with the `rsi` helper shows a Timeframe select that does
 nothing, which is worse than no control. Drop the row, or hand the settings to
 `getIndicator('rsi').calc` so the fold happens; for a study of your own,
 `withTimeframe(descriptor)` adds the row and the fold together.
+
+From 2.7.3 the fold refuses a timeframe the chart's bars do not divide into,
+such as 5m on a 3m chart, with an `IndicatorInputError` naming both: a 3m bar
+opening at 09:18 runs past 09:20, so the buckets would be 6 and 3 minutes
+long while each read as 5. The study shows that as its error status, which
+is right, since the trader can change the setting. A day or longer still
+takes any intraday bar.
 
 The tail does not come along either. Since 2.5.8 a built-in holds `calcTail`
 as a property a spread does not copy, so `{ ...getIndicator('ema'), id: 'x' }`

@@ -97,6 +97,7 @@ MIGRATIONS = [
     ("migrate_broker_keys.py", "Broker Keys, Session Sign-out and Broker Login State"),
     ("migrate_alert_channels.py", "Alert Channels (/alerts, Slack and Discord webhooks)"),
     ("migrate_password_reset_grants.py", "Password Reset Grants (single-use, expiring resets)"),
+    ("migrate_sandbox_charges.py", "Sandbox Brokerage and Statutory Charges"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,
@@ -112,6 +113,8 @@ REQUIRED_MIGRATIONS = frozenset(
         "migrate_alert_channels.py",
         # Without its table every password reset is refused.
         "migrate_password_reset_grants.py",
+        # Without its funds columns every sandbox order is refused.
+        "migrate_sandbox_charges.py",
     }
 )
 

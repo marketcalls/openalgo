@@ -20,14 +20,30 @@ all, so `get_quotes` and `get_depth` are served from the streaming feed:
 
 1. get (or force-create) a WebSocket connection
 2. `subscribe([instrument], is_depth=False)` — `is_depth=True` for depth
-3. **`time.sleep(2.0)`** waiting for a tick to arrive
+3. wait for the tick: check every ~50 ms and return as soon as the answer is
+   complete, with a deadline as the upper bound. "Complete" is per feed: one
+   packet (Pocketful), every needed field merged (Tradejini L1, Motilal field
+   groups), five priced levels a side for a book (Nubra). A fixed
+   `time.sleep(2.0)`, which AliceBlue's single quote still uses, holds the
+   request's thread for the whole wait.
 4. read the cached quote for `(exchange, token)`
 5. `unsubscribe(...)` in a `finally`
 
 Consequences to design around before choosing this shape:
 
-- **Every quote costs ~2 seconds.** Batch paths matter enormously here; a
-  per-symbol loop over an option chain is unusable.
+- **Every quote costs a feed round trip.** Batch paths matter enormously here;
+  a per-symbol loop over an option chain is unusable.
+- **Count subscribers per instrument.** Two requests quoting one instrument
+  share the socket. Only the last one unsubscribes at the broker and drops the
+  cached quote; otherwise the first to finish drops the tick the other is
+  waiting for (AliceBlue, Pocketful). Clear a released instrument's cached tick
+  even when the unsubscribe send fails, or the next quote is answered at once
+  from a stale packet (Pocketful).
+- **Build the pooled socket once, under a lock.** On AliceBlue, sixteen
+  concurrent callers built sixteen sockets, which invalidated each other's
+  sessions and reconnected forever.
+- **Cap the waiters under gthread** (see Step 5b in `SKILL.md`): each waiting
+  request holds a real thread.
 - **Quotes only exist when ticks flow.** Outside market hours, or on an
   illiquid instrument that has not traded, there is no tick and the call fails
   rather than returning a stale close.
@@ -68,7 +84,17 @@ needs in the master contract.
 ### NUANCE — price scaling
 
 Many brokers send prices as scaled integers (e.g. paise = x100). De-scale in
-quotes/depth/history (divide). Volume/OI are raw. Confirm the scale per segment.
+quotes/depth/history (divide). Volume/OI are raw. Confirm the scale per segment,
+and per instrument where the feed gives a precision (see `streaming.md`).
+
+The books follow the same rule: read the unit the broker documents for each
+field and scale every field of a book through one helper. Never scale on a
+value threshold: Groww divided prices above 1000, so Rs 1,001 read as 10.01
+(#2173). A pushed or returned field whose unit is undocumented is left out,
+never guessed.
+
+`get_quotes` may also carry `bid_qty` and `ask_qty` where the broker sends
+them; the option chain reads them (Angel, #2290).
 
 ### History is its own reference
 
@@ -210,4 +236,89 @@ missing ones with crossing LIMIT / stop-limit orders using the shared
 **`references/order-type-emulation.md`** before writing the pricetype map.
 - `place_order_api` MUST set `response.status = response.status_code` (services
   check `res.status == 200`).
-- Smart order: per-symbol lock + short-TTL position cache (copy from zerodha).
+- **Smart order: `utils.smart_order_guard`** (`SymbolLocks`, bounded under
+  gthread and forgetting idle symbols, and `PositionBookCache`, which never
+  stores a fetch that overlapped an order and is invalidated by every
+  placement), never a hand-rolled lock dict or cache.
+- **A failed position read places nothing.** Read through
+  `utils.position_read.read_position_book` with your own `_position_book_ok`,
+  and wrap `place_smartorder_api` with `refuse_smart_order_on_read_failure`.
+  Every plugin used to turn a failed read into 0, so an entry doubled a real
+  position and an exit closed nothing. Accept a "no data" envelope as flat only
+  if your broker is in `EMPTY_BOOK_MESSAGE_FIELDS` and the empty book was seen
+  live: Dhan's DH-907 read as flat and a flip sold 5 instead of 15. Never cache
+  a failed read, and let the refusal through any broad `except`.
+- **`get_open_position` matches on the key the position book uses** (instrument
+  id or token), not the broker's display name. RMoney compared
+  `NIFTY 27OCT2026 CE 22400` with `NIFTY26OCT22400CE`, and every F&O smart exit
+  found nothing (#2292).
+
+### NUANCE — an order call returns 200 only for a confirmed order
+
+Services read `status == 200` as placed, cancelled or modified, so:
+
+- **200 only when the broker accepted the order and returned its id.** An
+  error envelope sent over HTTP 200 goes out as 400 with the broker's own
+  message. Always return a response object, never `None`, or the service
+  answers a generic 500 (Tradejini #2444). The same holds for `cancel_order`
+  and `modify_order`: IIFL passed the HTTP status through, so a 200 carrying
+  EC003 was reported as done. Refuse a symbol missing from the master before
+  sending.
+- **A lost reply after the write is not a failure, and a write is never
+  resent.** Send a unique tag with every order (prefix plus uuid4). When the
+  reply is lost (`utils.httpx_client.request_may_have_been_sent`), unreadable,
+  or "ok" without an id, look the tag up in the order book; if it is not there,
+  return 502 "may have been placed, check the order book before placing it
+  again" (Zerodha #2305, Angel #2176, Tradejini #2444). Never retry a write on a
+  429, a throttle code or a "try after some time" message either (see
+  `rate-limiting.md`).
+- **A tag the broker treats as a client order id must be unique per order.**
+  Kotak rejects a reused `ig` ("Client OrderID already exists"), so a fixed
+  `openalgo` tag accepted only the first order of the day (#2178).
+- **An unmapped price type is refused, never defaulted.** Paytm's map lacked SL
+  and SL-M, so both fell back to MARKET and a protective stop filled at once
+  (#2404). SL and SL-M carry `trigger_price` on place and on modify, and a
+  non-finite trigger is refused.
+- **Modify sends the trigger in the field the broker reads.** Angel reads
+  `triggerprice`; modify sent only `stoploss`, answered success, and left the
+  trigger unchanged (#2279). Verify in the broker's book, not from the reply.
+- **Cancel distinguishes its failures.** Not found is 404, not cancellable is
+  400 naming the current status, and a failed order-book read is 500. Match
+  cancellable states against the broker's full vocabulary (Paytm #2374). A
+  cancel-all or modify on an unreadable order book is an error, never "nothing
+  to cancel" (Rupeezy).
+- **Order ids are strings.** Never pass them through `float()`: 20-digit XTS
+  ids collapsed onto one id across a day's orders (#2468). Percent-encode an id
+  placed in a URL path (Rupeezy's `OFPIM00001?:` cut the path, and cancel
+  answered "not found").
+
+### NUANCE — the account books
+
+- **An empty-book error code is an empty book.** Nuvama answers an empty order
+  book with HTTP 222 and ETRD0007; only the trade and position codes were
+  mapped, so a flat account showed "Failed to fetch orders" (#2479). Map the
+  code for every book and log it at debug, because the order-update poller
+  reads the book every 5 s (Flattrade #2249). Keep a warning for every other
+  error, session expiry included.
+- **Count each trade by its own fill.** Noren repeats the order's `qty` and
+  running `avgprc` on every fill row; the fill is `flqty` and `flprc`. Reading
+  `qty` counted part-filled orders per fill and broke realised P&L (Flattrade
+  #2480).
+- **One status map, applied per row, shared with the stream.** Map every
+  transient OMS state (VALIDATION PENDING, MODIFY PENDING, CANCEL PENDING, AMO
+  REQ RECEIVED ...) and never carry a previous row's status into an unmatched
+  one (Zerodha #2185). Match by exact value, not substring: "cancel pending"
+  contains "cancel" and is still open (Nuvama). `calculate_order_statistics`
+  counts with the same map.
+- **Carried positions show the traded average.** XTS fills `BuyAveragePrice`
+  with the previous close; use `ActualBuyAveragePrice` (#2468). Kotak values a
+  carried CNC position at the holdings `averagePrice` (#2367).
+- **Look rows up by the id the master stores** (Kotak holdings used
+  `instrumentToken`, which is not in the master; `exchangeIdentifier` is,
+  #2367), and **read the error field the docs name** (Kotak's is `emsg`, not
+  `errMsg`; the wrong key hid every reason).
+- **A failed read is reported to the trader**, never shown as an empty book or
+  a crash (XTS positions, #2468).
+- **Funds reconcile with the position book**: `m2mrealized + m2munrealized`
+  equals the summed position P&L, and an open row with no price has unknown
+  P&L, not 0 (Rupeezy).

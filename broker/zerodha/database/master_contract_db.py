@@ -4,6 +4,7 @@ import gzip
 import io
 import json
 import os
+import re
 import shutil
 
 import numpy as np
@@ -155,6 +156,45 @@ def reformat_symbol(row):
     return symbol
 
 
+# NSE series in which a company's own units trade outside EQ. Kite keeps the
+# series on the tradingsymbol of these (HFCL-BE, EMBASSY-RR, GOLDSTAR-ST),
+# while OpenAlgo's equity symbol is the bare exchange symbol, as NSE lists it
+# (Symbol HFCL, Series BE). The Sahi plugin strips every non-EQ series the
+# same way, and the Noren plugins strip -BE. brsymbol
+# keeps Kite's tradingsymbol unchanged: every order, quote, history and margin
+# call sends get_br_symbol(), and every book maps back with get_oa_symbol().
+# Not stripped: the debt and government security series (SG, GS, TB, N0 and
+# the like), and -RL, whose bare names exist as rows of their own.
+_NSE_SERIES_SUFFIXES = ('BE', 'BZ', 'RR', 'IV', 'SM', 'ST')
+_NSE_SERIES_RE = re.compile(r'^(.+)-(?:' + '|'.join(_NSE_SERIES_SUFFIXES) + r')$')
+
+
+def strip_nse_series_suffix(df):
+    """Give NSE cash rows traded outside the EQ series their bare symbol.
+
+    Only the OpenAlgo ``symbol`` changes; ``brsymbol`` stays Kite's
+    tradingsymbol. A row keeps its suffix when the bare name is already
+    another row's symbol, or when two suffixed rows would claim the same bare
+    name, so no two NSE rows ever share a symbol.
+    """
+    is_cash = (df['exchange'] == 'NSE') & (df['instrumenttype'] == 'EQ')
+    bases = df.loc[is_cash, 'symbol'].astype(str).str.extract(_NSE_SERIES_RE)[0]
+    suffixed = bases.notna()
+    if not suffixed.any():
+        return df
+
+    taken = set(df.loc[is_cash, 'symbol'])
+    claims = bases[suffixed].value_counts()
+    strip = suffixed & bases.map(lambda b: isinstance(b, str) and b not in taken and claims[b] == 1)
+
+    df.loc[strip[strip].index, 'symbol'] = bases[strip]
+    kept = int(suffixed.sum() - strip.sum())
+    logger.info(
+        f"NSE series suffix removed from {int(strip.sum())} symbols"
+        + (f", kept on {kept} whose bare name is already in use" if kept else "")
+    )
+    return df
+
 
 def process_zerodha_csv(path):
     """
@@ -216,6 +256,7 @@ def process_zerodha_csv(path):
 
     df['brsymbol'] = df['symbol']
     df['symbol'] = df.apply(reformat_symbol, axis=1)
+    df = strip_nse_series_suffix(df)
     df['brexchange'] = df['_kite_exchange']
     df = df.drop(columns=['_kite_exchange'])
 

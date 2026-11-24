@@ -1,993 +1,773 @@
-import functools
-import json
-import logging
-import os
+"""Pocketful market data over REST: quotes, depth, multiquotes, LTP and history.
+
+Every request goes through ``baseurl.pocketful_request`` and through this
+module's pacer. Nothing here opens the Pocketful WebSocket: quotes and depth
+used to subscribe on the feed and wait for a packet; the API now answers them
+over REST.
+
+Sources (offline copy of https://api.pocketful.in/docs/curl, 2026-11-17, and
+the official Python SDK ``pocketful`` 0.1.2, ``pocketful.py``):
+
+Quotes. ``GET /api/v1/marketdata/{exchange}/{segment}?token=<token>``
+(get-market-data.md; SDK routes ``api.marketdata`` and ``api.fnodata``). The
+segment is ``Capital`` for NSE and BSE, ``FutOpt`` for NFO, BFO and MCX and
+``Currency`` for CDS. The market data pages print every exchange under
+``/Capital``, but the segment table on chart-data.md ("Segment Mapping for F&O
+and Market Data") and the SDK's separate ``FutOpt`` routes agree on the
+mapping used here. Indices are quoted on their cash exchange: the docs' own LTP
+and closing price examples ask for ``('NSE', 26009)``, an index token, on the
+``Capital`` route. BSE indices follow by analogy; no page shows one.
+
+LTP. The same route with ``&key=last_trade_price`` (get-last-traded-price.md;
+SDK ``api.ltpdata`` and ``api.fnoLtpdata``), answering a bare number.
+
+Depth. The REST API has no five level book: the market data answer carries the
+best bid and ask only (``bid_price``, ``bid_qty``, ``ask_price``, ``ask_qty``).
+get_depth returns that as level one and pads levels two to five with zeros.
+The five level book exists only on the WebSocket (snapquote-data.md).
+
+Price units. The documented market data answer gives ``last_trade_price``,
+``open_price``, ``high_price``, ``low_price``, ``close_price`` and
+``average_trade_price`` in rupees but ``bid_price`` and ``ask_price`` in paise:
+token 14366 at 12.90 with a bid of 1285 and an ask of 1290 (``yearly_high``
+and ``yearly_low`` read the same way). The book prices are divided by 100,
+unless the undivided figure is the one near the rupee prices, so an answer
+that sends rupees is read correctly too (see _book_price).
+
+Multiquotes. The market data route takes one token, and no page or SDK route
+takes several, so get_multiquotes sends one request per symbol, paced.
+
+Rate limits (annexure.md): Data APIs 10 a second, 1,000 a minute, 5,000 an
+hour, 10,000 a day; HTTP 429 when exceeded. Every data request here is paced
+at about 8 a second from module-level state (services build a new BrokerData
+per request), and a 429 is retried twice with backoff. The hourly and daily
+budgets are not paced: Pocketful's 429 is the signal, and the trader is told.
+
+History. Two endpoints:
+
+* ``GET /api/v1/charts`` (chart-data.md): any exchange, by token, with
+  ``candletype``. The page documents one value only, ``1`` for one minute
+  candles, so this module asks for one minute candles and builds every other
+  interval from them (minute bins aligned to the session start, daily bars
+  from each IST date). Candles are ``[timestamp, open, high, low, close,
+  volume]``.
+* ``POST /api/data/v1/historical`` (getting-started.md, "Historical Data
+  NFO"): NFO futures and options by underlying, expiry, strike and type, with
+  the interval enum ``1minute`` to ``60minute`` and ``1day``, and open
+  interest as a seventh candle column. NFO contracts use it; when it answers
+  with an error or with nothing, the charts endpoint is used instead (no OI).
+
+The page's ``/api/data/v1/status/{job_id}`` belongs to the Export API: it
+reports a CSV export job and hands back a download link. The call that creates
+such a job and the layout of the CSV are not documented, and the historical
+endpoint answers with candles directly, so nothing here polls.
+
+Neither page states a per-request range cap. Requests are chunked small (7
+days of minute candles, a year of daily ones) and a chunk that fails fails the
+whole request rather than leaving a gap.
+"""
+
+import math
+import re
 import threading
 import time
-import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pandas as pd
 
-from broker.pocketful.api.pocketfulwebsocket import (
-    PocketfulSocket,
-    get_snapquotedata,
-    get_ws_connection_status,
-)
-from broker.pocketful.database.master_contract_db import SymToken, db_session
-from database.token_db import get_br_symbol, get_oa_symbol
-from utils import runtime
-from utils.broker_backpressure import BrokerBusyError, max_queue_wait
-from utils.httpx_client import get_httpx_client
+from broker.pocketful.api.baseurl import client_id, pocketful_request
+from database.token_db import get_token, get_tokens_bulk
+from utils.broker_backpressure import BrokerBusyError, cap_server_delay, check_queue_wait
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# --- How many requests may wait on the Pocketful feed at once, under gthread ---
-# A quote or depth request here subscribes on a WebSocket and then waits
-# seconds for the data, holding its thread the whole time. Under the gthread
-# worker those are request threads from a fixed pool, so at most
-# _FEED_WAITERS_MAX requests wait at once. The next waits at most the data
-# ceiling of utils.broker_backpressure for a place, and is refused with a
-# sentence the trader can act on.
-# Under eventlet and the development server nothing is capped, as before.
-_FEED_WAITERS_MAX = 8
-_feed_waiters = threading.BoundedSemaphore(_FEED_WAITERS_MAX)
-_feed_gate_held = threading.local()
-_FEED_BUSY_MESSAGE = (
-    "Too many live quote and depth requests are already waiting on the Pocketful "
-    "feed. Try again in a few seconds."
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+# OpenAlgo exchange -> (exchange in Pocketful's path, segment). See the module
+# docstring for where each pair comes from.
+_ROUTES = {
+    "NSE": ("NSE", "Capital"),
+    "BSE": ("BSE", "Capital"),
+    "NSE_INDEX": ("NSE", "Capital"),
+    "BSE_INDEX": ("BSE", "Capital"),
+    "NFO": ("NFO", "FutOpt"),
+    "BFO": ("BFO", "FutOpt"),
+    "MCX": ("MCX", "FutOpt"),
+    "CDS": ("CDS", "Currency"),
+}
+
+# Minutes after midnight IST at which each exchange's session opens, so a
+# built 5 minute or hourly bar starts at 09:15 on NSE and at 09:00 on MCX.
+_SESSION_OPEN_MINUTES = {"MCX": 0, "CDS": 0}
+_DEFAULT_SESSION_OPEN_MINUTES = 15
+
+# --- Pacing -------------------------------------------------------------------
+# Module-level: services create a fresh BrokerData per request, so state kept
+# on the instance would pace nothing. The slot is booked inside the lock and
+# slept outside it.
+_MIN_INTERVAL = 0.12  # about 8 a second against the documented 10
+_pace_lock = threading.Lock()
+_next_slot = 0.0
+
+_RATE_LIMIT_RETRIES = 2
+_RATE_LIMIT_BACKOFF = 1.0  # seconds, doubled per retry; no Retry-After is documented
+
+_QUOTE_TIMEOUT = 15.0
+_HISTORY_TIMEOUT = 30.0
+
+_CHART_CHUNK_DAYS = 7
+_HISTORICAL_INTRADAY_CHUNK_DAYS = 7
+_HISTORICAL_DAILY_CHUNK_DAYS = 365
+
+_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "oi"]
+
+# OpenAlgo interval -> the interval enum of /api/data/v1/historical
+# (getting-started.md, "Supported Intervals").
+_TIMEFRAMES = {
+    "1m": "1minute",
+    "3m": "3minute",
+    "5m": "5minute",
+    "10m": "10minute",
+    "15m": "15minute",
+    "30m": "30minute",
+    "1h": "60minute",
+    "D": "1day",
+}
+_MINUTES = {"1m": 1, "3m": 3, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60}
+
+# The candletype chart-data.md documents: "1 for 1-minute candles".
+_CHART_ONE_MINUTE = "1"
+
+# An OpenAlgo NFO symbol: NIFTY28MAR24FUT, NIFTY28MAR2420800CE, VEDL25APR24292.5CE.
+_FNO_SYMBOL = re.compile(
+    r"^(?P<base>.+?)(?P<expiry>\d{2}[A-Z]{3}\d{2})"
+    r"(?:(?P<future>FUT)|(?P<strike>\d+(?:\.\d+)?)(?P<kind>CE|PE))$"
+)
+
+_SESSION_ENDED = (
+    "Your Pocketful session has ended. Log in to Pocketful again from OpenAlgo and retry."
+)
+_UNREACHABLE = (
+    "OpenAlgo could not reach Pocketful for market data. Check this server's internet "
+    "connection and try again."
+)
+_RATE_LIMITED = (
+    "Pocketful is refusing more market data requests because its request limit was "
+    "reached (10 a second, 5,000 an hour, 10,000 a day). Wait a few minutes and try again."
 )
 
 
-def _feed_gated(on_busy=None):
-    """Decorate a method that waits on the feed; a no-op outside gthread.
+class PocketfulAPIError(Exception):
+    """A market data request that could not be answered; ``str()`` is for a trader."""
+
+
+class PocketfulUnavailableError(PocketfulAPIError):
+    """Every request would fail the same way: the session ended or Pocketful is unreachable."""
+
+
+def _pace():
+    """Wait for this request's turn at about 8 data requests a second.
+
+    Raises:
+        BrokerBusyError: Under gthread, when the turn is further away than the
+            data ceiling of utils.broker_backpressure. Nothing is booked then.
+    """
+    global _next_slot
+    with _pace_lock:
+        now = time.monotonic()
+        wait = max(0.0, _next_slot - now)
+        check_queue_wait(wait, "data")
+        _next_slot = now + wait + _MIN_INTERVAL
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _data_request(
+    method, path, token, params=None, payload=None, timeout=_QUOTE_TIMEOUT, headers=None
+):
+    """Send one paced data request, retrying a 429 with backoff.
+
+    ``headers`` adds an endpoint's documented extras (the charts endpoint's
+    ``clientid``) to the session headers.
+
+    Returns:
+        The PocketfulResponse of any answer other than 429.
+
+    Raises:
+        BrokerBusyError: Pocketful still answered 429 after the retries, or
+            (under gthread) the turn or the backoff would take too long.
+        PocketfulUnavailableError: The request could not be sent or answered.
+    """
+    attempt = 0
+    while True:
+        _pace()
+        try:
+            response = pocketful_request(
+                method,
+                path,
+                token,
+                params=params,
+                payload=payload,
+                timeout=timeout,
+                headers=headers,
+            )
+        except httpx.HTTPError as exc:
+            logger.exception(f"Pocketful {method} {path} failed in transport")
+            raise PocketfulUnavailableError(_UNREACHABLE) from exc
+        if response.status_code != 429:
+            return response
+        delay = None
+        if attempt < _RATE_LIMIT_RETRIES:
+            delay = cap_server_delay(_RATE_LIMIT_BACKOFF * (2**attempt), "data")
+        if delay is None:
+            logger.warning(f"Pocketful {method} {path} still rate limited after {attempt} retries")
+            raise BrokerBusyError(_RATE_LIMITED)
+        attempt += 1
+        logger.warning(f"Pocketful {method} {path} rate limited; retry {attempt} in {delay}s")
+        time.sleep(delay)
+
+
+def _refusal(response, what):
+    """The error for an answer that carried no usable data, naming what was asked for."""
+    logger.warning(
+        f"Pocketful refused {what}: HTTP {response.status_code}, message {response.message!r}"
+    )
+    if response.status_code in (401, 403):
+        return PocketfulUnavailableError(_SESSION_ENDED)
+    broker_message = response.message.strip().rstrip(".")
+    if broker_message:
+        return PocketfulAPIError(f"Pocketful did not return {what}: {broker_message}.")
+    return PocketfulAPIError(f"Pocketful did not return {what}. Try again in a moment.")
+
+
+def _route(exchange):
+    route = _ROUTES.get(exchange)
+    if route is None:
+        raise PocketfulAPIError(f"Pocketful market data does not cover the {exchange} exchange.")
+    return route
+
+
+def _not_found(symbol, exchange):
+    return PocketfulAPIError(
+        f"{symbol} on {exchange} is not in the Pocketful symbol list. Check the symbol, "
+        "or download the master contract again."
+    )
+
+
+def _num(value):
+    """A finite float from a number or numeric string, else 0.0."""
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _int(value):
+    return int(_num(value))
+
+
+_rupee_book_noted = False
+
+
+def _book_price(raw, reference):
+    """A best bid or ask in rupees.
+
+    The documented answer gives them in paise (see the module docstring), so
+    the figure is divided by 100, unless the undivided figure is the nearer of
+    the two to ``reference`` (the LTP or another rupee price of the same
+    answer). The two readings differ a hundredfold, so only a book more than
+    tenfold away from its last trade could be read the wrong way.
+    """
+    global _rupee_book_noted
+    value = _num(raw)
+    if value <= 0:
+        return 0.0
+    in_paise = value / 100
+    if reference > 0 and abs(math.log(value / reference)) < abs(math.log(in_paise / reference)):
+        if not _rupee_book_noted:
+            _rupee_book_noted = True
+            logger.info(
+                "Pocketful sent bid and ask in rupees, not in paise as its documentation shows"
+            )
+        return value
+    return in_paise
+
+
+def _quote_from(raw):
+    """OpenAlgo's quote from a market data answer (field names: get-market-data.md)."""
+    ltp = _num(raw.get("last_trade_price"))
+    prev_close = _num(raw.get("close_price"))
+    open_price = _num(raw.get("open_price"))
+    reference = ltp or prev_close or open_price or _num(raw.get("average_trade_price"))
+    return {
+        "ask": _book_price(raw.get("ask_price"), reference),
+        "bid": _book_price(raw.get("bid_price"), reference),
+        "ask_qty": _int(raw.get("ask_qty")),
+        "bid_qty": _int(raw.get("bid_qty")),
+        "high": _num(raw.get("high_price")),
+        "low": _num(raw.get("low_price")),
+        "ltp": ltp,
+        "open": open_price,
+        "prev_close": prev_close,
+        "volume": _int(raw.get("trade_volume")),
+        # Not on the market data page, whose example is an equity. Pocketful's
+        # REST name for open interest is ``current_open_interest`` (greek-data.md);
+        # the derivatives answer is undocumented, so it is read when present.
+        "oi": _int(raw.get("current_open_interest")),
+    }
+
+
+def _depth_from(raw):
+    """OpenAlgo's five level depth: REST carries the best bid and ask only."""
+    quote = _quote_from(raw)
+    bids = [{"price": quote["bid"], "quantity": quote["bid_qty"]}]
+    asks = [{"price": quote["ask"], "quantity": quote["ask_qty"]}]
+    while len(bids) < 5:
+        bids.append({"price": 0.0, "quantity": 0})
+    while len(asks) < 5:
+        asks.append({"price": 0.0, "quantity": 0})
+    return {
+        "asks": asks,
+        "bids": bids,
+        "high": quote["high"],
+        "low": quote["low"],
+        "ltp": quote["ltp"],
+        "ltq": _int(raw.get("last_trade_qty")),
+        "oi": quote["oi"],
+        "open": quote["open"],
+        "prev_close": quote["prev_close"],
+        "totalbuyqty": _int(raw.get("total_buy_qty")),
+        "totalsellqty": _int(raw.get("total_sell_qty")),
+        "volume": quote["volume"],
+    }
+
+
+# --- History helpers ------------------------------------------------------------
+
+
+def _chunks(start, end, days):
+    """Contiguous (first, last) date pairs covering start..end, ``days`` long at most."""
+    current = start
+    while current <= end:
+        last = min(current + timedelta(days=days - 1), end)
+        yield current, last
+        current = last + timedelta(days=1)
+
+
+def _ist_today():
+    return datetime.now(_IST).date()
+
+
+def _empty_history():
+    return pd.DataFrame(columns=_COLUMNS)
+
+
+def _candle_frame(rows):
+    """A frame of IST-aware candles from Pocketful's candle arrays.
+
+    Rows are ``[timestamp, open, high, low, close, volume]`` (charts) or carry
+    open interest as a seventh member (historical); missing OI is 0.
+    """
+    records = []
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            logger.warning(f"Skipping a Pocketful candle that is not a candle: {row!r}")
+            continue
+        records.append(list(row[:6]) + [row[6] if len(row) > 6 else 0])
+    frame = pd.DataFrame(records, columns=_COLUMNS)
+    if frame.empty:
+        return frame
+    try:
+        stamps = pd.to_datetime(frame["timestamp"], format="ISO8601", errors="coerce")
+    except ValueError:  # offsets that differ between candles
+        stamps = pd.to_datetime(frame["timestamp"], format="ISO8601", errors="coerce", utc=True)
+    # The documented candles carry +0530; one without an offset is IST.
+    stamps = stamps.dt.tz_localize(_IST) if stamps.dt.tz is None else stamps.dt.tz_convert(_IST)
+    frame["timestamp"] = stamps
+    frame = frame.dropna(subset=["timestamp"])
+    for column in _COLUMNS[1:]:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0)
+    return frame
+
+
+def _within(frame, start, end):
+    if frame.empty:
+        return frame
+    days = frame["timestamp"].dt.date
+    frame = frame[(days >= start) & (days <= end)]
+    return frame.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
+
+
+def _epoch_seconds(stamps):
+    return (stamps - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(seconds=1)
+
+
+def _finish(frame, timeframe, exchange, build_bars):
+    """OpenAlgo's history frame: epoch seconds, IST bar times, daily bars at IST midnight.
 
     Args:
-        on_busy: Called with the method's arguments instead of raising when no
-            place frees up in time, for a method that has another way to answer.
+        frame: IST-aware candles inside the requested dates.
+        timeframe: OpenAlgo interval.
+        exchange: OpenAlgo exchange, for the session open of built bars.
+        build_bars: True when ``frame`` holds one minute candles to build
+            ``timeframe`` from; False when it already holds ``timeframe`` bars.
     """
-
-    def decorate(method):
-        @functools.wraps(method)
-        def wrapper(*args, **kwargs):
-            # Nested gated calls on one thread already hold a place.
-            if not runtime.gthread_active() or getattr(_feed_gate_held, "held", False):
-                return method(*args, **kwargs)
-            if not _feed_waiters.acquire(timeout=max_queue_wait("data")):
-                logger.warning(f"Pocketful feed: {method.__name__} refused, all places taken")
-                if on_busy is not None:
-                    return on_busy(*args, **kwargs)
-                raise BrokerBusyError(_FEED_BUSY_MESSAGE)
-            _feed_gate_held.held = True
-            try:
-                return method(*args, **kwargs)
-            finally:
-                _feed_gate_held.held = False
-                _feed_waiters.release()
-
-        return wrapper
-
-    return decorate
-
-
-# --- Waiting on the feed ---------------------------------------------------
-# A quote or depth request subscribes and then waits for its instrument's
-# packet. Each Pocketful packet carries the whole quote or the whole five level
-# book, so the first one for the instrument is the answer. The request used to
-# look once a second; it now looks every _FEED_POLL_SECONDS and takes that
-# packet as soon as it is there. The test for "this instrument's packet" is the
-# one it always used, and with no packet the wait lasts as long as before.
-_FEED_POLL_SECONDS = 0.05
-_QUOTE_WAIT_SECONDS = 10.0
-_DEPTH_WAIT_SECONDS = 15.0
-
-
-def _wait_for_feed(ready, seconds: float) -> bool:
-    """Look every _FEED_POLL_SECONDS until ready() is true, for at most ``seconds``.
-
-    True as soon as it is, False once the time is up. time.sleep yields to the
-    other requests under eventlet and holds only this request's thread elsewhere.
-    """
-    deadline = time.monotonic() + seconds
-    while not ready():
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        time.sleep(min(_FEED_POLL_SECONDS, remaining))
-    return True
-
-
-def _is_packet_for(data, instrument_token) -> bool:
-    """Whether a feed packet is this instrument's: the check both waits have always made."""
-    if not data or not isinstance(data, dict):
-        return False
-    token_in_data = data.get("instrument_token") or data.get("instrumentToken")
-    return bool(token_in_data) and str(token_in_data) == str(instrument_token)
-
-
-class PocketfulPermissionError(Exception):
-    """Custom exception for Pocketful API permission errors"""
-
-    pass
-
-
-class PocketfulAPIError(Exception):
-    """Custom exception for other Pocketful API errors"""
-
-    pass
-
-
-def get_api_response(endpoint, auth, method="GET", payload=""):
-    AUTH_TOKEN = auth
-    base_url = "https://api.pocketful.in"
-    headers = {"Authorization": f"Bearer {AUTH_TOKEN}", "Content-Type": "application/json"}
-
-    try:
-        # Log the complete request details for debugging
-        logger.info("=== API Request Details ===")
-        logger.info(f"URL: {base_url}{endpoint}")
-        logger.info(f"Method: {method}")
-        logger.info(f"Headers: {json.dumps(headers, indent=2)}")
-        if payload:
-            logger.info(f"Payload: {payload}")
-
-        # Get the shared httpx client
-        client = get_httpx_client()
-        url = f"{base_url}{endpoint}"
-
-        # Make request based on method
-        if method == "GET":
-            res = client.get(url, headers=headers)
-        elif method == "POST":
-            res = client.post(url, headers=headers, content=payload)
-        elif method == "PUT":
-            res = client.put(url, headers=headers, content=payload)
-        elif method == "DELETE":
-            res = client.delete(url, headers=headers)
+    if frame.empty:
+        return _empty_history()
+    aggregate = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+        "oi": "last",
+    }
+    if timeframe == "D":
+        # Daily bars carry the IST date at 00:00 UTC, as zerodha's shifted bars do.
+        bars = frame.groupby(frame["timestamp"].dt.date, sort=True).agg(aggregate)
+        dates = pd.to_datetime(pd.Series(bars.index, dtype="object"))
+        stamps = (dates - pd.Timestamp("1970-01-01")) // pd.Timedelta(seconds=1)
+        bars = bars.reset_index(drop=True)
+    else:
+        minutes = _MINUTES[timeframe]
+        if build_bars and minutes > 1:
+            offset = _SESSION_OPEN_MINUTES.get(exchange, _DEFAULT_SESSION_OPEN_MINUTES)
+            bars = (
+                frame.set_index("timestamp")
+                .resample(
+                    f"{minutes}min",
+                    origin="start_day",
+                    offset=pd.Timedelta(minutes=offset),
+                    closed="left",
+                    label="left",
+                )
+                .agg(aggregate)
+                .dropna(subset=["open"])
+                .reset_index()
+            )
         else:
-            res = client.request(method, url, headers=headers, content=payload)
+            bars = frame.reset_index(drop=True)
+        stamps = _epoch_seconds(bars["timestamp"])
+        bars = bars.drop(columns=["timestamp"])
+    out = pd.DataFrame({"timestamp": stamps.to_numpy().astype("int64")})
+    for column in ("open", "high", "low", "close"):
+        out[column] = bars[column].to_numpy().astype(float)
+    out["volume"] = bars["volume"].to_numpy().astype("int64")
+    out["oi"] = bars["oi"].to_numpy().astype("int64")
+    return out
 
-        response = res.json()
 
-        # Log the complete response
-        logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status_code}")
-        logger.info(f"Response Headers: {dict(res.headers)}")
-        logger.info(f"Response Body: {json.dumps(response, indent=2)}")
+def _fno_contract(symbol):
+    """The /api/data/v1/historical body fields for an OpenAlgo NFO symbol, or None.
 
-        # Check for permission errors
-        if response.get("status") == "error":
-            error_type = response.get("error_type")
-            error_message = response.get("message", "Unknown error")
+    Field names and values from getting-started.md: ``symbol`` (the underlying,
+    "NIFTY"), ``product_type`` ("futures" or "options"), ``expiry_date``
+    (YYYY-MM-DD), and for options ``type`` ("CE" or "PE") and ``strike_price``.
+    """
+    match = _FNO_SYMBOL.match(symbol or "")
+    if not match:
+        return None
+    try:
+        expiry = datetime.strptime(match["expiry"], "%d%b%y").date()
+    except ValueError:
+        return None
+    body = {"symbol": match["base"], "expiry_date": expiry.isoformat()}
+    if match["future"]:
+        body["product_type"] = "futures"
+        return body
+    strike = float(match["strike"])
+    body["product_type"] = "options"
+    body["type"] = match["kind"]
+    body["strike_price"] = int(strike) if strike.is_integer() else strike
+    return body
 
-            if error_type == "PermissionException" or "permission" in error_message.lower():
-                raise PocketfulPermissionError(f"API Permission denied: {error_message}.")
-            else:
-                raise PocketfulAPIError(f"API Error: {error_message}")
 
-        return response
-    except PocketfulPermissionError:
-        raise
-    except PocketfulAPIError:
-        raise
-    except Exception as e:
-        logger.error(f"API request failed: {str(e)}")
-        raise PocketfulAPIError(f"API request failed: {str(e)}")
+def _history_dates(from_date, to_date):
+    try:
+        start = pd.Timestamp(from_date).date()
+        end = pd.Timestamp(to_date).date()
+    except (TypeError, ValueError) as exc:
+        raise PocketfulAPIError("The start and end dates must be in YYYY-MM-DD form.") from exc
+    return start, end
+
+
+class _HistoricalUnavailable(Exception):
+    """The NFO historical endpoint gave no candles; the charts endpoint is tried instead."""
 
 
 class BrokerData:
+    """Pocketful market data for OpenAlgo's quotes, depth, multiquotes, LTP and history."""
+
     def __init__(self, auth_token):
-        """Initialize Pocketful data handler with authentication token"""
         self.auth_token = auth_token
-        self.client_id = None  # Will be fetched when needed
-        self.ws_connection = None
-        self.ws_connected = False
-        self.last_depth = {}
+        # OpenAlgo interval -> the documented /api/data/v1/historical interval.
+        # On the charts endpoint every interval is built from one minute candles.
+        self.timeframe_map = dict(_TIMEFRAMES)
 
-        # Exchange code mapping for Pocketful WebSocket
-        self.exchange_map = {"NSE": 1, "NFO": 2, "CDS": 3, "MCX": 4, "BSE": 6, "BFO": 7}
+    # --- Quotes and depth --------------------------------------------------
 
-        # POCKETFUL does not support historical data API
-        # Empty timeframe map since historical data is not supported
-        self.timeframe_map = {}
-
-        # Market timing configuration for different exchanges
-        self.market_timings = {
-            "NSE": {"start": "09:15:00", "end": "15:30:00"},
-            "BSE": {"start": "09:15:00", "end": "15:30:00"},
-            "NFO": {"start": "09:15:00", "end": "15:30:00"},
-            "CDS": {"start": "09:00:00", "end": "17:00:00"},
-            "BCD": {"start": "09:00:00", "end": "17:00:00"},
-            "MCX": {"start": "09:00:00", "end": "23:30:00"},
-        }
-
-        # Default market timings if exchange not found
-        self.default_market_timings = {"start": "00:00:00", "end": "23:59:59"}
-
-    def get_market_timings(self, exchange: str) -> dict:
-        """Get market start and end times for given exchange"""
-        return self.market_timings.get(exchange, self.default_market_timings)
+    def _market_data(self, symbol, exchange, token=None):
+        """The market data answer (the ``data`` object) for one symbol."""
+        pf_exchange, segment = _route(exchange)
+        token = token or get_token(symbol, exchange)
+        if not token:
+            raise _not_found(symbol, exchange)
+        response = _data_request(
+            "GET",
+            f"/api/v1/marketdata/{pf_exchange}/{segment}",
+            self.auth_token,
+            params={"token": str(token)},
+        )
+        payload = response.payload
+        if not response.ok or not isinstance(payload, dict) or not payload:
+            raise _refusal(response, f"a quote for {symbol} on {exchange}")
+        return payload
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
+        """Quote for one symbol: ask, bid, ask_qty, bid_qty, high, low, ltp, open,
+        prev_close, volume, oi.
+
+        Raises:
+            PocketfulAPIError: No quote; the message is for a trader.
+            BrokerBusyError: Pacing refused it, or Pocketful's rate limit held.
         """
-        Get real-time quotes for given symbol using Compact Market Data WebSocket
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-        Returns:
-            dict: Quote data with required fields
-        """
-        try:
-            # Get quotes using WebSocket compact market data - no fallbacks
-            return self._get_quotes_compact(symbol, exchange)
-        except BrokerBusyError:
-            # Refused by the feed gate before anything was sent (gthread only).
-            # Passed through so the service answers 429 with its sentence; a
-            # 500 here would let an option chain show zero prices as success.
-            raise
-        except PocketfulPermissionError as e:
-            logger.error(f"Permission error fetching quotes: {str(e)}")
-            raise
-        except (PocketfulAPIError, Exception) as e:
-            logger.error(f"Error fetching quotes: {str(e)}")
-            raise PocketfulAPIError(f"Error fetching quotes: {str(e)}")
-
-    def _get_quotes_from_depth(self, symbol: str, exchange: str) -> dict:
-        """
-        Get quotes from market depth data (fallback method)
-        """
-        # Use the market depth method which already has its own fallbacks
-        depth = self.get_market_depth(symbol, exchange)
-
-        # Extract basic quote information from the depth data
-        return {
-            "ask": depth["asks"][0]["price"] if depth["asks"] else 0,
-            "bid": depth["bids"][0]["price"] if depth["bids"] else 0,
-            "high": depth.get("high", 0),
-            "low": depth.get("low", 0),
-            "ltp": depth.get("ltp", 0),
-            "open": depth.get("open", 0),
-            "prev_close": depth.get("prev_close", 0),
-            "volume": depth.get("volume", 0),
-        }
-
-    @_feed_gated()
-    def _get_quotes_compact(self, symbol: str, exchange: str) -> dict:
-        """
-        Get quotes using detailed market data WebSocket (provides open/close/volume)
-        """
-        # Ensure WebSocket connection is established
-        if not self._ensure_websocket_connection():
-            raise PocketfulAPIError("WebSocket connection not established")
-
-        # Convert symbol to broker format and get instrument token
-        br_symbol = get_br_symbol(symbol, exchange)
-        logger.info(f"Fetching quotes using detailed market data for {exchange}:{br_symbol}")
-
-        # Get token from database
-        with db_session() as session:
-            symbol_info = (
-                session.query(SymToken)
-                .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
-                .first()
-            )
-
-            if not symbol_info:
-                raise PocketfulAPIError(f"Could not find token for {exchange}:{br_symbol}")
-
-            # Get the instrument token from the database
-            instrument_token = int(symbol_info.token)
-
-        # Map exchange to Pocketful exchange code
-        if exchange == "NSE_INDEX":
-            exchange_code = self.exchange_map.get("NSE", 1)
-        elif exchange == "BSE_INDEX":
-            exchange_code = self.exchange_map.get("BSE", 6)
-        else:
-            exchange_code = self.exchange_map.get(exchange, 1)
-
-        # Log the instrument details
-        logger.info(f"Using exchange_code={exchange_code}, instrument_token={instrument_token}")
-
-        # Subscribe to detailed market data (includes open/close/volume)
-        detailed_payload = {"exchangeCode": exchange_code, "instrumentToken": instrument_token}
-        subscription_result = self.ws_connection.subscribe_detailed_marketdata(detailed_payload)
-        logger.info(f"Detailed market data subscription result: {subscription_result}")
-
-        # Use try/finally to ensure unsubscribe is always called
-        detailed_data = None
-        try:
-            # Wait for this instrument's packet, taking it as soon as it arrives.
-            # What was read last is kept, as before, for the checks below.
-            last_read = {}
-
-            def arrived():
-                last_read["data"] = self.ws_connection.read_detailed_marketdata()
-                return _is_packet_for(last_read["data"], instrument_token)
-
-            if _wait_for_feed(arrived, _QUOTE_WAIT_SECONDS):
-                logger.info(f"Received valid detailed data for {exchange}:{br_symbol}")
-            detailed_data = last_read.get("data")
-            logger.info(f"Received detailed data: {detailed_data}")
-        finally:
-            # Always unsubscribe, even if an exception occurs
-            self.ws_connection.unsubscribe_detailed_marketdata(detailed_payload)
-
-        # If no valid data received, raise exception
-        if not detailed_data or not isinstance(detailed_data, dict):
-            raise PocketfulAPIError(f"No detailed market data received for {exchange}:{br_symbol}")
-
-        # Extract and format quote data from detailed market data
-        # Note: Price values are multiplied by 100
-        last_traded_price = (
-            detailed_data.get("last_traded_price", 0) / 100
-            if detailed_data.get("last_traded_price")
-            else 0
-        )
-        bid_price = (
-            detailed_data.get("best_bid_price", 0) / 100
-            if detailed_data.get("best_bid_price")
-            else 0
-        )
-        ask_price = (
-            detailed_data.get("best_ask_price", 0) / 100
-            if detailed_data.get("best_ask_price")
-            else 0
-        )
-        high_price = (
-            detailed_data.get("high_price", 0) / 100 if detailed_data.get("high_price") else 0
-        )
-        low_price = detailed_data.get("low_price", 0) / 100 if detailed_data.get("low_price") else 0
-        open_price = (
-            detailed_data.get("open_price", 0) / 100 if detailed_data.get("open_price") else 0
-        )
-        close_price = (
-            detailed_data.get("close_price", 0) / 100 if detailed_data.get("close_price") else 0
-        )
-        volume = detailed_data.get("trade_volume", 0)
-
-        # Calculate change from LTP and previous close
-        change = last_traded_price - close_price if close_price else 0
-
-        # Return formatted quote data
-        return {
-            "ask": ask_price,
-            "bid": bid_price,
-            "high": high_price,
-            "low": low_price,
-            "ltp": last_traded_price,
-            "open": open_price,
-            "prev_close": close_price,
-            "volume": volume,
-            "oi": detailed_data.get("currentOpenInterest", 0),
-            "change": change,
-        }
-
-    def get_history(
-        self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str
-    ) -> pd.DataFrame:
-        """
-        Get historical data for given symbol and timeframe
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-            timeframe: Timeframe (e.g., 1m, 5m, 15m, 60m, D)
-            from_date: Start date in format YYYY-MM-DD
-            to_date: End date in format YYYY-MM-DD
-        Returns:
-            pd.DataFrame: Historical data with OHLCV
-        """
-        logger.warning("Historical data API is no longer supported by Pocketful")
-        # Return empty DataFrame with message
-        return pd.DataFrame(
-            {"message": "Pocketful does not support historical data API", "status": "success"},
-            index=[0],
-        )
-
-    def get_intervals(self) -> list:
-        """Get available intervals/timeframes for historical data
-
-        Returns:
-            list: List of available intervals
-        """
-        logger.warning("Historical data API is no longer supported by Pocketful")
-        # Return empty list with success status
-        return [{"message": "Pocketful does not support historical data API", "status": "success"}]
-
-    def _get_client_id(self):
-        """
-        Get client_id from Pocketful API
-        Returns:
-            str: Client ID for the authenticated user
-        """
-        if not self.client_id:
-            try:
-                # Fetch client_id from trading_info endpoint
-                logger.info("Fetching client_id from trading_info endpoint")
-
-                # Get the shared httpx client
-                client = get_httpx_client()
-                headers = {
-                    "Authorization": f"Bearer {self.auth_token}",
-                    "Content-Type": "application/json",
-                }
-
-                response = client.get(
-                    "https://trade.pocketful.in/api/v1/user/trading_info", headers=headers
-                )
-                info_response = response.json()
-
-                if info_response.get("status") == "success":
-                    self.client_id = info_response.get("data", {}).get("client_id")
-                    logger.info(f"Got client_id from API: {self.client_id}")
-                else:
-                    raise PocketfulAPIError(
-                        f"Failed to fetch client_id: {info_response.get('message', 'Unknown error')}"
-                    )
-            except httpx.HTTPError as e:
-                logger.error(f"Error fetching client_id: {str(e)}")
-                raise PocketfulAPIError(f"Error fetching client_id: {str(e)}")
-            except Exception as e:
-                logger.error(f"Error fetching client_id: {str(e)}")
-                raise PocketfulAPIError(f"Error fetching client_id: {str(e)}")
-
-        return self.client_id
-
-    def _ensure_websocket_connection(self):
-        """
-        Ensure WebSocket connection is established
-        Returns:
-            bool: True if connection is successful, False otherwise
-        """
-        if self.ws_connection is None:
-            logger.info("Initializing WebSocket connection")
-            # Get client_id first
-            client_id = self._get_client_id()
-            if not client_id:
-                logger.error("Failed to get client_id for WebSocket connection")
-                raise PocketfulAPIError("Failed to get client_id for WebSocket connection")
-
-            try:
-                self.ws_connection = PocketfulSocket(self.client_id, self.auth_token)
-                self.ws_connected = self.ws_connection.run_socket()
-
-                if not self.ws_connected:
-                    logger.error("Failed to establish WebSocket connection")
-                    raise PocketfulAPIError("Failed to establish WebSocket connection")
-
-                logger.info("WebSocket connection established successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error establishing WebSocket connection: {str(e)}")
-                raise PocketfulAPIError(f"Error establishing WebSocket connection: {str(e)}")
-        return self.ws_connected
-
-    def get_market_depth(self, symbol: str, exchange: str) -> dict:
-        """
-        Get market depth for given symbol using WebSocket
-        Args:
-            symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
-        Returns:
-            dict: Market depth data
-        """
-        try:
-            # Get market depth using WebSocket - no fallback to mock data
-            return self._get_market_depth_websocket(symbol, exchange)
-        except BrokerBusyError:
-            # Refused by the feed gate before anything was sent (gthread only).
-            # Passed through so the service answers 429 with its sentence; a
-            # 500 here would let an option chain show zero prices as success.
-            raise
-        except PocketfulPermissionError as e:
-            logger.error(f"Permission error fetching market depth: {str(e)}")
-            raise
-        except (PocketfulAPIError, Exception) as e:
-            logger.error(f"Error fetching market depth: {str(e)}")
-            raise PocketfulAPIError(f"Error fetching market depth: {str(e)}")
-
-    def _get_mock_market_depth(self, symbol: str, exchange: str) -> dict:
-        """
-        Generate mock market depth data with proper structure
-        This is a fallback when WebSocket fails
-        """
-        logger.warning(f"Generating mock market depth data for {exchange}:{symbol}")
-
-        # Try to get approximate price data from compact market data
-        approx_price = 100.0  # Default starting price
-        try:
-            # Try to get a more realistic price from compact market data
-            compact_data = self._get_quotes_compact_noexcept(symbol, exchange)
-            if compact_data and "ltp" in compact_data and compact_data["ltp"] > 0:
-                approx_price = compact_data["ltp"]
-                logger.info(
-                    f"Using approximate price of {approx_price} from compact data for mock depth"
-                )
-        except Exception:
-            pass  # Ignore errors, just use default
-
-        # Create structured mock data matching Pocketful format with realistic prices
-        mock_data = {
-            "asks": [
-                {"price": approx_price, "quantity": 100, "orders": 1},
-                {"price": approx_price + (approx_price * 0.005), "quantity": 200, "orders": 2},
-                {"price": approx_price + (approx_price * 0.010), "quantity": 300, "orders": 3},
-                {"price": approx_price + (approx_price * 0.015), "quantity": 400, "orders": 4},
-                {"price": approx_price + (approx_price * 0.020), "quantity": 500, "orders": 5},
-            ],
-            "bids": [
-                {"price": approx_price - (approx_price * 0.005), "quantity": 100, "orders": 1},
-                {"price": approx_price - (approx_price * 0.010), "quantity": 200, "orders": 2},
-                {"price": approx_price - (approx_price * 0.015), "quantity": 300, "orders": 3},
-                {"price": approx_price - (approx_price * 0.020), "quantity": 400, "orders": 4},
-                {"price": approx_price - (approx_price * 0.025), "quantity": 500, "orders": 5},
-            ],
-            "high": approx_price + (approx_price * 0.025),
-            "low": approx_price - (approx_price * 0.03),
-            "ltp": approx_price,
-            "ltq": 10,
-            "oi": 0,
-            "open": approx_price - (approx_price * 0.01),
-            "prev_close": approx_price - (approx_price * 0.015),
-            "totalbuyqty": 1500,
-            "totalsellqty": 1500,
-            "volume": 5000,
-            "instrument_token": 0,  # Placeholder
-        }
-
-        return mock_data
-
-    @_feed_gated()
-    def _get_market_depth_websocket(self, symbol: str, exchange: str) -> dict:
-        """
-        Get market depth using WebSocket implementation
-        Internal method called by get_market_depth
-        """
-        try:
-            # Ensure WebSocket connection is established
-            if not self._ensure_websocket_connection():
-                raise PocketfulAPIError("WebSocket connection not established")
-
-            # Convert symbol to broker format and get instrument token
-            br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Fetching market depth for {exchange}:{br_symbol}")
-
-            # Get token from database
-            with db_session() as session:
-                symbol_info = (
-                    session.query(SymToken)
-                    .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
-                    .first()
-                )
-
-                if not symbol_info:
-                    raise Exception(f"Could not find token for {exchange}:{br_symbol}")
-
-                # Get the instrument token from the database
-                instrument_token = int(symbol_info.token)
-
-            # Map exchange to Pocketful exchange code
-            if exchange == "NSE_INDEX":
-                exchange_code = self.exchange_map.get("NSE", 1)
-            elif exchange == "BSE_INDEX":
-                exchange_code = self.exchange_map.get("BSE", 6)
-            else:
-                exchange_code = self.exchange_map.get(exchange, 1)
-
-            # Log the instrument details
-            logger.info(f"Using exchange_code={exchange_code}, instrument_token={instrument_token}")
-
-            # Subscribe to snapquote data
-            snapquote_payload = {"exchangeCode": exchange_code, "instrumentToken": instrument_token}
-            subscription_result = self.ws_connection.subscribe_snapquote_data(snapquote_payload)
-            logger.info(f"Subscription result: {subscription_result}")
-
-            # Unsubscribe in a finally: the connection counts who holds each
-            # instrument, and a request that never released one would keep it
-            # subscribed for every later request.
-            try:
-                snapquote_data = None
-
-                # Set debug logging to see all messages
-                logging.getLogger("broker.pocketful.api.packet_decoder").setLevel(logging.DEBUG)
-                logging.getLogger("broker.pocketful.api.pocketfulwebsocket").setLevel(logging.DEBUG)
-
-                # Send a dummy heartbeat to ensure connection is active
-                if hasattr(self.ws_connection, "_send_heartbeat"):
-                    self.ws_connection._send_heartbeat()
-
-                logger.info(f"Waiting for snapquote data for instrument {instrument_token}")
-
-                # Wait for this instrument's book, taking it as soon as it
-                # arrives. What was read last is kept, as before, for the
-                # checks below.
-                last_read = {}
-
-                def arrived():
-                    last_read["data"] = self.ws_connection.read_snapquote_data()
-                    return _is_packet_for(last_read["data"], instrument_token)
-
-                if _wait_for_feed(arrived, _DEPTH_WAIT_SECONDS):
-                    logger.info(f"Received valid market depth data for {exchange}:{br_symbol}")
-                snapquote_data = last_read.get("data")
-                logger.info(f"Received data: {snapquote_data}")
-            finally:
-                # Unsubscribe after receiving data
-                self.ws_connection.unsubscribe_snapquote_data(snapquote_payload)
-
-            # If no valid data received, try to use cached data or raise error
-            if (
-                not snapquote_data
-                or not isinstance(snapquote_data, dict)
-                or "instrument_token" not in snapquote_data
-            ):
-                logger.warning(f"No market depth data received for {exchange}:{br_symbol}")
-                # Return last known depth if available
-                if self.last_depth.get(f"{exchange}:{br_symbol}"):
-                    logger.info(f"Using cached market depth data for {exchange}:{br_symbol}")
-                    return self.last_depth.get(f"{exchange}:{br_symbol}")
-                raise Exception(f"No market depth data received for {exchange}:{br_symbol}")
-
-            # Store the data for reference (in case subsequent calls fail)
-            self.last_depth[f"{exchange}:{br_symbol}"] = snapquote_data
-
-            # Process snapquote data
-            # Note: Pocketful price values are multiplied by 100, need to convert back
-
-            # Format asks and bids
-            asks = []
-            bids = []
-
-            # Process ask prices and quantities
-            ask_prices = snapquote_data.get("askPrices", [])
-            ask_qtys = snapquote_data.get("askQtys", [])
-            sellers = snapquote_data.get("sellers", [])
-
-            for i in range(min(5, len(ask_prices))):
-                asks.append(
-                    {
-                        "price": ask_prices[i] / 100
-                        if ask_prices[i]
-                        else 0,  # Convert price back to standard format
-                        "quantity": ask_qtys[i] if i < len(ask_qtys) else 0,
-                        "orders": sellers[i] if i < len(sellers) else 0,
-                    }
-                )
-
-            # Add empty entries if fewer than 5 provided
-            while len(asks) < 5:
-                asks.append({"price": 0, "quantity": 0, "orders": 0})
-
-            # Process bid prices and quantities
-            bid_prices = snapquote_data.get("bidPrices", [])
-            bid_qtys = snapquote_data.get("bidQtys", [])
-            buyers = snapquote_data.get("buyers", [])
-
-            for i in range(min(5, len(bid_prices))):
-                bids.append(
-                    {
-                        "price": bid_prices[i] / 100
-                        if bid_prices[i]
-                        else 0,  # Convert price back to standard format
-                        "quantity": bid_qtys[i] if i < len(bid_qtys) else 0,
-                        "orders": buyers[i] if i < len(buyers) else 0,
-                    }
-                )
-
-            # Add empty entries if fewer than 5 provided
-            while len(bids) < 5:
-                bids.append({"price": 0, "quantity": 0, "orders": 0})
-
-            # Return formatted market depth data
-            return {
-                "asks": asks,
-                "bids": bids,
-                "high": snapquote_data.get("high", 0) / 100 if snapquote_data.get("high") else 0,
-                "low": snapquote_data.get("low", 0) / 100 if snapquote_data.get("low") else 0,
-                "ltp": snapquote_data.get("averageTradePrice", 0) / 100
-                if snapquote_data.get("averageTradePrice")
-                else 0,
-                "ltq": 0,  # Pocketful doesn't provide last traded quantity in snapquote
-                "oi": 0,  # Pocketful doesn't provide open interest in snapquote
-                "open": snapquote_data.get("open", 0) / 100 if snapquote_data.get("open") else 0,
-                "prev_close": snapquote_data.get("close", 0) / 100
-                if snapquote_data.get("close")
-                else 0,
-                "totalbuyqty": snapquote_data.get("totalBuyQty", 0),
-                "totalsellqty": snapquote_data.get("totalSellQty", 0),
-                "volume": snapquote_data.get("volume", 0),
-            }
-
-        except PocketfulPermissionError as e:
-            logger.error(f"Permission error fetching market depth: {str(e)}")
-            raise
-        except (PocketfulAPIError, Exception) as e:
-            logger.error(f"Error fetching market depth: {str(e)}")
-            raise PocketfulAPIError(f"Error fetching market depth: {str(e)}")
-
-    def _get_quotes_compact_noexcept(self, symbol: str, exchange: str) -> dict:
-        """
-        Get quotes using compact market data, but don't raise exceptions
-        This is a helper method to safely get quote data for other functions
-        """
-        try:
-            return self._get_quotes_compact(symbol, exchange)
-        except Exception as e:
-            logger.debug(f"Non-critical error getting compact data: {str(e)}")
-            return {}
+        return _quote_from(self._market_data(symbol, exchange))
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
-        """Alias for get_market_depth to maintain compatibility with common API"""
-        return self.get_market_depth(symbol, exchange)
+        """Five level depth. REST carries the best bid and ask only, so levels
+        two to five are zeros; the totals, OHLC, LTP and LTQ are the broker's.
+        """
+        return _depth_from(self._market_data(symbol, exchange))
+
+    def get_market_depth(self, symbol: str, exchange: str) -> dict:
+        """Alias of get_depth, the name this module used before."""
+        return self.get_depth(symbol, exchange)
+
+    def get_ltp(self, symbol: str, exchange: str) -> float:
+        """Last traded price from one request; 0.0 when no price is available.
+
+        Never raises: a symbol not in the master contract, an exchange Pocketful
+        does not quote, a refusal, a transport failure or a refused turn all
+        log their cause and return 0.0.
+        """
+        try:
+            pf_exchange, segment = _route(exchange)
+            token = get_token(symbol, exchange)
+            if not token:
+                logger.warning(f"No Pocketful token for {exchange}:{symbol}; no LTP")
+                return 0.0
+            response = _data_request(
+                "GET",
+                f"/api/v1/marketdata/{pf_exchange}/{segment}",
+                self.auth_token,
+                params={"token": str(token), "key": "last_trade_price"},
+            )
+            if not response.ok:
+                logger.warning(
+                    f"Pocketful gave no LTP for {exchange}:{symbol}: HTTP "
+                    f"{response.status_code}, message {response.message!r}"
+                )
+                return 0.0
+            price = _num(response.payload)
+            return price if price > 0 else 0.0
+        except Exception:
+            logger.exception(f"Could not read the Pocketful LTP of {exchange}:{symbol}")
+            return 0.0
 
     def get_multiquotes(self, symbols: list) -> list:
-        """
-        Get real-time quotes for multiple symbols using WebSocket
-        Pocketful WebSocket supports subscribing to multiple instruments
+        """Quotes for several symbols, one paced request each, in the order given.
 
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys
-                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+            symbols: ``[{"symbol": "SBIN", "exchange": "NSE"}, ...]``
+
         Returns:
-            list: List of quote data for each symbol with format:
-                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+            ``[{"symbol", "exchange", "data": quote}]``, or ``"error"`` in place
+            of ``"data"`` for a symbol that could not be quoted.
+
+        Raises:
+            PocketfulUnavailableError: The session ended or Pocketful could not
+                be reached; the symbols after it would fail the same way.
+            BrokerBusyError: Pacing refused a request, or Pocketful's rate limit
+                held; the rest would be refused too.
         """
-        try:
-            # Pocketful WebSocket can handle multiple instruments
-            # Using batch size of 50 for practical response times
-            BATCH_SIZE = 50
-
-            if len(symbols) > BATCH_SIZE:
-                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
-                all_results = []
-
-                for i in range(0, len(symbols), BATCH_SIZE):
-                    batch = symbols[i : i + BATCH_SIZE]
-                    logger.info(
-                        f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
-                    )
-
-                    batch_results = self._process_multiquotes_batch(batch)
-                    all_results.extend(batch_results)
-
-                logger.debug(f"Successfully processed {len(all_results)} quotes")
-                return all_results
-            else:
-                return self._process_multiquotes_batch(symbols)
-
-        except BrokerBusyError:
-            # Refused by the feed gate before anything was sent (gthread only).
-            # Passed through so the service answers 429 with its sentence; a
-            # 500 here would let an option chain show zero prices as success.
-            raise
-        except Exception as e:
-            logger.exception("Error fetching multiquotes")
-            raise PocketfulAPIError(f"Error fetching multiquotes: {e}") from e
-
-    @_feed_gated()
-    def _process_multiquotes_batch(self, symbols: list) -> list:
-        """
-        Process a batch of symbols using WebSocket subscription
-        Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys
-        Returns:
-            list: List of quote data for the batch
-        """
+        pairs = [(item["symbol"], item["exchange"]) for item in symbols]
+        tokens = get_tokens_bulk(pairs) if pairs else []
         results = []
-        skipped_symbols = []
-        instruments_to_subscribe = []
-        symbol_map = {}  # Map instrument_token to original symbol/exchange
-
-        # Ensure WebSocket connection is established
-        try:
-            if not self._ensure_websocket_connection():
-                raise PocketfulAPIError("WebSocket connection not established")
-        except Exception as e:
-            logger.error(f"Failed to establish WebSocket connection: {str(e)}")
-            # Return all symbols as errors
-            for item in symbols:
-                results.append(
-                    {
-                        "symbol": item["symbol"],
-                        "exchange": item["exchange"],
-                        "error": f"WebSocket connection failed: {str(e)}",
-                    }
-                )
-            return results
-
-        # Step 1: Prepare all instruments
-        for item in symbols:
-            symbol = item["symbol"]
-            exchange = item["exchange"]
-
+        for (symbol, exchange), token in zip(pairs, tokens, strict=True):
             try:
-                br_symbol = get_br_symbol(symbol, exchange)
+                quote = _quote_from(self._market_data(symbol, exchange, token=token))
+                results.append({"symbol": symbol, "exchange": exchange, "data": quote})
+            except PocketfulUnavailableError:
+                raise
+            except PocketfulAPIError as exc:
+                results.append({"symbol": symbol, "exchange": exchange, "error": str(exc)})
+        return results
 
-                # Get token from database
-                with db_session() as session:
-                    symbol_info = (
-                        session.query(SymToken)
-                        .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
-                        .first()
-                    )
+    # --- History -------------------------------------------------------------
 
-                    if not symbol_info:
-                        logger.warning(
-                            f"Skipping symbol {symbol} on {exchange}: could not find token"
-                        )
-                        skipped_symbols.append(
-                            {
-                                "symbol": symbol,
-                                "exchange": exchange,
-                                "error": "Could not resolve token",
-                            }
-                        )
-                        continue
+    def get_intervals(self) -> list:
+        """The OpenAlgo intervals get_history serves."""
+        return list(self.timeframe_map.keys())
 
-                    instrument_token = int(symbol_info.token)
+    def get_history(
+        self, symbol: str, exchange: str, timeframe: str, from_date, to_date
+    ) -> pd.DataFrame:
+        """Candles as a DataFrame of timestamp, open, high, low, close, volume, oi.
 
-                # Map exchange to Pocketful exchange code
-                if exchange == "NSE_INDEX":
-                    exchange_code = self.exchange_map.get("NSE", 1)
-                elif exchange == "BSE_INDEX":
-                    exchange_code = self.exchange_map.get("BSE", 6)
-                else:
-                    exchange_code = self.exchange_map.get(exchange, 1)
+        ``timestamp`` is epoch seconds: the true UTC instant of an intraday bar's
+        IST start, and for a daily bar the IST date at 00:00 UTC. Both dates are
+        inclusive. NFO contracts come from /api/data/v1/historical with open
+        interest, everything else (and an NFO contract that endpoint does not
+        answer) from one minute chart candles.
 
-                # Store instrument details for subscription
-                instruments_to_subscribe.append(
-                    {"exchangeCode": exchange_code, "instrumentToken": instrument_token}
+        Raises:
+            PocketfulAPIError: Unknown interval, symbol or exchange, or a chunk
+                Pocketful refused; never a partial series.
+            BrokerBusyError: Pacing refused a request, or Pocketful's rate limit held.
+        """
+        if timeframe not in self.timeframe_map:
+            raise PocketfulAPIError(
+                f"Pocketful history does not offer the {timeframe} interval. Choose one of "
+                f"{', '.join(self.timeframe_map)}."
+            )
+        start, end = _history_dates(from_date, to_date)
+        pf_exchange, _segment = _route(exchange)
+        token = get_token(symbol, exchange)
+        if not token:
+            raise _not_found(symbol, exchange)
+        if end < start:
+            return _empty_history()
+
+        contract = _fno_contract(symbol) if exchange == "NFO" else None
+        if contract is not None:
+            try:
+                bars = self._historical_bars(contract, self.timeframe_map[timeframe], start, end)
+                if timeframe == "D":
+                    bars = self._with_todays_bar(bars, symbol, exchange, token, start, end)
+                return _finish(bars, timeframe, exchange, build_bars=False)
+            except _HistoricalUnavailable as exc:
+                logger.warning(
+                    f"Pocketful historical data gave nothing for {exchange}:{symbol} ({exc}); "
+                    "using chart candles, without open interest"
                 )
 
-                # Store mapping for response processing
-                symbol_map[str(instrument_token)] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "br_symbol": br_symbol,
-                    "token": instrument_token,
-                    "exchange_code": exchange_code,
-                }
+        minutes = self._chart_minutes(symbol, exchange, pf_exchange, token, start, end)
+        return _finish(minutes, timeframe, exchange, build_bars=True)
 
-            except Exception as e:
-                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
-                skipped_symbols.append({"symbol": symbol, "exchange": exchange, "error": str(e)})
-                continue
-
-        if not instruments_to_subscribe:
-            logger.warning("No valid symbols to fetch quotes for")
-            return skipped_symbols
-
-        # Step 2: Subscribe to all instruments at once
-        logger.info(f"Subscribing to {len(instruments_to_subscribe)} symbols via WebSocket")
-
-        for instrument in instruments_to_subscribe:
-            try:
-                self.ws_connection.subscribe_detailed_marketdata(instrument)
-            except Exception as e:
-                logger.warning(f"Failed to subscribe to instrument {instrument}: {str(e)}")
-
-        # Unsubscribe in a finally, for the reason given in
-        # _get_market_depth_websocket.
-        try:
-            # Step 3: Collect data while waiting - read continuously to capture all instruments
-            received_data = {}
-            num_instruments = len(instruments_to_subscribe)
-            max_wait_time = min(
-                max(num_instruments * 0.5, 3), 15
-            )  # Between 3-15 seconds based on instrument count
-            start_time = time.time()
-
-            logger.debug(
-                f"Collecting data for up to {max_wait_time:.1f}s for {num_instruments} instruments..."
+    def _chart_minutes(self, symbol, exchange, pf_exchange, token, start, end):
+        """One minute candles from /api/v1/charts for start..end, chunked."""
+        rows = []
+        for first, last in _chunks(start, end, _CHART_CHUNK_DAYS):
+            response = _data_request(
+                "GET",
+                "/api/v1/charts",
+                self.auth_token,
+                params={
+                    "exchange": pf_exchange,
+                    "token": str(token),
+                    "candletype": _CHART_ONE_MINUTE,
+                    "from_date": f"{first.isoformat()}T00:00:00",
+                    "to_date": f"{last.isoformat()}T23:59:59",
+                },
+                timeout=_HISTORY_TIMEOUT,
+                # chart-data.md lists a clientid header beside the session's own.
+                headers={"clientid": client_id(self.auth_token) or ""},
             )
+            payload = response.payload
+            candles = payload.get("candles") if isinstance(payload, dict) else None
+            if not response.ok or not isinstance(candles, (list, type(None))):
+                raise _refusal(
+                    response, f"history for {symbol} on {exchange} from {first} to {last}"
+                )
+            rows.extend(candles or [])
+        return _within(_candle_frame(rows), start, end)
 
-            # Read continuously until we have all data or timeout
-            while time.time() - start_time < max_wait_time:
-                detailed_data = self.ws_connection.read_detailed_marketdata()
+    def _historical_bars(self, contract, interval, start, end):
+        """NFO bars from /api/data/v1/historical for start..end, chunked.
 
-                if detailed_data and isinstance(detailed_data, dict):
-                    token_in_data = detailed_data.get("instrument_token") or detailed_data.get(
-                        "instrumentToken"
-                    )
-                    if token_in_data and str(token_in_data) in symbol_map:
-                        received_data[str(token_in_data)] = detailed_data
-                        logger.debug(
-                            f"Received data for token {token_in_data} ({len(received_data)}/{num_instruments})"
-                        )
-
-                # Exit early if we have all data
-                if len(received_data) >= num_instruments:
-                    logger.debug(f"All {num_instruments} instruments received, exiting early")
-                    break
-
-                # Small delay between reads to avoid busy loop
-                time.sleep(0.05)
-
-            logger.debug(
-                f"Data collection completed: {len(received_data)}/{num_instruments} instruments received"
-            )
-
-            # Step 5: Build results from received data
-            for token_str, info in symbol_map.items():
-                detailed_data = received_data.get(token_str)
-
-                if detailed_data:
-                    # Extract and format quote data from detailed market data
-                    # Note: Price values are multiplied by 100
-                    last_traded_price = (
-                        detailed_data.get("last_traded_price", 0) / 100
-                        if detailed_data.get("last_traded_price")
-                        else 0
-                    )
-                    bid_price = (
-                        detailed_data.get("best_bid_price", 0) / 100
-                        if detailed_data.get("best_bid_price")
-                        else 0
-                    )
-                    ask_price = (
-                        detailed_data.get("best_ask_price", 0) / 100
-                        if detailed_data.get("best_ask_price")
-                        else 0
-                    )
-                    high_price = (
-                        detailed_data.get("high_price", 0) / 100
-                        if detailed_data.get("high_price")
-                        else 0
-                    )
-                    low_price = (
-                        detailed_data.get("low_price", 0) / 100
-                        if detailed_data.get("low_price")
-                        else 0
-                    )
-                    open_price = (
-                        detailed_data.get("open_price", 0) / 100
-                        if detailed_data.get("open_price")
-                        else 0
-                    )
-                    close_price = (
-                        detailed_data.get("close_price", 0) / 100
-                        if detailed_data.get("close_price")
-                        else 0
-                    )
-                    volume = detailed_data.get("trade_volume", 0)
-
-                    results.append(
-                        {
-                            "symbol": info["symbol"],
-                            "exchange": info["exchange"],
-                            "data": {
-                                "bid": bid_price,
-                                "ask": ask_price,
-                                "open": open_price,
-                                "high": high_price,
-                                "low": low_price,
-                                "ltp": last_traded_price,
-                                "prev_close": close_price,
-                                "volume": volume,
-                                "oi": detailed_data.get("currentOpenInterest", 0),
-                            },
-                        }
-                    )
-                else:
-                    results.append(
-                        {
-                            "symbol": info["symbol"],
-                            "exchange": info["exchange"],
-                            "error": "No data received",
-                        }
-                    )
-        finally:
-            # Step 6: Unsubscribe after getting data
-            logger.info(f"Unsubscribing from {len(instruments_to_subscribe)} symbols")
-            for instrument in instruments_to_subscribe:
-                try:
-                    self.ws_connection.unsubscribe_detailed_marketdata(instrument)
-                except Exception as e:
-                    logger.warning(f"Failed to unsubscribe from instrument {instrument}: {str(e)}")
-
-        logger.info(
-            f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols"
+        Raises:
+            _HistoricalUnavailable: An error answer, or no candles at all.
+            PocketfulUnavailableError: The session ended or Pocketful is unreachable.
+        """
+        days = (
+            _HISTORICAL_DAILY_CHUNK_DAYS if interval == "1day" else _HISTORICAL_INTRADAY_CHUNK_DAYS
         )
-        return skipped_symbols + results
+        rows = []
+        for first, last in _chunks(start, end, days):
+            body = dict(contract)
+            body.update(
+                {
+                    "interval": interval,
+                    "from_date": f"{first.isoformat()}T00:00:00",
+                    "to_date": f"{last.isoformat()}T23:59:59",
+                }
+            )
+            response = _data_request(
+                "POST",
+                "/api/data/v1/historical",
+                self.auth_token,
+                payload=body,
+                timeout=_HISTORY_TIMEOUT,
+            )
+            if response.status_code in (401, 403):
+                raise _refusal(response, "historical data")
+            payload = response.payload
+            candles = payload.get("candles") if isinstance(payload, dict) else None
+            if not response.ok or not isinstance(candles, (list, type(None))):
+                raise _HistoricalUnavailable(
+                    f"HTTP {response.status_code}, message {response.message!r}"
+                )
+            rows.extend(candles or [])
+        bars = _within(_candle_frame(rows), start, end)
+        if bars.empty:
+            raise _HistoricalUnavailable("no candles in the range")
+        return bars
+
+    def _with_todays_bar(self, bars, symbol, exchange, token, start, end):
+        """Add today's daily bar from a quote when the daily series stops before today.
+
+        Only when today is in the range, and only from an answer whose last
+        trade (``last_trade_time``, epoch seconds) is today: on a holiday the
+        quote still shows the last session, which is already a bar.
+        """
+        today = _ist_today()
+        if not start <= today <= end:
+            return bars
+        if not bars.empty and bars["timestamp"].max().date() >= today:
+            return bars
+        try:
+            raw = self._market_data(symbol, exchange, token=token)
+        except PocketfulUnavailableError:
+            raise
+        except PocketfulAPIError:
+            logger.warning(
+                f"No quote for today's {exchange}:{symbol} daily bar; series ends earlier"
+            )
+            return bars
+        traded = _num(raw.get("last_trade_time"))
+        quote = _quote_from(raw)
+        if not traded or quote["open"] <= 0:
+            return bars
+        if datetime.fromtimestamp(traded, _IST).date() != today:
+            return bars
+        today_bar = pd.DataFrame(
+            [
+                {
+                    "timestamp": pd.Timestamp(
+                        datetime(today.year, today.month, today.day, tzinfo=_IST)
+                    ),
+                    "open": quote["open"],
+                    "high": quote["high"],
+                    "low": quote["low"],
+                    "close": quote["ltp"],
+                    "volume": quote["volume"],
+                    "oi": quote["oi"],
+                }
+            ]
+        )
+        return pd.concat([bars, today_bar], ignore_index=True) if not bars.empty else today_bar

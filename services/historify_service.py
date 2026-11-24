@@ -47,34 +47,79 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def validate_symbol(symbol: str, exchange: str) -> tuple[bool, str]:
+# Characters a list copied from elsewhere may carry as an underscore:
+# TradingView's symbol for NSE BAJAJ-AUTO is NSE:BAJAJ_AUTO, and its chart
+# links write M&M as M_M. A Zerodha master contract checked on 2026-11-17 held
+# no NSE or BSE symbol containing an underscore.
+_UNDERSCORE_STANDS_FOR = ("-", "&")
+
+# Each underscore doubles the lookups. Real symbols carry one or two.
+_MAX_UNDERSCORES_TO_RESOLVE = 4
+
+
+def _underscore_candidates(symbol: str) -> list[str]:
+    """Every spelling of ``symbol`` with each underscore read as - or &."""
+    candidates = [""]
+    for char in symbol:
+        if char == "_":
+            candidates = [c + sub for c in candidates for sub in _UNDERSCORE_STANDS_FOR]
+        else:
+            candidates = [c + char for c in candidates]
+    return candidates
+
+
+def resolve_symbol(symbol: str, exchange: str) -> tuple[str | None, str]:
     """
-    Validate that a symbol exists in the master contract database.
+    Find the master contract symbol a trader means.
+
+    The symbol as written wins. Only when it is not in the master contract and
+    contains an underscore is each underscore read as - or &, and the spelling
+    is accepted only if exactly one reading exists (BAJAJ_AUTO as BAJAJ-AUTO).
+    Two possible symbols are refused rather than guessed between.
 
     Args:
-        symbol: Trading symbol
+        symbol: Trading symbol as entered
         exchange: Exchange code
 
     Returns:
-        Tuple of (is_valid, error_message)
+        Tuple of (resolved_symbol, error_message). resolved_symbol is None when
+        the symbol cannot be added.
     """
+    symbol = symbol.upper()
+    exchange = exchange.upper()
+
     # Index exchanges don't need validation against master contract
-    if exchange.upper() in ("NSE_INDEX", "BSE_INDEX"):
-        return True, ""
+    if exchange in ("NSE_INDEX", "BSE_INDEX"):
+        return symbol, ""
 
     try:
-        symbol_info = get_symbol_info(symbol.upper(), exchange.upper())
-        if symbol_info is None:
-            return (
-                False,
-                f"Symbol '{symbol}' not found in {exchange} master contract. Please check the symbol name.",
-            )
-        return True, ""
+        if get_symbol_info(symbol, exchange) is not None:
+            return symbol, ""
+
+        if 0 < symbol.count("_") <= _MAX_UNDERSCORES_TO_RESOLVE:
+            matches = [
+                candidate
+                for candidate in _underscore_candidates(symbol)
+                if get_symbol_info(candidate, exchange) is not None
+            ]
+            if len(matches) == 1:
+                return matches[0], ""
+            if len(matches) > 1:
+                return (
+                    None,
+                    f"Symbol '{symbol}' could be {' or '.join(matches)} on {exchange}. "
+                    "Enter the exact symbol.",
+                )
+
+        return (
+            None,
+            f"Symbol '{symbol}' not found in {exchange} master contract. Please check the symbol name.",
+        )
     except Exception as e:
         logger.warning(f"Could not validate symbol {symbol}:{exchange}: {e}")
         # If validation fails due to cache/db issues, allow the symbol
         # (it will fail during download if truly invalid)
-        return True, ""
+        return symbol, ""
 
 
 # =============================================================================
@@ -126,11 +171,11 @@ def add_to_watchlist(
             )
 
         # Validate symbol exists in master contract database
-        is_valid, error_msg = validate_symbol(symbol, exchange)
-        if not is_valid:
+        resolved, error_msg = resolve_symbol(symbol, exchange)
+        if resolved is None:
             return False, {"status": "error", "message": error_msg}, 400
 
-        success, msg = db_add_to_watchlist(symbol, exchange, display_name)
+        success, msg = db_add_to_watchlist(resolved, exchange, display_name)
 
         if success:
             return True, {"status": "success", "message": msg}, 200
@@ -226,6 +271,7 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[bool, dict[str
         # Validate symbols before bulk insert
         validated_symbols = []
         invalid_symbols = []
+        renamed = []
 
         for item in symbols:
             symbol = item.get("symbol", "").upper()
@@ -248,15 +294,30 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[bool, dict[str
                 continue
 
             # Validate symbol exists in master contract
-            is_valid, error_msg = validate_symbol(symbol, exchange)
-            if not is_valid:
+            resolved, error_msg = resolve_symbol(symbol, exchange)
+            if resolved is None:
                 invalid_symbols.append({"symbol": symbol, "exchange": exchange, "error": error_msg})
                 continue
 
-            validated_symbols.append(item)
+            if resolved != symbol:
+                renamed.append({"from": symbol, "to": resolved, "exchange": exchange})
+
+            validated_symbols.append({**item, "symbol": resolved, "exchange": exchange})
 
         # Use bulk insert for validated symbols
         added, skipped, failed = db_bulk_add_to_watchlist(validated_symbols)
+
+        # The database layer reports a failed write as one "batch" entry:
+        # nothing was saved, so say so instead of listing a symbol named batch.
+        if any(f.get("symbol") == "batch" for f in failed):
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": "The watchlist could not be saved. Please try again.",
+                },
+                500,
+            )
 
         # Add invalid symbols to failed list
         failed.extend(invalid_symbols)
@@ -268,6 +329,7 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[bool, dict[str
                 "added": added,
                 "skipped": skipped,
                 "failed": failed,
+                "renamed": renamed,
                 "total": len(symbols),
             },
             200,

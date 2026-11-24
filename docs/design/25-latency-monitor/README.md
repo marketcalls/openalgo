@@ -4,6 +4,8 @@
 
 OpenAlgo tracks order execution latency at multiple stages to help identify performance bottlenecks and ensure SLA compliance.
 
+Every `/api/v1` call is timed, not only orders. The monitor reports them one group of endpoints at a time, with orders as the default, because an average across an order and a history download describes neither. See [Endpoint Groups](#endpoint-groups).
+
 ## Architecture Diagram
 
 ```
@@ -73,7 +75,7 @@ OpenAlgo tracks order execution latency at multiple stages to help identify perf
 │ user_id          │ INTEGER      │ User ID          │
 │ broker           │ VARCHAR(50)  │ Broker name      │
 │ symbol           │ VARCHAR(50)  │ Trading symbol   │
-│ order_type       │ VARCHAR(20)  │ MARKET/LIMIT/SL  │
+│ order_type       │ VARCHAR(20)  │ Endpoint tag     │
 │ rtt_ms           │ FLOAT        │ Round-trip time  │
 │ validation_ms    │ FLOAT        │ Validation time  │
 │ response_ms      │ FLOAT        │ Response time    │
@@ -85,6 +87,33 @@ OpenAlgo tracks order execution latency at multiple stages to help identify perf
 │ error            │ VARCHAR(500) │ Error message    │
 └──────────────────┴──────────────┴──────────────────┘
 ```
+
+`order_type` holds the endpoint the call was to (`PLACE`, `HISTORY`, `FUNDS` and so on), not the price type of an order. The column name is from when only orders were recorded.
+
+## Endpoint Groups
+
+`database/latency_groups.py` is the one place that says which tag each endpoint is recorded under and which group it belongs to. The recorder, the statistics, the purge and the page all read it; none keeps a list of its own. The groups follow the sections of the [API reference](../../api/README.md).
+
+| Group | Endpoints | Kept |
+|-------|-----------|------|
+| Orders (default) | Place, smart, options, options multi-leg, basket, split, modify, cancel, cancel all, close position, and the three GTT actions | Forever |
+| Account and books | Order status, open position, order book, trade book, position book, holdings, funds, margin, GTT order book | 7 days |
+| Market data | Quote, multiple quotes, depth, history, ticker | 7 days |
+| Options | Option chain, Greeks, batch Greeks, option symbol, synthetic future | 7 days |
+| Symbols and settings | Symbol, search, expiry, instruments, intervals, market calendar, analyzer mode, sandbox P&L, chart preferences, ping | 7 days |
+| Tools and alerts | Portfolio, SIP and sector analysis, the strategy module, Telegram, WhatsApp, Slack, Discord | 7 days |
+| Other | Any record whose tag is in no group. Listed only when there is one. | 7 days |
+| All calls | Every record together | As above |
+
+Rules that follow from this:
+
+- **A group's figures come from that group's records only.** Counts, averages and the speed bands cover everything stored for the group; the median and P99 cover the last 30 days.
+- **Only orders are rated.** The Excellent, Good, Acceptable and Slow bands (150, 250 and 400 ms) describe an order confirmation, so the page shows them for the orders group and not for the others.
+- **The orders group is the keep list.** `ORDER_TAGS` is what `purge_old_data_logs` leaves alone. There is one list, not one per module.
+- **A new endpoint has to be placed.** `test/test_latency_groups.py` fails for a registered namespace that has no `Endpoint` in a group, and for a group that names a namespace that does not exist.
+- **Old spellings are read as what they are.** Options orders were once stored as `OPTIONSORDER` and `OPTIONSMULTIORDER`; `LEGACY_TAGS` counts those rows as options orders and keeps them.
+
+The browser routes take the group as a query parameter: `/latency/api/stats?group=orders`, `/latency/api/logs?group=market_data`, `/latency/export?group=orders`. The figures and records default to `orders`; the export defaults to everything. A name that is not a group is refused with a 400.
 
 ## Implementation
 
@@ -274,7 +303,10 @@ LIMIT 10
 | File | Purpose |
 |------|---------|
 | `utils/latency_monitor.py` | Tracking utilities |
-| `database/latency_db.py` | Latency model |
+| `database/latency_db.py` | Latency model and per-group statistics |
+| `database/latency_groups.py` | Endpoint tags and groups (the single definition) |
 | `blueprints/latency.py` | Dashboard and export routes |
 | `utils/httpx_client.py` | HTTP timing hooks |
 | `frontend/src/pages/monitoring/LatencyDashboard.tsx` | React dashboard |
+| `frontend/src/api/latency.ts` | The dashboard's types and requests |
+| `test/test_latency_groups.py` | What belongs to which group, and that figures are per group |

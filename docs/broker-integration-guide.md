@@ -784,7 +784,7 @@ A new broker must be registered in **all** of the following locations:
 Add your broker to the "Supported Brokers" section (alphabetical order):
 
 ```markdown
-## Supported Brokers (38 plugins)
+## Supported Brokers (39 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>

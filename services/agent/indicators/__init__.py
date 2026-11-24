@@ -2,7 +2,7 @@
 
 Three modules, and the split is deliberate:
 
-* :mod:`registry` is the table of facts about the 127 callables on the ``ta``
+* :mod:`registry` is the table of facts about the 128 callables on the ``ta``
   singleton: which OHLCV series each one takes, what it returns and in what
   order, and how many bars of warm-up it needs. It is asserted against
   ``dir(ta)`` at import, so an SDK upgrade that adds or removes an indicator

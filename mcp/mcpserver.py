@@ -104,6 +104,35 @@ BSE_INDEX_SYMBOLS = [
     "BSESMALLCAP", "BSESMALLCAPSELECTINDEX", "BSESMEIPO",
     "BSETECK", "BSETELECOM",
 ]
+_NSE_INDEX_SET = frozenset(NSE_INDEX_SYMBOLS)
+_BSE_INDEX_SET = frozenset(BSE_INDEX_SYMBOLS)
+
+
+def _default_quote_exchange(symbol: str) -> str:
+    """Exchange to quote ``symbol`` on when the caller named none.
+
+    An index is quoted on its index exchange, never the equity one: SENSEX
+    lives on BSE_INDEX and NIFTY on NSE_INDEX, and asking NSE for either is
+    refused as an unknown symbol. No name in either list is also an NSE or
+    BSE equity, so routing on them cannot send a stock to the wrong place.
+    Everything else keeps the NSE default.
+    """
+    s = symbol.upper()
+    if s in _BSE_INDEX_SET:
+        return "BSE_INDEX"
+    if s in _NSE_INDEX_SET:
+        return "NSE_INDEX"
+    return "NSE"
+
+
+def _default_derivatives_exchange(symbol: str) -> str:
+    """F&O exchange for underlying ``symbol`` when the caller named none.
+
+    BSE indices (SENSEX, BANKEX, SENSEX50) trade on BFO, so looking for
+    their expiries on NFO finds nothing. Everything else keeps NFO.
+    """
+    return "BFO" if symbol.upper() in _BSE_INDEX_SET else "NFO"
+
 
 # Create MCP server
 mcp = FastMCP("openalgo")
@@ -1075,15 +1104,20 @@ def calculate_margin(positions: list[dict[str, Any]]) -> str:
 
 
 @openalgo_tool('marketdata', title="Get Quote")
-def get_quote(symbol: str, exchange: str = "NSE") -> str:
+def get_quote(symbol: str, exchange: str | None = None) -> str:
     """
     Get current quote for a symbol.
 
     Args:
-        symbol: Stock symbol
-        exchange: Exchange name
+        symbol: OpenAlgo symbol, e.g. RELIANCE, NIFTY, SENSEX, NIFTY28MAR2420800CE
+        exchange: NSE, BSE, NFO, BFO, MCX, CDS, BCD, NSE_INDEX or BSE_INDEX.
+            Optional. When omitted, an index uses its index exchange (SENSEX,
+            BANKEX and SENSEX50 use BSE_INDEX; NIFTY, BANKNIFTY and the other
+            NSE indices use NSE_INDEX) and any other symbol uses NSE. Pass it
+            for BSE equities and for every derivative contract.
     """
     try:
+        exchange = exchange or _default_quote_exchange(symbol)
         response = client.quotes(symbol=symbol.upper(), exchange=exchange.upper())
         return json.dumps(response, indent=2)
     except Exception as e:
@@ -1337,16 +1371,22 @@ def get_index_symbols(exchange: str = "NSE") -> str:
 
 
 @openalgo_tool('marketdata', title="Get Expiry Dates")
-def get_expiry_dates(symbol: str, exchange: str = "NFO", instrument_type: str = "options") -> str:
+def get_expiry_dates(
+    symbol: str, exchange: str | None = None, instrument_type: str = "options"
+) -> str:
     """
     Get expiry dates for derivatives.
 
     Args:
-        symbol: Underlying symbol
-        exchange: Exchange name (typically NFO for F&O)
+        symbol: Underlying symbol, e.g. NIFTY, BANKNIFTY, SENSEX, RELIANCE
+        exchange: Derivatives exchange: NFO, BFO, MCX or CDS. Optional. When
+            omitted, SENSEX, BANKEX and SENSEX50 use BFO and any other
+            underlying uses NFO. Pass MCX or CDS for commodity and currency
+            underlyings.
         instrument_type: 'options' or 'futures'
     """
     try:
+        exchange = exchange or _default_derivatives_exchange(symbol)
         response = client.expiry(
             symbol=symbol.upper(), exchange=exchange.upper(), instrumenttype=instrument_type.lower()
         )

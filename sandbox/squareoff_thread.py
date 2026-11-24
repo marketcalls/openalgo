@@ -226,6 +226,10 @@ def _schedule_square_off_jobs(scheduler):
                     # Get today's realized P&L
                     realized_pnl = Decimal(str(funds.today_realized_pnl or 0))
 
+                    # Brokerage and statutory charges paid today. The P&L
+                    # figures stay gross; the day's net is total_mtm - charges.
+                    charges = Decimal(str(funds.today_charges or 0))
+
                     # Total MTM = Realized + Unrealized (positions + holdings)
                     total_unrealized = positions_unrealized + holdings_unrealized
                     total_mtm = realized_pnl + total_unrealized
@@ -244,6 +248,7 @@ def _schedule_square_off_jobs(scheduler):
                         existing.positions_unrealized_pnl = positions_unrealized
                         existing.holdings_unrealized_pnl = holdings_unrealized
                         existing.total_mtm = total_mtm
+                        existing.charges = charges
                         existing.available_balance = funds.available_balance
                         existing.used_margin = funds.used_margin
                         existing.portfolio_value = portfolio_value
@@ -256,6 +261,7 @@ def _schedule_square_off_jobs(scheduler):
                             positions_unrealized_pnl=positions_unrealized,
                             holdings_unrealized_pnl=holdings_unrealized,
                             total_mtm=total_mtm,
+                            charges=charges,
                             available_balance=funds.available_balance,
                             used_margin=funds.used_margin,
                             portfolio_value=portfolio_value,
@@ -295,8 +301,11 @@ def _schedule_square_off_jobs(scheduler):
             try:
                 from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
 
-                # Reset funds - today_realized_pnl
-                funds_count = SandboxFunds.query.update({"today_realized_pnl": Decimal("0.00")})
+                # Reset funds - today_realized_pnl, and today's charges with
+                # it: the two are one day's figures and are read together.
+                funds_count = SandboxFunds.query.update(
+                    {"today_realized_pnl": Decimal("0.00"), "today_charges": Decimal("0.00")}
+                )
 
                 # Reset positions - today_realized_pnl
                 positions_count = SandboxPositions.query.update(

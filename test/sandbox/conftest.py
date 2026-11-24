@@ -148,8 +148,14 @@ def clean_scoped_sessions():
     object whose in-memory state no longer matches the row. That is why these
     tests passed alone and failed in a full run.
     """
-    from database.sandbox_db import db_session
+    from database.sandbox_db import db_session, set_configs
+    from sandbox.charges import CHARGES_ENABLED_KEY
 
+    db_session.remove()
+    # Charges off unless a test turns them on. These tests assert margin and
+    # P&L to the paisa, and the test database is a file that keeps whatever
+    # the last run left in it.
+    set_configs({CHARGES_ENABLED_KEY: "false"})
     db_session.remove()
     yield
     try:

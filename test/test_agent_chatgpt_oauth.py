@@ -380,7 +380,6 @@ def test_the_litellm_names_this_module_is_pinned_to_still_resolve():
         "_write_auth_file",
         "_build_auth_record",
         "_get_expires_at",
-        "_extract_account_id",
         "_record_device_code_request",
     ):
         assert hasattr(bits.authenticator_cls, name), f"litellm Authenticator lost {name}"

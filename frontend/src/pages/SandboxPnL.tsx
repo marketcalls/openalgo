@@ -1,4 +1,12 @@
-import { Activity, Briefcase, Calendar, Download, Package, Settings } from 'lucide-react'
+import {
+  Activity,
+  Briefcase,
+  Calendar,
+  Download,
+  Package,
+  ReceiptText,
+  Settings,
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +31,10 @@ interface DailyPnL {
   holdings_unrealized: number
   total_unrealized: number
   total_mtm: number
+  /** Brokerage and statutory charges paid that day. */
+  charges: number
+  /** total_mtm less the day's charges. */
+  net_mtm: number
   portfolio_value: number
 }
 
@@ -58,6 +70,8 @@ interface Trade {
   quantity: number
   price: number
   product: string
+  /** Brokerage and statutory charges this trade paid. */
+  charges: number
   timestamp: string
 }
 
@@ -67,6 +81,11 @@ interface Summary {
   holdings_unrealized_pnl: number
   today_total_mtm: number
   all_time_realized_pnl: number
+  /** Charges paid today. Every P&L figure above is before charges. */
+  today_charges: number
+  total_charges: number
+  today_net_mtm: number
+  all_time_net_realized_pnl: number
 }
 
 interface SandboxData {
@@ -131,6 +150,10 @@ export default function SandboxPnL() {
     holdings_unrealized_pnl: 0,
     today_total_mtm: 0,
     all_time_realized_pnl: 0,
+    today_charges: 0,
+    total_charges: 0,
+    today_net_mtm: 0,
+    all_time_net_realized_pnl: 0,
   }
 
   return (
@@ -143,16 +166,24 @@ export default function SandboxPnL() {
             Track your daily and historical profit & loss
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link to="/sandbox">
-            <Settings className="h-4 w-4 mr-2" />
-            Sandbox Config
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button asChild variant="outline">
+            <Link to="/sandbox/commissions?tab=report">
+              <ReceiptText className="h-4 w-4 mr-2" />
+              Transaction Costs
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link to="/sandbox">
+              <Settings className="h-4 w-4 mr-2" />
+              Sandbox Config
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
         {/* Today's Realized P&L */}
         <Card>
           <CardContent className="p-4">
@@ -225,6 +256,50 @@ export default function SandboxPnL() {
         </Card>
       </div>
 
+      {/* Charges. The cards above are before charges, as a position book is. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Charges</div>
+            <div className="text-2xl font-bold">{formatCurrency(summary.today_charges)}</div>
+            <Badge variant="secondary" className="mt-1">
+              Today
+            </Badge>
+          </CardContent>
+        </Card>
+        <Card className="border-2 border-primary">
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Net of Charges</div>
+            <div className={cn('text-2xl font-bold', getPnLColor(summary.today_net_mtm))}>
+              {formatCurrency(summary.today_net_mtm)}
+            </div>
+            <Badge className="mt-1">Today</Badge>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Charges</div>
+            <div className="text-2xl font-bold">{formatCurrency(summary.total_charges)}</div>
+            <Badge variant="outline" className="mt-1">
+              Lifetime
+            </Badge>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Realized Net of Charges</div>
+            <div
+              className={cn('text-2xl font-bold', getPnLColor(summary.all_time_net_realized_pnl))}
+            >
+              {formatCurrency(summary.all_time_net_realized_pnl)}
+            </div>
+            <Badge variant="outline" className="mt-1">
+              Lifetime
+            </Badge>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-4">
@@ -270,6 +345,8 @@ export default function SandboxPnL() {
                         <TableHead className="text-right">Holdings MTM</TableHead>
                         <TableHead className="text-right">Total Unrealized</TableHead>
                         <TableHead className="text-right">Total MTM</TableHead>
+                        <TableHead className="text-right">Charges</TableHead>
+                        <TableHead className="text-right">Net MTM</TableHead>
                         <TableHead className="text-right">Portfolio Value</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -299,6 +376,17 @@ export default function SandboxPnL() {
                             className={cn('text-right font-bold', getPnLColor(day.total_mtm))}
                           >
                             {formatCurrency(day.total_mtm)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(day.charges ?? 0)}
+                          </TableCell>
+                          <TableCell
+                            className={cn(
+                              'text-right font-bold',
+                              getPnLColor(day.net_mtm ?? day.total_mtm)
+                            )}
+                          >
+                            {formatCurrency(day.net_mtm ?? day.total_mtm)}
                           </TableCell>
                           <TableCell className="text-right text-primary">
                             {formatCurrency(day.portfolio_value)}
@@ -499,6 +587,7 @@ export default function SandboxPnL() {
                         <TableHead>Action</TableHead>
                         <TableHead className="text-right">Qty</TableHead>
                         <TableHead className="text-right">Price</TableHead>
+                        <TableHead className="text-right">Charges</TableHead>
                         <TableHead>Product</TableHead>
                         <TableHead>Timestamp</TableHead>
                       </TableRow>
@@ -521,6 +610,9 @@ export default function SandboxPnL() {
                           <TableCell className="text-right">{trade.quantity}</TableCell>
                           <TableCell className="text-right">
                             {formatCurrency(trade.price)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(trade.charges ?? 0)}
                           </TableCell>
                           <TableCell>
                             <Badge

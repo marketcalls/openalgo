@@ -9,6 +9,15 @@ from flask import Blueprint, Response, jsonify, render_template, request, sessio
 from sqlalchemy import func
 
 from database.latency_db import OrderLatency, latency_session
+from database.latency_groups import (
+    ALL,
+    DEFAULT_GROUP,
+    get_group,
+    group_key_of,
+    group_keys,
+    is_group,
+    label_of,
+)
 from limiter import limiter
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -33,6 +42,47 @@ def format_ist_time(timestamp):
     """Format timestamp in IST with 12-hour format"""
     ist_time = convert_to_ist(timestamp)
     return ist_time.strftime("%d-%m-%Y %I:%M:%S %p")
+
+
+def requested_group(default=DEFAULT_GROUP):
+    """The group named in the request, and a refusal if it is not one.
+
+    Returns ``(group, None)``, or ``(None, response)`` for a name that is not a
+    group. An unknown name is refused rather than answered with the default:
+    figures for the wrong group, shown under the right heading, are exactly
+    what this page used to get wrong.
+    """
+    group = (request.args.get("group") or "").strip().lower() or default
+    if is_group(group):
+        return group, None
+    choices = ", ".join(get_group(key).label for key in group_keys())
+    return None, (
+        jsonify({"error": f"That is not a latency group. The groups are: {choices}."}),
+        400,
+    )
+
+
+def log_to_dict(log):
+    """A latency record as the page reads it."""
+    return {
+        "timestamp": convert_to_ist(log.timestamp).isoformat(),
+        "id": log.id,
+        "order_id": log.order_id,
+        "broker": log.broker,
+        "symbol": log.symbol,
+        "order_type": log.order_type,
+        # The name and group of the endpoint, so the page keeps no table of
+        # its own to fall out of step with database/latency_groups.py.
+        "endpoint": label_of(log.order_type),
+        "group": group_key_of(log.order_type),
+        "rtt_ms": log.rtt_ms,
+        "validation_latency_ms": log.validation_latency_ms,
+        "response_latency_ms": log.response_latency_ms,
+        "overhead_ms": log.overhead_ms,
+        "total_latency_ms": log.total_latency_ms,
+        "status": log.status,
+        "error": log.error,
+    }
 
 
 def get_histogram_data(broker=None):
@@ -176,53 +226,45 @@ def latency_dashboard():
 @check_session_validity
 @limiter.limit("60/minute")
 def get_logs():
-    """API endpoint to get latency logs"""
+    """The newest latency records of one group.
+
+    ``group`` picks the group and defaults to orders, so the table headed
+    Recent Orders lists orders. It used to list the last hundred calls of any
+    kind, and a chart loading its history pushed every order out of it.
+    """
+    group, refusal = requested_group()
+    if refusal:
+        return refusal
     try:
-        limit = min(int(request.args.get("limit", 100)), 1000)
-        logs = OrderLatency.get_recent_logs(limit=limit)
-        return jsonify(
-            [
-                {
-                    "timestamp": convert_to_ist(log.timestamp).isoformat(),
-                    "id": log.id,
-                    "order_id": log.order_id,
-                    "broker": log.broker,
-                    "symbol": log.symbol,
-                    "order_type": log.order_type,
-                    "rtt_ms": log.rtt_ms,
-                    "validation_latency_ms": log.validation_latency_ms,
-                    "response_latency_ms": log.response_latency_ms,
-                    "overhead_ms": log.overhead_ms,
-                    "total_latency_ms": log.total_latency_ms,
-                    "status": log.status,
-                    "error": log.error,
-                }
-                for log in logs
-            ]
-        )
+        limit = max(1, min(int(request.args.get("limit", 100)), 1000))
+    except (TypeError, ValueError):
+        return jsonify({"error": "The limit has to be a whole number."}), 400
+    try:
+        logs = OrderLatency.get_recent_logs(limit=limit, group=group)
+        return jsonify([log_to_dict(log) for log in logs])
     except Exception as e:
         logger.exception(f"Error fetching latency logs: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "The latency records could not be read. Try again."}), 500
 
 
 @latency_bp.route("/api/stats", methods=["GET"])
 @check_session_validity
 @limiter.limit("60/minute")
 def get_stats():
-    """API endpoint to get latency statistics"""
+    """Latency figures for one group, and the list of groups with their counts.
+
+    ``group`` defaults to orders. The per-broker histograms this used to attach
+    are gone: nothing on the page drew them, and building them read every
+    record of every broker on each poll.
+    """
+    group, refusal = requested_group()
+    if refusal:
+        return refusal
     try:
-        stats = OrderLatency.get_latency_stats()
-
-        # Add histogram data for each broker
-        broker_histograms = {}
-        for broker in stats.get("broker_stats", {}):
-            broker_histograms[broker] = get_histogram_data(broker)
-
-        stats["broker_histograms"] = broker_histograms
-        return jsonify(stats)
+        return jsonify(OrderLatency.get_latency_stats(group))
     except Exception as e:
         logger.exception(f"Error fetching latency stats: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "The latency figures could not be read. Try again."}), 500
 
 
 @latency_bp.route("/api/broker/<broker>/stats", methods=["GET"])
@@ -230,9 +272,12 @@ def get_stats():
 @limiter.limit("60/minute")
 def get_broker_stats(broker):
     """API endpoint to get broker-specific latency statistics"""
+    group, refusal = requested_group()
+    if refusal:
+        return refusal
     try:
-        stats = OrderLatency.get_latency_stats()
-        broker_stats = stats.get("broker_stats", {}).get(broker, {})
+        stats = OrderLatency.get_latency_stats(group)
+        broker_stats = dict(stats.get("broker_stats", {}).get(broker, {}))
         if not broker_stats:
             return jsonify({"error": "Broker not found"}), 404
 
@@ -249,18 +294,23 @@ def get_broker_stats(broker):
 @limiter.limit("10/minute")
 def export_logs():
     """Export latency logs to CSV"""
+    # Every record unless a group is named, as before. The page names the
+    # group it is showing, so the file matches what is on the screen.
+    group, refusal = requested_group(default=ALL)
+    if refusal:
+        return refusal
     try:
-        # Get all logs for the current day
-        logs = OrderLatency.get_recent_logs(limit=None)  # None to get all logs
+        logs = OrderLatency.get_recent_logs(limit=None, group=group)
 
         # Generate CSV
         csv_data = generate_csv(logs)
 
         # Create the response
+        filename = "latency_logs.csv" if group == ALL else f"latency_{group}.csv"
         response = Response(
             csv_data,
             mimetype="text/csv",
-            headers={"Content-Disposition": "attachment; filename=latency_logs.csv"},
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
         return response
