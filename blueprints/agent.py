@@ -137,6 +137,14 @@ NOT_FOUND = "Conversation not found"
 #: hydrator ignores a notice type it does not recognise, so this renders nothing.
 RUN_OPTIONS_NOTICE = "run_options"
 
+#: How many of the operator's earlier messages in a conversation, and how many
+#: characters of them, the web tools may take words from. A follow-up such as "get
+#: the marketcap of it" names its company only in an earlier message, and without
+#: this the search query lost it and the page for it was refused. Small on purpose:
+#: it bounds what an old message can contribute, not what the model can read.
+MAX_OPERATOR_HISTORY_MESSAGES = 8
+MAX_OPERATOR_HISTORY_CHARS = 4000
+
 #: How many ``viz`` charts one stored turn keeps. A chart spec is a series, not
 #: a sentence, so an unbounded count would put a data dump in a text column.
 MAX_STORED_VIZ = 4
@@ -440,7 +448,7 @@ def _websearch_spec_or_400(provider: str):
         provider: The path segment naming the provider.
 
     Returns:
-        The resolved spec, or a 400 naming the three that exist.
+        The resolved spec, or a 400 naming the providers that exist.
     """
     try:
         return agent_settings.websearch_provider_spec(provider), None
@@ -2288,6 +2296,75 @@ def _model_id_of(agent: Any) -> str | None:
     return str(model_id) if model_id else None
 
 
+def _operator_history(conversation_id: int) -> str:
+    """The operator's own earlier messages in a conversation, newest last.
+
+    Only rows with the ``user`` role, which hold exactly what the operator typed:
+    the route stores the typed text and never the composed input, so an attached
+    file's contents are not in them, and an assistant reply, which can quote a web
+    page, is not either. That is what makes these words safe to treat as the
+    operator's own.
+
+    **Each message is redacted whole, before anything is cut.** Redaction
+    recognises a credential by its prefix, its length and the words around it, so
+    a cut made first can leave the tail of a key that no pattern recognises, and
+    that tail would then be a word the operator "typed". The text is therefore
+    only ever shortened by dropping whole oldest messages, and a single message
+    longer than the budget is cut at whitespace, never inside a token.
+
+    Args:
+        conversation_id: The conversation to read.
+
+    Returns:
+        The redacted messages joined by newlines, at most
+        :data:`MAX_OPERATOR_HISTORY_MESSAGES` of them and
+        :data:`MAX_OPERATOR_HISTORY_CHARS` characters, keeping the newest. Empty
+        when there is none, when the store cannot be read, or when the redactor is
+        unavailable, because this runs where nothing may raise and an unredacted
+        history is never the fallback.
+    """
+    try:
+        # The redactor lives with the web tools, which need the optional agno
+        # package; without it there are no web tools to feed.
+        from services.agent.tools.websearch import redact
+
+        rows = agent_db.list_messages(conversation_id, limit=64)
+    except Exception:
+        logger.exception("Could not read the earlier messages of conversation %s", conversation_id)
+        return ""
+
+    typed = [
+        str(row.get("content") or "")
+        for row in rows
+        if isinstance(row, dict) and row.get("role") == "user"
+    ]
+    cleaned: list[str] = []
+    for text in typed[-MAX_OPERATOR_HISTORY_MESSAGES:]:
+        try:
+            whole = redact(text).strip()
+        except Exception:
+            logger.exception("Could not redact an earlier message; leaving it out")
+            continue
+        if whole:
+            cleaned.append(whole)
+
+    # Whole oldest messages go first, so no token is ever cut.
+    while len(cleaned) > 1 and len("\n".join(cleaned)) > MAX_OPERATOR_HISTORY_CHARS:
+        cleaned.pop(0)
+    joined = "\n".join(cleaned)
+    if len(joined) <= MAX_OPERATOR_HISTORY_CHARS:
+        return joined
+
+    # One message alone is over the budget: keep its end, and drop the partial
+    # word the cut landed in. It was redacted whole above, so what is left is
+    # complete tokens only.
+    tail = joined[-MAX_OPERATOR_HISTORY_CHARS:]
+    if not joined[-MAX_OPERATOR_HISTORY_CHARS - 1].isspace():
+        parts = tail.split(None, 1)
+        tail = parts[1] if len(parts) > 1 else ""
+    return tail
+
+
 def _build_context(
     username: str,
     api_key: str,
@@ -2331,6 +2408,9 @@ def _build_context(
     """
     chart_context = body.get("chart_context")
     extras: dict = {"user_message": operator_message} if operator_message else {}
+    history = _operator_history(conversation_id)
+    if history:
+        extras["operator_history"] = history
     if isinstance(chart_context, dict):
         extras["chart_context"] = chart_context
     if viz_sink is not None:

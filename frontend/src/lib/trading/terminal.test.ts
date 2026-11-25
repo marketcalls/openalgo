@@ -357,6 +357,37 @@ describe('chart object lifecycle', () => {
     ])
   })
 
+  it('keeps the tracked studies when the chart refuses to rebuild them', async () => {
+    // openalgo-charts 2.7.3 answers a study that throws while it is rebuilt
+    // with a refusal and the chart's own state put back, where 2.7.2 threw.
+    // Syncing from that bare chart would overwrite the saved studies.
+    const studies = [{ indicatorId: 'rsi', settings: { period: 14 }, paneIndex: 1 }]
+    const syncIndicators = vi.fn()
+    const toast = vi.fn()
+    const terminal = Object.assign(Object.create(TradingTerminal.prototype), {
+      chart: {
+        restoreState: () => ({ applied: false, series: [], indicators: 0, reason: 'study failed' }),
+        indicators: () => [],
+      },
+      destroyed: false,
+      activeIndicators: studies,
+      restoringIndicatorsOn: null,
+      applyingIndicators: false,
+      loadIndicators: async () => {},
+      cleanError: (error: Error) => error.message,
+      toast,
+      syncIndicators,
+    })
+
+    await methods.applyIndicators.call(terminal)
+
+    expect(toast).toHaveBeenCalledWith('Indicators could not be restored: study failed', 'err')
+    expect(syncIndicators).not.toHaveBeenCalled()
+    expect(terminal.activeIndicators).toBe(studies)
+    expect(terminal.restoringIndicatorsOn).toBeNull()
+    expect(terminal.applyingIndicators).toBe(false)
+  })
+
   it('disposes inventory observation before drawing and chart teardown', () => {
     const order: string[] = []
     const terminal = Object.assign(Object.create(TradingTerminal.prototype), {

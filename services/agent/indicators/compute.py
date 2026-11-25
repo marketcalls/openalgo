@@ -1,4 +1,4 @@
-"""The indicator dispatcher: one code path for all 127 ``ta`` callables.
+"""The indicator dispatcher: one code path for all 128 ``ta`` callables.
 
 Pure Python over a DataFrame the caller already fetched. No database, no broker,
 no clock, no HTTP. Every input arrives as an argument and every decision leaves

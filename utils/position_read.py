@@ -65,6 +65,7 @@ BROKER_DISPLAY_NAMES = {
     "motilal": "Motilal Oswal",
     "mstock": "mStock by Mirae Asset",
     "nubra": "Nubra",
+    "nuvama": "Nuvama",
     "paytm": "Paytm Money",
     "pocketful": "Pocketful",
     "rmoney": "RMoney",

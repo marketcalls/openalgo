@@ -10,7 +10,7 @@ author-facing export is named in the docs but never appears inside real code.
 
 ## Reuse a built-in instead of porting its formula
 
-**The single highest-leverage technique in this skill.** The 112 built-ins are
+**The single highest-leverage technique in this skill.** The 113 built-ins are
 descriptors, and a descriptor is data plus a `calc`, so any of them doubles as a
 calculation. There is no reason to reimplement MACD.
 

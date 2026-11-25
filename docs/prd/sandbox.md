@@ -21,6 +21,7 @@ A complete sandbox trading environment that:
 - Simulates order execution with realistic fills
 - Maintains separate position/order books
 - Applies exchange-specific margin rules
+- Charges brokerage and statutory charges on every fill
 - Auto square-off at market close
 
 ## Target Users
@@ -91,6 +92,18 @@ A complete sandbox trading environment that:
 | FR7.3 | Position book with MTM | P0 |
 | FR7.4 | P&L summary | P0 |
 | FR7.5 | Export to CSV | P2 |
+| FR7.6 | Transaction cost report: charges by trade, segment and day | P1 |
+
+### FR9: Brokerage And Statutory Charges
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR9.1 | Charge brokerage and statutory charges on every fill, in the fill's own commit | P0 |
+| FR9.2 | Brokerage plan per segment: an amount per order, a percentage, or the lower of the two | P0 |
+| FR9.3 | Statutory charges at the published rates: STT or CTT, exchange, SEBI, stamp duty, GST | P0 |
+| FR9.4 | Record each fill's charges line by line; keep P&L gross with charges beside it | P0 |
+| FR9.5 | One switch turns every charge off | P1 |
+| FR9.6 | Brokerage calculator and a charges API for an order not yet placed | P1 |
+| FR9.7 | Crypto is charged nothing until the trader enters a venue fee | P1 |
 
 ### FR8: Session Management
 | ID | Requirement | Priority |
@@ -212,6 +225,7 @@ sandbox.db (separate from main)
 | [Sandbox Architecture](./sandbox-architecture.md) | Detailed system architecture |
 | [Execution Engine](./sandbox-execution-engine.md) | Order matching engine details |
 | [Margin System](./sandbox-margin-system.md) | Margin calculation and fund management |
+| [Charges](./sandbox-charges.md) | Brokerage plan, statutory schedule, calculator and transaction costs |
 
 ## Key Files Reference
 
@@ -220,6 +234,7 @@ sandbox.db (separate from main)
 | `database/sandbox_db.py` | SQLAlchemy models for sandbox tables |
 | `blueprints/analyzer.py` | Web routes and API endpoints |
 | `services/sandbox_service.py` | Business logic and execution engine |
+| `sandbox/charges.py` | Brokerage and statutory charges for a fill (no I/O) |
 | `frontend/src/pages/Analyzer.tsx` | React UI component |
 
 ## Success Metrics

@@ -54,6 +54,8 @@ _MONEY_COLUMNS = (
     "today_realized_pnl",
     "unrealized_pnl",
     "total_pnl",
+    "total_charges",
+    "today_charges",
 )
 
 #: Attempts before a funds write gives up. A failed attempt leaves this
@@ -256,6 +258,8 @@ class FundManager:
                         today_realized_pnl=Decimal("0.00"),
                         unrealized_pnl=Decimal("0.00"),
                         total_pnl=Decimal("0.00"),
+                        total_charges=Decimal("0.00"),
+                        today_charges=Decimal("0.00"),
                         last_reset_date=datetime.now(pytz.timezone("Asia/Kolkata")),
                         reset_count=0,
                     )
@@ -305,6 +309,10 @@ class FundManager:
                 ),  # Today's realized P&L (resets daily)
                 "total_realized_pnl": float(funds.realized_pnl),  # All-time realized P&L
                 "today_realized_pnl": float(funds.today_realized_pnl or 0),
+                # Brokerage and statutory charges. availablecash is already net
+                # of them; the P&L figures above are gross, as a broker's are.
+                "today_charges": float(funds.today_charges or 0),
+                "total_charges": float(funds.total_charges or 0),
                 "utiliseddebits": float(funds.used_margin),
                 "grossexposure": float(funds.used_margin),
                 "totalpnl": float(funds.total_pnl),
@@ -362,6 +370,8 @@ class FundManager:
                 funds.today_realized_pnl = Decimal("0.00")
                 funds.unrealized_pnl = Decimal("0.00")
                 funds.total_pnl = Decimal("0.00")
+                funds.total_charges = Decimal("0.00")
+                funds.today_charges = Decimal("0.00")
                 funds.last_reset_date = datetime.now(pytz.timezone("Asia/Kolkata"))
                 funds.reset_count += 1
 
@@ -757,6 +767,60 @@ class FundManager:
             logger.exception(f"Error crediting sale proceeds for user {self.user_id}: {e}")
             return False, f"Error crediting sale proceeds: {str(e)}"
 
+    def stage_charges(self, amount, description="", log=True):
+        """Take a fill's brokerage and statutory charges out of the balance, WITHOUT committing.
+
+        The execution engine stages this inside the transaction that claims the
+        order and writes its trade, so the three land together or not at all: a
+        trade never records a charge the balance did not pay, and a fill that
+        is rolled back takes its charge with it.
+
+        The charge comes out of the available balance and is added to the two
+        charges totals. It deliberately leaves the P&L columns and used margin
+        alone. Realized P&L stays gross, so it keeps agreeing with the position
+        book, and used margin keeps equalling the margin the open positions
+        hold, which is what margin reconciliation checks.
+
+        A balance that cannot cover the charge is not a refusal: the fill has
+        happened, and the charge is owed. The balance goes below zero, as a
+        broker's ledger does, and nothing new can be opened until it is back
+        above the margin an order needs.
+
+        Args:
+            amount: The charge; never negative.
+            description: For the log line.
+            log: Log the debit here.
+
+        Returns:
+            ``(ok, message)``. Nothing is committed.
+        """
+        amount = Decimal(str(amount))
+
+        def compute(funds):
+            # A negative charge is a credit wearing the wrong name: it would
+            # add to the balance with none of the checks a credit goes through.
+            if amount < 0:
+                return False, f"Charges cannot be negative, got {amount}", None
+
+            return (
+                True,
+                f"Charges debited: ₹{amount}",
+                {
+                    "available_balance": funds["available_balance"] - amount,
+                    "total_charges": (funds["total_charges"] or Decimal("0.00")) + amount,
+                    "today_charges": (funds["today_charges"] or Decimal("0.00")) + amount,
+                },
+            )
+
+        # No ensure: creating a funds row commits, and that commit would take
+        # the caller's half-built fill with it. A fill always follows a margin
+        # block or an existing position, either of which needs the row, so a
+        # missing row means there is no balance to charge.
+        ok, message = apply_funds_change(self.user_id, compute)
+        if ok and log:
+            logger.info(f"Debited ₹{amount} charges for user {self.user_id}. {description}")
+        return ok, message
+
     def stage_prior_session_release(self, amount, realized_pnl, description=""):
         """Settle a position left over from a previous session, WITHOUT committing.
 
@@ -951,7 +1015,8 @@ def rebase_starting_capital(new_capital) -> int:
     """Move every funds row onto a new starting capital, keeping its margin and P&L.
 
     For each row, total capital becomes ``new_capital`` and the available
-    balance becomes ``new_capital - used_margin + total_pnl``. Each row is
+    balance becomes ``new_capital - used_margin + total_pnl - total_charges``
+    (the charges already paid stay paid: total_pnl is gross). Each row is
     written as a compare-and-set against a fresh read, so a margin block that
     commits while this runs is kept rather than overwritten by a balance
     computed from before it. All rows are committed together.
@@ -976,13 +1041,16 @@ def rebase_starting_capital(new_capital) -> int:
 
     def compute(funds):
         # Calculate what the new available balance should be
-        # New available = new_capital - used_margin + total_pnl
+        # New available = new_capital - used_margin + total_pnl - total_charges
         return (
             True,
             "",
             {
                 "total_capital": new_capital,
-                "available_balance": new_capital - funds["used_margin"] + funds["total_pnl"],
+                "available_balance": new_capital
+                - funds["used_margin"]
+                + funds["total_pnl"]
+                - (funds["total_charges"] or Decimal("0.00")),
             },
         )
 

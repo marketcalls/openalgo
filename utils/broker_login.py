@@ -170,6 +170,10 @@ def login_url(keys, state):
         return (
             f"https://kite.zerodha.com/connect/login?v=3&api_key={key}&redirect_params={params}"
         )
+    if broker == "nuvama":
+        # Nuvama returns to the redirect URL registered for the API key with
+        # request_id; its sign-in address takes no state.
+        return f"https://www.nuvamawealth.com/api-connect/login?api_key={key}"
     if broker == "arrow":
         return f"https://app.arrow.trade/app/login?appID={key}"
     if broker == "rupeezy":
@@ -181,9 +185,13 @@ def login_url(keys, state):
     if broker == "paytm":
         return f"https://login.paytmmoney.com/merchant-login?apiKey={key}&state={state}"
     if broker == "pocketful":
-        scope = quote("orders holdings", safe="")
+        # The OAuth 2.0 sign-in on Pocketful's API host, as Pocketful's own
+        # developer portal opens it (broker/pocketful/api/auth_api.py).
+        from broker.pocketful.api.auth_api import AUTHORIZE_URL, SCOPE
+
+        scope = quote(SCOPE, safe="")
         return (
-            f"https://trade.pocketful.in/oauth2/auth?client_id={key}&redirect_uri={redirect}"
+            f"{AUTHORIZE_URL}?client_id={key}&redirect_uri={redirect}"
             f"&response_type=code&scope={scope}&state={state}"
         )
     return f"/{broker}/callback"

@@ -1004,30 +1004,32 @@ def _broker_callback(broker, para=None):
         forward_url = "broker.html"
 
     elif broker == "pocketful":
-        # Handle the OAuth2 authorization code from the callback
+        # OAuth 2.0 code (RFC 6749 4.1.2). The state was matched to this
+        # browser's login above and is used up when the login is stored.
+        from broker.pocketful.api.auth_api import MISSING_CODE, callback_refusal
+
         auth_code = request.args.get("code")
         state = request.args.get("state")
         error = request.args.get("error")
-        error_description = request.args.get("error_description")
 
-        # Check if there was an error in the OAuth process
+        # Pocketful sent the sign-in back with an error instead of a code. The
+        # broker's own words go to the log; the trader reads a sentence.
         if error:
-            error_msg = f"OAuth error: {error}. {error_description if error_description else ''}"
-            logger.error(error_msg)
-            return handle_auth_failure(error_msg, forward_url="broker.html")
+            message = callback_refusal(error, request.args.get("error_description"))
+            return handle_auth_failure(message, forward_url="broker.html")
 
-        # Check if authorization code was provided
         if not auth_code:
-            error_msg = "Authorization code not provided"
-            logger.error(error_msg)
-            return handle_auth_failure(error_msg, forward_url="broker.html")
+            logger.warning("Pocketful callback arrived without a login code")
+            return handle_auth_failure(MISSING_CODE, forward_url="broker.html")
 
         logger.debug(
             "Pocketful broker - authorization code present: %s, state present: %s",
             bool(auth_code),
             bool(state),
         )
-        # Exchange auth code for access token and fetch client_id
+        # The code for a session, and the trading account it belongs to: the
+        # token comes back as <client_id>:::<access_token> and the account is
+        # stored as the session's user id.
         auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
         forward_url = "broker.html"
 
@@ -1227,6 +1229,18 @@ def _broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "nuvama":
+        # Nuvama's login page returns to the redirect URL with `request_id`
+        # (its User Login Flow page); the session also reports the account.
+        code = (
+            request.args.get("request_id")
+            or request.args.get("requestId")
+            or request.args.get("reqId")
+        )
+        logger.debug(f"Nuvama broker - request id present: {bool(code)}")
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "rupeezy":
         # Rupeezy Vortex SSO redirects back with the auth code in `auth`
         # (https://vortex.rupeezy.in/docs/latest/authentication/), which the
@@ -1284,7 +1298,7 @@ def _broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital"]:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital", "nuvama"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database

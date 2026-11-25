@@ -1690,7 +1690,7 @@ Useful interpolations: `{{orders.data.orders[0].orderid}}`,
   "data": {
     "symbol": "NIFTY30DEC25FUT",
     "exchange": "NFO",
-    "quantity": 75,
+    "quantity": 65,
     "price": 0,
     "product": "NRML",
     "action": "BUY",

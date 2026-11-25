@@ -231,9 +231,15 @@ Only executed fills.
 
 LTP, bid, ask, OHLC, volume for one symbol.
 
+| Param | Required | Notes |
+|---|---|---|
+| `symbol` | Yes | OpenAlgo symbol |
+| `exchange` | No | When omitted, an index uses its index exchange (`SENSEX`, `BANKEX`, `SENSEX50` use `BSE_INDEX`; `NIFTY`, `BANKNIFTY` and the other NSE indices use `NSE_INDEX`) and any other symbol uses `NSE`. Pass it for BSE equities and derivative contracts |
+
 **Prompts:**
 - *"Get the latest quote for RELIANCE"*
 - *"What's NIFTY trading at right now?"*
+- *"Where is SENSEX trading?"*
 
 ---
 
@@ -330,7 +336,15 @@ Put-call parity synthetic future price — useful for illiquid futures or weekly
 
 All tradeable expiries for an underlying.
 
-**Prompt:** *"List all NIFTY options expiries available on NFO"*
+| Param | Required | Notes |
+|---|---|---|
+| `symbol` | Yes | Underlying, e.g. `NIFTY`, `SENSEX` |
+| `exchange` | No | `NFO`, `BFO`, `MCX` or `CDS`. When omitted, `SENSEX`, `BANKEX` and `SENSEX50` use `BFO` and any other underlying uses `NFO` |
+| `instrument_type` | No | `options` (default) or `futures` |
+
+**Prompts:**
+- *"List all NIFTY options expiries available on NFO"*
+- *"What are the next SENSEX weekly expiries?"*
 
 ---
 

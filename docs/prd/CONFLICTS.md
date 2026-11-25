@@ -39,7 +39,7 @@ This file records unresolved implementation/documentation conflicts and delibera
 
 - RESTX Swagger is disabled with `doc=False`. `/api/docs` is intentionally absent and must not be treated as a broken route.
 - `mcp/mcpserver.py::check_holiday` is registered as an MCP tool but calls the absent `/api/v1/checkholiday` route. The internal `services.market_calendar_service.check_holiday()` function exists; the public REST contract does not. The MCP reference labels this declared tool unavailable until its implementation uses a supported path or service.
-- Blueprint-route BDD coverage is representative. The complete 74-method RESTX inventory and all 38 broker plugins have explicit scenario-outline rows.
+- Blueprint-route BDD coverage is representative. The complete 74-method RESTX inventory and all 39 broker plugins have explicit scenario-outline rows.
 
 ## Resolved During This Sweep
 

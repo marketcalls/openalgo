@@ -62,12 +62,20 @@ if data["pricetype"] == "MARKET":
     order_type = "LIMIT"
 ```
 
-Three things that implementation gets right and are easy to miss:
+Three things to get right, which are easy to miss:
 
-- **Resolve the user from the Flask session, never a hardcoded username.**
-  Falling back to a fixed user borrows another account's auth token.
-- **Fall back to a native MARKET order** when there is no session user, no auth
-  token, or `ltp <= 0`. A quote lookup that fails must not turn into a limit
+- **Take the quote's credentials from the stored broker session, never from a
+  username.** Use the `auth` token the service hands the plugin. When the
+  broker quotes with a separate credential (an XTS feed token), read it from
+  the unrevoked `Auth` row of your broker and `get_feed_token(row.name)`, as
+  `broker/ibulls/mapping/transform_data.py` does. Do not read the user from
+  the Flask session: a signed-in session carries `user`, not `username`, and
+  an API, strategy or Flow order has no browser session at all. Ibulls read
+  `session.get("username")`, so every order fell back to a hard-coded name and
+  its conversion never ran (#2392). IndMoney's snippet above reads the same
+  key and has the same gap.
+- **Fall back to a native MARKET order** when there is no auth token, no tick
+  size, or `ltp <= 0`. A quote lookup that fails must not turn into a limit
   order at price 0.
 - **Emulation costs a quote round-trip on every order.** On a broker with a
   1 req/sec quote limit that is a real latency and rate-limit cost. Prefer
@@ -132,6 +140,7 @@ There is no convention. Real mappings in the tree:
 | flattrade, arrow | `SL-MKT` |
 | indmoney | `MARKET` (its stop handling is separate) |
 | dhan | `STOP_LOSS` (stop-limit) + computed protective price |
+| ibulls | `STOPLIMIT` (XTS stop-limit) + computed protective price; MARKET goes out as a protected `LIMIT` |
 
 Check the broker's enum before assuming a spelling, and check whether their
 "stop-loss-market" actually rests.

@@ -104,158 +104,118 @@ class AliceBlueCapabilityRegistry(BrokerCapabilityRegistry):
         return self._supported_instruments.copy()
 
 
+def _to_float(value):
+    return float(value)
+
+
+def _to_int(value):
+    # Quantities arrive as strings such as "125888500"; some feeds send "50.0".
+    return int(float(value))
+
+
+# Quote fields of the tick (t) and depth (d) feeds. 11-websocket.md lists
+# lp, pc, cv, v, o, h, l, c, ap; the dk/df samples add oi, ltq, tbq, tsq,
+# uc, lc, ft (feed time, epoch seconds) and ltt (last traded time, HH:MM:SS).
+# A field is parsed only when the message carries it: tf/df are incremental.
+QUOTE_FIELD_MAP = {
+    "lp": ("ltp", _to_float),
+    "o": ("open", _to_float),
+    "h": ("high", _to_float),
+    "l": ("low", _to_float),
+    "c": ("close", _to_float),
+    "pc": ("change_percent", _to_float),
+    "cv": ("change_value", _to_float),
+    "ap": ("average_price", _to_float),
+    "v": ("volume", _to_int),
+    "oi": ("total_oi", _to_int),
+    # Not in the docs, but the earlier parser read it; kept so a feed that
+    # sends toi still reports OI. A message carrying oi sets the same key.
+    "toi": ("total_oi", _to_int),
+    "ltq": ("last_quantity", _to_int),
+    "tbq": ("total_buy_quantity", _to_int),
+    "tsq": ("total_sell_quantity", _to_int),
+    "uc": ("upper_circuit", _to_float),
+    "lc": ("lower_circuit", _to_float),
+    "ft": ("timestamp", str),
+    "ltt": ("last_trade_time", str),
+}
+
+# Depth level fields: bp/bq/bo (buy price, quantity, orders), sp/sq/so (sell).
+DEPTH_LEVEL_FIELDS = (
+    ("bid_levels", "bp", "price", _to_float),
+    ("bid_levels", "bq", "quantity", _to_int),
+    ("bid_levels", "bo", "orders", _to_int),
+    ("ask_levels", "sp", "price", _to_float),
+    ("ask_levels", "sq", "quantity", _to_int),
+    ("ask_levels", "so", "orders", _to_int),
+)
+
+
+def _clean_symbol(raw_symbol) -> str:
+    return raw_symbol.split("-")[0] if raw_symbol else ""
+
+
+def _parse_quote_fields(message: dict, parsed: dict) -> None:
+    """Copy the quote fields the message carries into parsed; skip absent or bad ones."""
+    for src_key, (dest_key, converter) in QUOTE_FIELD_MAP.items():
+        value = message.get(src_key)
+        if value is None or value == "":
+            continue
+        try:
+            parsed[dest_key] = converter(value)
+        except (ValueError, TypeError):
+            continue
+
+
 class AliceBlueMessageMapper:
     """Maps AliceBlue WebSocket messages to standardized format"""
 
     @staticmethod
     def parse_tick_data(message: dict) -> dict:
-        """Parse tick data message from AliceBlue format to standard format"""
+        """Parse a tick (tk/tf) message; only fields present in the message are returned."""
         try:
-            # Get message type to handle different formats
-            msg_type = message.get("t", "")
-
-            # Common fields that should always be present
             parsed = {
                 "type": "tick_data",
-                "message_type": msg_type,
+                "message_type": message.get("t", ""),
                 "exchange": message.get("e", ""),
                 "token": message.get("tk", ""),
             }
-
-            # For 'tk' (token acknowledgment) messages, we get full data
-            if msg_type == "tk":
-                # Extract symbol and clean it (remove suffixes like -EQ for OpenAlgo format)
-                raw_symbol = message.get("ts", "")
-                # Log the raw symbol for debugging
-                from utils.logging import get_logger
-
-                logger = get_logger("aliceblue_mapping")
-                logger.debug(f"Raw symbol from AliceBlue: '{raw_symbol}'")
-                clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
-                logger.debug(f"Cleaned symbol: '{clean_symbol}'")
-                parsed.update(
-                    {
-                        "symbol": clean_symbol,
-                        "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,
-                        "volume": int(message.get("v", 0)) if message.get("v") else 0,
-                        "open": float(message.get("o", 0)) if message.get("o") else 0.0,
-                        "high": float(message.get("h", 0)) if message.get("h") else 0.0,
-                        "low": float(message.get("l", 0)) if message.get("l") else 0.0,
-                        "close": float(message.get("c", 0)) if message.get("c") else 0.0,
-                        "change_percent": float(message.get("pc", 0)) if message.get("pc") else 0.0,
-                        "change_value": float(message.get("cv", 0)) if message.get("cv") else 0.0,
-                        "average_price": float(message.get("ap", 0)) if message.get("ap") else 0.0,
-                        "timestamp": message.get("ft", ""),
-                        "total_oi": int(message.get("toi", 0)) if message.get("toi") else 0,
-                        "tick_size": float(message.get("ti", 0)) if message.get("ti") else 0.0,
-                        "lot_size": int(message.get("ls", 0)) if message.get("ls") else 0,
-                        "market_lot": int(message.get("ml", 0)) if message.get("ml") else 0,
-                        "price_precision": int(message.get("pp", 0)) if message.get("pp") else 0,
-                    }
-                )
-
-            # For 'tf' (tick feed) messages, only include fields that are present
-            elif msg_type == "tf":
-                # Only add fields that exist in the message
-                if "lp" in message:
-                    parsed["ltp"] = float(message["lp"])
-                if "pc" in message:
-                    parsed["change_percent"] = float(message["pc"])
-                if "ft" in message:
-                    parsed["timestamp"] = message["ft"]
-                if "v" in message:
-                    parsed["volume"] = int(message["v"])
-                if "toi" in message:
-                    parsed["total_oi"] = int(message["toi"])
-                # Add any other fields that might be present
-                for key in ["o", "h", "l", "c", "cv", "ap"]:
-                    if key in message:
-                        mapped_key = {
-                            "o": "open",
-                            "h": "high",
-                            "l": "low",
-                            "c": "close",
-                            "cv": "change_value",
-                            "ap": "average_price",
-                        }.get(key, key)
-                        parsed[mapped_key] = float(message[key])
-
-            # For other message types, parse whatever is available
-            else:
-                # Parse all available fields
-                field_mappings = {
-                    "lp": ("ltp", float),
-                    "v": ("volume", int),
-                    "o": ("open", float),
-                    "h": ("high", float),
-                    "l": ("low", float),
-                    "c": ("close", float),
-                    "pc": ("change_percent", float),
-                    "cv": ("change_value", float),
-                    "ap": ("average_price", float),
-                    "ft": ("timestamp", str),
-                    "toi": ("total_oi", int),
-                    "ts": ("symbol", str),
-                }
-
-                for src_key, (dest_key, converter) in field_mappings.items():
-                    if src_key in message:
-                        try:
-                            if dest_key == "symbol" and src_key == "ts":
-                                # Clean symbol for OpenAlgo format (remove -EQ suffix)
-                                raw_symbol = message[src_key]
-                                clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
-                                parsed[dest_key] = clean_symbol
-                            else:
-                                parsed[dest_key] = converter(message[src_key])
-                        except (ValueError, TypeError):
-                            pass  # Skip fields that can't be converted
-
+            if "ts" in message:
+                parsed["symbol"] = _clean_symbol(message.get("ts"))
+            _parse_quote_fields(message, parsed)
             return parsed
         except (ValueError, KeyError) as e:
             return {"type": "error", "message": f"Failed to parse tick data: {e}"}
 
     @staticmethod
     def parse_depth_data(message: dict) -> dict:
-        """Parse market depth message from AliceBlue format to standard format"""
+        """Parse a depth (dk/df) message.
+
+        Returns the quote fields the message carries plus ``bid_levels`` and
+        ``ask_levels``: {level_number: {price, quantity, orders}} holding only
+        the level fields present, so a df diff can be merged per level and field.
+        """
         try:
-            # Parse bid/ask data
-            bids = []
-            asks = []
-
-            # AliceBlue depth data structure parsing
-            for i in range(5):  # Assuming 5 levels of depth
-                bid_price = message.get(f"bp{i + 1}", "0")
-                bid_qty = message.get(f"bq{i + 1}", "0")
-                ask_price = message.get(f"sp{i + 1}", "0")
-                ask_qty = message.get(f"sq{i + 1}", "0")
-
-                try:
-                    bid_price_float = float(bid_price)
-                    bid_qty_int = int(bid_qty)
-                    if bid_price_float > 0:
-                        bids.append({"price": bid_price_float, "quantity": bid_qty_int})
-                except (ValueError, TypeError):
-                    pass
-
-                try:
-                    ask_price_float = float(ask_price)
-                    ask_qty_int = int(ask_qty)
-                    if ask_price_float > 0:
-                        asks.append({"price": ask_price_float, "quantity": ask_qty_int})
-                except (ValueError, TypeError):
-                    pass
-
             parsed = {
                 "type": "market_depth",
                 "exchange": message.get("e"),
                 "token": message.get("tk"),
-                "symbol": message.get("ts"),
-                "bids": bids,
-                "asks": asks,
-                "timestamp": message.get("ft", ""),
-                "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,
+                "bid_levels": {},
+                "ask_levels": {},
             }
+            if "ts" in message:
+                parsed["symbol"] = message.get("ts")
+            _parse_quote_fields(message, parsed)
+
+            for level in range(1, 6):
+                for side, prefix, field, converter in DEPTH_LEVEL_FIELDS:
+                    value = message.get(f"{prefix}{level}")
+                    if value is None or value == "":
+                        continue
+                    try:
+                        parsed[side].setdefault(level, {})[field] = converter(value)
+                    except (ValueError, TypeError):
+                        continue
             return parsed
         except (ValueError, KeyError) as e:
             return {"type": "error", "message": f"Failed to parse depth data: {e}"}

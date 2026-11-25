@@ -20,6 +20,10 @@ The Sandbox margin system replicates real exchange margin requirements with conf
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Charges are separate from margin. Each fill also pays brokerage and statutory
+charges, taken from the available balance and kept in their own totals; they do
+not change used margin or realized P&L. See [Sandbox Charges](./sandbox-charges.md).
+
 ## Margin Rules by Product
 
 ### Product Types

@@ -8,7 +8,9 @@ import httpx
 
 from broker.ibulls.baseurl import INTERACTIVE_URL
 from broker.ibulls.mapping.transform_data import (
+    OrderFieldError,
     map_product_type,
+    protected_order_type,
     reverse_map_product_type,
     transform_data,
     transform_modify_order_data,
@@ -25,6 +27,25 @@ from utils.position_read import (
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
+
+# XTS exchange segment -> OpenAlgo exchange, for orders built from a position.
+_SEGMENT_EXCHANGE = {
+    "NSECM": "NSE",
+    "BSECM": "BSE",
+    "NSEFO": "NFO",
+    "BSEFO": "BFO",
+    "MCXFO": "MCX",
+    "NSECD": "CDS",
+}
+
+
+class _OrderResponse:
+    """Response-shaped result for an order refused before it is sent; the
+    services read ``.status``."""
+
+    def __init__(self, status):
+        self.status = status
+        self.status_code = status
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
@@ -183,7 +204,11 @@ def place_order_api(data, auth):
         # Traditional symbol-based payload that needs transformation
         token = get_token(data["symbol"], data["exchange"])
         logger.debug("Order API token available")
-        newdata = transform_data(data, token)
+        try:
+            newdata = transform_data(data, token, auth)
+        except OrderFieldError as e:
+            logger.info(f"Order not sent to Ibulls: {e}")
+            return _OrderResponse(400), {"status": "error", "message": str(e)}, None
 
     headers = {
         "authorization": AUTH_TOKEN,
@@ -420,17 +445,33 @@ def close_all_positions(current_api_key, auth):
         logger.debug(f"Exchange Segment: {exchange_segment}")
         logger.debug(f"Exchange Instrument ID: {instrument_id}")
 
+        # A square-off is a MARKET order, so it is priced with the same
+        # protection as one placed through the API. A position whose symbol
+        # cannot be resolved goes out as MARKET, as it did before.
+        order_type, limit_price = "MARKET", "0"
+        exchange = _SEGMENT_EXCHANGE.get(exchange_segment)
+        try:
+            symbol = get_symbol(str(instrument_id), exchange) if exchange else None
+            if symbol:
+                order_type, limit_price = protected_order_type(
+                    {"symbol": symbol, "exchange": exchange, "action": action, "pricetype": "MARKET"},
+                    auth,
+                )
+        except Exception:
+            # Never let pricing stop a square-off: send it as MARKET.
+            logger.exception(f"Could not price the square-off of {exchange_segment}:{instrument_id}")
+
         # Prepare the order payload
         place_order_payload = {
             "exchangeSegment": exchange_segment,
             "exchangeInstrumentID": instrument_id,
             "productType": position["ProductType"],
-            "orderType": "MARKET",
+            "orderType": order_type,
             "orderSide": action,
             "timeInForce": "DAY",
             "disclosedQuantity": "0",
             "orderQuantity": str(quantity),
-            "limitPrice": "0",
+            "limitPrice": limit_price,
             "stopPrice": "0",
             "orderUniqueIdentifier": "openalgo",
         }
@@ -490,11 +531,14 @@ def modify_order(data, auth):
     client = get_httpx_client()
 
     token = get_token(data["symbol"], data["exchange"])
+    # Priced while data still holds the OpenAlgo symbol: the tick size and the
+    # LTP are looked up by it.
+    try:
+        transformed_data = transform_modify_order_data(data, token, auth)
+    except OrderFieldError as e:
+        logger.info(f"Modify not sent to Ibulls: {e}")
+        return {"status": "error", "message": str(e)}, 400
     data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])
-
-    transformed_data = transform_modify_order_data(
-        data, token
-    )  # You need to implement this function
     # Set up the request headers
     headers = {
         "authorization": AUTH_TOKEN,

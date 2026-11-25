@@ -399,6 +399,17 @@ def map_portfolio_data(portfolio_data):
         # raw, which no product in OpenAlgo would have matched.
         portfolio["product"] = "CNC"
 
+        # Kite's tradingsymbol is not always OpenAlgo's symbol: a stock traded
+        # in the BE or RR series is HFCL-BE on Kite and HFCL in OpenAlgo. Map
+        # it back as the order, trade and position books do, keeping Kite's
+        # symbol for a holding the master contract does not list.
+        br_symbol = portfolio.get("tradingsymbol")
+        exchange = portfolio.get("exchange")
+        if br_symbol and exchange:
+            portfolio["tradingsymbol"] = (
+                get_oa_symbol(brsymbol=br_symbol, exchange=exchange) or br_symbol
+            )
+
     return portfolio_data
 
 

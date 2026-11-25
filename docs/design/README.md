@@ -2,7 +2,7 @@
 
 This directory describes the implemented architecture of the current OpenAlgo source tree. OpenAlgo is a self-hosted, single-user trading application with a Flask/Flask-RESTX backend, React 19 frontend, broker plugins, a separate WebSocket proxy, sandbox execution, hosted strategies, Flow automation, analytics tools, and optional local or remote MCP access.
 
-The current plugin inventory contains 38 broker directories with `plugin.json`. Broker capabilities are metadata-driven; a plugin's presence does not imply every optional broker operation is supported.
+The current plugin inventory contains 39 broker directories with `plugin.json`. Broker capabilities are metadata-driven; a plugin's presence does not imply every optional broker operation is supported.
 
 ## Documentation Policy
 

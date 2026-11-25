@@ -47,7 +47,7 @@ Broker Configuration shows it when you choose the broker.
   ```
   fivepaisa, fivepaisaxts, aliceblue, angel, arrow, compositedge, definedge, deltaexchange, dhan, dhan_sandbox,
   firstock, flattrade, fyers, groww, hdfcsky, ibulls, iifl, iiflcapital, indmoney, jainamxts, kotak, motilal,
-  mstock, nubra, paytm, pocketful, rmoney, rupeezy, sahi, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha
+  mstock, nubra, nuvama, paytm, pocketful, rmoney, rupeezy, sahi, samco, shoonya, tradejini, tradesmart, upstox, wisdom, zebu, zerodha
   ```
 - Keep your broker's API key and secret at hand for that step. XTS brokers also need market data credentials:
   - `fivepaisaxts`, `compositedge`, `ibulls`, `iifl`, `jainamxts`, `rmoney`, `wisdom`
