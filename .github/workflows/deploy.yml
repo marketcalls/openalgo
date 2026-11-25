@@ -94,6 +94,30 @@ jobs:
               exit 1
             fi
 
+            echo "Checking disk space..."
+            # install/update.sh copies openalgo.db, logs.db, latency.db, sandbox.db
+            # and historify.duckdb (not health.db) to db/backup_<time> on each run
+            # and never removes old copies. A full disk then fails the fetch, or
+            # worse, leaves the service stopped halfway through the update. Stop
+            # here, before anything changes.
+            DB_KB=0
+            for f in openalgo.db logs.db latency.db sandbox.db historify.duckdb; do
+              if [ -f "$APP/db/$f" ]; then
+                DB_KB=$((DB_KB + $(du -k "$APP/db/$f" | cut -f1)))
+              fi
+            done
+            FREE_KB=$(df -Pk "$APP" | awk 'NR == 2 { print $4 }')
+            NEED_KB=$((DB_KB + 1048576))
+            echo "Free: $((FREE_KB / 1024)) MB. Needed: $((NEED_KB / 1024)) MB (databases $((DB_KB / 1024)) MB for the updater's backup, plus 1 GB)."
+            if [ "$FREE_KB" -lt "$NEED_KB" ]; then
+              echo "Not enough disk space to deploy. OpenAlgo was not touched."
+              df -h "$APP"
+              echo "Database backups made by earlier updates (newest first):"
+              ls -1dt "$APP"/db/backup_* 2>/dev/null | head -20 | while read -r b; do du -sh "$b"; done || true
+              echo "Free space (old backups, journalctl --vacuum-size=200M, apt-get clean), then run the workflow again."
+              exit 1
+            fi
+
             # The checkout is owned by www-data; git refuses it to root without this.
             git config --global --get-all safe.directory | grep -qx "$APP" \
               || git config --global --add safe.directory "$APP"

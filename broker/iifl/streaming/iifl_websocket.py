@@ -7,8 +7,13 @@ from typing import Any, Dict, List, Optional
 import requests
 import socketio
 
+from broker.iifl.api.auth_api import get_feed_token as market_data_login_once
 from broker.iifl.baseurl import BASE_URL, INTERACTIVE_URL, MARKET_DATA_URL
 from utils.logging import get_logger
+from utils.xts_market_token import market_data_tokens
+
+# The market-data token shared with the web worker (one live token per app key)
+_MARKET_TOKENS = market_data_tokens("iifl", market_data_login_once)
 
 
 class IiflWebSocketClient:
@@ -82,6 +87,10 @@ class IiflWebSocketClient:
         # Subscriptions tracking
         self.subscriptions = {}
 
+        # A refused token is renewed once at a time (_on_token_rejected)
+        self._renewal_lock = threading.Lock()
+        self._renewing = False
+
         # Create Socket.IO client
         self._setup_socketio()
 
@@ -113,58 +122,6 @@ class IiflWebSocketClient:
         # Add catch-all handler for any unhandled events
         self.sio.on("*", self._on_catch_all)
 
-    def marketdata_login(self):
-        """
-        Login to XTS market data API to get authentication tokens
-
-        Returns:
-            bool: True if login successful, False otherwise
-        """
-        try:
-            login_url = f"{self.base_url}/apibinarymarketdata/auth/login"
-
-            login_payload = {
-                "appKey": self.api_key,
-                "secretKey": self.api_secret,
-                "source": "WebAPI",
-            }
-
-            headers = {"Content-Type": "application/json"}
-
-            self.logger.info(f"[MARKET DATA LOGIN] Attempting login to: {login_url}")
-
-            response = requests.post(login_url, json=login_payload, headers=headers, timeout=30)
-
-            if response.status_code == 200:
-                result = response.json()
-                self.logger.info(f"[MARKET DATA LOGIN] Response type: {result.get('type')}")
-
-                if result.get("type") == "success":
-                    login_result = result.get("result", {})
-                    self.market_data_token = login_result.get("token")
-                    self.actual_user_id = login_result.get("userID")
-
-                    if self.market_data_token and self.actual_user_id:
-                        self.logger.info(
-                            f"[MARKET DATA LOGIN] Success! Token obtained, UserID: {self.actual_user_id}"
-                        )
-                        return True
-                    else:
-                        self.logger.error("[MARKET DATA LOGIN] Missing token or userID in response")
-                        return False
-                else:
-                    self.logger.error(f"[MARKET DATA LOGIN] API returned error: {result}")
-                    return False
-            else:
-                self.logger.error(
-                    f"[MARKET DATA LOGIN] HTTP Error: {response.status_code}, Response: {response.text}"
-                )
-                return False
-
-        except Exception as e:
-            self.logger.error(f"[MARKET DATA LOGIN] Exception: {e}")
-            return False
-
     def connect(self):
         """Establish Socket.IO connection with proper authentication"""
         try:
@@ -172,27 +129,30 @@ class IiflWebSocketClient:
             if self.sio is None:
                 self._setup_socketio()
 
-            # First, login to market data API to get proper tokens
-            if not self.marketdata_login():
+            # Use the market data token shared with the web worker. Logging in
+            # here on every connect ended the worker's token (IIFL keeps one
+            # live market data token per app key), the worker logged in again
+            # and ended this one, and the two alternated every few seconds.
+            token = _MARKET_TOKENS.current() or _MARKET_TOKENS.renew(rejected=None)
+            if token and not _MARKET_TOKENS.user_id:
+                # The socket's address needs the userID of a login reply,
+                # which the stored token does not carry. It is fixed for the
+                # account, so this process logs in once to learn it; the web
+                # worker then adopts the token this stores.
+                token = _MARKET_TOKENS.renew(rejected=token, need_user_id=True)
+            if not token:
                 raise Exception("Market data login failed")
 
-            # Build connection URL with proper market data token and user ID
-            publish_format = "JSON"
-            broadcast_mode = "FULL"  # or 'PARTIAL'
-
-            # Use the market data token and actual user ID from login response
-            connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
-
-            self.logger.info(f"Connecting to Iifl XTS Socket.IO: {self.base_url}")
-
-            # Connect to Socket.IO server
-            self.sio.connect(
-                connection_url,
-                headers={},
-                transports=["websocket"],
-                namespaces=None,
-                socketio_path=self.SOCKET_PATH,
-            )
+            try:
+                self._connect_socket(token)
+            except Exception:
+                # The stored token may be one IIFL no longer accepts (the
+                # daily expiry): renew it once, then connect with the new one.
+                renewed = _MARKET_TOKENS.renew(rejected=token)
+                if not renewed or renewed == token:
+                    raise
+                self._setup_socketio()
+                self._connect_socket(renewed)
 
             self.running = True
 
@@ -201,6 +161,57 @@ class IiflWebSocketClient:
             if self.on_error:
                 self.on_error(self, e)
             raise
+
+    def _connect_socket(self, token: str):
+        """Open the Socket.IO connection with ``token``."""
+        self.market_data_token = token
+        self.actual_user_id = _MARKET_TOKENS.user_id
+
+        publish_format = "JSON"
+        broadcast_mode = "FULL"  # or 'PARTIAL'
+        connection_url = (
+            f"{self.base_url}/?token={token}&userID={self.actual_user_id}"
+            f"&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
+        )
+
+        # The address carries the token: log the host only.
+        self.logger.info(f"Connecting to Iifl XTS Socket.IO: {self.base_url}")
+        self.sio.connect(
+            connection_url,
+            headers={},
+            transports=["websocket"],
+            namespaces=None,
+            socketio_path=self.SOCKET_PATH,
+        )
+
+    def _on_token_rejected(self, token: str):
+        """The broker refused ``token`` on a subscription (e-session-0007).
+
+        Take the shared token in its place (renewed by the web worker, or by
+        one login here when the stored token is the refused one) and reconnect
+        with it; the adapter's close handler reconnects and resubscribes. One
+        renewal at a time per client."""
+        with self._renewal_lock:
+            if self._renewing:
+                return
+            self._renewing = True
+
+        def renew_and_reconnect():
+            try:
+                renewed = _MARKET_TOKENS.renew(rejected=token)
+                sio = self.sio
+                if renewed and renewed != token and sio is not None and sio.connected:
+                    self.logger.info("Market data session renewed: reconnecting the feed with it")
+                    sio.disconnect()
+            except Exception:
+                self.logger.exception("Could not renew the market data session")
+            finally:
+                with self._renewal_lock:
+                    self._renewing = False
+
+        threading.Thread(
+            target=renew_and_reconnect, name="iifl-feed-token-renewal", daemon=True
+        ).start()
 
     def disconnect(self):
         """Disconnect from Socket.IO and release transport resources"""
@@ -290,6 +301,8 @@ class IiflWebSocketClient:
                 self.logger.error(
                     f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}"
                 )
+                if "e-session-0007" in response.text or "Invalid Token" in response.text:
+                    self._on_token_rejected(headers["Authorization"])
 
         except Exception as e:
             self.logger.error(f"[SUBSCRIPTION EXCEPTION] Error: {e}")
