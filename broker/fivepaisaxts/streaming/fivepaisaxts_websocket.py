@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -72,7 +73,28 @@ class FivepaisaXTSWebSocketClient:
     _MCX_SEGMENTS = {"5", "51"}
     _IST = timezone(timedelta(hours=5, minutes=30))
 
-    def __init__(self, api_key: str, api_secret: str, user_id: str, base_url: str = None):
+    # How long connect() waits for the previous Socket.IO connection to finish
+    # closing before it opens a new one (issue #2484).
+    PREVIOUS_CONNECTION_CLOSE_WAIT = 5.0
+
+    # Engine.IO idle-timeout floor, as in the rmoney and wisdom clients.
+    # python-engineio's write loop gives up ("packet queue is empty,
+    # aborting") once it has had nothing to send for
+    # max(pingInterval, pingTimeout) + 5 seconds. The client only sends when
+    # answering a server ping, so a server that does not ping drops every
+    # connection after that long, ticks or not: 65 seconds with a 60 second
+    # ping timeout, the drop reported under issue #2484. The data-stall
+    # watchdog below still catches a connection that goes silent in session.
+    MIN_ENGINEIO_ACTIVITY_TIMEOUT = 300
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        user_id: str,
+        base_url: str = None,
+        feed_token_provider: Callable[[], str | None] | None = None,
+    ):
         """
         Initialize the Fivepaisa XTS Socket.IO client
 
@@ -81,11 +103,15 @@ class FivepaisaXTSWebSocketClient:
             api_secret: Market data API secret
             user_id: User ID (client ID)
             base_url: Base URL for the Socket.IO endpoint
+            feed_token_provider: Returns the market data token stored at broker
+                login. The feed connects with it, so history, quotes and the
+                feed share one market data session (issue #2484).
         """
         self.api_key = api_key
         self.api_secret = api_secret
         self.user_id = user_id
         self.base_url = base_url or self.BASE_URL
+        self.feed_token_provider = feed_token_provider
 
         # Authentication tokens
         self.market_data_token = None
@@ -107,7 +133,10 @@ class FivepaisaXTSWebSocketClient:
         # Logger
         self.logger = get_logger("fivepaisaxts_websocket")
 
-        # Subscriptions tracking
+        # Instruments the server has confirmed, one entry per
+        # (xts code, segment, instrument id), so subscribing the same
+        # instrument again (every reconnect replays the adapter's book) never
+        # grows it.
         self.subscriptions = {}
 
         # Data-stall watchdog state
@@ -120,7 +149,11 @@ class FivepaisaXTSWebSocketClient:
 
     def _setup_socketio(self):
         """Setup Socket.IO client with event handlers"""
-        self.sio = socketio.Client(logger=False, engineio_logger=False)
+        # reconnection=False: the adapter reconnects (its close callback). The
+        # library's own reconnect loop raced it on the same client, and the
+        # loser failed with "Already connected" (issue #2484).
+        self.sio = socketio.Client(logger=False, engineio_logger=False, reconnection=False)
+        self._hook_engineio_timeout_floor(self.sio)
 
         # Register event handlers
         self.sio.on("connect", self._on_connect)
@@ -150,15 +183,146 @@ class FivepaisaXTSWebSocketClient:
         # Add catch-all handler for any unhandled events
         self.sio.on("*", self._on_catch_all)
 
+    def _hook_engineio_timeout_floor(self, sio) -> None:
+        """Apply the idle-timeout floor as soon as Engine.IO's handshake ends.
+
+        Engine.IO raises its connect event after reading the server's ping
+        timers and before it starts the write loop, so a floor set there
+        governs the loop's very first wait. Set later, at the Socket.IO
+        connect event, the first wait has already begun with the server's
+        timers and still ends the connection. Socket.IO's own handler for the
+        event runs afterwards, unchanged.
+        """
+        eio = getattr(sio, "eio", None)
+        handlers = getattr(eio, "handlers", None)
+        if eio is None or not isinstance(handlers, dict):
+            return
+        socketio_handler = handlers.get("connect")
+
+        def on_engineio_connect():
+            self._apply_engineio_timeout_floor(eio)
+            if socketio_handler is not None:
+                return socketio_handler()
+            return None
+
+        eio.on("connect", on_engineio_connect)
+
+    def _apply_engineio_timeout_floor(self, eio) -> None:
+        """Raise Engine.IO's ping timers to the floor if the server set them low.
+
+        The socket read timeout is set from the same timers right after this,
+        so a dead connection outside trading hours is noticed after about
+        MIN_ENGINEIO_ACTIVITY_TIMEOUT * 2 seconds; in session the data-stall
+        watchdog notices it after DATA_TIMEOUT.
+        """
+        try:
+            interval = float(getattr(eio, "ping_interval", 0) or 0)
+            timeout = float(getattr(eio, "ping_timeout", 0) or 0)
+            if max(interval, timeout) + 5 >= self.MIN_ENGINEIO_ACTIVITY_TIMEOUT:
+                return
+            target = max(1, self.MIN_ENGINEIO_ACTIVITY_TIMEOUT - 5)
+            eio.ping_interval = max(interval, target)
+            eio.ping_timeout = max(timeout, target)
+            self.logger.info(
+                f"Raised the Engine.IO idle timeout from {max(interval, timeout) + 5:.0f}s "
+                f"to {self.MIN_ENGINEIO_ACTIVITY_TIMEOUT}s"
+            )
+        except Exception as e:
+            self.logger.warning(f"Could not raise the Engine.IO idle timeout: {e}")
+
+    def _close_socketio(self, sio) -> None:
+        """Close a socketio.Client and its Engine.IO transport.
+
+        A transport that dropped mid-connect, or is still closing, is not
+        marked connected, so Engine.IO is aborted directly to release its
+        socket and threads. Safe on a client that never connected.
+        """
+        if sio is None:
+            return
+        try:
+            if sio.connected:
+                sio.disconnect()
+        except Exception as e:
+            self.logger.warning(f"Error during Socket.IO disconnect: {e}")
+        try:
+            eio = getattr(sio, "eio", None)
+            if eio is not None and getattr(eio, "state", "disconnected") != "disconnected":
+                eio.disconnect(abort=True)
+        except Exception as e:
+            self.logger.warning(f"Error closing the Engine.IO transport: {e}")
+
+    @staticmethod
+    def market_data_user_id(token: str) -> str | None:
+        """The market data user id the Socket.IO URL takes, read from the token.
+
+        The XTS token is a JWT whose userID claim reads "<user id>_<app id>";
+        the URL takes the part before the "_".
+        """
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            claim = json.loads(base64.urlsafe_b64decode(payload)).get("userID")
+        except (AttributeError, IndexError, ValueError, TypeError):
+            return None
+        if not claim:
+            return None
+        return str(claim).split("_", 1)[0] or None
+
+    def _use_stored_feed_token(self) -> bool:
+        """Take the market data token stored at broker login, if there is one."""
+        if self.feed_token_provider is None:
+            return False
+        try:
+            token = self.feed_token_provider()
+        except Exception as e:
+            self.logger.warning(f"Could not read the stored market data token: {e}")
+            return False
+        if not token:
+            return False
+        user_id = self.market_data_user_id(token)
+        if not user_id:
+            self.logger.warning("Stored market data token carries no user id")
+            return False
+        self.market_data_token = token
+        self.actual_user_id = user_id
+        return True
+
+    def _wait_until_disconnected(self) -> None:
+        """Let a previous connection finish closing before connecting again.
+
+        After a drop the old engine.io transport is often still closing, and
+        connecting on it raises "Already connected". If it has not closed in
+        time, it is aborted and a fresh client is used.
+        """
+        if self.sio is None:
+            return
+        deadline = time.time() + self.PREVIOUS_CONNECTION_CLOSE_WAIT
+        while time.time() < deadline:
+            eio = getattr(self.sio, "eio", None)
+            if not self.sio.connected and getattr(eio, "state", "disconnected") == "disconnected":
+                return
+            time.sleep(0.1)
+        self.logger.warning("Previous Socket.IO connection still closing; using a new client")
+        # Close it rather than abandon it: a client left to finish on its own
+        # keeps its socket and Engine.IO threads until it does, if it ever does.
+        previous = self.sio
+        self._setup_socketio()
+        self._close_socketio(previous)
+
     def marketdata_login(self):
         """
         Login to XTS market data API to get authentication tokens
+
+        Used only when no market data token was stored at broker login. It
+        logs in where the broker login does (/apimarketdata): XTS lets
+        several sessions of that kind coexist, while an /apibinarymarketdata
+        login cancels them all, which broke history (issue #2484).
 
         Returns:
             bool: True if login successful, False otherwise
         """
         try:
-            login_url = f"{self.base_url}/apibinarymarketdata/auth/login"
+            login_url = f"{MARKET_DATA_URL}/auth/login"
 
             login_payload = {
                 "appKey": self.api_key,
@@ -209,8 +373,13 @@ class FivepaisaXTSWebSocketClient:
             if self.sio is None:
                 self._setup_socketio()
 
-            # First, login to market data API to get proper tokens
-            if not self.marketdata_login():
+            # Connect with the market data token stored at broker login, read
+            # again on every (re)connect. Never log in while one is stored: any
+            # new login risks cancelling the token history and quotes use
+            # (issue #2484). If this connect fails, the adapter retries.
+            if self._use_stored_feed_token():
+                self._wait_until_disconnected()
+            elif not self.marketdata_login():
                 raise Exception("Market data login failed")
 
             # Build connection URL with proper market data token and user ID
@@ -223,13 +392,21 @@ class FivepaisaXTSWebSocketClient:
             self.logger.info(f"Connecting to Fivepaisa XTS Socket.IO: {self.base_url}")
 
             # Connect to Socket.IO server
-            self.sio.connect(
-                connection_url,
-                headers={},
-                transports=["websocket"],
-                namespaces=None,
-                socketio_path=self.SOCKET_PATH,
-            )
+            sio = self.sio
+            try:
+                sio.connect(
+                    connection_url,
+                    headers={},
+                    transports=["websocket"],
+                    namespaces=None,
+                    socketio_path=self.SOCKET_PATH,
+                )
+            except Exception:
+                # A connect that failed part-way can leave Engine.IO open.
+                # Release it, and give the adapter's retry a clean client.
+                self._setup_socketio()
+                self._close_socketio(sio)
+                raise
 
             self.running = True
 
@@ -245,83 +422,131 @@ class FivepaisaXTSWebSocketClient:
         self.connected = False
         self._stop_health_check()
 
-        try:
-            if self.sio and self.sio.connected:
-                self.sio.disconnect()
-                self.logger.info("Socket.IO client disconnected")
-        except Exception as e:
-            self.logger.warning(f"Error during Socket.IO disconnect: {e}")
-
-        # Release the socketio.Client so its engine-io transport threads can be GC'd
-        self.sio = None
+        # Close the transport even when it is not marked connected (mid-connect
+        # or still closing), then release the client.
+        sio, self.sio = self.sio, None
+        self._close_socketio(sio)
 
         # Clear subscriptions
         self.subscriptions.clear()
 
         self.logger.info("Disconnected from Fivepaisa XTS Socket.IO")
 
-    def subscribe(self, correlation_id: str, mode: int, instruments: list[dict]):
+    def subscribe(self, correlation_id: str, mode: int, instruments: list[dict]) -> list[dict]:
         """
         Subscribe to market data using XTS HTTP API
 
+        The adapter sends at most MAX_INSTRUMENTS_PER_SUBSCRIBE instruments per
+        call. XTS answers a request for several instruments as a whole, so
+        when it refuses one (an instrument already subscribed, or one it does
+        not accept), the same instruments are sent one at a time and one
+        refusal does not cost the others their subscription. "Already
+        subscribed" counts as subscribed: the feed reuses the stored market
+        data session (issue #2484), so the server can still hold what a
+        reconnect replays.
+
         Args:
-            correlation_id: Unique identifier for this subscription
+            correlation_id: Names this request in the log
             mode: Subscription mode (1=LTP, 2=Quote, 3=Depth)
             instruments: List of instruments to subscribe to
+
+        Returns:
+            list[dict]: The instruments the server confirmed.
+
+        Raises:
+            RuntimeError: Socket.IO is not connected.
+            requests.RequestException: A request could not be sent; the
+                adapter queues the instruments again.
         """
         if not self.connected:
             raise RuntimeError("Socket.IO not connected")
 
         xts_message_code = self.MODE_TO_XTS_CODE.get(mode, 1501)
 
-        # Prepare subscription request
-        subscription_request = {"instruments": instruments, "xtsMessageCode": xts_message_code}
+        outcome = self._send_subscription(xts_message_code, instruments)
+        if outcome == "ok" or (outcome == "duplicate" and len(instruments) == 1):
+            subscribed = list(instruments)
+        elif len(instruments) == 1:
+            subscribed = []
+        else:
+            self.logger.info(
+                f"[SUBSCRIPTION] Request {correlation_id} of {len(instruments)} instruments "
+                "refused; sending them one at a time"
+            )
+            subscribed = []
+            for instrument in instruments:
+                if not self.connected:
+                    raise RuntimeError("Socket.IO not connected")
+                if self._send_subscription(xts_message_code, [instrument]) in ("ok", "duplicate"):
+                    subscribed.append(instrument)
 
-        # Store subscription for reconnection
-        self.subscriptions[correlation_id] = {
-            "mode": mode,
-            "instruments": instruments,
-            "xts_message_code": xts_message_code,
-        }
+        self._remember(mode, xts_message_code, subscribed)
+        self.logger.info(
+            f"Subscribed to {len(subscribed)} of {len(instruments)} instruments with XTS code "
+            f"{xts_message_code} (mode {mode})"
+        )
+        return subscribed
+
+    def _send_subscription(self, xts_message_code: int, instruments: list[dict]) -> str:
+        """POST one subscription request.
+
+        Returns:
+            str: "ok", "duplicate" (already subscribed) or "refused".
+
+        Raises:
+            requests.RequestException: The request could not be sent.
+        """
+        subscription_request = {"instruments": instruments, "xtsMessageCode": xts_message_code}
+        headers = {"Authorization": self.market_data_token, "Content-Type": "application/json"}
 
         # Send subscription via HTTP POST (like the official XTS SDK)
-        try:
-            headers = {"Authorization": self.market_data_token, "Content-Type": "application/json"}
-
-            response = requests.post(
-                self.API_BASE_URL, json=subscription_request, headers=headers, timeout=10
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                self.logger.info(
-                    f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}"
-                )
-
-                # Process initial quote data from listQuotes if available
-                if result.get("type") == "success" and "result" in result:
-                    list_quotes = result["result"].get("listQuotes", [])
-                    for quote_str in list_quotes:
-                        try:
-                            quote_data = json.loads(quote_str)
-                            self.logger.info(
-                                f"[INITIAL QUOTE] Processing initial quote: {quote_data}"
-                            )
-                            if self.on_data:
-                                self.on_data(self, quote_data)
-                        except json.JSONDecodeError as e:
-                            self.logger.error(f"Error parsing initial quote: {e}")
-            else:
-                self.logger.error(
-                    f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}"
-                )
-
-        except Exception as e:
-            self.logger.error(f"[SUBSCRIPTION EXCEPTION] Error: {e}")
-
-        self.logger.info(
-            f"Subscribed to {len(instruments)} instruments with XTS code {xts_message_code} (mode {mode})"
+        response = requests.post(
+            self.API_BASE_URL, json=subscription_request, headers=headers, timeout=10
         )
+
+        try:
+            result = response.json()
+        except ValueError:
+            result = None
+
+        if response.status_code == 200 and isinstance(result, dict):
+            if result.get("type") == "success":
+                self.logger.info(
+                    f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, "
+                    f"Instruments: {len(instruments)}, Response: {result}"
+                )
+                # Process initial quote data from listQuotes if available
+                list_quotes = (result.get("result") or {}).get("listQuotes", [])
+                for quote_str in list_quotes:
+                    try:
+                        quote_data = json.loads(quote_str)
+                        self.logger.info(f"[INITIAL QUOTE] Processing initial quote: {quote_data}")
+                        if self.on_data:
+                            self.on_data(self, quote_data)
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"Error parsing initial quote: {e}")
+                return "ok"
+
+        text = json.dumps(result) if result is not None else response.text
+        lowered = str(text).lower()
+        if "already subscribed" in lowered or "e-session-0002" in lowered:
+            self.logger.info(
+                f"[SUBSCRIPTION] {len(instruments)} instrument(s) already subscribed "
+                f"(code {xts_message_code})"
+            )
+            return "duplicate"
+
+        self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {text}")
+        return "refused"
+
+    def _remember(self, mode: int, xts_message_code: int, instruments: list[dict]) -> None:
+        """Record confirmed instruments, one entry each."""
+        for instrument in instruments:
+            self.subscriptions[(xts_message_code, *self._instrument_key(instrument))] = {
+                "mode": mode,
+                "instruments": [instrument],
+                "xts_message_code": xts_message_code,
+            }
 
     @staticmethod
     def _instrument_key(instrument: dict) -> tuple:
@@ -337,19 +562,9 @@ class FivepaisaXTSWebSocketClient:
         )
 
     def _forget_instruments(self, xts_message_code: int, instruments: list[dict]) -> None:
-        """Remove `instruments` from every stored entry using the same code."""
-        targets = {self._instrument_key(i) for i in instruments}
-        for correlation_id in list(self.subscriptions):
-            entry = self.subscriptions[correlation_id]
-            if entry.get("xts_message_code") != xts_message_code:
-                continue
-            kept = [
-                i for i in entry.get("instruments", []) if self._instrument_key(i) not in targets
-            ]
-            if not kept:
-                del self.subscriptions[correlation_id]
-            else:
-                entry["instruments"] = kept
+        """Remove `instruments` from the book for this code."""
+        for instrument in instruments:
+            self.subscriptions.pop((xts_message_code, *self._instrument_key(instrument)), None)
 
     def unsubscribe(self, correlation_id: str, mode: int, instruments: list[dict]):
         """
@@ -377,8 +592,6 @@ class FivepaisaXTSWebSocketClient:
         # tick filter (see _process_1105_data), so an instrument left behind
         # here keeps being accepted after it was unsubscribed.
         self._forget_instruments(xts_message_code, instruments)
-        if correlation_id in self.subscriptions:
-            del self.subscriptions[correlation_id]
 
         # Send unsubscription via HTTP PUT (different from subscription POST)
         try:
@@ -628,9 +841,11 @@ class FivepaisaXTSWebSocketClient:
             # string, so the previous `== instrument_id_int` could never match
             # and every 1105 tick was dropped here.
             wanted = (str(exchange_segment_int), str(instrument_id_int))
+            # list(): the batch thread and unsubscribe() change the book while
+            # ticks arrive on Socket.IO's threads.
             is_subscribed = any(
                 self._instrument_key(instrument) == wanted
-                for sub in self.subscriptions.values()
+                for sub in list(self.subscriptions.values())
                 for instrument in sub.get("instruments", [])
             )
 
@@ -687,8 +902,8 @@ class FivepaisaXTSWebSocketClient:
 
     def resubscribe_all(self):
         """Resubscribe to all stored subscriptions after reconnection"""
-        for correlation_id, sub_data in self.subscriptions.items():
+        for key, sub_data in list(self.subscriptions.items()):
             try:
-                self.subscribe(correlation_id, sub_data["mode"], sub_data["instruments"])
+                self.subscribe(str(key), sub_data["mode"], sub_data["instruments"])
             except Exception as e:
-                self.logger.error(f"Error resubscribing {correlation_id}: {e}")
+                self.logger.error(f"Error resubscribing {key}: {e}")

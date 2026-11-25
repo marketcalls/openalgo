@@ -6,6 +6,22 @@ from utils.xts_order_data import exact_order_id, position_rows, traded_average_p
 
 logger = get_logger(__name__)
 
+# XTS OrderStatus (Order Status enum, XTS v2 docs) -> OpenAlgo order_status.
+# New, Replaced and PartiallyFilled are what XTS calls open; the Pending
+# states are still working at the exchange.
+ORDER_STATUS_MAPPING = {
+    "New": "open",
+    "Open": "open",
+    "PartiallyFilled": "open",
+    "Replaced": "open",
+    "PendingNew": "open",
+    "PendingReplace": "open",
+    "PendingCancel": "open",
+    "Filled": "complete",
+    "Rejected": "rejected",
+    "Cancelled": "cancelled",
+}
+
 
 def map_order_data(order_data):
     """
@@ -78,11 +94,12 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            if order["OrderStatus"] == "Filled":
+            status = ORDER_STATUS_MAPPING.get(order.get("OrderStatus"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif order["OrderStatus"] == "New":
+            elif status == "open":
                 total_open_orders += 1
-            elif order["OrderStatus"] == "Rejected":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -120,13 +137,7 @@ def transform_order_data(orders):
         "StopLimit": "SL",
         "StopMarket": "SL-M",
     }
-    # Define order status mappings
-    order_status_mapping = {
-        "Filled": "complete",
-        "Rejected": "rejected",
-        "Cancelled": "cancelled",
-        "New": "open",
-    }
+    order_status_mapping = ORDER_STATUS_MAPPING
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
@@ -228,9 +239,18 @@ def transform_tradebook_data(tradebook_data):
         exchange = trade.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
 
-        # Ensure quantity and average price are converted to the correct types
-        quantity = int(trade.get("OrderQuantity", 0))
-        average_price = float(trade.get("OrderAverageTradedPrice", 0.0))
+        # Each trade-book row is one fill: XTS reports that fill's quantity and
+        # price in LastTradedQuantity and LastTradedPrice. OrderQuantity is the
+        # whole order, so a part-filled order counted it on every fill. A row
+        # without the fill fields keeps the order-level ones, as before.
+        fill_qty = trade.get("LastTradedQuantity")
+        fill_price = trade.get("LastTradedPrice")
+        if fill_qty not in (None, "") and fill_price not in (None, ""):
+            quantity = int(float(fill_qty))
+            average_price = float(fill_price)
+        else:
+            quantity = int(float(trade.get("OrderQuantity", 0) or 0))
+            average_price = float(trade.get("OrderAverageTradedPrice", 0.0) or 0.0)
 
         transformed_trade = {
             "symbol": trade.get("TradingSymbol", ""),
@@ -241,7 +261,8 @@ def transform_tradebook_data(tradebook_data):
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": exact_order_id(trade.get("AppOrderID")),
-            "timestamp": trade.get("OrderGeneratedDateTime", ""),
+            "timestamp": trade.get("LastExecutionTransactTime")
+            or trade.get("OrderGeneratedDateTime", ""),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
