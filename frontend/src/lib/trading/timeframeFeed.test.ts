@@ -172,3 +172,83 @@ describe('broker custom timeframes', () => {
     service.destroy()
   })
 })
+
+describe('derived weekly and monthly history from a daily-only broker (#2384)', () => {
+  const DAY = 86400
+  const end = Date.parse('2026-11-06T00:00:00Z') / 1000
+  const derived = (interval: string, years: number) => ({
+    symbol: 'NIFTY',
+    exchange: 'NSE_INDEX',
+    interval,
+    from: end - years * 365 * DAY,
+    to: end,
+  })
+  const dailyOnly = (latencyMs = 0) => {
+    const getBars = vi.fn(async (_req: BarsRequest) => {
+      if (latencyMs) await new Promise((resolve) => setTimeout(resolve, latencyMs))
+      return []
+    })
+    const service = createTradingTimeframes({ getBars }, { ...options(['D']), now: () => end })
+    return { getBars, service }
+  }
+
+  it.each([
+    ['W', 5, 1],
+    ['M', 10, 2],
+    ['2W', 10, 2],
+    ['3M', 30, 6],
+  ])('loads %s over %i years in at most %i daily requests', async (interval, years, maxCalls) => {
+    const { getBars, service } = dailyOnly()
+    await service.feed.getBars(derived(interval, years))
+    expect(getBars).toHaveBeenCalled()
+    expect(getBars.mock.calls.length).toBeLessThanOrEqual(maxCalls)
+    for (const [req] of getBars.mock.calls) expect(req.interval).toBe('D')
+    service.destroy()
+  })
+
+  it('finishes a 5-year W load within the history deadline at the server pacing', async () => {
+    const { getBars, service } = dailyOnly(350)
+    await expect(service.feed.getBars(derived('W', 5))).resolves.toEqual([])
+    expect(getBars.mock.calls.length).toBeLessThanOrEqual(2)
+    service.destroy()
+  }, 20_000)
+
+  it('builds M from a daily bar on a day with no session, such as a Sunday Muhurat session', async () => {
+    // 2019-10-25 (Fri), 2019-10-27 (Sun, Muhurat) and 2019-10-28 (Mon), at IST midnight.
+    const day = (date: string) => Date.parse(`${date}T00:00:00+05:30`) / 1000
+    const daily = ['2019-10-25', '2019-10-27', '2019-10-28'].map((date, i) => ({
+      time: day(date),
+      open: 10 + i,
+      high: 12 + i,
+      low: 9 + i,
+      close: 11 + i,
+      volume: 1,
+    }))
+    const service = createTradingTimeframes(
+      {
+        getBars: async (req) => daily.filter((bar) => bar.time >= req.from! && bar.time < req.to!),
+      },
+      { ...options(['D']), now: () => end }
+    )
+    const bars = await service.feed.getBars({
+      symbol: 'NIFTY',
+      exchange: 'NSE_INDEX',
+      interval: 'M',
+      from: day('2019-10-01'),
+      to: day('2019-11-01'),
+    })
+    expect(bars).toHaveLength(1)
+    expect(bars[0]).toMatchObject({ open: 10, high: 14, low: 9, close: 13, volume: 3 })
+    service.destroy()
+  })
+
+  it('still splits intraday sources into 30-day windows', async () => {
+    const getBars = vi.fn(async (_req: BarsRequest) => [])
+    const service = createTradingTimeframes({ getBars }, { ...options(['1m']), now: () => end })
+    await service.feed.getBars({ ...derived('2h', 0), from: end - 90 * DAY })
+    expect(getBars.mock.calls.length).toBeGreaterThanOrEqual(3)
+    for (const [req] of getBars.mock.calls)
+      expect(req.to! - req.from!).toBeLessThanOrEqual(30 * DAY)
+    service.destroy()
+  })
+})
