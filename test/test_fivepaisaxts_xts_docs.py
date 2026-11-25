@@ -346,10 +346,20 @@ def _jwt(user_id):
     return f"{part({'alg': 'HS256'})}.{part({'userID': user_id})}.sig"
 
 
+class _FakeEio:
+    def __init__(self):
+        self.state = "disconnected"
+        self.aborts = []
+
+    def disconnect(self, abort=False):
+        self.aborts.append(abort)
+        self.state = "disconnected"
+
+
 class _FakeSio:
     def __init__(self, error=None):
         self.connected = False
-        self.eio = type("Eio", (), {"state": "disconnected"})()
+        self.eio = _FakeEio()
         self.error = error
         self.urls = []
         self.paths = []
@@ -449,6 +459,7 @@ def test_feed_waits_for_the_previous_connection_to_close(monkeypatch):
     client.connect()
 
     assert rebuilt == [True]  # gave up waiting and took a fresh client
+    assert sio.eio.aborts == [True]  # and closed the old one instead of abandoning it
 
 
 def test_adapter_hands_the_stored_feed_token_to_the_feed(monkeypatch):
@@ -522,3 +533,194 @@ def test_history_logs_in_again_once_on_an_invalid_token(monkeypatch):
 
     assert tokens_used == ["OLD", "NEW"]
     assert len(df) == 1 and isinstance(df, pd.DataFrame)
+
+
+# ------------------------------------- feed transport and subscriptions
+
+
+def test_socketio_client_leaves_reconnecting_to_the_adapter():
+    """The library's own reconnect raced the adapter's on one client and the
+    loser failed with "Already connected" (issue #2484)."""
+    client = _feed_client(lambda: None, sio=None)
+    client._setup_socketio()
+
+    assert client.sio.reconnection is False
+
+
+class _HookEio:
+    def __init__(self, interval, timeout, order):
+        self.ping_interval = interval
+        self.ping_timeout = timeout
+        self.order = order
+        self.handlers = {"connect": lambda: order.append(("socketio", self.ping_timeout))}
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+
+def test_engineio_floor_is_set_before_the_write_loop_and_socketio_still_connects():
+    client = _feed_client(lambda: None)
+    order = []
+    eio = _HookEio(25.0, 60.0, order)
+    client._hook_engineio_timeout_floor(type("Sio", (), {"eio": eio})())
+
+    eio.handlers["connect"]()  # what Engine.IO calls after its handshake
+
+    floor = client.MIN_ENGINEIO_ACTIVITY_TIMEOUT
+    assert max(eio.ping_interval, eio.ping_timeout) + 5 == floor  # was 65s
+    assert order == [("socketio", floor - 5)]  # Socket.IO's handler ran, after
+
+
+def test_engineio_floor_never_lowers_longer_server_timers():
+    client = _feed_client(lambda: None)
+    eio = _HookEio(25.0, 600.0, [])
+
+    client._apply_engineio_timeout_floor(eio)
+
+    assert (eio.ping_interval, eio.ping_timeout) == (25.0, 600.0)
+
+
+def test_real_socketio_client_has_the_floor_hooked():
+    client = _feed_client(lambda: None)
+    client._setup_socketio()
+    eio = client.sio.eio
+    assert eio.handlers["connect"] != client.sio._handle_eio_connect
+    eio.ping_interval, eio.ping_timeout = 25.0, 60.0
+
+    eio.handlers["connect"]()  # no namespaces requested yet, so nothing is sent
+
+    assert max(eio.ping_interval, eio.ping_timeout) + 5 >= client.MIN_ENGINEIO_ACTIVITY_TIMEOUT
+
+
+def test_failed_connect_closes_the_transport_and_retries_on_a_new_client(monkeypatch):
+    sio = _FakeSio(error=RuntimeError("Connection refused"))
+    sio.eio.state = "connecting"
+    client = _feed_client(lambda: _jwt("1_A"), sio=sio)
+    sio.eio.state = "disconnected"  # let the pre-connect wait pass
+
+    def failing_connect(url, **kwargs):
+        sio.eio.state = "connecting"  # half-open when it fails
+        raise RuntimeError("Connection refused")
+
+    sio.connect = failing_connect
+
+    with pytest.raises(RuntimeError):
+        client.connect()
+
+    assert sio.eio.aborts == [True]
+    assert client.sio is not sio
+
+
+def test_disconnect_closes_a_transport_that_is_not_marked_connected():
+    sio = _FakeSio()
+    sio.eio.state = "connecting"
+    client = _feed_client(lambda: None, sio=sio)
+
+    client.disconnect()
+
+    assert sio.eio.aborts == [True]
+    assert client.sio is None
+
+
+def _subscribing_client(monkeypatch, replies):
+    from broker.fivepaisaxts.streaming import fivepaisaxts_websocket as ws
+
+    sent = []
+
+    def fake_post(url, json=None, **kwargs):
+        sent.append([i["exchangeInstrumentID"] for i in json["instruments"]])
+        reply = replies(json["instruments"])
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(ws.requests, "post", fake_post)
+    client = _feed_client(lambda: None)
+    client.connected = True
+    client.market_data_token = "T"
+    return client, sent
+
+
+def _inst(i):
+    return {"exchangeSegment": 1, "exchangeInstrumentID": str(i)}
+
+
+_OK = _Response({"type": "success", "result": {"listQuotes": []}})
+_DUPLICATE = _Response(
+    {"type": "error", "code": "e-session-0002", "description": "Instrument Already Subscribed !"},
+    status_code=400,
+)
+_REFUSED = _Response({"type": "error", "code": "e-x", "description": "Invalid instrument"}, 400)
+
+
+def test_a_refused_batch_is_sent_one_at_a_time(monkeypatch):
+    """One instrument the server will not take used to cost every other
+    instrument in the same request its subscription."""
+
+    def replies(instruments):
+        ids = [i["exchangeInstrumentID"] for i in instruments]
+        if len(ids) > 1:
+            return _DUPLICATE  # the server answers the request as a whole
+        return {"1": _OK, "2": _DUPLICATE, "3": _REFUSED}[ids[0]]
+
+    client, sent = _subscribing_client(monkeypatch, replies)
+
+    confirmed = client.subscribe("batch_1", 2, [_inst(1), _inst(2), _inst(3)])
+
+    assert sent == [["1", "2", "3"], ["1"], ["2"], ["3"]]
+    assert [i["exchangeInstrumentID"] for i in confirmed] == ["1", "2"]
+    assert sorted(k[2] for k in client.subscriptions) == ["1", "2"]
+
+
+def test_a_single_already_subscribed_instrument_counts_as_subscribed(monkeypatch):
+    client, sent = _subscribing_client(monkeypatch, lambda instruments: _DUPLICATE)
+
+    assert client.subscribe("batch_1", 2, [_inst(7)]) == [_inst(7)]
+    assert sent == [["7"]]
+
+
+def test_replaying_the_book_on_every_reconnect_does_not_grow_it(monkeypatch):
+    """Each reconnect resent the book under new batch ids, and each id stayed
+    in the book: it grew all day, and every 1105 tick scanned all of it."""
+    client, _ = _subscribing_client(monkeypatch, lambda instruments: _OK)
+
+    for n in range(20):
+        client.subscribe(f"batch_mode_2_{n}", 2, [_inst(1), _inst(2)])
+
+    assert len(client.subscriptions) == 2
+
+
+def test_unsubscribe_removes_the_instrument_from_the_book(monkeypatch):
+    from broker.fivepaisaxts.streaming import fivepaisaxts_websocket as ws
+
+    client, _ = _subscribing_client(monkeypatch, lambda instruments: _OK)
+    monkeypatch.setattr(ws.requests, "put", lambda *a, **k: _OK)
+    client.subscribe("batch_1", 2, [_inst(1), _inst(2)])
+
+    client.unsubscribe("NIFTY_NSE_2", 2, [{"exchangeSegment": 1, "exchangeInstrumentID": 1}])
+
+    assert [k[2] for k in client.subscriptions] == ["2"]
+
+
+def test_a_network_error_reaches_the_adapter_so_it_queues_the_batch_again(monkeypatch):
+    import requests as _requests
+
+    client, _ = _subscribing_client(
+        monkeypatch, lambda instruments: _requests.ConnectionError("reset")
+    )
+
+    with pytest.raises(_requests.ConnectionError):
+        client.subscribe("batch_1", 2, [_inst(1)])
+    assert client.subscriptions == {}
+
+
+def test_1105_ticks_pass_only_for_confirmed_instruments(monkeypatch):
+    client, _ = _subscribing_client(monkeypatch, lambda instruments: _OK)
+    client.subscribe("batch_1", 2, [_inst(1140025)])
+    ticks = []
+    client.on_data = lambda _client, data: ticks.append(data["ExchangeInstrumentID"])
+
+    client._process_1105_data("t:1_1140025,110:2067.75")
+    client._process_1105_data("t:1_999,110:1.0")
+
+    assert ticks == [1140025]
