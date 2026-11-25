@@ -14,11 +14,12 @@ from database.auth_db import get_feed_token
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.xts_market_token import market_data_tokens
 
 logger = get_logger(__name__)
 
-# Configure logging
-logger = get_logger(__name__)
+# The market-data token shared with the live feed process (one per app key).
+_MARKET_TOKENS = market_data_tokens("iifl", refresh_feed_token)
 
 
 def get_api_response(endpoint, auth, method="GET", payload="", feed_token=None, params=None):
@@ -102,19 +103,25 @@ class BrokerData:
         }
 
     def _refresh_feed_token(self):
-        """Refresh the feed token when it expires"""
+        """Replace a refused feed token with the shared one.
+
+        IIFL allows one live market-data token per app key, and the live feed
+        (another process) uses the same key. Logging in here on every refusal
+        ended the feed's token, the feed logged in again and ended this one,
+        every few seconds (utils/xts_market_token.py). The shared store hands
+        back the token the feed already renewed when there is one, and logs in
+        only when the stored token is the refused one."""
         try:
-            new_feed_token, user_id, error = refresh_feed_token()
-            if error:
-                logger.error(f"Failed to refresh feed token: {error}")
+            new_feed_token = _MARKET_TOKENS.renew(rejected=self.feed_token)
+            if not new_feed_token:
                 return False
             self.feed_token = new_feed_token
-            if user_id:
-                self.user_id = user_id
+            if _MARKET_TOKENS.user_id:  # from a login reply in this process, when there was one
+                self.user_id = _MARKET_TOKENS.user_id
             logger.info("Feed token refreshed successfully")
             return True
-        except Exception as e:
-            logger.error(f"Error refreshing feed token: {e}")
+        except Exception:
+            logger.exception("Error refreshing feed token")
             return False
 
     def _market_data_request(
