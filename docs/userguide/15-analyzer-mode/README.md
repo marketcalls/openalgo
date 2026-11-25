@@ -69,9 +69,41 @@ These are sandbox configuration values, not broker promises. Operators can chang
 6. Review sandbox P&L, order events, and errors.
 7. Before live use, reduce quantity, verify the mode again, and monitor the broker terminal.
 
+## Brokerage And Charges
+
+Every sandbox trade pays brokerage and statutory charges, so sandbox results are
+close to what the same trades cost in a live account. The charges are taken from
+the available balance when the order fills. P&L is shown before charges, with the
+charges beside it.
+
+| Page | What it is for |
+|---|---|
+| `/sandbox/commissions` | Set your broker's brokerage for each segment, switch charges on or off, and see what trades have cost (Transaction Costs, with a CSV export) |
+| `/sandbox/calculator` | Work out what a buy and a sell cost before placing them: brokerage, every statutory line, points to breakeven and net P&L |
+| `/sandbox/mypnl` | Today's and lifetime charges beside the P&L, and a charges column per day and per trade |
+
+Brokerage is two numbers per segment: an amount per executed order and a
+percentage of the trade value. With both set, the lower of the two is charged on
+each order. Set either to 0 to leave it out.
+
+| Segment | Default brokerage |
+|---|---|
+| Equity delivery | 20 per order or 2.5% of the trade value, whichever is lower |
+| Equity intraday | 20 per order or 0.1%, whichever is lower |
+| Futures (equity, currency, commodity) | 20 per order or 0.03%, whichever is lower |
+| Options (equity, currency, commodity) | 20 per order |
+| Crypto | Nothing until you enter your venue's fee |
+
+STT or CTT, exchange transaction charges, SEBI fees, stamp duty and GST are added
+at the published rates. They are the same at every broker and cannot be changed.
+
+Not charged: depository (DP) charges on a delivery sell, and STT on an option
+that is held to expiry and exercised. Trades made before charges were introduced
+are not charged after the fact.
+
 ## Resetting Sandbox Data
 
-The Sandbox page provides manual reset controls and optional scheduled fund resets. A reset affects simulated state only. The default `reset_day` is `Never`, so no weekly reset occurs unless an operator enables one.
+The Sandbox page provides manual reset controls and optional scheduled fund resets. A reset affects simulated state only, and puts the brokerage plan back to its defaults. The default `reset_day` is `Never`, so no weekly reset occurs unless an operator enables one.
 
 ---
 

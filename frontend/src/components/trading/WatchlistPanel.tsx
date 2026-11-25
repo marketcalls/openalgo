@@ -58,6 +58,15 @@ const ACTIVE_LIST_KEY = 'oa-trading-watchlist'
 const DEFAULT_LIST_NAME = 'Watchlist'
 
 /**
+ * How wide the panel opens until the user drags it.
+ *
+ * Room for the three default columns beside a whole BANKNIFTY and its
+ * NSE_INDEX tag, the widest of the names a list usually starts with. At the
+ * shared 340 the move in price would have been paid for by the exchange tags.
+ */
+const DEFAULT_WIDTH = 392
+
+/**
  * How often the multiquote snapshot is refreshed.
  *
  * Not a fallback despite the option's name: useLivePrice polls this
@@ -82,6 +91,10 @@ interface Props {
 interface Quote {
   ltp: number
   /**
+   * The move from the previous close, in price. Rounded to the decimals the
+   * instrument is quoted in, so it is the difference of the two prices as
+   * they are printed, with no binary remainder left in it.
+   *
    * Null when the snapshot carries no previous close, which is not the same
    * as unchanged. Collapsing the two rendered a confident green +0.00% for a
    * pre-open or thinly quoted instrument, indistinguishable from a symbol
@@ -89,6 +102,8 @@ interface Quote {
    */
   change: number | null
   changePercent: number | null
+  /** How many decimals this instrument's prices are quoted in. */
+  decimals: number
   volume?: number
   high?: number
   low?: number
@@ -114,29 +129,54 @@ interface Column {
   get(quote: Quote): string
 }
 
+/**
+ * Room for a six-figure price to the paisa (1,34,567.85) in a system font
+ * with wider digits than the one this was drawn in. Every price column is
+ * the same width, so a row reads as a table whichever of them are chosen.
+ */
+const PRICE_WIDTH = 70
+
 const COLUMNS: readonly Column[] = [
-  { id: 'last', label: 'Last', width: 64, get: (q: Quote) => fmt(q.ltp) },
+  {
+    id: 'last',
+    label: 'Last',
+    width: PRICE_WIDTH,
+    get: (q: Quote) => fmt(q.ltp, q.decimals),
+  },
   {
     id: 'change',
     label: 'Chg',
-    width: 60,
+    width: 62,
     tone: true,
-    get: (q: Quote) => (q.change == null ? '-' : `${q.change >= 0 ? '+' : ''}${fmt(q.change)}`),
+    get: (q: Quote) => (q.change == null ? '-' : signed(q.change, q.decimals)),
   },
   {
     id: 'changePercent',
     label: 'Chg%',
     width: 58,
     tone: true,
-    get: (q: Quote) =>
-      q.changePercent == null
-        ? '-'
-        : `${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%`,
+    // Two decimals whatever the instrument: a percentage is not a price.
+    get: (q: Quote) => (q.changePercent == null ? '-' : `${signed(q.changePercent, 2)}%`),
   },
   { id: 'volume', label: 'Vol', width: 58, get: (q: Quote) => compact(q.volume) },
-  { id: 'high', label: 'High', width: 60, get: (q: Quote) => (q.high ? fmt(q.high) : '-') },
-  { id: 'low', label: 'Low', width: 60, get: (q: Quote) => (q.low ? fmt(q.low) : '-') },
-  { id: 'open', label: 'Open', width: 60, get: (q: Quote) => (q.open ? fmt(q.open) : '-') },
+  {
+    id: 'high',
+    label: 'High',
+    width: PRICE_WIDTH,
+    get: (q: Quote) => (q.high ? fmt(q.high, q.decimals) : '-'),
+  },
+  {
+    id: 'low',
+    label: 'Low',
+    width: PRICE_WIDTH,
+    get: (q: Quote) => (q.low ? fmt(q.low, q.decimals) : '-'),
+  },
+  {
+    id: 'open',
+    label: 'Open',
+    width: PRICE_WIDTH,
+    get: (q: Quote) => (q.open ? fmt(q.open, q.decimals) : '-'),
+  },
 ] as const
 type ColumnId = string
 
@@ -157,22 +197,51 @@ interface Display {
 }
 
 const DISPLAY_KEY = 'oa-trading-watchlist-display'
+/**
+ * Last, the move in price and the move in percent: the three figures a
+ * watchlist is read for. The percent says how big a move is and the price
+ * says what it is worth, and a trader comparing two instruments wants both.
+ */
 const DISPLAY_DEFAULT: Display = {
-  columns: ['last', 'changePercent'],
+  columns: ['last', 'change', 'changePercent'],
   logo: true,
   exchange: true,
 }
+
+/**
+ * Stamped on what is stored, so a later change of default can tell a
+ * selection it started from one the user made.
+ */
+const DISPLAY_VERSION = 2
+
+/**
+ * What the panel started every browser with before the price move joined the
+ * default. It was written to storage the first time the panel opened, touched
+ * or not, so a changed default alone would have reached nobody who had ever
+ * opened it.
+ */
+const FIRST_DEFAULT_COLUMNS: readonly ColumnId[] = ['last', 'changePercent']
 
 function readDisplay(): Display {
   try {
     const saved = JSON.parse(localStorage.getItem(DISPLAY_KEY) || '{}')
     const ids = COLUMNS.map((c) => c.id) as string[]
+    // Only the exact selection the older build wrote is moved to the new
+    // default, and only once: whatever is stored from here on carries the
+    // version, so switching the column off again is remembered. Any other
+    // selection is one the user made, and is left as it is.
+    const untouched =
+      typeof saved.version !== 'number' &&
+      Array.isArray(saved.columns) &&
+      saved.columns.length === FIRST_DEFAULT_COLUMNS.length &&
+      FIRST_DEFAULT_COLUMNS.every((id, i) => saved.columns[i] === id)
     return {
       // Filtered against the live column list, so a stored id from an older
       // build cannot leave the header and the rows disagreeing.
-      columns: Array.isArray(saved.columns)
-        ? (saved.columns.filter((c: unknown) => ids.includes(c as string)) as ColumnId[])
-        : DISPLAY_DEFAULT.columns,
+      columns:
+        Array.isArray(saved.columns) && !untouched
+          ? (saved.columns.filter((c: unknown) => ids.includes(c as string)) as ColumnId[])
+          : DISPLAY_DEFAULT.columns,
       logo: typeof saved.logo === 'boolean' ? saved.logo : true,
       exchange: typeof saved.exchange === 'boolean' ? saved.exchange : true,
     }
@@ -181,21 +250,72 @@ function readDisplay(): Display {
   }
 }
 
+/** Exchanges whose contracts are quoted to four decimals. */
+const FOUR_DECIMAL_EXCHANGES = new Set(['CDS', 'BCD'])
+
 /**
- * Compact price.
+ * How many decimals an instrument's prices are quoted in.
  *
- * One decimal above a thousand so a five-figure index still fits the column,
- * two below it. Both bounds move together: toLocaleString throws a RangeError
- * if the minimum is ever left above the maximum, which is a throw inside
- * render, and the app's root error boundary turns that into a blank page.
+ * Paise everywhere except currency contracts, which trade in steps of a
+ * quarter paisa: at two decimals a USDINR future reads as unchanged through
+ * most of a session.
  */
-function fmt(value: number): string {
+function decimalsFor(exchange: string): number {
+  return FOUR_DECIMAL_EXCHANGES.has(exchange) ? 4 : 2
+}
+
+/**
+ * A figure at the decimals it is shown in, so the sign printed with it is the
+ * sign of what is printed: 62585.35 - 64635.2 is -2049.8499999999985 in binary,
+ * which is -2,049.85.
+ */
+function roundTo(value: number, decimals: number): number {
+  const scale = 10 ** decimals
+  return Math.round(value * scale) / scale
+}
+
+/**
+ * How far the last price is from the previous close, or exactly zero when the
+ * two are the same price.
+ *
+ * Two feeds can hand over the same price as two different binary numbers
+ * (1594.3 and 1594.3000000000002), and their difference is then a few parts
+ * in ten to the sixteenth rather than nothing. Read as a move, that put a
+ * green "+0.00%" on an instrument sitting on its close.
+ */
+function moveFrom(prevClose: number, ltp: number): number {
+  const move = ltp - prevClose
+  return Math.abs(move) < Math.abs(prevClose) * 1e-9 ? 0 : move
+}
+
+/**
+ * A price, to the decimals it is quoted in.
+ *
+ * It used to drop to one decimal above a thousand to save width, which put a
+ * price on screen that never traded (25,349.65 read 25,349.7) and a move that
+ * did not add up with it (-2,049.85 read -2,049.8). The columns are wide
+ * enough for the full figure.
+ *
+ * Both bounds are the same number: toLocaleString throws a RangeError if the
+ * minimum is ever left above the maximum, which is a throw inside render, and
+ * the app's root error boundary turns that into a blank page.
+ */
+function fmt(value: number, decimals = 2): string {
   if (!Number.isFinite(value)) return '-'
-  const dp = Math.abs(value) >= 1000 ? 1 : 2
   return value.toLocaleString('en-IN', {
-    minimumFractionDigits: dp,
-    maximumFractionDigits: dp,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
   })
+}
+
+/**
+ * A move, with its sign. The sign is always printed for a gain and a loss so
+ * colour is never the only cue, and never for no move at all: a zero is not a
+ * gain, and "+0.00" in green said it was.
+ */
+function signed(value: number, decimals: number): string {
+  const size = fmt(Math.abs(value), decimals)
+  return value > 0 ? `+${size}` : value < 0 ? `-${size}` : size
 }
 
 /**
@@ -242,7 +362,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
 
   const [display, setDisplay] = useState<Display>(readDisplay)
   useEffect(() => {
-    localStorage.setItem(DISPLAY_KEY, JSON.stringify(display))
+    localStorage.setItem(DISPLAY_KEY, JSON.stringify({ version: DISPLAY_VERSION, ...display }))
   }, [display])
 
   /** The chosen columns, in the canonical order rather than click order. */
@@ -254,9 +374,10 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
    * The narrowest the panel can be drawn at with these columns chosen.
    *
    * 16px of padding, 16px for the remove control, 6px between each cell, the
-   * columns themselves, and 96px left for the symbol -- enough for a
-   * BANKNIFTY and its exchange tag. Without a floor the symbol column
-   * absorbed every column added and collapsed to two letters.
+   * columns themselves, and 96px left for the symbol: its letter and a name
+   * of about ten characters. The exchange tag is not counted, because it is
+   * the part that gives way. Without a floor the symbol column absorbed every
+   * column added and collapsed to two letters.
    */
   const minWidth = useMemo(
     () =>
@@ -415,11 +536,13 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
       const prevClose = needsPreviousClose(snapshot?.prev_close, ltp)
         ? resolvedCloses[key]
         : snapshot?.prev_close
-      const known = typeof prevClose === 'number' && prevClose > 0
+      const decimals = decimalsFor(row.exchange)
+      const move = typeof prevClose === 'number' && prevClose > 0 ? moveFrom(prevClose, ltp) : null
       next[key] = {
         ltp,
-        change: known ? ltp - (prevClose as number) : null,
-        changePercent: known ? ((ltp - (prevClose as number)) / (prevClose as number)) * 100 : null,
+        change: move == null ? null : roundTo(move, decimals),
+        changePercent: move == null ? null : (move / (prevClose as number)) * 100,
+        decimals,
         volume: snapshot?.volume,
         high: snapshot?.high,
         low: snapshot?.low,
@@ -659,6 +782,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
       id="oa-panel-watchlist"
       label="Watchlist"
       storageKey="oa-trading-watchlist-width"
+      defaultWidth={DEFAULT_WIDTH}
       minWidth={minWidth}
     >
       {/* Header: which list, and what can be done to it. Its height lands the
@@ -812,21 +936,28 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         </DropdownMenu>
       </div>
 
-      {/* Column header, built from the same selection as the rows below */}
-      <div
-        className="grid shrink-0 gap-x-1.5 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70"
-        style={{ gridTemplateColumns: gridTemplate }}
-      >
-        <span>Symbol</span>
-        {shownColumns.map((column) => (
-          <span key={column.id} className="text-right">
-            {column.label}
-          </span>
-        ))}
-        <span />
-      </div>
-
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Column header, built from the same selection as the rows below.
+            It lives inside the scrolling box and sticks to its top, so it is
+            exactly as wide as the rows. Outside it, a list long enough to
+            scroll lost the scrollbar's width from every row and from none of
+            the labels, and each label sat that far to the right of the
+            figures under it. Above the rows' own controls, below the panel's
+            resize handle. */}
+        <div
+          data-testid="watchlist-columns"
+          className="sticky top-0 z-[11] grid gap-x-1.5 border-b bg-background px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70"
+          style={{ gridTemplateColumns: gridTemplate }}
+        >
+          <span>Symbol</span>
+          {shownColumns.map((column) => (
+            <span key={column.id} data-column={column.id} className="text-right">
+              {column.label}
+            </span>
+          ))}
+          <span />
+        </div>
+
         {loading ? (
           <p className="p-3 text-[12px] text-muted-foreground">Loading...</p>
         ) : loadError ? (
@@ -854,9 +985,14 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
           items.map((item, index) => {
             const key = `${item.exchange}:${item.symbol}`
             const quote = quotes[key]
-            // Three states, not two: no previous close means no direction.
-            const direction =
-              quote?.changePercent == null ? 'flat' : quote.changePercent >= 0 ? 'up' : 'down'
+            // Three states, not two: no previous close means no direction, and
+            // neither does a close the price is sitting exactly on. Read from
+            // the percent, which is not rounded to the price's decimals.
+            const direction = !quote?.changePercent
+              ? 'flat'
+              : quote.changePercent > 0
+                ? 'up'
+                : 'down'
             // Which side of the hovered row the dragged one will land on.
             // dropOn splices out then re-inserts at the target index, so a
             // downward drag lands BELOW the row it was dropped on; drawing
@@ -865,6 +1001,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
             return (
               <div
                 key={item.id}
+                data-testid="watchlist-row"
                 draggable
                 onDragStart={(e) => {
                   // Firefox refuses to begin a drag unless dataTransfer carries
@@ -936,6 +1073,11 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                   }}
                   className="absolute inset-0 cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                   aria-label={`Chart ${item.symbol} on ${item.exchange}`}
+                  // The whole name and its exchange, for a row too narrow to
+                  // show both. It sits here because this button is what the
+                  // pointer is over: the cells above it take no pointer events,
+                  // so a title on the symbol itself never appeared.
+                  title={`${item.symbol} (${item.exchange})`}
                   // The charted row said so only in colour. This states it, so
                   // a screen reader hears which instrument is on the chart and a
                   // test can assert the fact rather than a Tailwind class that
@@ -947,21 +1089,33 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                     width at all, which is the column under the most pressure. */}
                 <GripVertical className="pointer-events-none absolute left-0 top-1/2 h-3 w-3 -translate-y-1/2 text-transparent transition-colors group-hover:text-muted-foreground/50" />
 
-                <span className="pointer-events-none relative flex min-w-0 items-center gap-1.5">
-                  {display.logo && (
-                    <span
-                      className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white"
-                      style={{ backgroundColor: symbolTint(item.symbol) }}
-                      aria-hidden="true"
-                    >
-                      {item.symbol.charAt(0)}
+                {/* The name outranks the exchange tag. The cell is one line
+                    high and wraps, so a tag with no room beside the whole name
+                    drops to a second line that is clipped away, and comes back
+                    as soon as the panel is wide enough. With the tag fixed in
+                    place the name paid for every column added, and NIFTY read
+                    "NI..." beside a complete NSE_INDEX. The letter and the name
+                    are one item so they can never be the part that wraps. */}
+                <span className="pointer-events-none relative flex h-[18px] min-w-0 flex-wrap content-start items-center gap-x-1.5 overflow-hidden leading-[18px]">
+                  <span className="flex h-[18px] min-w-0 max-w-full items-center gap-1.5">
+                    {display.logo && (
+                      <span
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold leading-none text-white"
+                        style={{ backgroundColor: symbolTint(item.symbol) }}
+                        aria-hidden="true"
+                      >
+                        {item.symbol.charAt(0)}
+                      </span>
+                    )}
+                    <span data-testid="watchlist-name" className="truncate font-medium">
+                      {item.symbol}
                     </span>
-                  )}
-                  <span className="truncate font-medium" title={item.symbol}>
-                    {item.symbol}
                   </span>
                   {display.exchange && (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                    <span
+                      data-testid="watchlist-exchange"
+                      className="shrink-0 text-[10px] text-muted-foreground"
+                    >
                       {item.exchange}
                     </span>
                   )}
@@ -973,6 +1127,11 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                 {shownColumns.map((column) => (
                   <span
                     key={column.id}
+                    data-column={column.id}
+                    // Which way the row moved, stated rather than only
+                    // coloured: a test can assert it, where a colour class
+                    // says nothing in a renderer with no cascade.
+                    data-direction={column.tone ? direction : undefined}
                     className={cn(
                       'pointer-events-none relative text-right tabular-nums',
                       // Only a column carrying direction is coloured.

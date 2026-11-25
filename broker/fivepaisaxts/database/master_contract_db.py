@@ -89,6 +89,57 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+# XTS master rows for F&O (Instruments > Master in the XTS v2 docs): options
+# carry 23 fields, futures and spreads 21, with no StrikePrice or OptionType
+# between ContractExpiration and DisplayName.
+_FO_OPTION_FIELDS = 23
+_FO_FUTURE_FIELDS = 21
+_FO_STRIKE_INDEX = 17  # StrikePrice, then OptionType
+
+# XTS InstrumentType: 1 futures, 2 options, 4 spread.
+_INSTRUMENT_FUTURES = 1
+_INSTRUMENT_OPTIONS = 2
+
+
+def _fo_row_in_options_layout(row):
+    """A futures or spread row with empty StrikePrice and OptionType inserted,
+    so every F&O row lines up with the 23-column options header."""
+    if len(row) == _FO_FUTURE_FIELDS:
+        return row[:_FO_STRIKE_INDEX] + ["", ""] + row[_FO_STRIKE_INDEX:]
+    return row
+
+
+def _fo_contracts(df):
+    """Futures and options rows of an F&O master, spreads left out.
+
+    Futures get strike 0 and instrument type FUT from InstrumentType; options
+    take CE or PE from OptionType (3 CE, 4 PE).
+    """
+    instrument_type = pd.to_numeric(df["InstrumentType"], errors="coerce")
+    df = df[instrument_type.isin([_INSTRUMENT_FUTURES, _INSTRUMENT_OPTIONS])].copy()
+    is_future = pd.to_numeric(df["InstrumentType"], errors="coerce") == _INSTRUMENT_FUTURES
+    option_type = pd.to_numeric(df["OptionType"], errors="coerce")
+
+    df["instrumenttype"] = option_type.map({3: "CE", 4: "PE"})
+    df.loc[is_future, "instrumenttype"] = "FUT"
+    df = df[df["instrumenttype"].notna()].copy()
+
+    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors="coerce")
+    df.loc[df["instrumenttype"] == "FUT", "StrikePrice"] = 0.0
+    df = df[df["StrikePrice"].notna()].copy()
+    return df
+
+
+def _fo_symbol(row):
+    """OpenAlgo F&O symbol: NAME + DDMMMYY + FUT, or + strike + CE/PE."""
+    expiry = row["ContractExpiration"].strftime("%d%b%y").upper()
+    if row["instrumenttype"] == "FUT":
+        return f"{row['Name']}{expiry}FUT"
+    strike = float(row["StrikePrice"])
+    strike_text = str(int(strike)) if strike == int(strike) else str(strike)
+    return f"{row['Name']}{expiry}{strike_text}{row['instrumenttype']}"
+
+
 def download_csv_compositedge_data(output_path):
     logger.info("Downloading Master Contract CSV Files")
     exchange_segments = ["NSECM", "NSEFO", "BSECM", "BSEFO"]
@@ -124,6 +175,9 @@ def download_csv_compositedge_data(output_path):
         csv_data = [
             row.split("|") for row in csv_data if row.strip()
         ]  # Convert each row into a list
+
+        if header is headers_fo:
+            csv_data = [_fo_row_in_options_layout(row) for row in csv_data]
 
         with open(segment_output_path, "w", encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -307,15 +361,9 @@ def process_compositedge_nfo_csv(path):
     # Convert 'Expiry Date' column to datetime format
     df["ContractExpiration"] = pd.to_datetime(df["ContractExpiration"])
 
-    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors="coerce").fillna(1.0)
+    df = _fo_contracts(df)
 
-    df["symbol"] = df.apply(
-        lambda row: f"{row['Name']}"
-        f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
-        f"{'' if row['OptionType'] == 1 else (str(int(float(row['StrikePrice']))) if float(row['StrikePrice']) == int(float(row['StrikePrice'])) else str(row['StrikePrice'])) if pd.notna(row['StrikePrice']) else ''}"
-        f"{'FUT' if row['OptionType'] == 1 else 'CE' if row['OptionType'] == 3 else 'PE'}",
-        axis=1,
-    )
+    df["symbol"] = df.apply(_fo_symbol, axis=1)
 
     # Create token_df with the relevant columns
     token_df = df[["symbol"]].copy()
@@ -330,7 +378,7 @@ def process_compositedge_nfo_csv(path):
     token_df["expiry"] = df["ContractExpiration"].dt.strftime("%d-%b-%y").str.upper()
     token_df["strike"] = df["StrikePrice"].values
     token_df["lotsize"] = df["LotSize"].values
-    token_df["instrumenttype"] = df["OptionType"].map({1: "FUT", 3: "CE", 4: "PE"})
+    token_df["instrumenttype"] = df["instrumenttype"].values
     token_df["tick_size"] = df["TickSize"].values
 
     return token_df
@@ -410,15 +458,9 @@ def process_compositedge_bfo_csv(path):
     # Convert 'Expiry Date' column to datetime format
     df["ContractExpiration"] = pd.to_datetime(df["ContractExpiration"])
 
-    df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors="coerce").fillna(1.0)
+    df = _fo_contracts(df)
 
-    df["symbol"] = df.apply(
-        lambda row: f"{row['Name']}"
-        f"{row['ContractExpiration'].strftime('%d%b%y').upper()}"
-        f"{'' if row['OptionType'] == 1 else (str(int(float(row['StrikePrice']))) if float(row['StrikePrice']) == int(float(row['StrikePrice'])) else str(row['StrikePrice'])) if pd.notna(row['StrikePrice']) else ''}"
-        f"{'FUT' if row['OptionType'] == 1 else 'CE' if row['OptionType'] == 3 else 'PE'}",
-        axis=1,
-    )
+    df["symbol"] = df.apply(_fo_symbol, axis=1)
 
     token_df = df[["symbol"]].copy()
     token_df["symbol"] = df["symbol"].values
@@ -432,7 +474,7 @@ def process_compositedge_bfo_csv(path):
     token_df["expiry"] = df["ContractExpiration"].dt.strftime("%d-%b-%y").str.upper()
     token_df["strike"] = df["StrikePrice"].values
     token_df["lotsize"] = df["LotSize"].values
-    token_df["instrumenttype"] = df["OptionType"].map({1: "FUT", 3: "CE", 4: "PE"})
+    token_df["instrumenttype"] = df["instrumenttype"].values
     token_df["tick_size"] = df["TickSize"].values
 
     return token_df

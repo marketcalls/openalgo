@@ -16,6 +16,7 @@ from .basket_order import api as basket_order_ns
 from .cancel_all_order import api as cancel_all_order_ns
 from .cancel_gtt_order import api as cancel_gtt_order_ns
 from .cancel_order import api as cancel_order_ns
+from .charges import api as charges_ns
 from .chart_api import api as chart_ns
 from .close_position import api as close_position_ns
 from .depth import api as depth_ns
@@ -104,6 +105,7 @@ api.add_namespace(whatsapp_ns, path="/whatsapp")
 api.add_namespace(slack_ns, path="/slack")
 api.add_namespace(discord_ns, path="/discord")
 api.add_namespace(margin_ns, path="/margin")
+api.add_namespace(charges_ns, path="/charges")
 api.add_namespace(instruments_ns, path="/instruments")
 api.add_namespace(chart_ns, path="/chart")
 api.add_namespace(market_holidays_ns, path="/market/holidays")

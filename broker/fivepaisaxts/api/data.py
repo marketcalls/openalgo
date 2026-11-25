@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import pytz
-from flask import session
 
 from broker.fivepaisaxts.api.auth_api import get_feed_token as refresh_feed_token
 from broker.fivepaisaxts.baseurl import MARKET_DATA_URL
@@ -88,7 +87,6 @@ class BrokerData:
 
         # Map common timeframe format to FivepaisaXTS intervals
         self.timeframe_map = {
-            "1s": "1",
             "1m": "60",
             "2m": "120",
             "3m": "180",
@@ -506,7 +504,6 @@ class BrokerData:
         try:
             # Map timeframe to compression value
             compression_map = {
-                "1s": "1",
                 "1m": "60",
                 "2m": "120",
                 "3m": "180",
@@ -555,6 +552,9 @@ class BrokerData:
                 # Get the token for quotes
                 token = symbol_info.token  # token = instrument ID
 
+            # Set once the market data token has been refreshed for this request.
+            token_refreshed = False
+
             # Convert dates to datetime objects with IST timezone
             start_date = pd.to_datetime(from_date).tz_localize("Asia/Kolkata")
             end_date = pd.to_datetime(to_date).tz_localize("Asia/Kolkata")
@@ -567,9 +567,10 @@ class BrokerData:
 
             dfs = []
             current_start = from_date
+            chunk = timedelta(days=365)
 
             while current_start <= to_date:
-                current_end = min(current_start + timedelta(days=6), to_date)
+                current_end = min(current_start + chunk - timedelta(seconds=1), to_date)
 
                 # FivepaisaXTS expects MMM DD YYYY HHMMSS in IST
                 from_str = current_start.strftime("%b %d %Y %H%M%S")
@@ -598,6 +599,24 @@ class BrokerData:
                     params=params,
                 )
 
+                # An expired market data token: log in again once, as quotes
+                # do, and repeat the request (issue #2484).
+                if (
+                    response
+                    and response.get("type") != "success"
+                    and "Invalid Token" in str(response.get("description", ""))
+                    and not token_refreshed
+                ):
+                    token_refreshed = True
+                    if self._refresh_feed_token():
+                        response = get_api_response(
+                            "/instruments/ohlc",
+                            self.auth_token,
+                            method="GET",
+                            feed_token=self.feed_token,
+                            params=params,
+                        )
+
                 if not response or response.get("type") != "success":
                     logger.error(f"API Response: {response}")
                     raise Exception(
@@ -608,7 +627,7 @@ class BrokerData:
                 raw_data = response.get("result", {}).get("dataReponse", "")
                 if not raw_data:
                     logger.warning(f"No data returned for period {from_str} to {to_str}")
-                    current_start = current_end + timedelta(days=1)
+                    current_start = current_end + timedelta(seconds=1)
                     continue
 
                 rows = raw_data.strip().split(",")
@@ -636,7 +655,7 @@ class BrokerData:
                     df = pd.DataFrame(data)
                     dfs.append(df)
 
-                current_start = current_end + timedelta(days=1)
+                current_start = current_end + timedelta(seconds=1)
 
             if not dfs:
                 if compression_value == "D" and to_date.date() == datetime.now().date():
@@ -645,6 +664,8 @@ class BrokerData:
                     # Exchange segment mapping
                     exchange_segment_map = {
                         "NSE": 1,
+                        "NSE_INDEX": 1,
+                        "BSE_INDEX": 11,
                         "NFO": 2,
                         "CDS": 3,
                         "BSE": 11,
@@ -762,7 +783,7 @@ class BrokerData:
         Returns:
             list: List of available intervals
         """
-        return ["1s", "1m", "2m", "3m", "5m", "10m", "15m", "30m", "60m", "D"]
+        return ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "60m", "D"]
 
     def get_market_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -777,91 +798,14 @@ class BrokerData:
             logger.debug("=== Starting Market Depth Request ===")
             logger.debug(f"Symbol: {symbol}, Exchange: {exchange}")
 
-            # Get feed token and user ID for request
-            user_id = None
-            feed_token = None
+            # The market-data session this handler was built with. Refresh it
+            # once when it is missing, the same way quotes do.
+            if not self.feed_token and not self._refresh_feed_token():
+                raise Exception("No market data session available")
 
-            # First check if we have user ID in the instance
-            if hasattr(self, "user_id") and self.user_id:
-                user_id = self.user_id
-                logger.debug(f"Using instance user_id: {user_id}")
-
-            # Try to get from session if not found in instance
-            if (
-                not user_id
-                and hasattr(session, "marketdata_userid")
-                and session.get("marketdata_userid")
-            ):
-                user_id = session.get("marketdata_userid")
-                logger.debug(f"Using session user_id: {user_id}")
-
-            # If no user ID is available, use the one from feed token authentication
-            if not user_id and self.user_id:
-                user_id = self.user_id
-                logger.debug(f"Using feed token auth user_id: {user_id}")
-
-            if not user_id:
-                logger.error("No user ID available for market depth request")
-                return None
-
-            # Get feed token from instance
-            if hasattr(self, "feed_token") and self.feed_token:
-                feed_token = self.feed_token
-                logger.debug("Using instance feed_token")
-
-            # Try to get from session if not found in instance
-            if (
-                not feed_token
-                and hasattr(session, "marketdata_token")
-                and session.get("marketdata_token")
-            ):
-                feed_token = session.get("marketdata_token")
-                logger.debug("Using session feed_token")
-
-            # If still no feed token, try to get a new one
-            if not feed_token:
-                logger.info("No feed token available, attempting to get one")
-                from database.auth_db import get_feed_token
-
-                feed_token, new_user_id, error = get_feed_token()
-                if error:
-                    logger.error(f"Failed to get feed token: {error}")
-                    raise Exception(f"Failed to get feed token: {error}")
-                if not user_id and new_user_id:
-                    user_id = new_user_id
-                    logger.info(f"Got new user_id from feed token: {user_id}")
-
-            # Log the user ID and feed token we're using
-            logger.debug(f"Using user ID: {user_id}")
-            logger.debug("Using feed token" if feed_token else "No feed token available")
-
-            # Exchange segment mapping
-            exchange_segment_map = {"NSE": 1, "NFO": 2, "CDS": 3, "BSE": 11, "BFO": 12, "MCX": 51}
-
-            # Convert symbol to broker format
-            br_symbol = get_br_symbol(symbol, exchange)
-            logger.debug(f"Converted symbol {symbol} to broker format: {br_symbol}")
-
-            brexchange = exchange_segment_map.get(exchange)
-            logger.debug(f"Mapped exchange {exchange} to segment: {brexchange}")
-
-            if brexchange is None:
-                logger.error(f"Unknown exchange segment: {exchange}")
-                raise Exception(f"Unknown exchange segment: {exchange}")
-
-            # Get exchange_token from database
-            logger.debug("Querying database for symbol token...")
-            with db_session() as session:
-                symbol_info = (
-                    session.query(SymToken)
-                    .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
-                    .first()
-                )
-
-                if not symbol_info:
-                    logger.error(f"Could not find exchange token for {exchange}:{br_symbol}")
-                    raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
-                logger.debug(f"Found token {symbol_info.token} for {exchange}:{br_symbol}")
+            # Index symbols (NSE_INDEX, BSE_INDEX) quote in segments 1 and 11.
+            symbol_info, brexchange = self._get_instrument_token(symbol, exchange)
+            logger.debug(f"Found token {symbol_info.token} for {exchange}:{symbol}")
 
             # Get market depth via REST API
             logger.info("Getting market depth via REST API...")
@@ -932,26 +876,6 @@ class BrokerData:
                 "oi": 0,
             }
             logger.info("Returning empty market depth structure")
-            return empty_depth
-
-        except Exception as e:
-            logger.error(f"Error in get_market_depth: {str(e)}", exc_info=True)
-            # Return empty structure on error
-            empty_depth = {
-                "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
-                "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
-                "totalbuyqty": 0,
-                "totalsellqty": 0,
-                "ltp": 0,
-                "ltq": 0,
-                "volume": 0,
-                "open": 0,
-                "high": 0,
-                "low": 0,
-                "prev_close": 0,
-                "oi": 0,
-            }
-            logger.info("Returning empty market depth structure due to error")
             return empty_depth
 
     def get_depth(self, symbol: str, exchange: str) -> dict:

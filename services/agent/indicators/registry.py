@@ -1,7 +1,7 @@
 """The 128-entry indicator registry for the ``openalgo.ta`` singleton.
 
 ``from openalgo import ta`` yields a *singleton instance* of
-``TechnicalAnalysis``, not a module. On the pinned openalgo 2.4.0 build
+``TechnicalAnalysis``, not a module. On the pinned openalgo 2.4.1 build
 ``len([m for m in dir(ta) if not m.startswith("_")]) == 128``: 115 indicators
 plus 13 utilities; openalgo 2.1.0 added the 128th, ``rvi_volatility``. The
 introduction doc says "over 80" and the flow reference says 117; both are
@@ -1062,7 +1062,7 @@ def ta_callables() -> list[str]:
 
     Returns:
         Every attribute of ``ta`` not starting with an underscore. 128 on the
-        pinned openalgo 2.4.0 build.
+        pinned openalgo 2.4.1 build.
     """
     return [name for name in dir(ta) if not name.startswith("_")]
 

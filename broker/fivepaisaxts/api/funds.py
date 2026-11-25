@@ -33,7 +33,19 @@ def get_margin_data(auth_token):
         and margin_data["result"].get("BalanceList")
         and margin_data["result"]["BalanceList"]
     ):
-        rms_sublimits = margin_data["result"]["BalanceList"][0]["limitObject"]["RMSSubLimits"]
+        # XTS can return several balance entries (for example CASH|NSE|MTF,
+        # which is often all zeros). The ALL|ALL|ALL entry holds the account's
+        # consolidated limits; the first entry is used only when none is so named.
+        balance_list = margin_data["result"]["BalanceList"]
+        if isinstance(balance_list, dict):
+            balance_list = [balance_list]
+        balance_entry = balance_list[0]
+        for entry in balance_list:
+            if isinstance(entry, dict) and entry.get("limitHeader") == "ALL|ALL|ALL":
+                balance_entry = entry
+                break
+
+        rms_sublimits = balance_entry["limitObject"]["RMSSubLimits"]
 
         required_keys = [
             "netMarginAvailable",

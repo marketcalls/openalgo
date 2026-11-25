@@ -479,7 +479,7 @@ async function readIndex(): Promise<CustomModule[] | null> {
  * Fetch, import and run every user module that has not been seen yet.
  *
  * Never throws. A missing folder, a logged-out session and a syntax error in one
- * user file all have to leave the other 112 indicators working, so the index is
+ * user file all have to leave the built-in indicators working, so the index is
  * treated as optional and each module is isolated from the next.
  *
  * This is the complete load the picker needs. A chart restoring a saved layout

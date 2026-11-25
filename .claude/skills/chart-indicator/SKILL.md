@@ -59,6 +59,35 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.5: nothing for an indicator author.** Three fixes to host
+  surfaces; nothing a descriptor declares changed, and the registry stays
+  at 113 built-ins and the index at 439 names. The indicator tier is byte
+  for byte 2.7.4's, so every built-in computes what it did. A fit now
+  returns to the `timeScale.rightOffset` its host configured instead of
+  the built-in four bars (no chart in OpenAlgo sets one, so every chart
+  here opens and resets as before); the widget's own right-click menu
+  gains a Reset view row; and the widget's centred dialogs move by their
+  title bar. The last is the one a trader meets: on the Historify and
+  strategy charts, an indicator's settings form can be slid off the plot
+  it edits. `/trading` draws its own forms, which stay where they open.
+
+- **2.7.4: one more built-in, so one more reserved id.** Pivot Points
+  Standard (`pivot-points`, exported as `PIVOT_POINTS`) takes the registry
+  from 112 to 113 and the index from 438 to 439 names. A custom module
+  registered under `pivot-points` now replaces it (pitfall 13). It draws the
+  pivot and up to five support and resistance pairs as step lines (`p`,
+  `s1` to `s5`, `r1` to `r5`) from the finished period before the one on
+  screen, in six level sets (`kind`: `traditional`, `fibonacci`, `woodie`,
+  `classic`, `demark`, `camarilla`) over a `frame` of `daily`, `weekly`,
+  `monthly`, `quarterly`, `yearly` or `auto`. Like CPR it never reads the
+  forming period, so a live tick moves no level, and it prints nothing
+  through the first two loaded periods. Call its `calc` rather than porting
+  six sets of formulas. Nothing a descriptor declares changed. The
+  release's other additions are host surfaces, not descriptor ones: rows a
+  host adds to the widget's right-click menu, a full screen button, study
+  placement from the widget's own menu, a regular or extended hours switch
+  and a list of thirty timezones.
+
 - **2.7.3: one refusal to know about, three built-ins re-derived.** A
   correctness release; nothing a descriptor declares changed and the registry
   stays at 112 and the index at 438 names. A study timeframe the chart's bars
@@ -422,7 +451,7 @@ changed, newest first:
    resets per day or per session.
 2. **Before writing a formula, check `reference/cookbook.md`.** Every
    author-facing call is demonstrated there, and the first section is the one
-   that saves the most work: the 112 built-ins are descriptors, so
+   that saves the most work: the 113 built-ins are descriptors, so
    `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
    rather than a reimplementation that can drift from the chart's.
 3. **Load the context you need.** `reference/contract.md` for the descriptor

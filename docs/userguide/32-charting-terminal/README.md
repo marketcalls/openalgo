@@ -4,8 +4,8 @@
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
 it. The terminal uses the pinned `openalgo-charts` package: a from-scratch canvas
-charting engine with 19 chart types, 112 built-in indicators plus any you write
-yourself, and 87 drawing tools, wired to the same broker session and market-data
+charting engine with 19 chart types, 113 built-in indicators plus any you write
+yourself, and 90 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
 Price updates arrive over the WebSocket feed. History refreshes reconcile bars
@@ -413,7 +413,7 @@ Pick a tool from the left rail. A group button selects whatever you last used
 from that group again; the small corner wedge opens the full list without
 changing the selected tool.
 
-The terminal exposes all 90 drawing tools from openalgo-charts 2.7.3. Each
+The terminal exposes all 90 drawing tools from openalgo-charts 2.7.5. Each
 tool's icon shows its drawing with an open ring at every point you place.
 Channels include regression and pitchfork variants; Fibonacci and Gann include
 fans, arcs, circles and squares. Patterns include XABCD, head and shoulders and
@@ -469,6 +469,47 @@ and automatic price scaling.
 On a narrow screen, the pane toolbar scrolls horizontally to keep its actions
 reachable. Use the drawing rail, side panels and bottom dock for the remaining
 chart and trading controls.
+
+## Watchlist
+
+The **Watchlist** control on the right rail opens your lists of instruments
+with their prices. Click a row to chart that instrument in the selected chart;
+the charted row is marked.
+
+| Column | Shows |
+|---|---|
+| Symbol | The instrument, with a letter and its exchange |
+| Last | The last traded price |
+| Chg | The move from the previous close, in price |
+| Chg% | The same move, in percent |
+
+Those four are shown to begin with. **Customise columns** (the three dots at
+the top of the panel) adds Volume, High, Low and Open, removes any column, and
+hides the letter or the exchange. Your choice is remembered in this browser.
+
+A gain is printed with a plus sign in green and a loss with a minus sign in
+red. An instrument sitting exactly on its previous close reads `0.00` and
+`0.00%` with no sign and no colour. A dash means the figure is not known yet:
+no price has arrived, or there is no previous close to measure from.
+
+Prices and moves are shown to the paisa, and currency contracts on CDS and BCD
+to four decimals. An instrument quoted finer than that elsewhere (some crypto
+contracts) is still shown to two decimals here, so its Chg can read `0.00`
+while its Chg% shows the move.
+
+When the panel is too narrow for a name and its exchange, the exchange gives
+way first and the name is shortened last. Hold the pointer over a row to read
+both in full, or drag the panel's left edge to widen it. Each column you add
+makes the panel's narrowest width a little larger.
+
+The name at the top of the panel opens the list menu: create, copy, rename,
+import, export, clear or delete a list, and switch between your lists. **+**
+adds an instrument. Drag a row to reorder the list. Hover a row and use the bin
+to remove it, or focus the row and press `Delete`.
+
+While the market is open the prices come from the live feed. When the feed is
+unavailable or the market is closed, the panel says so at the bottom and shows
+the last traded prices.
 
 ## Objects Panel
 
