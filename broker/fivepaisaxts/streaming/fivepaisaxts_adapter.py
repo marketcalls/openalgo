@@ -967,11 +967,9 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
-        # For MessageCode 1502 (Depth mode), data is structured differently
-        message_code = message.get("MessageCode")
-
-        # For depth mode (MessageCode 1502), extract data from Touchline
-        if message_code == 1502 and "Touchline" in message:
+        # XTS nests the touchline fields under "Touchline" in 1502 and, on
+        # many servers, in 1501 too; read them there whenever it is present.
+        if isinstance(message.get("Touchline"), dict):
             touchline = message.get("Touchline", {})
             ltp = touchline.get("LastTradedPrice", 0)
             ltt = touchline.get("LastTradedTime", 0)
@@ -990,7 +988,8 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"Extracted from Touchline - LTP: {ltp}, Volume: {volume}, Open: {open_price}"
             )
         else:
-            # For other message codes (1512, 1501), data is at root level
+            # Otherwise (1512, and 1501 on servers that send it flat) the
+            # fields are at root level
             ltp = message.get("LastTradedPrice", 0)
             ltt = message.get("LastTradedTime", 0)
             volume = message.get("TotalTradedQuantity", 0)
