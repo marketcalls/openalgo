@@ -174,6 +174,7 @@ are identified separately so a custom module can use the right surface.
 
 | | |
 | --- | --- |
+| **2.7.5** | No descriptor or export changes: 113 built-ins and 439 indexed names, and the indicator, draw, trade, transform, profile and workspace tiers are byte for byte 2.7.4's. Host behaviour only: `TimeScale.fitContent`, the first view and `resetScale()` return to the host's configured `timeScale.rightOffset` (four bars when none is set, as before); the widget's own right-click menu gains a `chart-reset` row between `chart-fit` and `chart-indicators`; and the widget's centred dialogs move by their title bar (the CSS `translate` property on the dialog, nothing remembered). |
 | **2.7.4** | One study takes the registry from 112 to 113 and this index from 438 to 439 names: `pivot-points` (Pivot Points Standard, exported as `PIVOT_POINTS`), the pivot and up to five support and resistance pairs as step lines from the finished prior period, in six level sets (`kind`) over a `frame` of daily to yearly or auto. It is one more reserved id. No descriptor field changed. Host APIs only otherwise, all in the widget tier: `WidgetOptions.contextMenuItems`, `WidgetOptions.fullscreen`, study placement rows on the widget's own menu, optional `BottombarControls.session` and `setSession`, and thirty timezones in the default list. 90 drawing tools. |
 | **2.7.3** | No descriptor or export changes: 112 built-ins and 438 indexed names. A timeframe the chart's bars do not divide into (5m on a 3m chart) is refused with an `IndicatorInputError`, for the built-ins and for `withTimeframe`, instead of folded into buckets of the wrong length; requested higher-timeframe history is unaffected. CPR waits for a complete first period, KAMA steps over a missing value and HalfTrend seeds from the first complete bar. Renko on a decimal box, point and figure reversals and Kagi thickness are corrected. Fills paint only the bars in view. Host APIs: `restoreState` returns `{ applied: false, reason }` where a study that threw while being rebuilt used to throw, and the trade adapter's book reads throw on an error reply instead of returning an empty book. |
 | **2.7.2** | No descriptor or export changes: 112 built-ins and 438 indexed names. Elliott wave counts leave their origin unlabelled and number their waves from the second anchor, default to the Intermediate degree, `(1)` to `(5)`, centre their labels on their points and are drawn as they are placed (`DrawingTool.progressive`, a new optional drawing tool field). 90 drawing tools. |
@@ -228,7 +229,7 @@ methods are not properties of that API object.
 <!-- BEGIN GENERATED EXPORT INDEX -->
 
 All 439 names on the API object, so nothing is a surprise. Generated from
-the installed openalgo-charts@2.7.4 build by `generate-api-index.mjs`; do not
+the installed openalgo-charts@2.7.5 build by `generate-api-index.mjs`; do not
 edit this section by hand.
 
 **Registration and introspection** (14)

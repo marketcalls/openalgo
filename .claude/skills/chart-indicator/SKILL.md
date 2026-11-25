@@ -59,6 +59,18 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.5: nothing for an indicator author.** Three fixes to host
+  surfaces; nothing a descriptor declares changed, and the registry stays
+  at 113 built-ins and the index at 439 names. The indicator tier is byte
+  for byte 2.7.4's, so every built-in computes what it did. A fit now
+  returns to the `timeScale.rightOffset` its host configured instead of
+  the built-in four bars (no chart in OpenAlgo sets one, so every chart
+  here opens and resets as before); the widget's own right-click menu
+  gains a Reset view row; and the widget's centred dialogs move by their
+  title bar. The last is the one a trader meets: on the Historify and
+  strategy charts, an indicator's settings form can be slid off the plot
+  it edits. `/trading` draws its own forms, which stay where they open.
+
 - **2.7.4: one more built-in, so one more reserved id.** Pivot Points
   Standard (`pivot-points`, exported as `PIVOT_POINTS`) takes the registry
   from 112 to 113 and the index from 438 to 439 names. A custom module

@@ -38,11 +38,12 @@ fix, live in [docs/releases](releases/).
   charges column on the day-wise and trade tables. The day-wise and trades CSV
   exports gain charges columns at the end.
 - **Pivot Points Standard on every chart.** `/trading`, Historify and the
-  strategy charts now use openalgo-charts 2.7.4 (from 2.7.3), which adds one
-  study and takes the built-in indicators to 113. It draws the pivot with up
-  to five support and resistance pairs, worked out from the last finished
-  period. Choose the type (Traditional, Fibonacci, Woodie, Classic, DeMark or
-  Camarilla) and the period: daily, weekly, monthly, quarterly, yearly, or
+  strategy charts now use openalgo-charts 2.7.5 (from 2.7.3). Its 2.7.4
+  release adds one study and takes the built-in indicators to 113. The
+  study draws the pivot with up to five support and resistance pairs,
+  worked out from the last finished period. Choose the type (Traditional,
+  Fibonacci, Woodie, Classic, DeMark or Camarilla) and the period: daily,
+  weekly, monthly, quarterly, yearly, or
   Auto, which takes the previous session on a chart of 15 minutes or less,
   the previous week on other intraday charts, the previous month on a daily
   chart and the previous year above that. The fourth and fifth pairs are
@@ -93,6 +94,17 @@ fix, live in [docs/releases](releases/).
   these do not appear. Full screen is already on the `/trading` toolbar, no
   broker feed here serves extended hours as a separate series, and moving a
   study between panes from the menu is not available yet.
+- On the Historify and strategy charts, Chart settings and an indicator's
+  settings can now be moved: drag the form by its title bar to see the
+  candles or the study behind it. It cannot be dragged out of reach, and it
+  opens in the centre again the next time. This comes with openalgo-charts
+  2.7.5. The settings forms on `/trading` are OpenAlgo's own: they still open
+  over the middle of the chart and do not move.
+- Nothing else in openalgo-charts 2.7.5 changes a chart here. Its other two
+  fixes are a chart that now keeps the right-hand gap its host page asked
+  for (no chart in OpenAlgo asks for one, so every chart opens and resets to
+  the same view as before) and a Reset view row on the library's own
+  right-click menu (OpenAlgo's menus already have Reset chart view).
 - The watchlist on `/trading` now opens on four columns: Symbol, Last, Chg and
   Chg%. Chg is the move from the previous close in price. It was an optional
   column before, switched off, and easy to miss. A browser that still has the
