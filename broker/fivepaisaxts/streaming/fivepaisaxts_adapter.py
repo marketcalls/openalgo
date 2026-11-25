@@ -124,11 +124,27 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.logger.info("Using configured API key for Fivepaisa XTS connection")
 
+        # The feed connects with the market data token stored at broker login,
+        # read again on every reconnect, instead of logging in on its own: a
+        # second market data login cancelled the token history and quotes use
+        # (issue #2484). Tokens handed in through auth_data are used as given.
+        if auth_data:
+            provided_feed_token = feed_token
+
+            def feed_token_provider():
+                return provided_feed_token
+
+        else:
+
+            def feed_token_provider():
+                return get_feed_token(user_id)
+
         # Create Fivepaisa XTS WebSocket client with API credentials
         self.ws_client = FivepaisaXTSWebSocketClient(
             api_key=api_key,
             api_secret=api_secret,
-            user_id=user_id,  # Pass the user_id, client will get actual userID from login
+            user_id=user_id,
+            feed_token_provider=feed_token_provider,
         )
 
         # Set callbacks

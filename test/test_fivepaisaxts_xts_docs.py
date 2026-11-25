@@ -331,3 +331,194 @@ def test_streaming_quote_reads_touchline_for_1501():
     quote = adapter._normalize_market_data(message, 2)
 
     assert (quote["ltp"], quote["open"], quote["volume"]) == (1723.0, 1696.8, 189238)
+
+
+# ------------------------------------------- one market data session (#2484)
+
+
+def _jwt(user_id):
+    import base64
+    import json
+
+    def part(obj):
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+
+    return f"{part({'alg': 'HS256'})}.{part({'userID': user_id})}.sig"
+
+
+class _FakeSio:
+    def __init__(self, error=None):
+        self.connected = False
+        self.eio = type("Eio", (), {"state": "disconnected"})()
+        self.error = error
+        self.urls = []
+        self.paths = []
+
+    def connect(self, url, **kwargs):
+        if self.error:
+            raise self.error
+        self.urls.append(url)
+        self.paths.append(kwargs.get("socketio_path"))
+
+
+def _feed_client(provider, sio=None):
+    import websocket_proxy  # noqa: F401  (resolves the adapter import cycle)
+    from broker.fivepaisaxts.streaming.fivepaisaxts_websocket import FivepaisaXTSWebSocketClient
+
+    client = FivepaisaXTSWebSocketClient(
+        api_key="k", api_secret="s", user_id="admin", feed_token_provider=provider
+    )
+    client.sio = sio or _FakeSio()
+    return client
+
+
+def test_market_data_user_id_is_the_claim_before_the_underscore():
+    from broker.fivepaisaxts.streaming.fivepaisaxts_websocket import FivepaisaXTSWebSocketClient
+
+    token = _jwt("1048131_856F2F2AF32542B762129")
+    assert FivepaisaXTSWebSocketClient.market_data_user_id(token) == "1048131"
+    assert FivepaisaXTSWebSocketClient.market_data_user_id("not-a-jwt") is None
+
+
+def test_feed_connects_with_the_stored_token_and_never_logs_in(monkeypatch):
+    token = _jwt("1048131_APP")
+    client = _feed_client(lambda: token)
+    monkeypatch.setattr(
+        client, "marketdata_login", lambda: pytest.fail("the feed logged in on its own")
+    )
+
+    client.connect()
+
+    [url] = client.sio.urls
+    assert f"token={token}" in url and "userID=1048131&" in url
+    assert client.sio.paths == ["/apimarketdata/socket.io"]
+    assert client.market_data_token == token
+
+
+def test_reconnect_reads_the_stored_token_again(monkeypatch):
+    tokens = iter([_jwt("1_A"), _jwt("1_B")])
+    client = _feed_client(lambda: next(tokens))
+    monkeypatch.setattr(client, "marketdata_login", lambda: pytest.fail("logged in"))
+
+    client.connect()
+    client.connect()
+
+    assert [u.split("token=")[1].split("&")[0] for u in client.sio.urls] == [
+        _jwt("1_A"),
+        _jwt("1_B"),
+    ]
+
+
+def test_a_failed_connect_with_a_stored_token_raises_instead_of_logging_in(monkeypatch):
+    client = _feed_client(
+        lambda: _jwt("1_A"), sio=_FakeSio(error=RuntimeError("Already connected"))
+    )
+    monkeypatch.setattr(client, "marketdata_login", lambda: pytest.fail("logged in"))
+
+    with pytest.raises(RuntimeError):
+        client.connect()
+
+
+def test_without_a_stored_token_the_feed_logs_in_where_history_does(monkeypatch):
+    from broker.fivepaisaxts.baseurl import MARKET_DATA_URL
+    from broker.fivepaisaxts.streaming import fivepaisaxts_websocket as ws
+
+    posted = []
+
+    def fake_post(url, **kwargs):
+        posted.append(url)
+        return _Response({"type": "success", "result": {"token": "T", "userID": "1048131"}})
+
+    monkeypatch.setattr(ws.requests, "post", fake_post)
+    client = _feed_client(lambda: None)
+
+    client.connect()
+
+    assert posted == [f"{MARKET_DATA_URL}/auth/login"]
+    assert "apibinarymarketdata" not in posted[0]
+
+
+def test_feed_waits_for_the_previous_connection_to_close(monkeypatch):
+    sio = _FakeSio()
+    sio.eio.state = "connected"
+    client = _feed_client(lambda: _jwt("1_A"), sio=sio)
+    client.PREVIOUS_CONNECTION_CLOSE_WAIT = 0.3
+    rebuilt = []
+    monkeypatch.setattr(client, "_setup_socketio", lambda: rebuilt.append(True))
+
+    client.connect()
+
+    assert rebuilt == [True]  # gave up waiting and took a fresh client
+
+
+def test_adapter_hands_the_stored_feed_token_to_the_feed(monkeypatch):
+    import websocket_proxy  # noqa: F401  (resolves the adapter import cycle)
+    from broker.fivepaisaxts.streaming import fivepaisaxts_adapter as adapter_mod
+
+    reads = []
+    monkeypatch.setattr(adapter_mod, "get_auth_token", lambda user_id, bypass_cache=True: "auth")
+    monkeypatch.setattr(
+        adapter_mod, "get_feed_token", lambda user_id: reads.append(user_id) or _jwt("1_A")
+    )
+    monkeypatch.setenv("BROKER_API_KEY_MARKET", "k")
+    monkeypatch.setenv("BROKER_API_SECRET_MARKET", "s")
+    adapter = adapter_mod.FivepaisaXTSWebSocketAdapter.__new__(
+        adapter_mod.FivepaisaXTSWebSocketAdapter
+    )
+    adapter.logger = logging.getLogger("test_fivepaisaxts_streaming")
+
+    adapter.initialize("fivepaisaxts", "admin")
+    reads.clear()
+
+    assert adapter.ws_client.feed_token_provider() == _jwt("1_A")
+    assert reads == ["admin"]
+
+
+def test_history_logs_in_again_once_on_an_invalid_token(monkeypatch):
+    import pandas as pd
+
+    from broker.fivepaisaxts.api import data as fp_data
+
+    answers = [
+        {"type": "error", "code": "e-session-0007", "description": "Invalid Token"},
+        {
+            "type": "success",
+            "result": {"dataReponse": "1737331200|1316|1316|1300.25|1305.45|14040244|0|"},
+        },
+    ]
+    tokens_used = []
+
+    def fake_api(endpoint, auth, method="GET", payload="", feed_token=None, params=None):
+        tokens_used.append(feed_token)
+        return answers.pop(0)
+
+    class _Row:
+        token = "26000"
+
+    class _Query:
+        def filter(self, *args):
+            return self
+
+        def first(self):
+            return _Row()
+
+    class _Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def query(self, model):
+            return _Query()
+
+    monkeypatch.setattr(fp_data, "get_api_response", fake_api)
+    monkeypatch.setattr(fp_data, "get_br_symbol", lambda symbol, exchange: "NIFTY 50")
+    monkeypatch.setattr(fp_data, "db_session", lambda: _Session())
+    monkeypatch.setattr(fp_data, "refresh_feed_token", lambda: ("NEW", "1048131", None))
+
+    handler = fp_data.BrokerData("auth", feed_token="OLD")
+    df = handler.get_history("NIFTY", "NSE_INDEX", "D", "2025-01-20", "2025-01-20")
+
+    assert tokens_used == ["OLD", "NEW"]
+    assert len(df) == 1 and isinstance(df, pd.DataFrame)

@@ -552,6 +552,9 @@ class BrokerData:
                 # Get the token for quotes
                 token = symbol_info.token  # token = instrument ID
 
+            # Set once the market data token has been refreshed for this request.
+            token_refreshed = False
+
             # Convert dates to datetime objects with IST timezone
             start_date = pd.to_datetime(from_date).tz_localize("Asia/Kolkata")
             end_date = pd.to_datetime(to_date).tz_localize("Asia/Kolkata")
@@ -594,6 +597,24 @@ class BrokerData:
                     feed_token=self.feed_token,
                     params=params,
                 )
+
+                # An expired market data token: log in again once, as quotes
+                # do, and repeat the request (issue #2484).
+                if (
+                    response
+                    and response.get("type") != "success"
+                    and "Invalid Token" in str(response.get("description", ""))
+                    and not token_refreshed
+                ):
+                    token_refreshed = True
+                    if self._refresh_feed_token():
+                        response = get_api_response(
+                            "/instruments/ohlc",
+                            self.auth_token,
+                            method="GET",
+                            feed_token=self.feed_token,
+                            params=params,
+                        )
 
                 if not response or response.get("type") != "success":
                     logger.error(f"API Response: {response}")

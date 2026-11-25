@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -72,7 +73,18 @@ class FivepaisaXTSWebSocketClient:
     _MCX_SEGMENTS = {"5", "51"}
     _IST = timezone(timedelta(hours=5, minutes=30))
 
-    def __init__(self, api_key: str, api_secret: str, user_id: str, base_url: str = None):
+    # How long connect() waits for the previous Socket.IO connection to finish
+    # closing before it opens a new one (issue #2484).
+    PREVIOUS_CONNECTION_CLOSE_WAIT = 5.0
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        user_id: str,
+        base_url: str = None,
+        feed_token_provider: Callable[[], str | None] | None = None,
+    ):
         """
         Initialize the Fivepaisa XTS Socket.IO client
 
@@ -81,11 +93,15 @@ class FivepaisaXTSWebSocketClient:
             api_secret: Market data API secret
             user_id: User ID (client ID)
             base_url: Base URL for the Socket.IO endpoint
+            feed_token_provider: Returns the market data token stored at broker
+                login. The feed connects with it, so history, quotes and the
+                feed share one market data session (issue #2484).
         """
         self.api_key = api_key
         self.api_secret = api_secret
         self.user_id = user_id
         self.base_url = base_url or self.BASE_URL
+        self.feed_token_provider = feed_token_provider
 
         # Authentication tokens
         self.market_data_token = None
@@ -150,15 +166,74 @@ class FivepaisaXTSWebSocketClient:
         # Add catch-all handler for any unhandled events
         self.sio.on("*", self._on_catch_all)
 
+    @staticmethod
+    def market_data_user_id(token: str) -> str | None:
+        """The market data user id the Socket.IO URL takes, read from the token.
+
+        The XTS token is a JWT whose userID claim reads "<user id>_<app id>";
+        the URL takes the part before the "_".
+        """
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            claim = json.loads(base64.urlsafe_b64decode(payload)).get("userID")
+        except (AttributeError, IndexError, ValueError, TypeError):
+            return None
+        if not claim:
+            return None
+        return str(claim).split("_", 1)[0] or None
+
+    def _use_stored_feed_token(self) -> bool:
+        """Take the market data token stored at broker login, if there is one."""
+        if self.feed_token_provider is None:
+            return False
+        try:
+            token = self.feed_token_provider()
+        except Exception as e:
+            self.logger.warning(f"Could not read the stored market data token: {e}")
+            return False
+        if not token:
+            return False
+        user_id = self.market_data_user_id(token)
+        if not user_id:
+            self.logger.warning("Stored market data token carries no user id")
+            return False
+        self.market_data_token = token
+        self.actual_user_id = user_id
+        return True
+
+    def _wait_until_disconnected(self) -> None:
+        """Let a previous connection finish closing before connecting again.
+
+        After a drop the old engine.io transport is often still closing, and
+        connecting on it raises "Already connected". If it has not closed in
+        time, a fresh client is used and the old one is left to finish.
+        """
+        if self.sio is None:
+            return
+        deadline = time.time() + self.PREVIOUS_CONNECTION_CLOSE_WAIT
+        while time.time() < deadline:
+            eio = getattr(self.sio, "eio", None)
+            if not self.sio.connected and getattr(eio, "state", "disconnected") == "disconnected":
+                return
+            time.sleep(0.1)
+        self.logger.warning("Previous Socket.IO connection still closing; using a new client")
+        self._setup_socketio()
+
     def marketdata_login(self):
         """
         Login to XTS market data API to get authentication tokens
+
+        Used only when no market data token was stored at broker login. It
+        logs in where the broker login does (/apimarketdata): XTS lets
+        several sessions of that kind coexist, while an /apibinarymarketdata
+        login cancels them all, which broke history (issue #2484).
 
         Returns:
             bool: True if login successful, False otherwise
         """
         try:
-            login_url = f"{self.base_url}/apibinarymarketdata/auth/login"
+            login_url = f"{MARKET_DATA_URL}/auth/login"
 
             login_payload = {
                 "appKey": self.api_key,
@@ -209,8 +284,13 @@ class FivepaisaXTSWebSocketClient:
             if self.sio is None:
                 self._setup_socketio()
 
-            # First, login to market data API to get proper tokens
-            if not self.marketdata_login():
+            # Connect with the market data token stored at broker login, read
+            # again on every (re)connect. Never log in while one is stored: any
+            # new login risks cancelling the token history and quotes use
+            # (issue #2484). If this connect fails, the adapter retries.
+            if self._use_stored_feed_token():
+                self._wait_until_disconnected()
+            elif not self.marketdata_login():
                 raise Exception("Market data login failed")
 
             # Build connection URL with proper market data token and user ID
