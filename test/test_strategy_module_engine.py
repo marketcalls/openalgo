@@ -785,6 +785,39 @@ def test_a_manual_close_does_not_trail_the_other_legs_to_entry(api_key):
     assert live["legs"]["2"]["effective_sl"] is None
 
 
+def test_a_ce_stop_moves_the_open_pe_leg_to_cost_and_leaves_the_ce_alone(api_key):
+    sid = _make(
+        _config(
+            move_sl_to_cost=True,
+            legs=[
+                {"id": 1, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20},
+                {"id": 2, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20},
+            ],
+        )
+    )
+    run_id = _start(
+        sid,
+        resolved=[
+            _resolved(leg_id=1, symbol="NIFTY28MAY2624000CE"),
+            _resolved(leg_id=2, symbol="NIFTY28MAY2624000PE"),
+        ],
+    ).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    engine.apply_fill(run_id, 2, 90.0, is_entry=True)
+
+    with patch.object(
+        engine.order_dispatch,
+        "dispatch_order",
+        return_value=DispatchResult(ok=True, broker_order_id="X", response={}),
+    ):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 121.0)
+
+    live = state.get_run_state(run_id)
+    assert live["sl_cost_side"] == "PE"
+    assert live["legs"]["2"]["effective_sl"] == pytest.approx(90.0)
+    assert live["legs"]["1"]["effective_sl"] != pytest.approx(90.0)
+
+
 def test_the_run_finalises_when_the_last_exit_fills_not_when_it_is_placed(api_key):
     # A leg is closed by its fill arriving, not by its exit being sent. Between
     # the two the strategy still holds the position, so it must still read as

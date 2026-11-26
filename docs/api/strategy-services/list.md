@@ -56,6 +56,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/list \
         "trail_step": 1000.0
       },
       "trail_sl_to_entry": false,
+      "move_sl_to_cost": false,
       "scheduler": {
         "enabled": true,
         "days": ["MON", "TUE", "WED", "THU", "FRI"],
@@ -94,6 +95,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/list \
       "overall_target_mtm": null,
       "lock_profit": null,
       "trail_sl_to_entry": false,
+      "move_sl_to_cost": false,
       "scheduler": null,
       "live_enabled": true,
       "webhook_locked": false,
@@ -158,6 +160,7 @@ Each object in `data`:
 | overall_target_mtm | number or null | Strategy-level target in rupees of MTM |
 | lock_profit | object or null | `{mode, if_profit_reaches, lock_profit, trail_step}` |
 | trail_sl_to_entry | boolean | Whether a stop on one leg trails the others to entry |
+| move_sl_to_cost | boolean | Whether a CE or PE leg stop moves open opposite-side legs' stops to their entry (mutually exclusive with trail_sl_to_entry) |
 | scheduler | object or null | `{enabled, days, start_time, auto_stop_time, default_mode}` |
 | live_enabled | boolean | Whether this strategy may run in `live` mode |
 | webhook_locked | boolean | Whether the webhook kill switch is engaged |

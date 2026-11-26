@@ -1630,6 +1630,7 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
             label="Trail-SL-to-entry"
             value={strategy.trail_sl_to_entry ? 'enabled' : 'off'}
           />
+          <RiskRow label="Move-SL-to-cost" value={strategy.move_sl_to_cost ? 'enabled' : 'off'} />
           {strategy.lock_profit ? (
             <>
               <Separator />

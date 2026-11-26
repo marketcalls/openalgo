@@ -337,6 +337,65 @@ def test_trail_to_entry_bypasses_the_overall_stop_for_the_rest_of_the_run():
 
 
 # ---------------------------------------------------------------------------
+# Move SL to cost (CE/PE)
+# ---------------------------------------------------------------------------
+
+
+def test_move_to_cost_moves_only_the_opposite_side_legs():
+    ce = _leg(leg_id=1, symbol="NIFTY28MAY2624000CE", position="S", entry_avg=100.0, ltp=120.0)
+    pe = _leg(leg_id=2, symbol="NIFTY28MAY2623000PE", position="S", entry_avg=90.0, ltp=85.0)
+    state = _state([ce, pe])
+
+    moved = ra.move_opposite_side_to_cost(state, ce)
+
+    assert moved == ["2"]
+    assert pe["effective_sl"] == pytest.approx(90.0)
+    assert ce["effective_sl"] is None
+    assert state["sl_cost_side"] == "PE"
+
+
+def test_move_to_cost_leaves_a_same_side_buy_leg_on_the_other_side_alone():
+    ce_sell = _leg(leg_id=1, symbol="NIFTY28MAY2624000CE", position="S", entry_avg=100.0, ltp=120.0)
+    pe_sell = _leg(leg_id=2, symbol="NIFTY28MAY2623000PE", position="S", entry_avg=90.0, ltp=85.0)
+    pe_buy = _leg(leg_id=3, symbol="NIFTY28MAY2623000PE", position="B", entry_avg=40.0, ltp=45.0)
+    ce_buy = _leg(leg_id=4, symbol="NIFTY28MAY2624000CE", position="B", entry_avg=30.0, ltp=25.0)
+    state = _state([ce_sell, pe_sell, pe_buy, ce_buy])
+
+    moved = ra.move_opposite_side_to_cost(state, ce_sell)
+
+    assert sorted(moved) == ["2", "3"]
+    assert pe_sell["effective_sl"] == pytest.approx(90.0)
+    assert pe_buy["effective_sl"] == pytest.approx(40.0)
+    assert ce_buy["effective_sl"] is None
+
+
+def test_move_to_cost_does_nothing_when_the_opposite_side_is_not_open():
+    ce = _leg(leg_id=1, symbol="NIFTY28MAY2624000CE", position="S", entry_avg=100.0, ltp=120.0)
+    pe = _leg(leg_id=2, symbol="NIFTY28MAY2623000PE", position="S", entry_avg=90.0, status="closed")
+    state = _state([ce, pe], sl_cost_side=None)
+
+    moved = ra.move_opposite_side_to_cost(state, ce)
+
+    assert moved == []
+    assert state["sl_cost_side"] is None
+
+
+def test_move_to_cost_the_moved_side_stopping_out_moves_nothing():
+    ce = _leg(leg_id=1, symbol="NIFTY28MAY2624000CE", position="S", entry_avg=100.0, ltp=120.0)
+    pe = _leg(leg_id=2, symbol="NIFTY28MAY2623000PE", position="S", entry_avg=90.0, ltp=85.0)
+    state = _state([ce, pe])
+    ra.move_opposite_side_to_cost(state, ce)
+
+    ce_second = _leg(leg_id=3, symbol="NIFTY28MAY2624500CE", position="S", entry_avg=80.0, ltp=95.0)
+    state["legs"]["3"] = ce_second
+    moved_again = ra.move_opposite_side_to_cost(state, pe)
+
+    assert moved_again == []
+    assert ce_second["effective_sl"] is None
+    assert state["sl_cost_side"] == "PE"
+
+
+# ---------------------------------------------------------------------------
 # Run state
 # ---------------------------------------------------------------------------
 

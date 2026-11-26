@@ -194,6 +194,7 @@ export interface StrategySummary {
   overall_target_mtm: number | null
   lock_profit: LockProfitConfig | null
   trail_sl_to_entry: boolean
+  move_sl_to_cost: boolean
   scheduler: SchedulerConfig | null
   live_enabled: boolean
   webhook_locked: boolean
@@ -235,6 +236,7 @@ export interface StrategyConfigPayload {
   overall_target_mtm?: number | null
   lock_profit?: LockProfitConfig | null
   trail_sl_to_entry?: boolean
+  move_sl_to_cost?: boolean
   scheduler?: SchedulerConfig | null
   daily_loss_limit_inr?: number | null
   webhook_ip_allowlist?: string[] | null

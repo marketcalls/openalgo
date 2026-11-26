@@ -298,3 +298,50 @@ def trail_open_legs_to_entry(state: dict[str, Any], triggering_leg_id: Any) -> l
     if moved:
         state["trail_to_entry_active"] = True
     return moved
+
+
+def leg_option_side(leg: dict[str, Any]) -> str | None:
+    """Return CE or PE for an option leg, read from its symbol; None otherwise."""
+    symbol = str(leg.get("symbol") or "").upper()
+    for side in ("CE", "PE"):
+        if symbol.endswith(side):
+            return side
+    return None
+
+
+def move_opposite_side_to_cost(state: dict[str, Any], triggering_leg: dict[str, Any]) -> list[str]:
+    """Move the open opposite-side legs' stops to their own entry, and say which moved.
+
+    Fired when a CE or PE leg's own stop hits. Only the other side is touched,
+    and only while it is open. The side that was moved to cost becomes the
+    run's cost side; a later stop on that same side moves nothing.
+    """
+    trigger_side = leg_option_side(triggering_leg)
+    if trigger_side is None or state.get("sl_cost_side") == trigger_side:
+        return []
+
+    opposite = "PE" if trigger_side == "CE" else "CE"
+    legs = [
+        leg
+        for leg in state.get("legs", {}).values()
+        if leg.get("status") == "open" and leg_option_side(leg) == opposite
+    ]
+    if not legs:
+        return []
+
+    decision = trail_stops_to_entry(
+        [leg_to_position_risk(leg) for leg in legs],
+        last_prices={str(leg.get("leg_id")): leg.get("ltp") for leg in legs},
+    )
+
+    by_id = {str(leg.get("leg_id")): leg for leg in legs}
+    moved: list[str] = []
+    for move in decision.moves:
+        leg = by_id.get(move.identifier)
+        if leg is not None:
+            leg["effective_sl"] = move.new_stop
+            moved.append(move.identifier)
+
+    if moved:
+        state["sl_cost_side"] = opposite
+    return moved

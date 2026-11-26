@@ -552,6 +552,7 @@ def _rebuild_state(
         "lock_armed": lock_floor is not None,
         "lock_floor": lock_floor,
         "trail_to_entry_active": bool(checkpoint.get("trail_to_entry_active", False)),
+        "sl_cost_side": checkpoint.get("sl_cost_side"),
         # Re-derived by the tick feed, which knows nothing about what the feed
         # was doing before the restart.
         "tick_source_degraded": False,

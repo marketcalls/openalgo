@@ -904,6 +904,7 @@ def _validate_strategy_config(payload: Any) -> dict:
         "overall_target_mtm": _gain_amount(raw.get("overall_target_mtm"), "overall_target_mtm"),
         "lock_profit": _validate_lock_profit(raw.get("lock_profit")),
         "trail_sl_to_entry": _boolean(raw.get("trail_sl_to_entry", False), "trail_sl_to_entry"),
+        "move_sl_to_cost": _boolean(raw.get("move_sl_to_cost", False), "move_sl_to_cost"),
         "scheduler": _validate_scheduler(raw.get("scheduler")),
         "daily_loss_limit_inr": _loss_amount(
             raw.get("daily_loss_limit_inr"), "daily_loss_limit_inr"
@@ -924,6 +925,9 @@ def _validate_strategy_config(payload: Any) -> dict:
     config["exit_time"] = _hhmm(exit_raw, "exit_time") if exit_raw is not None else None
     if config["entry_time"] and config["exit_time"] and config["entry_time"] >= config["exit_time"]:
         raise ValidationError("entry_time must be earlier than exit_time")
+
+    if config["trail_sl_to_entry"] and config["move_sl_to_cost"]:
+        raise ValidationError("trail_sl_to_entry and move_sl_to_cost cannot both be enabled")
 
     _reject_contradictory_sides(config)
     _reject_segments_outside_tab(config)

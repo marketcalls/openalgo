@@ -228,6 +228,7 @@ EVENT_KINDS = (
     "lock_profit_floor_advanced",
     "lock_profit_triggered",
     "trail_to_entry_activated",
+    "sl_moved_to_cost",
     "eod_squareoff",
     "expiry_squareoff",
     # Tick source
@@ -302,6 +303,7 @@ class SmStrategy(Base):
     overall_target_mtm = Column(Numeric(18, 2), nullable=True)
     lock_profit = Column(JSON, nullable=True)
     trail_sl_to_entry = Column(Boolean, nullable=False, default=False)
+    move_sl_to_cost = Column(Boolean, nullable=False, default=False)
 
     scheduler = Column(JSON, nullable=True)
 
@@ -463,6 +465,7 @@ class SmStrategyCheckpoint(Base):
 
     lock_floor = Column(Numeric(18, 2), nullable=True)
     trail_to_entry_active = Column(Boolean, nullable=False, default=False)
+    sl_cost_side = Column(String(2), nullable=True)
 
     leg_state = Column(JSON, nullable=False, default=dict)
 
@@ -626,6 +629,7 @@ def strategy_to_dict(row: SmStrategy, *, include_legs: bool = True) -> dict:
         "overall_target_mtm": _num(row.overall_target_mtm),
         "lock_profit": row.lock_profit,
         "trail_sl_to_entry": bool(row.trail_sl_to_entry),
+        "move_sl_to_cost": bool(row.move_sl_to_cost),
         "scheduler": row.scheduler,
         "live_enabled": bool(row.live_enabled),
         "webhook_locked": bool(row.webhook_locked),
@@ -727,6 +731,7 @@ def checkpoint_to_dict(row: SmStrategyCheckpoint) -> dict:
         "pnl_trough": _num(row.pnl_trough),
         "lock_floor": _num(row.lock_floor),
         "trail_to_entry_active": bool(row.trail_to_entry_active),
+        "sl_cost_side": row.sl_cost_side,
         "leg_state": row.leg_state or {},
     }
 
@@ -769,6 +774,7 @@ def create_strategy(user_id: str, config: dict) -> tuple[dict | None, str | None
             overall_target_mtm=config.get("overall_target_mtm"),
             lock_profit=config.get("lock_profit"),
             trail_sl_to_entry=bool(config.get("trail_sl_to_entry", False)),
+            move_sl_to_cost=bool(config.get("move_sl_to_cost", False)),
             scheduler=config.get("scheduler"),
             daily_loss_limit_inr=config.get("daily_loss_limit_inr"),
             webhook_ip_allowlist=config.get("webhook_ip_allowlist"),
@@ -950,6 +956,7 @@ UPDATABLE_FIELDS = frozenset(
         "overall_target_mtm",
         "lock_profit",
         "trail_sl_to_entry",
+        "move_sl_to_cost",
         "scheduler",
         "daily_loss_limit_inr",
         "webhook_ip_allowlist",
@@ -2478,6 +2485,7 @@ def write_checkpoint(run_id: int, snapshot: dict) -> bool:
             pnl_trough=snapshot.get("pnl_trough", 0),
             lock_floor=snapshot.get("lock_floor"),
             trail_to_entry_active=bool(snapshot.get("trail_to_entry_active", False)),
+            sl_cost_side=snapshot.get("sl_cost_side"),
             leg_state=snapshot.get("leg_state", {}),
         )
         db_session.add(row)

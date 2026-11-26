@@ -57,6 +57,7 @@ const stoppedStrategy = {
   overall_target_mtm: null,
   lock_profit: null,
   trail_sl_to_entry: false,
+  move_sl_to_cost: false,
   scheduler: null,
   live_enabled: false,
   webhook_locked: false,

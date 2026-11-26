@@ -220,6 +220,12 @@ REFUSALS = [
     ("an unknown product", {"product": "COVER"}, "product"),
     ("an unknown pricetype", {"pricetype": "ICEBERG"}, "pricetype"),
     ("a non-boolean trail_sl_to_entry", {"trail_sl_to_entry": "yes"}, "trail_sl_to_entry"),
+    ("a non-boolean move_sl_to_cost", {"move_sl_to_cost": "yes"}, "move_sl_to_cost"),
+    (
+        "both stop-to-entry modes together",
+        {"trail_sl_to_entry": True, "move_sl_to_cost": True},
+        "move_sl_to_cost",
+    ),
     # Times
     ("a malformed entry_time", {"entry_time": "9.20am"}, "entry_time"),
     ("an entry_time hour out of range", {"entry_time": "25:00"}, "entry_time"),
