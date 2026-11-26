@@ -1,4 +1,7 @@
+import io
 import os
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import pandas as pd
@@ -132,6 +135,71 @@ flattrade_urls = {
     "BFO_IDX": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Index_Derivatives.csv",
     "BFO_EQ": "https://flattrade.s3.ap-south-1.amazonaws.com/scripmaster/Bfo_Equity_Derivatives.csv",
 }
+
+
+# Flattrade's scrip master files carry no tick size, so the processors fill a
+# per-segment value that is wrong for many contracts (NATGASMINI ticks in 0.10,
+# not 0.05), and the chart and order ticket then offer prices Flattrade rejects.
+# Shoonya runs the same Noren OMS and publishes the exchange tick per token, so
+# the tick is taken from its files, matched on exchange and token.
+shoonya_tick_urls = {
+    "NSE": "https://api.shoonya.com/NSE_symbols.txt.zip",
+    "NFO": "https://api.shoonya.com/NFO_symbols.txt.zip",
+    "CDS": "https://api.shoonya.com/CDS_symbols.txt.zip",
+    "MCX": "https://api.shoonya.com/MCX_symbols.txt.zip",
+    "BSE": "https://api.shoonya.com/BSE_symbols.txt.zip",
+    "BFO": "https://api.shoonya.com/BFO_symbols.txt.zip",
+}
+
+# One shared worker that fetches the Shoonya tick files while the Flattrade
+# files download. Module-level so a download never builds its own pool.
+_tick_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flattrade_tick")
+_TICK_WAIT_SECONDS = 120
+
+
+def download_shoonya_tick_sizes():
+    """Return {(exchange, token): tick_size} from Shoonya's symbol files.
+
+    A file that fails to download or parse is logged and skipped; its
+    segment keeps the tick the Flattrade processors set. A tick of zero or
+    less (Shoonya gives indices 0) is not a tick and is left out.
+    """
+    ticks = {}
+    for exchange, url in shoonya_tick_urls.items():
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                with archive.open(archive.namelist()[0]) as handle:
+                    df = pd.read_csv(handle, usecols=["Exchange", "Token", "TickSize"], dtype=str)
+        except Exception:
+            logger.exception(f"Tick sizes: could not read Shoonya's {exchange} file from {url}")
+            continue
+        df["TickSize"] = pd.to_numeric(df["TickSize"], errors="coerce")
+        df = df[df["TickSize"] > 0]
+        keys = zip(df["Exchange"].str.strip(), df["Token"].str.strip(), strict=True)
+        ticks.update(zip(keys, df["TickSize"], strict=True))
+        logger.info(f"Tick sizes: {len(df)} {exchange} ticks read from Shoonya")
+    return ticks
+
+
+def apply_shoonya_tick_sizes(frames, ticks):
+    """Set each row's tick_size from ``ticks`` where its exchange and token match.
+
+    Rows Shoonya does not list keep the tick their processor set.
+    """
+    for segment, df in frames:
+        if df is None or df.empty:
+            continue
+        exchange = df["brexchange"].astype(str).str.replace("_INDEX", "", regex=False)
+        tokens = df["token"].astype(str).str.strip()
+        keys = pd.Series(list(zip(exchange, tokens, strict=True)), index=df.index)
+        matched = keys.map(ticks)
+        df["tick_size"] = matched.where(matched.notna(), df["tick_size"]).astype(float)
+        logger.info(
+            f"Tick sizes: {segment} {int(matched.notna().sum())} of {len(df)} rows "
+            f"matched Shoonya; the rest keep the default tick"
+        )
 
 
 def download_csv_data(output_path):
@@ -950,6 +1018,9 @@ def master_contract_download():
     # concurrent download would delete or overwrite its files.
     output_path = os.path.join("tmp", "flattrade")
     try:
+        # Shoonya's tick files download alongside Flattrade's own.
+        tick_future = _tick_executor.submit(download_shoonya_tick_sizes)
+
         # Download and process every segment before touching the stored
         # contract. A failure anywhere up to the swap leaves it unchanged.
         download_csv_data(output_path)
@@ -962,6 +1033,18 @@ def master_contract_download():
             ("MCX", process_flattrade_mcx_data(output_path)),
             ("BFO", process_flattrade_bfo_data(output_path)),
         ]
+
+        # The tick files are a correction, never a reason to fail the
+        # download: without them every row keeps its processor's tick.
+        try:
+            ticks = tick_future.result(timeout=_TICK_WAIT_SECONDS)
+        except Exception:
+            logger.exception(
+                "Tick sizes: Shoonya's files were not ready; keeping the default ticks"
+            )
+            ticks = {}
+        apply_shoonya_tick_sizes(frames, ticks)
+
         replace_symtoken_table(frames)
 
         delete_flattrade_temp_data(output_path)
