@@ -73,6 +73,7 @@ BROKER_DISPLAY_NAMES = {
     "sahi": "Sahi",
     "samco": "Samco",
     "shoonya": "Shoonya",
+    "smifs": "SMIFS God Quant",
     "tradejini": "Tradejini",
     "tradesmart": "TradeSmart",
     "upstox": "Upstox",

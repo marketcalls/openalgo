@@ -931,6 +931,24 @@ GUIDES = {
         "and Shoonya sends you back to OpenAlgo.",
         "redirect_hint": "Register this exact address as the redirect URL in your broker app.",
     },
+    "smifs": {
+        "name": "SMIFS God Quant",
+        "sign_in": "saved_keys",
+        "fields": (
+            {
+                "hint": "An access token minted in the SMIFS developer portal "
+                "(smifsgq.smifs.com). A token is valid for 24 hours and works only "
+                "from the static IP addresses whitelisted for your account.",
+                "key": "api_key",
+                "label": "Access Token",
+                "required": True,
+                "secret": True,
+            },
+        ),
+        "banner": "Login with SMIFS God Quant signs you in with one click using your saved "
+        "access token. Mint a fresh token in the SMIFS developer portal when it expires.",
+        "redirect_hint": "",
+    },
     "tradejini": {
         "name": "Tradejini",
         "sign_in": "form",
