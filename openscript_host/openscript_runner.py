@@ -242,10 +242,6 @@ STATED_FACTS = (
 # ``_check_readable`` instead, as is any session fact the engine adds later.
 STATED_SESSION_FACTS = ("session.isFirstBar",)
 
-# The ``stdlib.md`` 15.2 units a ``req.timeframe`` read folds by the calendar, in
-# the instrument's zone, rather than by counting. See ``_check_readable``.
-CALENDAR_UNITS = ("D", "W", "M")
-
 # The compiled program tag a program that places orders carries, and the word its
 # meta uses for a program that is one. Both are the compiled program format's own
 # vocabulary rather than this file's.
@@ -558,6 +554,22 @@ def _calls_in(text: str) -> frozenset:
     return frozenset(
         one["name"] for one in functions if isinstance(one, dict) and isinstance(one.get("name"), str)
     )
+
+
+def _reads_in(text: str) -> bool:
+    """Whether a program reads another timeframe or instrument, from a copy of its text.
+
+    From openalgo-script 0.9.0 an intraday read is counted from the session's
+    open in the instrument's zone (``compiled-program.md`` 2.16.2), so a read is
+    a question about the clock as much as ``date.hour`` is, and needs the same
+    reader. A table that is not there reads nothing.
+    """
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return False
+    requests = parsed.get("requests") if isinstance(parsed, dict) else None
+    return isinstance(requests, list) and len(requests) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1038,7 +1050,7 @@ class Session:
         # The calendar before the load, because the load is what checks every
         # call a program makes against the library it is handed. Read from the
         # same copy of the text as the kind above.
-        self._join_calendar(served, _calls_in(text))
+        self._join_calendar(served, _calls_in(text), _reads_in(text))
         loaded = engine.load_text(
             text,
             self._settings(),
@@ -1370,7 +1382,7 @@ class Session:
             say(f"Running with {', '.join(sorted(named))} set from the saved parameters.")
         return named
 
-    def _join_calendar(self, served, called) -> None:
+    def _join_calendar(self, served, called, reads_bars: bool = False) -> None:
         """Serve the calendar calls a program makes, in the instrument's zone, or refuse it.
 
         Two things stand between a script and a clock, and this host supplies
@@ -1394,9 +1406,21 @@ class Session:
         outside a copy kept in this file.
         """
         reads = sorted(set(called).intersection(self.engine.calendar_reads))
+        zone = self.instrument.get("timezone")
+        # A read of another timeframe needs the reader too: from openalgo-script
+        # 0.9.0 its candles are counted from the session's open, a wall clock
+        # time in the instrument's zone, and the engine's fold reads that zone
+        # through the same seam ``date.hour`` does. Without the reader every such
+        # read on this platform's zone would be absent on every bar.
+        if reads_bars and not self.engine.reads_calendar_in(zone):
+            raise Refusal(
+                f"{self.options.script} reads another timeframe with req.timeframe or "
+                f"req.symbol, whose candles start at the session's open in {zone}, and this "
+                "server cannot read a clock in that zone. Every one of those reads would come "
+                "back with no answer, so it will not be started."
+            )
         if not reads:
             return
-        zone = self.instrument.get("timezone")
         if not self.engine.reads_calendar_in(zone):
             raise Refusal(
                 f"{self.options.script} reads the clock, with {', '.join(reads)}, and this "
@@ -1422,12 +1446,11 @@ class Session:
         (``Engine.time_reader``), and refused only where this server cannot read
         a clock in that zone, for the reason ``_join_calendar`` gives.
 
-        **Then a day, a week or a month read by ``req.timeframe``.** The engine
-        folds one by the calendar in the instrument's zone, and its fold reads a
-        calendar in UTC alone: the reader this host supplies reaches the calendar
-        calls (``calendar_reader``) and not the fold. Such a read in any other
-        zone is absent on every bar with nothing said, so it is refused by name.
-        A read in minutes or hours is folded by counting and needs no zone.
+        **A read of another timeframe is not refused here.** From openalgo-script
+        0.9.0 the engine's fold reads the instrument's zone through the same seam
+        as the calendar calls, so the reader this host installs for any program
+        that reads one (``_join_calendar``) dates its days, weeks and months, and
+        counts its minutes from the session's open, in the platform's zone.
 
         **Then the session.** ``session.isFirstBar`` is a fact this driver states
         on every bar, from the session the market calendar holds for the
@@ -1454,25 +1477,6 @@ class Session:
                 f"{self.options.script} takes a written time, and this instrument's calendar is "
                 f"{zone}, which this server cannot read a clock in. It would read that time under "
                 "the wrong calendar, so it will not run it."
-            )
-
-        # The reads as the engine planned them at load, each with its timeframe
-        # resolved and the zone it is dated in. A run that makes none has none.
-        undated = sorted(
-            {
-                plan.query.timeframe
-                for plan in getattr(self.run, "plans", ())
-                if plan.timeframe.unit in CALENDAR_UNITS and plan.zone != self.engine.readable_zone
-            }
-        )
-        if undated:
-            raise Refusal(
-                f"{self.options.script} reads {', '.join(undated)} bars with req.timeframe, and "
-                f"the engine on this server can group bars into days, weeks or months only in "
-                f"UTC while this instrument's calendar is {zone}. Every one of those reads would "
-                "come back with no answer and the script would never act on one, so it will not "
-                "be started. Read a timeframe in minutes or hours instead, or remove the read and "
-                "save it again."
             )
 
         unstated = sorted(

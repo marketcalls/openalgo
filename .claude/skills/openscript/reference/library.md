@@ -2,7 +2,7 @@
 
 # The OpenScript library, every name
 
-Read from `openalgo-script@0.8.1`, the compiler this app ships, so it is
+Read from `openalgo-script@0.9.0`, the compiler this app ships, so it is
 what the browser will actually accept. `coverage.mjs` holds this page to the
 compiler in both directions: a name the compiler has and this page lacks fails,
 and so does a name here the compiler does not have.
@@ -490,7 +490,7 @@ Reading another instrument or another timeframe.
 | `req.events` | Dividends, splits and other scheduled events **(planned, not implemented)** | n/a |
 | `req.isReady` | Whether the host has answered yet | bar 0 |
 | `req.symbol` | Read an expression computed on another instrument | as above, plus the host's answer |
-| `req.timeframe` | Read an expression computed on a coarser interval | first bar the mode allows, section 15.3 |
+| `req.timeframe` | Read an expression computed on another interval, coarser or finer | first bar the mode allows, section 15.3 |
 
 ## Colours
 

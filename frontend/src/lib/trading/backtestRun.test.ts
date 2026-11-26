@@ -19,9 +19,13 @@ vi.mock('./openscriptFiles', () => ({
 
 const backtest = vi.fn()
 const settingsFor = vi.fn((contract: unknown) => ({ contract }))
+// A load asks the host about every read a strategy makes. By default it reads
+// nothing, so no test above the reads section fetches anything beyond the chart.
+const load = vi.fn()
 vi.mock('openalgo-script', () => ({
   backtest: (...args: unknown[]) => backtest(...args),
   settingsFor: (contract: unknown) => settingsFor(contract),
+  load: (...args: unknown[]) => load(...args),
 }))
 
 // The instrument facts route. Undefined is the route not answering, which is
@@ -36,6 +40,7 @@ const {
   contractFor,
   contractFromFacts,
   engineInterval,
+  historyInterval,
   MAX_BARS,
   runBacktest,
   runInstrumentFrom,
@@ -439,5 +444,63 @@ describe('the facts reach the engine', () => {
       hasOpenInterest: true,
     })
     expect(out.instrument).toEqual(options.instrument)
+  })
+})
+
+describe('reads the chart bars cannot answer', () => {
+  it('fetches the platform interval for a base, and one minute where history has none', () => {
+    expect(historyInterval('5m')).toBe('5m')
+    expect(historyInterval('2m')).toBe('2m')
+    expect(historyInterval('7m')).toBe('1m')
+    expect(historyInterval('60')).toBe('1h')
+    expect(historyInterval('2h')).toBe('2h')
+    expect(historyInterval('1D')).toBe('D')
+    expect(historyInterval('nonsense')).toBeNull()
+  })
+
+  it('fetches a fifteen minute read on a ten minute run at its five minute base and serves it', async () => {
+    // Catches a backtest that hands the engine no provider, which refuses a read
+    // the chart draws, and one that fetches the fifteen minute bars rather than
+    // the five minute base the engine folds them from.
+    compiles()
+    answering([row(0), row(1)])
+    ran()
+    load.mockImplementationOnce((_program: unknown, options: { host: { requestBars: (q: unknown) => unknown } }) => {
+      options.host.requestBars({
+        id: 0,
+        read: 'timeframe',
+        instrument: 'AAA',
+        exchange: 'XX',
+        timeframe: '15',
+        interval: '5m',
+        mode: 'confirmed',
+        warmup: null,
+      })
+      return { ok: true }
+    })
+
+    const outcome = await runBacktest(aRequest({ interval: '10m' }))
+
+    expect(outcome.ok).toBe(true)
+    const fetched = post.mock.calls
+      .filter(([url]) => url === '/history')
+      .map(([, body]) => (body as { interval: string }).interval)
+    expect(fetched).toEqual(['10m', '5m'])
+    const options = backtest.mock.calls[0][3] as {
+      requestBars?: (q: unknown) => { bars: { time: number }[] } | undefined
+    }
+    const served = options.requestBars?.({ instrument: 'AAA', exchange: 'XX', interval: '5m' })
+    expect(served?.bars[0].time).toBe(1_700_000_000_000)
+    expect(options.requestBars?.({ instrument: 'AAA', exchange: 'XX', interval: '15' })).toBeUndefined()
+  })
+
+  it('gives the engine no provider when no read needs one', async () => {
+    compiles()
+    answering([row(0), row(1)])
+    ran()
+
+    await runBacktest(aRequest())
+
+    expect(backtest.mock.calls[0][3]).not.toHaveProperty('requestBars')
   })
 })

@@ -98,6 +98,28 @@ backtest. It is invisible in a long test and dominant in a short one.
 
 ---
 
+### Any minute timeframe reads on a chart; a deployed strategy still needs a multiple
+
+```
+quarter = req.timeframe("15", close)   // on a 10 minute chart: built from 5 minute bars
+three   = req.timeframe("3", close)    // the last 3 minute bar closed by each chart bar
+```
+
+From openalgo-script 0.9.0 an intraday read is not limited to whole multiples
+of the chart's interval. On `/trading` charts and in backtests, fifteen and
+twenty five minutes on a ten minute chart, and three, are built from finer bars
+the terminal fetches. A strategy **deployed to run on the server** still reads
+whole multiples only: the runner serves no extra bars, so a fifteen minute read
+on a ten minute deployment, or a three minute one, is refused when it starts,
+with a message naming the read and the chart's interval. Write a whole multiple
+of the interval the strategy will be deployed on if it is going to run live.
+
+Since 0.9.0 an intraday read starts at the session open, 09:15 on NSE: a sixty
+minute read runs 09:15 to 10:15, as the broker's candles do. Before 0.9.0 it ran
+09:15 to 09:30 and then 09:30 to 10:30, so a study written earlier that reads
+10, 20, 30 or 60 minutes draws different values after the upgrade, and the new
+ones are the ones that match the chart.
+
 ## The warnings, which do not stop a thing
 
 A warning compiles, emits a program, and installs. Nobody is stopped. These are

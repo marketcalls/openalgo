@@ -1,6 +1,7 @@
 import { type BarsRequest, CandleBuilder, SessionCalendar } from 'openalgo-charts'
 import { describe, expect, it, vi } from 'vitest'
-import { createTradingTimeframes } from './timeframeFeed'
+import { lookbackDays } from './intervals'
+import { createTradingTimeframes, sourceSpanSeconds } from './timeframeFeed'
 
 const start = Date.parse('2026-10-01T03:45:00Z') / 1000
 const calendar = new SessionCalendar({ timezone: 'Asia/Kolkata', sessions: ['0915-1530:23456'] })
@@ -169,6 +170,66 @@ describe('broker custom timeframes', () => {
         asOf: start,
       })
     ).rejects.toThrow(/Historical/)
+    service.destroy()
+  })
+
+  // #2384: W and M derive from D one window after another under the chart's
+  // 15 s deadline, and the server spaces broker history calls 0.35 s apart.
+  it('builds weekly and monthly from a daily-only feed in few history calls', async () => {
+    expect(sourceSpanSeconds('1m')).toBe(30 * 86400)
+    expect(sourceSpanSeconds('1h')).toBe(30 * 86400)
+    expect(sourceSpanSeconds('D')).toBe(2000 * 86400)
+    const to = Date.parse('2026-11-12T00:00:00Z') / 1000
+    for (const interval of ['W', 'M', '2W', '3M']) {
+      // One daily bar per window, so a derived result proves the windows were read.
+      const getBars = vi.fn(async (req: BarsRequest) => [
+        { time: req.from!, open: 1, high: 2, low: 1, close: 2, volume: 1 },
+      ])
+      const service = createTradingTimeframes({ getBars }, { ...options(['D']), now: () => to })
+      const from = to - lookbackDays(interval) * 86400
+      const bars = await service.feed.getBars({
+        symbol: 'NIFTY',
+        exchange: 'NSE',
+        interval,
+        from,
+        to,
+      })
+      expect(bars.length).toBeGreaterThan(0)
+      const calls = getBars.mock.calls.map(([req]) => req)
+      expect(calls.length).toBeGreaterThan(0)
+      expect(calls.every((req) => req.interval === 'D')).toBe(true)
+      expect(calls.every((req) => req.to! - req.from! <= 2000 * 86400)).toBe(true)
+      // At the server's 0.35 s spacing the whole derived load fits well inside 15 s.
+      expect(calls.length * 0.35).toBeLessThan(5)
+      service.destroy()
+    }
+  })
+
+  // A Sunday special session in a year with no holiday list is still that day's bar.
+  it('places a daily bar on a day the calendar shows closed on its own date', async () => {
+    const sunday = Date.parse('2019-10-27T00:00:00+05:30') / 1000
+    const daily = [sunday - 2 * 86400, sunday, sunday + 86400].map((time, i) => ({
+      time,
+      open: i,
+      high: i + 1,
+      low: i,
+      close: i + 1,
+      volume: 1,
+    }))
+    const service = createTradingTimeframes(
+      { getBars: async (req) => daily.filter((b) => b.time >= req.from! && b.time < req.to!) },
+      { ...options(['D']), now: () => sunday + 30 * 86400 }
+    )
+    const from = Date.parse('2019-10-01T00:00:00+05:30') / 1000
+    const bars = await service.feed.getBars({
+      symbol: 'SBIN',
+      exchange: 'NSE',
+      interval: 'M',
+      from,
+      to: from + 31 * 86400,
+    })
+    expect(bars).toHaveLength(1)
+    expect(bars[0]).toMatchObject({ open: 0, close: 3, volume: 3 })
     service.destroy()
   })
 })

@@ -107,8 +107,11 @@ describe('an OpenScript interval input', () => {
   it('offers only timeframes the language reads, with the chart entry spelled out', () => {
     mount(request('openscript:higher-1', [FIELD], { tf: '1h' }), '5m')
     const options = optionsOf(screen.getByLabelText('Higher timeframe'))
+    // From openalgo-script 0.9.0 a finer interval runs on an intraday chart, so
+    // 1m is offered on a 5m chart; the empty entry and the broker's `D` are not.
     expect(options).toEqual([
       { label: 'Chart interval (5m)', value: '5m' },
+      { label: '1m', value: '1m' },
       { label: '15m', value: '15m' },
       { label: '1h', value: '1h' },
       { label: 'D', value: '1D' },

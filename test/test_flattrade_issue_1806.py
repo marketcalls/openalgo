@@ -58,60 +58,72 @@ def _close_frame(payload: bytes) -> websocket.ABNF:
 # --------------------------------------------------------------------------
 
 
-def test_flattrade_order_updates_do_not_open_a_second_piconnect_session(monkeypatch) -> None:
+@pytest.fixture(autouse=True)
+def _not_the_reloader_watcher(monkeypatch):
+    """The factory starts nothing in the debug reloader's watcher process; the
+    tests here are about the serving process."""
+    monkeypatch.delenv("FLASK_DEBUG", raising=False)
+
+
+class _FakeRelay:
+    def __init__(self, bound=True):
+        self.bound = bound
+
+    def add_handler(self, handler):
+        return 1
+
+    def remove_handler(self, handle):
+        pass
+
+
+def test_flattrade_order_updates_never_open_a_socket_beside_market_data(monkeypatch) -> None:
     """The dedicated order socket is what evicted the market-data feed.
 
-    The Flattrade factory must hand back the REST-polling adapter. The decision
-    lives in the broker plugin, not in the shared registry, so nothing outside
-    broker/flattrade has to know about PiConnect's single-session rule.
+    Since #2386 the factory returns the event-driven adapter, which takes order
+    updates from the market-data socket through the relay and opens a socket
+    of its own only while no market-data adapter holds the session (pinned in
+    test_flattrade_issue_2386.py). Building it opens nothing.
     """
     from broker.flattrade.streaming import flattrade_order_adapter as foa
-    from websocket_proxy.order_adapter import PollingOrderUpdateAdapter
 
-    monkeypatch.delenv("FLATTRADE_ORDER_WS", raising=False)
-    adapter = foa.create_flattrade_order_adapter("someuser")
-
-    assert isinstance(adapter, PollingOrderUpdateAdapter)
-    assert adapter.broker_name == "flattrade"
-    # No WebSocket surface at all — nothing can open a second session.
-    assert not hasattr(adapter, "get_ws_url")
-
-
-def test_the_polling_adapter_satisfies_the_lifecycle_the_service_expects() -> None:
-    """order_update_service calls connect()/disconnect() on whatever the factory
-    returns, so the substitute has to carry the same surface."""
-    from broker.flattrade.streaming import flattrade_order_adapter as foa
+    monkeypatch.delenv("FLATTRADE_ORDER_POLLING", raising=False)
+    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
+    monkeypatch.setattr(foa.relay_mod, "listener", lambda: _FakeRelay())
 
     adapter = foa.create_flattrade_order_adapter("someuser")
+
+    assert isinstance(adapter, foa.FlattradeEventOrderAdapter)
+    assert adapter.flattrade_uid == "FZ06120"
+    assert adapter._socket is None
     for attr in ("connect", "disconnect", "connected"):
         assert hasattr(adapter, attr), attr
 
 
-def test_the_dedicated_socket_remains_reachable_behind_an_explicit_opt_in(monkeypatch) -> None:
-    """Kept reachable for whoever implements the multiplexed fix — but only on
-    an explicit request, never by default."""
+def test_without_the_relay_flattrade_falls_back_to_polling(monkeypatch) -> None:
+    """A socket of our own without the relay could evict the market-data feed,
+    so a relay port that cannot be bound means polling, as before #2386."""
     from broker.flattrade.streaming import flattrade_order_adapter as foa
 
-    monkeypatch.setenv("FLATTRADE_ORDER_WS", "TRUE")
-    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
-    monkeypatch.setattr(foa, "get_auth_token", lambda *a, **k: "tok")
+    monkeypatch.delenv("FLATTRADE_ORDER_POLLING", raising=False)
+    monkeypatch.setattr(foa.relay_mod, "listener", lambda: _FakeRelay(bound=False))
 
     adapter = foa.create_flattrade_order_adapter("someuser")
-    assert isinstance(adapter, foa.FlattradeOrderUpdateAdapter)
-    assert adapter.get_ws_url() == "wss://piconnect.flattrade.in/PiConnectWSAPI/"
-    assert adapter.flattrade_uid == "FZ06120"
+    assert isinstance(adapter, foa.FlattradeSessionPoller)
+    assert adapter.broker_name == "flattrade"
 
 
-@pytest.mark.parametrize("value", ["FALSE", "false", "0", "", "yes", "1"])
-def test_only_the_exact_opt_in_value_enables_the_socket(monkeypatch, value) -> None:
-    """Anything other than TRUE keeps the safe default."""
+@pytest.mark.parametrize(
+    ("value", "polls"),
+    [("TRUE", True), ("true", True), ("FALSE", False), ("", False), ("1", False)],
+)
+def test_only_the_exact_polling_value_selects_polling(monkeypatch, value, polls) -> None:
     from broker.flattrade.streaming import flattrade_order_adapter as foa
-    from websocket_proxy.order_adapter import PollingOrderUpdateAdapter
 
-    monkeypatch.setenv("FLATTRADE_ORDER_WS", value)
-    assert isinstance(
-        foa.create_flattrade_order_adapter("someuser"), PollingOrderUpdateAdapter
-    )
+    monkeypatch.setenv("FLATTRADE_ORDER_POLLING", value)
+    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
+    monkeypatch.setattr(foa.relay_mod, "listener", lambda: _FakeRelay())
+    adapter = foa.create_flattrade_order_adapter("someuser")
+    assert isinstance(adapter, foa.FlattradeSessionPoller) is polls
 
 
 def test_the_shared_order_update_registry_is_untouched() -> None:

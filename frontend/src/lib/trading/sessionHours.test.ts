@@ -267,4 +267,38 @@ describe('historical calendar ranges', () => {
     resetSessionHours()
     vi.unstubAllGlobals()
   })
+
+  // #2384: the holiday API serves 2020 onwards, and M looks back ten years.
+  it('gives years before the holiday list a regular-hours calendar without asking for them', async () => {
+    const { prepareSessionHours, sessionCalendar } = await import('./sessionHours')
+    resetSessionHours()
+    const years: number[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.includes('holidays')) {
+          const year = JSON.parse(String(init.body)).year
+          years.push(year)
+          if (year < 2020)
+            return { ok: false, status: 400, json: async () => ({ status: 'error' }) }
+          return { ok: true, status: 200, json: async () => ({ status: 'success', data: [] }) }
+        }
+        return { ok: true, status: 200, json: async () => ({ status: 'success', data: TIMINGS }) }
+      })
+    )
+    const request = {
+      symbol: 'SBIN',
+      exchange: 'NSE',
+      interval: 'M',
+      from: secs(ist('2016-11-01', 0, 0)),
+      to: secs(ist('2021-02-01', 0, 0)),
+    }
+    await prepareSessionHours('key', request)
+    expect(years.every((year) => year >= 2020)).toBe(true)
+    const calendar = sessionCalendar(request)
+    expect(calendar).not.toBeNull()
+    expect(calendar?.phaseAt(secs(ist('2016-11-02', 12, 0)))).toBe('regular')
+    resetSessionHours()
+    vi.unstubAllGlobals()
+  })
 })

@@ -114,6 +114,14 @@ A live rejection example (pushed by the broker's own order feed):
   AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow, IIFL Capital, Kotak
   stream natively via each broker's push channel
   (`broker/*/streaming/*_order_adapter.py`).
+- **Shared broker session (Flattrade)**: Flattrade allows one WebSocket session
+  per account, so its order updates ride the market-data connection in the
+  websocket proxy and reach the app over a local relay port
+  (`FLATTRADE_ORDER_RELAY_PORT`, default `ZMQ_PORT` + 100, so 5655). When no
+  chart or watchlist has the market-data connection open, the app opens the
+  session itself and hands it back as soon as market data connects. After the
+  daily session rollover nothing connects until the next broker login.
+  `FLATTRADE_ORDER_POLLING=TRUE` goes back to orderbook polling.
 - **REST polling fallback**: brokers with no push mechanism (e.g. Groww) are
   covered by server-side orderbook polling (`ORDER_POLL_INTERVAL`, default 5s).
 - **HTTPS postbacks**: the `/postback/zerodha` webhook receiver feeds the same
