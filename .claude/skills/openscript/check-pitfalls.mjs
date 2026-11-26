@@ -90,6 +90,18 @@ const STUDY = ['version 1', 'study("Probe")']
  */
 const CASES = [
   {
+    page: ':= is not an operator; a var is reassigned with =',
+    code: 'OS1018',
+    wrong: [...STUDY, 'var held = 0.0', 'if close > open', '    held := close', 'plot(held, "Held", aqua)'],
+    right: [...STUDY, 'var held = 0.0', 'if close > open', '    held = close', 'plot(held, "Held", aqua)'],
+  },
+  {
+    page: 'a signal shape is one of ten words',
+    code: 'OS3008',
+    wrong: [...STUDY, 'if crossUp(close, sma(close, 20))', '    signal("BUY", color = lime, at = "below", shape = "labelUp")'],
+    right: [...STUDY, 'if crossUp(close, sma(close, 20))', '    signal("BUY", color = lime, at = "below", shape = "label")'],
+  },
+  {
     page: 'order.bracket has no stop or target',
     code: 'OS3002',
     wrong: [...STRATEGY, 'plot(close, "c", aqua)', 'if bar.isLast', '    order.bracket("B", stop = close, target = close)'],

@@ -1,6 +1,6 @@
 # What goes wrong, and what the compiler says about it
 
-Every entry here was hit while writing the six files in `examples/` or arrived
+Every entry here was hit while writing the files in `examples/` or arrived
 with a compiler upgrade. None is hypothetical, and each names the diagnostic
 code you will actually see, because a code is a promise and the wording around
 it is allowed to improve.
@@ -119,6 +119,62 @@ minute read runs 09:15 to 10:15, as the broker's candles do. Before 0.9.0 it ran
 09:15 to 09:30 and then 09:30 to 10:30, so a study written earlier that reads
 10, 20, 30 or 60 minutes draws different values after the upgrade, and the new
 ones are the ones that match the chart.
+
+### The average goes inside the read
+
+```
+hourEma  = req.timeframe("1h", ema(close, 20))   // an EMA of 20 hourly closes
+notThat  = ema(req.timeframe("1h", close), 20)   // an EMA of 20 CHART bars
+```
+
+Inside the read, `close` is the hourly bar's and `ema` runs on hourly bars. The
+second line reads the hourly close first and then averages it over the chart's
+own bars: on a 5 minute chart, twenty bars of a value that changes once an
+hour. Both compile and both draw a smooth line near the price; only the first is
+the line an hourly chart shows. `examples/mtf-ema-crossover.oscript` is the
+shape.
+
+### A coarse bar counts from the chart bar after it closes
+
+The default mode is `"confirmed"`: a read holds the last coarse bar that has
+closed. On NSE the 09:15 to 10:15 hourly bar enters an hourly read on the
+10:15 chart bar, and from 09:15 to 10:15 the read holds the previous session's
+last hourly bar. That is the read refusing to show a bar that has not
+finished, which is what keeps it from repainting; the 09:15 bar is not skipped.
+`mode = "developing"` follows the forming bar instead, and repaints inside it.
+
+### On a 0.9.0 chart, a finer read whose interval the chart's divides draws nothing
+
+```
+lastMinute = req.timeframe("1m", close)   // on a 5 minute chart: absent on every bar
+lastMinute = req.timeframe("1", close)    // the same read, fetched and drawn
+```
+
+A read finer than the chart whose interval divides the chart's (`"1m"` on 5
+minutes, `"5m"` on 15, `"15m"` on an hour) is its own base. openalgo-script
+0.9.0's chart adapter decides whether to fold the chart's own bars by comparing
+the read's spelling with its base, so with the unit written out the two match,
+nothing is fetched, and the read is absent while `req.error` names the
+interval. A bare count of minutes is spelled differently and is fetched. A
+timeframe setting (`kind = "interval"`) stores the spelled form, so a trader who
+picks such an interval in the settings dialog meets this too. Backtests on
+`/trading` fetch these reads. The chart fix is in the openscript repository for
+its next release; delete this entry when the pin moves past 0.9.0.
+
+### A crossing level kept in `var` can be weeks old
+
+```
+var crossLevel: number = none
+if crossUp(fast, slow)
+    crossLevel = slow
+plot(crossLevel, "Level", lime, style = "step")   // holds the last crossing for ever
+```
+
+A `var` keeps its value until something replaces it, so on a trending
+instrument the last crossing can be weeks back and far from the price. The
+chart scales to show every plotted value, so one old level squashes the
+candles into a strip. Count the bars since the crossing and plot `none` past a
+limit, as `examples/mtf-ema-crossover.oscript` does with `sinceCross`.
 
 ## The warnings, which do not stop a thing
 
@@ -340,6 +396,31 @@ upper = plot(u, "Upper", blue)
 lower = plot(l, "Lower", blue)
 fill(upper, lower, blue)          // correct
 ```
+
+### `OS1018`: `:=` is not an operator; a `var` is reassigned with `=`
+
+```
+var held = 0.0
+if close > open
+    held := close         // OS1018: Unexpected : after the end of this statement
+    held = close          // correct
+```
+
+`var` makes the name keep its value from bar to bar, and every later `=` writes
+it. There is no second assignment operator. A file full of these also warns
+that the plot is absent on every bar, because none of the assignments parsed:
+fix the `OS1018` lines and the warning goes with them.
+
+### `OS3008`: a `signal` shape is one of ten words
+
+```
+signal("BUY", color = lime, at = "below", shape = "labelUp")   // OS3008
+signal("BUY", color = lime, at = "below", shape = "label")     // correct
+```
+
+The shapes are `label`, `arrowUp`, `arrowDown`, `triangleUp`, `triangleDown`,
+`circle`, `square`, `diamond`, `cross` and `flag`. The side is `at`, never part
+of the shape's name, which is why `labelUp` and `labelDown` do not exist.
 
 ### `OS7001`: `pos`, `buy`, `sell`, `close(tag)` and `order.*` need a strategy
 

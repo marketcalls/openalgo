@@ -76,6 +76,32 @@ instrument and timeframe rather than changing the script.
 `reference/strategies.md` ends with the four steps between a compile and money,
 and they are not optional.
 
+## Run it on bars before installing
+
+A pass cannot see what a script draws. Each of these compiled clean while
+writing `examples/mtf-ema-crossover.oscript`, and each was found by running it:
+a crossing level from weeks before that stretched the price scale until the
+candles were a strip, and a read finer than the chart that drew nothing.
+`run.mjs` runs the draft on real bars with the engine `/trading` ships, and
+prints each plot's first value and last value and every marker with its bar:
+
+```bash
+# bars from your own OpenAlgo server, for the instrument and interval the chart shows
+curl -s -X POST http://127.0.0.1:5000/api/v1/history -H 'Content-Type: application/json' \
+  -d '{"apikey":"'"$OPENALGO_API_KEY"'","symbol":"RELIANCE","exchange":"NSE","interval":"5m","start_date":"2026-11-10","end_date":"2026-11-25"}' \
+  > <scratch>/bars.json
+
+node .claude/skills/openscript/run.mjs <scratch>/my_study.oscript <scratch>/bars.json \
+  --symbol RELIANCE --interval 5m
+```
+
+Read the output against what the study is meant to do: a plot absent on every
+bar, a first value much later than the warmup explains, a marker that never
+fires, or a level far from the last close is a script to fix before it is
+installed. `run.mjs` serves no bars beyond the file, so a read of another
+instrument, or of an interval that is not a whole multiple of `--interval`, is
+refused at load there and draws on a chart, which fetches them.
+
 ## Read these before writing
 
 | Page | What it is for |
@@ -84,7 +110,7 @@ and they are not optional.
 | `reference/pitfalls.md` | what goes wrong, with the diagnostic code you will actually see. Every code on it is proved against the compiler. |
 | `reference/strategies.md` | the shapes a strategy takes, and which example answers which ask. |
 | `reference/porting-from-javascript.md` | porting a JavaScript chart indicator into a study that computes the same values: the chart helpers whose OpenScript twin differs, absent values, `fn` scope, markers, tables, inputs, and how to check parity. |
-| `examples/*.oscript` | six worked files, all of which compile. The reasoning is in the comments. |
+| `examples/*.oscript` | seven worked files, all of which compile. The reasoning is in the comments. `mtf-ema-crossover.oscript` is the one for reading another timeframe. |
 
 **Look a name up rather than recalling it.** 350 names is more than anyone holds,
 and the dangerous failure is not reaching for a name that does not exist: it is
@@ -158,10 +184,13 @@ still come out clean. It also checks that the page and the script name the same
 set of codes, so neither can drift alone. Two claims on the first draft of that
 page were wrong, and this is what found them.
 
-This skill describes `openalgo-script` 0.8.1, the compiler `/trading` pins, with
-the server engine `openscript` at the same version. OpenScript 0.9.0, with
-fixes to the backtest engine, is coming; when the pin moves to it, read its
-changelog for anything a backtest now reports differently and say so here.
+This skill describes `openalgo-script` 0.9.0, the compiler `/trading` pins, with
+the server engine `openscript` at the same version. 0.9.0 reads any minute
+timeframe on a chart and in a backtest, and counts intraday reads from the
+session open, which changes the values of reads of 10, 20, 30 and 60 minutes
+on NSE: `reference/pitfalls.md` has both, and the one 0.9.0 chart bug, under
+the timeframe entries. When the pin moves past 0.9.0, read the changelog for
+what changed and delete that bug's entry if the release carries the fix.
 
 **Bumping `openalgo-script` means updating this skill in the same change**, the
 way a chart bump does. Run the generator, run both checks, then update the prose
