@@ -10,6 +10,23 @@ fix, live in [docs/releases](releases/).
 
 ### Added
 
+- OpenScript studies and strategies on `/trading` read any minute timeframe,
+  coarser or finer than the chart: fifteen, twenty five and three minutes on a
+  ten minute chart, where only whole multiples (twenty, thirty, forty) were
+  allowed before. `openalgo-script` 0.9.0 builds those from finer bars the
+  terminal's bars provider serves. The script settings dialog now offers every
+  intraday interval on an intraday chart. Backtests fetch the finer bars a
+  strategy needs before the run, and a backtest can now read another
+  instrument with `req.symbol`. A strategy deployed to run on the server still
+  reads whole multiples only, and says so when it starts.
+
+### Changed
+
+- OpenScript intraday timeframe reads now start at the session open. A 60
+  minute `req.timeframe` read on NSE ran 09:15 to 09:30 and then 09:30 to 10:30;
+  it now runs 09:15 to 10:15, as the broker's own hourly candles do, and so do
+  30 and 10 minute reads. Studies using those reads redraw after the update.
+
 - Sandbox trades now pay brokerage and statutory charges. Each fill is charged
   brokerage under your own plan, plus STT or CTT, exchange transaction charges,
   SEBI fees, stamp duty and GST at the published rates. The charge is taken from

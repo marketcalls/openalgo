@@ -75,12 +75,34 @@ export async function foldBacktest(message: BacktestMessage): Promise<BacktestRe
     // the engine resolves declarations against.
     const inputs = message.inputs as typeof settings.inputs
 
+    // The bars fetched for the reads the chart's own bars cannot answer. With
+    // none, the engine is given no provider, so a read of another instrument is
+    // refused at load by name rather than answered with nothing.
+    const served = message.served ?? []
+    const requestBars =
+      served.length === 0
+        ? undefined
+        : (query: { instrument: string | null; exchange: string | null; interval: string }) => {
+            const hit = served.find(
+              (one) =>
+                one.instrument === query.instrument &&
+                one.exchange === query.exchange &&
+                one.interval === query.interval
+            )
+            return hit === undefined ? undefined : { bars: hit.bars }
+          }
+
     const started = performance.now()
     const out = engine.backtest(
       message.program as Parameters<typeof engine.backtest>[0],
       message.bars as Parameters<typeof engine.backtest>[1],
       { ...settings, inputs },
-      { instrument: message.instrument }
+      {
+        instrument: message.instrument,
+        ...(requestBars === undefined
+          ? {}
+          : { requestBars: requestBars as NonNullable<Parameters<typeof engine.backtest>[3]>['requestBars'] }),
+      }
     )
     const ranMs = performance.now() - started
 

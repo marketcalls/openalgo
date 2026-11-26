@@ -20,12 +20,15 @@
  * because the stored value is that interval: moving the chart to another one
  * afterwards does not move the setting with it.
  *
- * **Only what the engine would run on this chart is offered.** Besides the
- * spelling, the engine refuses a request finer than the chart (OS6002, folding
- * cannot invent bars that were never loaded) and an intraday request that is
- * not a whole multiple of an intraday chart (OS6015). The tests hold every
- * choice made here to the installed engine's own answer, so if the language
- * changes a rule this file has to change with it.
+ * **Only what the engine would run on this chart is offered.** Since
+ * openalgo-script 0.9.0 any whole number of minutes runs on an intraday chart:
+ * a whole multiple of the chart's interval is folded from the chart's own bars,
+ * and any other, finer than the chart's included, from a finer base the
+ * terminal's bars provider serves (`stdlib.md` 15.2). What the engine still
+ * refuses is an intraday request on a chart of a day or longer (OS6002), whose
+ * base would be minutes over the whole of a daily chart's history. The tests
+ * hold every choice made here to the installed engine's own answer, so if the
+ * language changes a rule this file has to change with it.
  */
 
 /** Minutes in one unit, as the engine orders two timeframes. A month is thirty days. */
@@ -90,20 +93,21 @@ function measure(timeframe: string): { minutes: number; intraday: boolean } | nu
 }
 
 /**
- * Whether the engine would fold a chart's bars into the requested ones.
+ * Whether the engine would run a read at the requested timeframe on this chart.
  *
  * Both in the language's spelling. A chart interval the language cannot read
  * refuses nothing, which is also what the engine does: with no chart timeframe
- * to compare against, it skips both comparisons.
+ * to compare against, it folds the chart's bars as they come. On an intraday
+ * chart every intraday timeframe runs; on a chart of a day or longer, one finer
+ * than the chart's is refused.
  */
 export function foldsOnto(requested: string, chart: string | null): boolean {
   const wanted = measure(requested)
   if (wanted === null) return false
   const have = chart === null ? null : measure(chart)
   if (have === null) return true
-  if (wanted.minutes < have.minutes) return false
-  if (wanted.intraday && have.intraday) return wanted.minutes % have.minutes === 0
-  return true
+  if (wanted.intraday && have.intraday) return true
+  return wanted.minutes >= have.minutes
 }
 
 export interface IntervalChoice {

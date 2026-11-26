@@ -7,10 +7,11 @@ this server three would load and then answer nothing on every bar, with nothing
 in the log to say why:
 
 - **A day, a week or a month read by ``req.timeframe``.** The engine folds one by
-  the calendar in the instrument's zone, and its fold reads a calendar in UTC
-  alone. The reader this host supplies reaches ``date.*`` and not the fold, so on
-  the platform's own zone the read is absent on every bar. The runner refuses it
-  by name, and a read in minutes or hours, which is folded by counting, runs.
+  the calendar in the instrument's zone, and until 0.9.0 its fold read a calendar
+  in UTC alone, so the runner refused it by name. From 0.9.0 the fold reads the
+  zone through the same seam as ``date.*``, and the reader this host installs for
+  any program that reads another timeframe dates it in the platform's zone. The
+  same reader counts a minute read from the session's open, 09:15.
 - **``session.isLastBar``.** The engine answers it from a bar fact this driver
   does not state, so it was never true and a position meant to close at the end
   of the session never closed. Refused by name.
@@ -20,7 +21,8 @@ in the log to say why:
   compared nothing and answered neither fact. The runner now states the interval
   as the chart's backtest does, ``1D``.
 
-Each program below is real, compiled by the 0.8.1 compiler. No test here reaches
+Each program below is real, compiled by the 0.8.1 compiler, except the ten
+minute read, compiled by 0.9.0 in the same format. No test here reaches
 a broker or places an order: every program is a study, and the platform client is
 the stand-in the runner's other tests use.
 """
@@ -42,6 +44,24 @@ from test.test_openscript_runner_facts import (
     at,
     handed_facts,
 )
+
+
+@pytest.fixture(autouse=True)
+def _engine_calendar_put_back():
+    """Each test ends with the engine's own calendar, whatever reader a run put in.
+
+    A run installs the platform zone's reader on ``openscript.dates`` for the
+    life of its process, which in production is the run's own. Here every test
+    shares one process, and from 0.9.0 the runner installs it for any program
+    that reads another timeframe, so a reader one test installs would otherwise
+    still be in place for the next file's tests of the reader itself.
+    """
+    import openscript.dates
+
+    held = (openscript.dates.fields_in, openscript.dates.instant_of)
+    yield
+    openscript.dates.fields_in, openscript.dates.instant_of = held
+
 
 # ---------------------------------------------------------------------------
 # Real compiled programs. A program's hash is taken over its canonical text and a
@@ -83,6 +103,33 @@ DAILY_READ_PROGRAM = (
 #:     version 1
 #:     study("Five", overlay = true)
 #:     plot(req.timeframe("5m", close), "Five minute close")
+TEN_MINUTE_READ_PROGRAM = (
+    '{"callSites":[],"cells":[],"channels":[{"defer":false,"id":0,"once":true,"ty'
+    'pe":"number"}],"code":[["SLOAD",0],["EMIT",0],["HALT"]],"compiler":{"name":"'
+    'openscript","version":"0.9.0"},"consts":[["z",null],["b",false],["b",true]],'
+    '"debug":{"fnPos":[],"names":{"cells":[],"channels":["Ten minute close"],"ser'
+    'ies":["req.timeframe"],"slots":[]},"pos":[[0,3,6],[1,3,1]],"retain":false},"'
+    'frame":{"slots":0},"functions":[],"inputs":[],"lib":{"functions":[],"manifes'
+    't":1},"limits":{"history":null,"loops":2000000},"loops":[],"meta":{"format":'
+    '"price","group":"","kind":"study","onUnconfirmed":false,"overlay":false,"pre'
+    'cision":4,"range":null,"scale":"right","short":"Ten minute close","title":"T'
+    'en minute close"},"openscript":{"format":"1.1","language":1},"outputs":{"ale'
+    'rts":[],"background":null,"barColor":null,"fills":[],"levels":[],"markers":['
+    '],"plots":[{"channel":0,"color":null,"colorChannel":null,"key":"p0","lineSty'
+    'le":"solid","offset":0,"ohlc":null,"overlay":null,"precision":null,"priceFor'
+    'mat":null,"scale":"right","title":"Ten minute close","type":"line","width":1'
+    '.5}],"tables":[]},"requests":[{"body":{"callSites":[],"cells":[],"code":[["S'
+    'LOAD",0],["RET"]],"fnPos":[],"frame":{"slots":0},"functions":[],"inputs":[],'
+    '"loops":[],"pos":[[0,3,26]],"requests":[],"series":[{"field":"close","id":0,'
+    '"kind":"bar","name":"close"}],"states":[]},"exchange":null,"id":0,"mode":"co'
+    'nfirmed","read":"timeframe","series":0,"symbol":null,"timeframe":"10","warmu'
+    'p":0}],"requires":["core.1","req.timeframe"],"series":[{"field":null,"id":0,'
+    '"kind":"request","name":"req.timeframe"}],"source":{"file":"ten.oscript","ha'
+    'sh":"sha256:e5e3ac6bcdd474b87493e0c99f44c7c6d0ada22d5465afe3415ae9be1b5d7910'
+    '","lines":4},"states":[]}'
+)
+
+
 FIVE_MINUTE_READ_PROGRAM = (
     '{"callSites":[],"cells":[],"channels":[{"defer":false,"id":0,"once":true,"ty'
     'pe":"number"}],"code":[["SLOAD",0],["EMIT",0],["HALT"]],"compiler":{"name":"'
@@ -284,23 +331,53 @@ def test_a_read_finer_than_a_daily_run_is_refused_by_the_engine_at_load(monkeypa
     assert "OS6002" in str(refused.value)
 
 
-def test_a_day_read_on_the_platform_zone_is_refused_by_name(monkeypatch):
-    with pytest.raises(runner.Refusal) as refused:
-        session_for(DAILY_READ_PROGRAM, monkeypatch, rising(tuesday_minutes(15, 20)))
+def test_a_day_read_on_the_platform_zone_runs_in_that_zone(monkeypatch):
+    """Refused by name until 0.9.0, because the fold could not read the zone.
 
-    said = str(refused.value)
-    assert "1D" in said
-    assert "req.timeframe" in said
-    assert PLATFORM_ZONE in said
-
-
-def test_the_engine_answers_a_day_read_on_the_platform_zone_with_nothing():
-    """The defect the refusal above exists for, on the engine alone.
-
-    So that refusal cannot pass vacuously, and so that the day an engine dates a
-    day in a zone the host supplies, this fails and the refusal can go. The same
-    bars in UTC answer, which is what shows the zone is the whole of it.
+    The reader this runner installs for a program that reads another timeframe
+    now reaches the fold, so the day closes at the platform's midnight: nothing
+    on the first day, then that day's last close through the next.
     """
+    days = (REGULAR_TUESDAY, REGULAR_TUESDAY + timedelta(days=1))
+    times = [at(day, 9, minute) for day in days for minute in range(15, 18)]
+
+    values = plotted(session_for(DAILY_READ_PROGRAM, monkeypatch, rising(times)))
+
+    assert values == [None] * 3 + [102.0] * 3
+
+
+def test_a_ten_minute_read_starts_at_the_session_open(monkeypatch):
+    """0.9.0 counts a minute read from 09:15, as the broker's ten minute candles do.
+
+    Counted from the epoch, as before, the first bucket ran 09:10 to 09:20 and
+    closed on the 09:20 bar with 09:19's close. Counted from the open it runs
+    09:15 to 09:25 and closes on the 09:25 bar with 09:24's.
+    """
+    times = tuesday_minutes(15, 27)
+    opening = {"start": "09:15", "end": "15:30", "days": [1, 2, 3, 4, 5]}
+    values = plotted(
+        session_for(TEN_MINUTE_READ_PROGRAM, monkeypatch, rising(times), session=opening)
+    )
+
+    closes = [100.0 + step for step in range(len(times))]
+    assert values == [None] * 10 + [closes[9]] * 3
+
+
+def test_the_engine_answers_a_day_read_on_the_platform_zone_with_nothing(monkeypatch):
+    """The engine alone, with no reader installed, still dates nothing in the platform zone.
+
+    This is why the runner installs its reader for any program that reads
+    another timeframe: without it the day read above would be absent on every
+    bar. The same bars in UTC answer, which is what shows the zone is the whole
+    of it.
+    """
+    # A reader another test installed stays on the engine's calendar module for
+    # the life of the process, and the fold reads through it from 0.9.0, so it is
+    # taken off for this test: the engine's own reading of a zone, and nothing else.
+    import openscript.dates
+    import openscript.zones
+
+    monkeypatch.setattr(openscript.dates, "fields_in", openscript.zones.fields_in)
     days = (REGULAR_TUESDAY, REGULAR_TUESDAY + timedelta(days=1))
     answered = {}
     for zone in (PLATFORM_ZONE, "UTC"):
