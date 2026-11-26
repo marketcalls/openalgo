@@ -53,7 +53,7 @@ import type {
 } from './backtestWorkerProtocol'
 import { factsFor, type InstrumentFacts } from './instrumentFacts'
 import { compileSource, type EditorDiagnostic } from './openscriptFiles'
-import { languageInterval } from './openscriptIntervals'
+import { finerThanChart, languageInterval } from './openscriptIntervals'
 
 export type { RunInstrument, RunStop } from './backtestWorkerProtocol'
 
@@ -554,7 +554,11 @@ async function servedFor(
   const wanted = new Map<string, AskedRead & { instrument: string }>()
   for (const query of asked) {
     if (query.instrument === null) continue
-    if (query.read === 'timeframe' && query.interval === query.timeframe) continue
+    // The engine folds the run's own bars unless the interval it asks at is
+    // finer than the run's; the spelling cannot tell, because a finer read that
+    // is its own base asks at its own timeframe.
+    if (query.read === 'timeframe' && !finerThanChart(query.interval, instrument.interval ?? null))
+      continue
     wanted.set(`${query.instrument}|${query.exchange ?? ''}|${query.interval}`, {
       ...query,
       instrument: query.instrument,

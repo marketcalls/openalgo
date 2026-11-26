@@ -494,6 +494,62 @@ describe('reads the chart bars cannot answer', () => {
     expect(options.requestBars?.({ instrument: 'AAA', exchange: 'XX', interval: '15' })).toBeUndefined()
   })
 
+  it('fetches a finer read that is its own base, spelled with its unit', async () => {
+    // Catches a backtest that decides "the engine folds the run's own bars" by
+    // comparing a read's interval with its timeframe. A fifteen minute read on
+    // an hourly run is finer than the run, so its base is fifteen minutes and
+    // both are spelled '15m'; it was never fetched, and the read was absent.
+    compiles()
+    answering([row(0), row(1)])
+    ran()
+    load.mockImplementationOnce((_program: unknown, options: { host: { requestBars: (q: unknown) => unknown } }) => {
+      options.host.requestBars({
+        id: 0,
+        read: 'timeframe',
+        instrument: 'AAA',
+        exchange: 'XX',
+        timeframe: '15m',
+        interval: '15m',
+        mode: 'confirmed',
+        warmup: null,
+      })
+      return { ok: true }
+    })
+
+    const outcome = await runBacktest(aRequest({ interval: '1h' }))
+
+    expect(outcome.ok).toBe(true)
+    const fetched = post.mock.calls
+      .filter(([url]) => url === '/history')
+      .map(([, body]) => (body as { interval: string }).interval)
+    expect(fetched).toEqual(['1h', '15m'])
+  })
+
+  it('fetches nothing for a whole multiple spelled the same as its interval', async () => {
+    compiles()
+    answering([row(0), row(1)])
+    ran()
+    load.mockImplementationOnce((_program: unknown, options: { host: { requestBars: (q: unknown) => unknown } }) => {
+      options.host.requestBars({
+        id: 0,
+        read: 'timeframe',
+        instrument: 'AAA',
+        exchange: 'XX',
+        timeframe: '1h',
+        interval: '1h',
+        mode: 'confirmed',
+        warmup: null,
+      })
+      return { ok: true }
+    })
+
+    await runBacktest(aRequest({ interval: '5m' }))
+
+    const fetched = post.mock.calls.filter(([url]) => url === '/history')
+    expect(fetched).toHaveLength(1)
+    expect(backtest.mock.calls[0][3]).not.toHaveProperty('requestBars')
+  })
+
   it('gives the engine no provider when no read needs one', async () => {
     compiles()
     answering([row(0), row(1)])

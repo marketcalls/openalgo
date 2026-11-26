@@ -110,6 +110,24 @@ export function foldsOnto(requested: string, chart: string | null): boolean {
   return wanted.minutes >= have.minutes
 }
 
+/**
+ * Whether a read of the run's own instrument needs bars served at `interval`.
+ *
+ * The engine folds the run's own bars only for a whole multiple of an intraday
+ * run's interval, or for a calendar read, and then asks at the read's own
+ * timeframe. Any other intraday read is folded from a base, the longest interval
+ * dividing both, which is always finer than the run's. So a read needs serving
+ * exactly when the interval the engine asks at is finer than the run's: that is
+ * true of a finer read that is its own base, fifteen minutes on an hourly run,
+ * whose interval and timeframe are the same text.
+ */
+export function finerThanChart(interval: string, chart: string | null): boolean {
+  const asked = measure(interval)
+  const have = chart === null ? null : measure(chart)
+  if (asked === null || have === null) return false
+  return asked.intraday && have.intraday && asked.minutes < have.minutes
+}
+
 export interface IntervalChoice {
   label: string
   value: string

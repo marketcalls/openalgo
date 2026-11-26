@@ -175,6 +175,11 @@ fix, live in [docs/releases](releases/).
 
 ### Fixed
 
+- An OpenScript backtest of a script that reads a finer interval the chart's
+  divides, such as `"15m"` on an hourly chart or `"1m"` on a 5 minute one, now
+  fetches those bars; the read was absent on every bar. The same read drawn on
+  a chart still shows nothing until the next `openalgo-script` release: write
+  the minutes as a bare number (`"15"`) until then, which is fetched.
 - An instrument sitting on its previous close is no longer shown as a gain in
   the `/trading` watchlist. It read `+0.00%` in green. It now reads `0.00` and
   `0.00%` with no sign and no colour.
