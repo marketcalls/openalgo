@@ -97,6 +97,7 @@ class FakeMarket:
         self.expiry_calls: list[tuple[str, str, str]] = []
         self.strike_calls: list[tuple[str, str, str, str]] = []
         self.quote_calls: list[tuple[str, str]] = []
+        self.option_prices: dict[tuple[str, str], float] = {}
         self.lookups: list[tuple[str, str]] = []
 
     def list_contract(self, symbol, exchange, lotsize=UNSET, tick_size=0.05):
@@ -147,6 +148,14 @@ class FakeMarket:
             return False, {"status": "error", "message": f"No quote for {symbol}"}, 404
         return True, {"status": "success", "data": {"ltp": price}}, 200
 
+    def get_multiquotes(self, symbols, api_key=None, **kwargs):
+        results = []
+        for item in symbols:
+            price = self.option_prices.get((item["symbol"], item["exchange"]))
+            if price is not None:
+                results.append({**item, "data": {"ltp": price}})
+        return True, {"status": "success", "results": results}, 200
+
 
 @pytest.fixture
 def market(monkeypatch):
@@ -164,6 +173,7 @@ def market(monkeypatch):
         option_symbol_service, "find_near_month_futures", fake.find_near_month_futures
     )
     monkeypatch.setattr(quotes_service, "get_quotes", fake.get_quotes)
+    monkeypatch.setattr(quotes_service, "get_multiquotes", fake.get_multiquotes)
     return fake
 
 
@@ -440,6 +450,81 @@ class TestFractionalStrikes:
         leg = resolve_leg(option_leg(), "VEDL", "NSE")
         assert leg.strike != 292
         assert "292.5" in leg.symbol
+
+
+class TestPremiumStrikes:
+    def _prices(self, market, prices):
+        for strike, premium in prices.items():
+            symbol = f"NIFTY03JAN30{strike}CE"
+            market.option_prices[(symbol, "NFO")] = premium
+
+    def test_closest_premium_scans_the_listed_chain(self, market):
+        self._prices(market, {23400: 210, 23450: 165, 23500: 122, 23550: 86})
+        leg = resolve_leg(
+            option_leg(
+                strike_mode="premium",
+                atm_offset=None,
+                premium=100,
+                premium_comparison="closest",
+                premium_strike_filter="none",
+            ),
+            "NIFTY",
+            "NSE_INDEX",
+        )
+        assert leg.ok, leg.error
+        assert leg.strike == 23550
+        assert leg.detail["selected_premium"] == 86
+
+    @pytest.mark.parametrize(
+        ("comparison", "expected"), [("higher", 23500), ("lower", 23550)]
+    )
+    def test_directional_premium_matching(self, market, comparison, expected):
+        self._prices(market, {23500: 122, 23550: 86})
+        leg = resolve_leg(
+            option_leg(
+                strike_mode="premium",
+                atm_offset=None,
+                premium=100,
+                premium_comparison=comparison,
+                premium_strike_filter="none",
+            ),
+            "NIFTY",
+            "NSE_INDEX",
+        )
+        assert leg.ok, leg.error
+        assert leg.strike == expected
+
+    def test_liquid_filter_uses_only_nifty_100_point_strikes(self, market):
+        self._prices(market, {23400: 140, 23500: 101, 23600: 70})
+        leg = resolve_leg(
+            option_leg(
+                strike_mode="premium",
+                atm_offset=None,
+                premium=100,
+                premium_comparison="closest",
+                premium_strike_filter="liquid",
+            ),
+            "NIFTY",
+            "NSE_INDEX",
+        )
+        assert leg.ok, leg.error
+        assert leg.strike == 23500
+
+    def test_refuses_when_no_premium_satisfies_direction(self, market):
+        self._prices(market, {23500: 122, 23550: 86})
+        leg = resolve_leg(
+            option_leg(
+                strike_mode="premium",
+                atm_offset=None,
+                premium=50,
+                premium_comparison="lower",
+                premium_strike_filter="none",
+            ),
+            "NIFTY",
+            "NSE_INDEX",
+        )
+        assert not leg.ok
+        assert leg.code == "no_matching_premium"
 
 
 class TestQuantityAndLotSize:
