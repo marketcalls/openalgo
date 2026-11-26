@@ -661,6 +661,10 @@ class DhanWebSocket:
             )
 
             # Parse payload based on response code
+            if message_length < 8:
+                # Shorter than the header itself is padding, not a packet;
+                # it can never advance the offset, so stop parsing.
+                break
             payload_start = offset + 8
             payload_end = offset + message_length
 
@@ -724,6 +728,10 @@ class DhanWebSocket:
             # Skip message sequence (4 bytes)
 
             # Parse payload
+            if message_length < 12:
+                # Shorter than the header itself is padding, not a packet;
+                # it can never advance the offset, so stop parsing.
+                break
             payload_start = offset + 12
             payload_end = offset + message_length
 

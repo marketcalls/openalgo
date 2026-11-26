@@ -206,3 +206,37 @@ def test_disconnect_clears_prev_close(adapter):
     adapter.cleanup_zmq = lambda: None
     adapter.disconnect()
     assert adapter.prev_close_data == {}
+
+
+def _header_20depth(
+    code: int, payload_len: int, segment: int = SEG_NSE, sec: int = SEC_ID
+) -> bytes:
+    # 12-byte header: length(2) + code(1) + segment(1) + security_id(4) + sequence(4)
+    return struct.pack("<HBBII", 12 + payload_len, code, segment, sec, 0)
+
+
+def depth_20_frame() -> bytes:
+    return _header_20depth(41, 320) + b"\x00" * 320  # 20 levels * 16 bytes
+
+
+@pytest.mark.timeout(10)
+def test_trailing_zero_length_header_stops_parse(adapter):
+    # Issue #2502: a packet followed by zero bytes reads a header with
+    # message_length 0; payload_end == offset and the loop never advances.
+    subscribe(adapter, 2)
+    feed(adapter, prev_close_frame(1280.5, 120))
+    feed(adapter, quote_frame() + b"\x00" * 8)
+    ((topic, quote),) = adapter.published
+    assert topic == "NSE_RELIANCE_QUOTE"
+    assert quote["close"] == 1280.5
+
+
+@pytest.mark.timeout(10)
+def test_trailing_zero_length_header_stops_20depth_parse():
+    ws = DhanWebSocket.__new__(DhanWebSocket)
+    ws.is_20_depth = True
+    ws.logger = MagicMock()
+    ws.on_data = MagicMock()
+    ws._parse_20_depth_message(depth_20_frame() + b"\x00" * 12)
+    assert ws.on_data.call_count == 1
+    assert ws.on_data.call_args[0][1]["type"] == "depth_20"
