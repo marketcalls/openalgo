@@ -1,16 +1,24 @@
 import json
+import re
 
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# The whole emsg of an empty book, in the two forms Noren servers send:
+# "no data" and 'Error Occurred : 5 "no data"'. Matched against the entire
+# message, never as a substring, so a real failure such as
+# "no database connection" is not mistaken for an empty book.
+_EMPTY_BOOK_EMSG = re.compile(r'(?:error occurred\s*:\s*\d+\s*)?"?no data"?', re.IGNORECASE)
+
 
 def _log_unavailable_book(response, book):
     """Log a Flattrade book read that returned no rows, at the level it deserves.
 
     PiConnect answers an empty order, trade or position book with
-    {"stat": "Not_Ok", "emsg": "no data"}. That is the normal answer on a flat
+    {"stat": "Not_Ok", "emsg": "no data"} (some Noren servers send
+    'Error Occurred : 5 "no data"'). That is the normal answer on a flat
     account, and the order-update poller reads the order book every
     ORDER_POLL_INTERVAL seconds (5 by default), so it is logged at debug. Any
     other Not_Ok, such as "Session Expired :  Invalid Session Key", is a failed
@@ -24,7 +32,7 @@ def _log_unavailable_book(response, book):
         logger.warning(f"Flattrade returned no response for the {book}.")
         return
     emsg = str(response.get("emsg", "")).strip()
-    if "no data" in emsg.lower():
+    if _EMPTY_BOOK_EMSG.fullmatch(emsg):
         logger.debug(f"Flattrade {book} is empty ({emsg}).")
         return
     logger.warning(f"Flattrade could not read the {book}: {emsg or response}")
