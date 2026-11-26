@@ -36,6 +36,13 @@ const ROUND_THE_CLOCK = new Set(['CRYPTO'])
  * 09:08) is a fixed exchange rule rather than something an admin edits.
  */
 const PRE_OPEN_MINUTES: Record<string, number> = { NSE: 15, BSE: 15 }
+/**
+ * First year `/api/v1/market/holidays` serves; it refuses anything earlier.
+ * Older years follow the regular weekly hours with no holiday list, so a long
+ * derived chart (10 years of M, up to 30 of a custom multiple) still has a
+ * calendar instead of failing the whole load (#2384).
+ */
+const FIRST_HOLIDAY_YEAR = 2020
 
 /** One row of the holiday list, as `/api/v1/market/holidays` returns it. */
 export interface HolidayRow {
@@ -268,6 +275,11 @@ export async function prepareSessionHours(apiKey: string, request: BarsRequest):
   const needed = requestYears(request)
   for (const year of needed) {
     if (target.years.has(year)) continue
+    if (year < FIRST_HOLIDAY_YEAR) {
+      // No holidays to add, so the cached calendars and revision stay valid.
+      target.years.set(year, [])
+      continue
+    }
     let pending = target.yearPending.get(year)
     if (!pending) {
       pending = (async () => {
