@@ -14,10 +14,18 @@ from database.token_db_enhanced import get_symbol_info
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 _BASE = "https://api.kite.trade"
+
+# GTTs cancelled through this instance, by trigger id: Kite's raw trigger as read back once.
+# Kite keeps a cancelled GTT (status "deleted", readable by id) but leaves it out of
+# GET /gtt/triggers, so without this the history book could never show a cancel. A cancelled
+# GTT is final, so each is read once. In memory: after a restart, a repeated cancel of the
+# same id records it again (see cancel_gtt_order).
+_CANCELLED = LockedTTLCache(maxsize=512, ttl=18 * 3600)
 
 
 def _headers(auth, form=False):
@@ -265,12 +273,47 @@ def cancel_gtt_order(trigger_id, auth):
 
     if response_data.get("status") == "success":
         returned_id = response_data.get("data", {}).get("trigger_id", trigger_id)
+        _remember_cancelled(client, str(trigger_id), auth, accepted=True)
         return {"status": "success", "trigger_id": str(returned_id)}, 200
 
+    # A cancel refused because the GTT is already cancelled (a retry, or one sent before a
+    # restart) still lists it in the history book, so the caller can confirm it there.
+    _remember_cancelled(client, str(trigger_id), auth, accepted=False)
     return {
         "status": "error",
         "message": response_data.get("message", "Failed to cancel GTT"),
     }, response.status_code
+
+
+def _fetch_trigger(client, trigger_id, auth):
+    """Kite's raw trigger by id (it still answers for a cancelled one), or None."""
+    try:
+        response = client.get(f"{_BASE}/gtt/triggers/{trigger_id}", headers=_headers(auth))
+        data = response.json()
+    except Exception:
+        logger.exception(f"Zerodha GTT {trigger_id}: could not read it back")
+        return None
+    if data.get("status") != "success" or not isinstance(data.get("data"), dict):
+        logger.info(f"Zerodha GTT {trigger_id} read back: status={response.status_code}")
+        return None
+    return data["data"]
+
+
+def _remember_cancelled(client, trigger_id, auth, accepted):
+    """Record a cancelled GTT for the book.
+
+    ``accepted``: Kite has just accepted the cancel, so the GTT is recorded even if it cannot be
+    read back (as a bare row with its id). Otherwise it is recorded only when Kite says it is
+    cancelled.
+    """
+    if not trigger_id:
+        return
+    raw = _fetch_trigger(client, trigger_id, auth)
+    status = ((raw or {}).get("status") or "").lower()
+    if raw is not None and status in ("deleted", "cancelled"):
+        _CANCELLED[trigger_id] = raw
+    elif accepted:
+        _CANCELLED[trigger_id] = {"id": trigger_id, "status": "deleted"}
 
 
 def get_gtt_book(auth, include_history=False):
@@ -294,4 +337,9 @@ def get_gtt_book(auth, include_history=False):
             "message": raw.get("message", "Failed to fetch GTT book"),
         }, response.status_code
 
+    if include_history:
+        listed = {str(g.get("id")) for g in raw.get("data") or []}
+        cancelled = [g for tid, g in list(_CANCELLED.items()) if tid not in listed]
+        if cancelled:
+            raw = {**raw, "data": list(raw.get("data") or []) + cancelled}
     return {"status": "success", "data": map_gtt_book(raw, include_history=include_history)}, 200

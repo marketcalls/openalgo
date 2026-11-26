@@ -136,14 +136,16 @@ curl -X POST http://127.0.0.1:5000/api/v1/gttorderbook \
 | price | number | Child order limit price (`0` for MARKET-style legs) |
 | pricetype | string | `"LIMIT"` or `"MARKET"` |
 | product | string | `"CNC"` or `"NRML"` |
-| triggered_order_id | string or null | **Analyzer mode only.** The sandbox order this leg placed when it fired; `null` until then. Live brokers do not expose the link, so the field is absent there |
+| triggered_order_id | string or null | The order this leg placed when it fired; `null` until then. Analyzer mode (the sandbox order) and Zerodha (from Kite's `result.order_result.order_id`). Other live brokers do not expose the link, so the field is absent there |
+| rejection_reason | string | **Zerodha only**, and only on a leg that fired but whose order the broker could not place: the broker's reason. The GTT itself still shows `"triggered"`, and the position it protected is no longer protected |
 
 ## Notes
 
 - **Active-only by default.** Without `status`, or with `"status": "active"`, triggered, cancelled, expired, rejected, disabled and deleted GTTs never appear in `data`, the shape every existing consumer relies on.
 - **`"status": "all"` returns the history too.** Rows are ordered active first, then the rest, each group newest first. The sandbox, Zerodha and Rupeezy mappers support history; the other current broker mappers still return active triggers only. Broker-retained history can be shorter than the full lifetime of a trigger.
+- **Zerodha cancels.** Kite keeps a cancelled GTT (status `"deleted"`) but leaves it out of its GTT list. The history adds the GTTs cancelled through this OpenAlgo instance in the last 18 hours, read back from Kite once, with Kite's status `"deleted"`. A GTT cancelled in Kite itself does not appear; one cancelled before an OpenAlgo restart appears again when its cancel is repeated (Kite refuses the repeat, and the refusal is returned unchanged).
 - **Analyzer (sandbox) mode** reads the sandbox book and answers with `"mode": "analyze"`. Sandbox entries also carry `strategy` (the identifier sent at placement) and `margin_blocked` (the reservation held while the trigger is active, `0` once it fires or is cancelled).
-- A fired GTT's child order is an ordinary order: it appears in the regular [OrderBook](../account-services/orderbook.md) in both modes, as it does at the broker. The GTT row with `"status": "triggered"` (and `triggered_order_id` in analyzer mode) is how the two are tied together.
+- A fired GTT's child order is an ordinary order: it appears in the regular [OrderBook](../account-services/orderbook.md) in both modes, as it does at the broker. The GTT row with `"status": "triggered"` (and `triggered_order_id` in analyzer mode and on Zerodha) is how the two are tied together.
 - **Field semantics by trigger type**:
   - SINGLE → `trigger_prices` has one element; `legs` has one entry.
   - OCO → `trigger_prices` has two elements (sl first, tg second); `legs` has two entries in matching order.
