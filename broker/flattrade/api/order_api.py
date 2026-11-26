@@ -218,7 +218,7 @@ def place_order_api(data, auth):
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"Place Order Data: {newdata}")
+    logger.debug(f"{newdata}")
     # Get the shared httpx client
     client = get_httpx_client()
 
@@ -237,7 +237,6 @@ def place_order_api(data, auth):
     # cannot tell "rejected for rate" from "accepted, response lost", and a
     # duplicate order is far worse than a failed one. Surface it instead.
     clamp_from_response(response_data, ORDER_LIMITER)
-    logger.info(f"Place Order Response: {response_data}")
 
     # Add status attribute for backward compatibility
     res.status = res.status_code
@@ -278,8 +277,8 @@ def place_smartorder_api(data, auth):
         except BrokerBusyError as busy:
             return busy_response(str(busy))
 
-        logger.debug(f"Smart Order position_size : {position_size}")
-        logger.debug(f"Smart Order Open Position : {current_position}")
+        logger.debug(f"position_size : {position_size}")
+        logger.debug(f"Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -342,8 +341,8 @@ def place_smartorder_api(data, auth):
             res, response, orderid = place_order_api(order_data, auth)
             _invalidate_position_cache(AUTH_TOKEN)
             # logger.debug(f"{res}")
-            logger.debug(f"Smart Order Response: {response}")
-            logger.debug(f"Smart Order orderid: {orderid}")
+            logger.debug(f"{response}")
+            logger.debug(f"{orderid}")
 
             return res, response, orderid
 
@@ -387,7 +386,7 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.debug(f"Close All Positions Payload: {place_order_payload}")
+            logger.debug(f"{place_order_payload}")
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
@@ -442,7 +441,7 @@ def cancel_order(orderid, auth):
     res = client.post(url, content=payload, headers=headers)
     data = res.json()
     clamp_from_response(data, ORDER_LIMITER)  # clamp only, never retry an order
-    logger.info(f"Cancel Order Response: {data}")
+    logger.debug(f"{data}")
 
     # Check if the request was successful
     if data.get("stat") == "Ok":
@@ -471,8 +470,7 @@ def modify_order(data, auth):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
-    safe_log = {k: v for k, v in transformed_data.items() if k != "uid"}
-    logger.info(f"Modify Order Data: {safe_log}")
+    logger.debug(f"Modify Order Data: {transformed_data}")
 
     # Get the shared httpx client
     client = get_httpx_client()
@@ -488,7 +486,7 @@ def modify_order(data, auth):
     response = res.json()
     clamp_from_response(response, ORDER_LIMITER)  # clamp only, never retry an order
 
-    logger.info(f"Modify Order Response: {response}")
+    logger.debug(f"Modify Order Response: {response}")
     logger.debug(f"Modify Order Status Code: {res.status_code}")
 
     if response.get("stat") == "Ok":
