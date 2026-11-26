@@ -2953,7 +2953,7 @@ wheels = [
 
 [[package]]
 name = "openalgoui"
-version = "2.0.3.5"
+version = "2.0.3.6"
 source = { editable = "." }
 dependencies = [
     { name = "agno" },
