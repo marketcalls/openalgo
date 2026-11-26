@@ -618,6 +618,39 @@ class FyersHSMWebSocket:
                 if value != -2147483648 and index < len(self.INDEX_FIELDS):
                     index_data[self.INDEX_FIELDS[index]] = value
 
+            # An index snapshot ends with the same trailer as a scrip snapshot
+            # (2 bytes, multiplier, precision, then exchange / exchange_token /
+            # symbol strings), as in the official SDK (fyers-apiv3
+            # FyersWebsocket/data_ws.py). Skipping it left the offset inside
+            # the trailer, so the next snapshot in the same frame was read as
+            # "Unknown data type" and dropped: that symbol never registered
+            # and none of its later updates were delivered.
+            offset += 2
+
+            if offset + 3 > len(data):
+                return offset
+
+            index_data["multiplier"] = struct.unpack(">H", data[offset : offset + 2])[0]
+            offset += 2
+
+            index_data["precision"] = struct.unpack("B", data[offset : offset + 1])[0]
+            offset += 1
+
+            for field in ("exchange", "exchange_token", "symbol"):
+                if offset + 1 > len(data):
+                    break
+
+                string_len = struct.unpack("B", data[offset : offset + 1])[0]
+                offset += 1
+
+                if offset + string_len > len(data):
+                    break
+
+                index_data[field] = data[offset : offset + string_len].decode(
+                    "utf-8", errors="ignore"
+                )
+                offset += string_len
+
             # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
                 index_data["original_symbol"] = self.symbol_mappings[topic_name]
