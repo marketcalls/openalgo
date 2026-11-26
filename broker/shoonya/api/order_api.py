@@ -7,6 +7,7 @@ import time
 
 from broker.shoonya.mapping.order_data import normalize_order_status
 from broker.shoonya.mapping.transform_data import (
+    SLMOrderRefused,
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -123,7 +124,6 @@ def _invalidate_position_cache(auth):
     _POSITION_BOOK.invalidate(auth)
 
 
-
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
@@ -153,6 +153,18 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     return net_qty
 
 
+class _RejectedResponse:
+    """Stands in for a broker response to an order refused before sending.
+
+    The service layer reads ``.status`` and the message from the response
+    data, so the trader sees a 400 naming the problem instead of the
+    "internal error" an escaped exception would produce.
+    """
+
+    status = 400
+    status_code = 400
+
+
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
     # BROKER_API_KEY format: userid:::client_id
@@ -160,7 +172,12 @@ def place_order_api(data, auth):
     BROKER_API_KEY = full_api_key.split(":::")[0]  # Trading user ID
     data["apikey"] = BROKER_API_KEY
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token, AUTH_TOKEN)
+    try:
+        newdata = transform_data(data, token, AUTH_TOKEN)
+    except SLMOrderRefused as refused:
+        # Refused before anything reached the broker; the message names the fix.
+        logger.warning(f"PlaceOrder refused: {refused}")
+        return _RejectedResponse(), {"status": "error", "message": str(refused)}, None
     headers = {
         "Content-Type": "text/plain",
         "Authorization": f"Bearer {AUTH_TOKEN}",

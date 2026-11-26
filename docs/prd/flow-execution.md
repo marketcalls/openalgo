@@ -2,6 +2,12 @@
 
 This document describes the backend execution engine that runs Flow workflows.
 
+## HTTP Triggers Under gthread
+
+For webhook and Run Now requests, eventlet and the development server retain inline execution. Under gthread, `workflow_runs_in_background()` estimates the saved graph's total Delay time plus its furthest Wait Until target. At most ten seconds remains inline; a longer wait is accepted onto a bounded shared background pool and the caller reads the result in execution history.
+
+The Delay pool admits 16 runs; a Wait Until target more than ten seconds away uses its own four-run pool. A saturated pool refuses the trigger before any order is placed and records the refusal in execution history. The workflow lock is claimed before submission so a second trigger still receives `already_running`. Scheduler, price-alert and order-update triggers already have their own background ownership. These pool sizes are internal constants, not operator settings. Source: `services/flow_executor_service.py` and `blueprints/flow.py`.
+
 ## Architecture
 
 ```

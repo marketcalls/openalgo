@@ -35,6 +35,10 @@ def app():
     """
     application = Flask(__name__)
     application.config["TESTING"] = True
+    # Stated, not inherited: an app that sets nothing takes whatever the last
+    # app given to the shared limiter set, so a test elsewhere that switched
+    # it off left every test here seeing 200 where it expects 429.
+    application.config["RATELIMIT_ENABLED"] = True
     limiter.init_app(application)
     application.register_blueprint(flow_bp)
 

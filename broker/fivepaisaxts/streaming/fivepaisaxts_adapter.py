@@ -124,11 +124,27 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.logger.info("Using configured API key for Fivepaisa XTS connection")
 
+        # The feed connects with the market data token stored at broker login,
+        # read again on every reconnect, instead of logging in on its own: a
+        # second market data login cancelled the token history and quotes use
+        # (issue #2484). Tokens handed in through auth_data are used as given.
+        if auth_data:
+            provided_feed_token = feed_token
+
+            def feed_token_provider():
+                return provided_feed_token
+
+        else:
+
+            def feed_token_provider():
+                return get_feed_token(user_id)
+
         # Create Fivepaisa XTS WebSocket client with API credentials
         self.ws_client = FivepaisaXTSWebSocketClient(
             api_key=api_key,
             api_secret=api_secret,
-            user_id=user_id,  # Pass the user_id, client will get actual userID from login
+            user_id=user_id,
+            feed_token_provider=feed_token_provider,
         )
 
         # Set callbacks
@@ -573,7 +589,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             # Don't log the actual token value for security, but log its type and length
             token_info = (
-                f"type={type(token)}, len={len(str(token))}, value={str(token)[:4]}...{str(token)[-4:]}"
+                f"type={type(token)}, len={len(str(token))}"
                 if token
                 else "None"
             )
@@ -967,11 +983,9 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Normalized market data
         """
-        # For MessageCode 1502 (Depth mode), data is structured differently
-        message_code = message.get("MessageCode")
-
-        # For depth mode (MessageCode 1502), extract data from Touchline
-        if message_code == 1502 and "Touchline" in message:
+        # XTS nests the touchline fields under "Touchline" in 1502 and, on
+        # many servers, in 1501 too; read them there whenever it is present.
+        if isinstance(message.get("Touchline"), dict):
             touchline = message.get("Touchline", {})
             ltp = touchline.get("LastTradedPrice", 0)
             ltt = touchline.get("LastTradedTime", 0)
@@ -990,7 +1004,8 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"Extracted from Touchline - LTP: {ltp}, Volume: {volume}, Open: {open_price}"
             )
         else:
-            # For other message codes (1512, 1501), data is at root level
+            # Otherwise (1512, and 1501 on servers that send it flat) the
+            # fields are at root level
             ltp = message.get("LastTradedPrice", 0)
             ltt = message.get("LastTradedTime", 0)
             volume = message.get("TotalTradedQuantity", 0)

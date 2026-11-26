@@ -171,6 +171,7 @@ def categorize_endpoint(path):
             "/holdings",
             "/analyzer",
             "/margin",
+            "/charges",
         ]
     ):
         return "account"

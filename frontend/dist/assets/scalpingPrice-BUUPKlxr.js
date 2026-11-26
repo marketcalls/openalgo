@@ -1,0 +1,1 @@
+function e(e){let t=(e||``).toUpperCase();return t===`CDS`||t===`BCD`?4:2}export{e as t};

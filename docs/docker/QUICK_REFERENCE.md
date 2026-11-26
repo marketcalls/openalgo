@@ -1,5 +1,7 @@
 # Docker Scripts Update - Quick Reference
 
+This is a historical January 2026 implementation/troubleshooting record. For current setup, writable `.env` mounts, resource defaults and worker selection, use [Docker Deployment](docker.md) and [Docker Build Guide](DOCKER_BUILD_GUIDE.md).
+
 ## What Was Changed
 
 ### All 3 Installation Scripts Updated

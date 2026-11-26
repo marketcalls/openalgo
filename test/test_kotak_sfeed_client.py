@@ -163,9 +163,10 @@ def test_a_symbol_not_yet_acknowledged_reads_as_empty_not_none(client):
     assert client._to_quote(scrip(4))["ts"] == ""
 
 
-def test_a_mini_tick_reports_absent_fields_as_zero(client):
-    """Mini touch line has no OHLC or book. Zero is how this contract says
-    "unchanged" - the adapter skips zero price fields when merging."""
+def test_a_mini_tick_leaves_out_the_fields_it_does_not_carry(client):
+    """Mini touch line has no OHLC, volume or book. Those keys are absent, not
+    zero: the adapter treats a priced tick as complete, so a zero would be
+    published as a real zero, while an absent key keeps the last known value."""
     lite = client._to_quote_lite(
         {
             "type": "scrip_lite",
@@ -177,8 +178,8 @@ def test_a_mini_tick_reports_absent_fields_as_zero(client):
     )
 
     assert lite["ltp"] == 2135.0
-    assert lite["open"] == 0.0
-    assert lite["bid"] == 0.0
+    for absent in ("open", "high", "low", "volume", "bid", "ask"):
+        assert absent not in lite
 
 
 def test_depth_ticks_route_to_the_depth_callback_and_touch_line_to_quote(client):

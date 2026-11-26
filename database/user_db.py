@@ -1,11 +1,13 @@
 # database/user_db.py
 
 import os
+from datetime import datetime, timedelta
 
 import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from sqlalchemy import Boolean, Column, Integer, String, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, create_engine
+from sqlalchemy import delete as sql_delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -144,6 +146,164 @@ class User(Base):
         """Verify TOTP token"""
         totp = pyotp.TOTP(self.get_totp_secret())
         return totp.verify(token)
+
+
+class PasswordResetGrant(Base):
+    """A password reset that has been approved and not yet used.
+
+    A reset is approved by a TOTP code or by the emailed link, and the browser
+    is handed a token for the last step. The token's digest used to live only
+    in the session cookie, which is signed and held by the browser: the server
+    kept no record of it, so it could not say that a token had been used. A
+    copy of the cookie from before the reset, with its token, set the password
+    a second time, and the token never lapsed on its own.
+
+    A row here is that record. The last step needs the cookie and a row that
+    is still open, and using the row removes it. Only the SHA-256 digest of
+    the token is stored, so a copy of the table completes nothing.
+    """
+
+    __tablename__ = "password_reset_grants"
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, nullable=False)
+    user_id = Column(Integer, nullable=False, index=True)
+    method = Column(String(10), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+
+#: How long an approved reset stays open. The email says its link lasts an
+#: hour. A TOTP approval is used in the same sitting, so it gets far less.
+RESET_GRANT_TTL = {"totp": timedelta(minutes=15), "email": timedelta(hours=1)}
+
+
+def issue_password_reset_grant(user_id, token_hash, method):
+    """Record an approved password reset, replacing any earlier one.
+
+    One account has one open reset at a time: starting another ends the one
+    before it, and lapsed rows of any account are cleared on the way.
+
+    Args:
+        user_id: The account's users.id.
+        token_hash: SHA-256 hex digest of the reset token.
+        method: "totp" or "email"; decides how long the reset stays open.
+
+    Returns:
+        bool: True when recorded. False means the reset must not proceed.
+    """
+    now = datetime.utcnow()
+    try:
+        db_session.execute(
+            sql_delete(PasswordResetGrant).where(
+                (PasswordResetGrant.user_id == user_id) | (PasswordResetGrant.expires_at <= now)
+            )
+        )
+        db_session.add(
+            PasswordResetGrant(
+                token_hash=token_hash,
+                user_id=user_id,
+                method=method,
+                created_at=now,
+                expires_at=now + RESET_GRANT_TTL[method],
+            )
+        )
+        db_session.commit()
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record an approved password reset")
+        return False
+
+
+def password_reset_grant_is_open(user_id, token_hash):
+    """Whether this account has an approved reset for this token, not yet used.
+
+    Args:
+        user_id: The account's users.id.
+        token_hash: SHA-256 hex digest of the reset token.
+
+    Returns:
+        bool: True while the reset can still be completed.
+    """
+    try:
+        return (
+            PasswordResetGrant.query.filter(
+                PasswordResetGrant.user_id == user_id,
+                PasswordResetGrant.token_hash == token_hash,
+                PasswordResetGrant.expires_at > datetime.utcnow(),
+            ).first()
+            is not None
+        )
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not read the approved password resets")
+        return False
+
+
+def reset_password_with_grant(user_id, token_hash, new_password):
+    """Use up an approved reset and set the password, as one step.
+
+    The reset is claimed by deleting its row, so exactly one caller wins when
+    two arrive together, and the password is written in the same transaction:
+    a claim without the password, or the password without the claim, cannot
+    be committed. Every other open reset of the account ends with it.
+
+    Args:
+        user_id: The account's users.id.
+        token_hash: SHA-256 hex digest of the reset token.
+        new_password: The password to set.
+
+    Returns:
+        bool: True when this call set the password. False when the reset was
+        already used, has lapsed or was never approved, and nothing changed.
+    """
+    try:
+        claimed = db_session.execute(
+            sql_delete(PasswordResetGrant).where(
+                PasswordResetGrant.user_id == user_id,
+                PasswordResetGrant.token_hash == token_hash,
+                PasswordResetGrant.expires_at > datetime.utcnow(),
+            )
+        ).rowcount
+        user = db_session.get(User, user_id) if claimed == 1 else None
+        if user is None:
+            db_session.rollback()
+            return False
+        user.set_password(new_password)
+        db_session.execute(
+            sql_delete(PasswordResetGrant).where(PasswordResetGrant.user_id == user_id)
+        )
+        username = user.username
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not complete a password reset")
+        return False
+    # After the commit (see LockedTTLCache.invalidate): the cached hash is the
+    # old password's, and would keep it working for the rest of its 30 seconds.
+    username_cache.invalidate(f"user-{username}")
+    return True
+
+
+def clear_password_reset_grants(user_id):
+    """End every open reset of an account, after its password was changed.
+
+    Args:
+        user_id: The account's users.id.
+
+    Returns:
+        bool: True when the rows are gone.
+    """
+    try:
+        db_session.execute(
+            sql_delete(PasswordResetGrant).where(PasswordResetGrant.user_id == user_id)
+        )
+        db_session.commit()
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not end the open password resets")
+        return False
 
 
 def init_db():

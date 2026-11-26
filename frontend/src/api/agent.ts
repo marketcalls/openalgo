@@ -300,8 +300,11 @@ export interface AgentSettingsResponse {
 // every other agent credential.
 // =============================================================================
 
-/** The three providers `ag_setting.websearch_provider` accepts. */
-export type WebSearchProviderId = 'duckduckgo' | 'tavily' | 'perplexity'
+/** The providers `ag_setting.websearch_provider` accepts. */
+export type WebSearchProviderId = 'duckduckgo' | 'tavily' | 'perplexity' | 'firecrawl' | 'tinyfish'
+
+/** The providers that can also read a whole page, for `web_fetch`. */
+export type WebFetchProviderId = 'firecrawl' | 'tinyfish'
 
 /**
  * What a provider gives back, and why that decides which tool it answers.
@@ -313,7 +316,7 @@ export type WebSearchProviderId = 'duckduckgo' | 'tavily' | 'perplexity'
  */
 export type WebSearchResultKind = 'links' | 'answer'
 
-/** The two web search tools the agent exposes. */
+/** The web tools a provider answers. Reading a page is `web_fetch`, see `fetch`. */
 export type WebSearchTool = 'web_search' | 'web_research'
 
 /**
@@ -333,6 +336,8 @@ export interface WebSearchProvider {
   tool: WebSearchTool
   /** One sentence an operator can choose on. */
   description: string
+  /** True when the same key also answers `web_fetch`, which reads a whole page. */
+  fetch: boolean
   has_api_key: boolean
   /** Display safe, never the value: `...abcd sha256:0123456789ab`. */
   api_key_fingerprint: string | null
@@ -362,6 +367,16 @@ export interface WebSearchUsage {
 export interface WebSearchConfig {
   /** Which provider answers web_search. Perplexity leaves it on DuckDuckGo. */
   provider: WebSearchProviderId
+  /** Which provider web_fetch tries first. It has no keyless provider. */
+  fetch_provider: WebFetchProviderId
+  /** True when a Firecrawl or TinyFish key is stored, so web_fetch can run. */
+  fetch_ready: boolean
+  /**
+   * Where company fundamentals are looked for first, best first. A search for
+   * fundamentals tries these in order and only then the open web. Empty means
+   * the preference is off.
+   */
+  preferred_sources: string[]
   /** The model web_research runs. */
   perplexity_model: string
   /** How many searches one turn may make. */
@@ -375,6 +390,8 @@ export interface WebSearchConfig {
 /** What each configurable field reverts to. */
 export interface WebSearchDefaults {
   provider: WebSearchProviderId
+  fetch_provider: WebFetchProviderId
+  preferred_sources: string[]
   perplexity_model: string
   max_calls_per_turn: number
   daily_cap: number

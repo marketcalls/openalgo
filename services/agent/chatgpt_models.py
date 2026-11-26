@@ -1,8 +1,9 @@
 """Models the ChatGPT subscription serves that LiteLLM does not yet list.
 
-LiteLLM 1.104.0's bundled registry carries fourteen `chatgpt/*` entries, the
-newest the three `gpt-5.6` variants and `gpt-5.5`, which used to be supplied
-here. The Codex backend behind a ChatGPT plan serves more than that, and the
+LiteLLM 1.106.6's bundled registry carries nineteen `chatgpt/*` entries, the
+newest `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna` and `gpt-6-astra`, and every
+model this module used to supply is among them. The Codex backend behind a
+ChatGPT plan has repeatedly served models before LiteLLM listed them, and the
 omission is not cosmetic: a model absent from the registry has no `mode`, so LiteLLM routes
 it through the chat-completions bridge instead of `/v1/responses`. That request
 never reaches the API at all. It lands on a Cloudflare interstitial and comes
@@ -36,13 +37,14 @@ and no cost keys, so `catalog.estimate_cost` keeps returning None and a plan
 turn is reported as subscription usage rather than as costing zero. See
 `chatgpt_oauth.apply_billing`.
 
-This module exists to be deleted. When LiteLLM ships these names, its own entry
-wins and this one is skipped, so the only cost of the overlap is this file.
-LiteLLM 1.104.0 shipped four of the five, and they were removed from
-`SUPPLEMENTAL`. The one left, `gpt-6-astra`, is already in the model map LiteLLM
-fetches from GitHub at import, so on an online install this module adds nothing;
-it stays for the install whose fetch fails and falls back to the bundled map,
-where it is still absent.
+When LiteLLM ships these names, its own entry wins and this one is skipped, so
+the only cost of the overlap is this file. LiteLLM 1.104.0 shipped four of the
+five and 1.106.6 shipped the last, `gpt-6-astra`, so `SUPPLEMENTAL` is empty and
+`register` adds nothing. The module stays because the lag recurs: on 2026-10-30
+the model map LiteLLM fetches from GitHub at import already listed
+`chatgpt/gpt-6.1-terra`, which the 1.106.6 bundle does not, so an install whose
+fetch fails would not see it. A name goes back in only once a real subscription
+has answered with it, as above, never because it appears upstream.
 """
 
 import warnings
@@ -71,10 +73,9 @@ _BASE: dict[str, Any] = {
 #: Bare model name -> the fields that differ from `_BASE`. Context windows are
 #: the ones LiteLLM records for the same model on the API path, because it is
 #: the same model reached by a different route. `gpt-5.5` and the three
-#: `gpt-5.6` variants left this map when LiteLLM 1.104.0 shipped them.
-SUPPLEMENTAL: dict[str, dict[str, Any]] = {
-    "gpt-6-astra": {"max_input_tokens": 922000},
-}
+#: `gpt-5.6` variants left this map when LiteLLM 1.104.0 shipped them, and
+#: `gpt-6-astra` when 1.106.6 did.
+SUPPLEMENTAL: dict[str, dict[str, Any]] = {}
 
 
 def entry(name: str) -> dict[str, Any]:

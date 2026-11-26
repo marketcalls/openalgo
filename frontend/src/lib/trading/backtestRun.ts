@@ -49,10 +49,11 @@ import type {
   BacktestReply,
   RunInstrument,
   RunStop,
+  ServedBars,
 } from './backtestWorkerProtocol'
 import { factsFor, type InstrumentFacts } from './instrumentFacts'
 import { compileSource, type EditorDiagnostic } from './openscriptFiles'
-import { languageInterval } from './openscriptIntervals'
+import { finerThanChart, languageInterval } from './openscriptIntervals'
 
 export type { RunInstrument, RunStop } from './backtestWorkerProtocol'
 
@@ -423,7 +424,13 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
   }
   const inputs = (request.inputs ?? {}) as Record<string, unknown>
 
-  const folded = await fold({ program, bars, contract: priced, inputs, instrument }, request.signal)
+  const served = await servedFor(program, inputs, instrument, request)
+  if (typeof served === 'string') return refused(served)
+
+  const folded = await fold(
+    { program, bars, contract: priced, inputs, instrument, ...(served.length > 0 ? { served } : {}) },
+    request.signal
+  )
   if (folded === null) return refused('This run was stopped.')
 
   // A run can be refused before its first bar: a cost model stated twice, a
@@ -467,6 +474,138 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestOut
  * Answers `null` for a run that was abandoned, which is a run nobody is waiting
  * for rather than a run that failed.
  */
+/** Minutes this platform's history serves an intraday interval at. */
+const HISTORY_MINUTES = new Set([1, 2, 3, 5, 10, 15, 20, 30, 60, 120, 180, 240])
+
+/**
+ * The platform interval to fetch a requested series at, from the engine's
+ * spelling of it, or null where it has none.
+ *
+ * A minute count history has no code for is fetched at one minute, which
+ * divides every count, and the engine folds the finer bars: a host may answer a
+ * read with bars at any interval that divides the one asked for
+ * (`host-interface.md` 5.2). A day, week or month count above one is fetched
+ * at one of its unit, for the same reason.
+ */
+export function historyInterval(interval: string): string | null {
+  const found = /^([0-9]+)(m|h|D|W|M)?$/.exec(interval.trim())
+  if (found === null) return null
+  const count = Number(found[1])
+  const unit = found[2] ?? 'm'
+  if (!Number.isInteger(count) || count < 1) return null
+  if (unit === 'm' || unit === 'h') {
+    const minutes = count * (unit === 'h' ? 60 : 1)
+    if (!HISTORY_MINUTES.has(minutes)) return '1m'
+    return minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`
+  }
+  return unit
+}
+
+/** A read as the engine asks a host about it, in the fields this needs. */
+interface AskedRead {
+  read: string
+  instrument: string | null
+  exchange: string | null
+  timeframe: string
+  interval: string
+}
+
+/**
+ * The bars a strategy's reads need beyond the chart's own, fetched before the
+ * run, or the sentence that stops it.
+ *
+ * **The engine says which.** Whether a read folds from the chart's bars or
+ * needs a finer base is the engine's rule (openalgo-script 0.9.0, `stdlib.md`
+ * 15.2) and depends on the chart's interval and the script's settings, so it is
+ * asked rather than worked out here: the strategy is loaded, and nothing more,
+ * with a provider that records every read and answers none. A load asks the
+ * host about every read before any bar runs, so no bar of the backtest runs on
+ * this thread. A read of the chart's own instrument whose `interval` is its
+ * `timeframe` folds from the chart's bars and needs nothing.
+ *
+ * A series that cannot be fetched is left out rather than stopping the run: its
+ * read is absent with the engine's own reason, as on a chart.
+ */
+async function servedFor(
+  program: unknown,
+  inputs: Record<string, unknown>,
+  instrument: RunInstrument,
+  request: BacktestRequest
+): Promise<ServedBars[] | string> {
+  const asked: AskedRead[] = []
+  try {
+    const engine = await import('openalgo-script')
+    engine.load(program, {
+      settings: inputs,
+      host: {
+        instrument,
+        requestBars: ((query: AskedRead) => {
+          asked.push(query)
+          return { pending: true }
+        }) as unknown as NonNullable<
+          NonNullable<Parameters<typeof engine.load>[1]>['host']
+        >['requestBars'],
+      },
+    })
+  } catch {
+    return []
+  }
+
+  const wanted = new Map<string, AskedRead & { instrument: string }>()
+  for (const query of asked) {
+    if (query.instrument === null) continue
+    // The engine folds the run's own bars unless the interval it asks at is
+    // finer than the run's; the spelling cannot tell, because a finer read that
+    // is its own base asks at its own timeframe.
+    if (query.read === 'timeframe' && !finerThanChart(query.interval, instrument.interval ?? null))
+      continue
+    wanted.set(`${query.instrument}|${query.exchange ?? ''}|${query.interval}`, {
+      ...query,
+      instrument: query.instrument,
+    })
+  }
+
+  const served: ServedBars[] = []
+  for (const query of wanted.values()) {
+    const code = historyInterval(query.interval)
+    if (code === null) continue
+    let rows: HistoryRow[]
+    try {
+      const res = await apiClient.post<{ status: string; data?: HistoryRow[]; message?: string }>(
+        '/history',
+        {
+          apikey: request.apiKey,
+          symbol: query.instrument,
+          exchange: query.exchange ?? request.exchange,
+          interval: code,
+          start_date: request.startDate,
+          end_date: request.endDate,
+        },
+        { signal: request.signal }
+      )
+      if (res.data?.status !== 'success') continue
+      rows = res.data.data ?? []
+    } catch {
+      if (request.signal?.aborted) return 'This run was stopped.'
+      continue
+    }
+    if (rows.length > MAX_BARS) {
+      return (
+        `The ${code} bars of ${query.instrument} a read in this strategy needs come to ` +
+        `${rows.length.toLocaleString()} over that range, and a run takes up to ` +
+        `${MAX_BARS.toLocaleString()}. Shorten the range.`
+      )
+    }
+    served.push({
+      instrument: query.instrument,
+      exchange: query.exchange,
+      interval: query.interval,
+      bars: barsFromHistory(rows),
+    })
+  }
+  return served
+}
+
 async function fold(
   message: BacktestMessage,
   signal?: AbortSignal

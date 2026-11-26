@@ -84,6 +84,22 @@ def _to_int(value, default=0):
     return int(_to_float(value, default))
 
 
+def _holding_quantity(holding):
+    """Shares the trader owns in a Kite holdings row.
+
+    Kite's ``quantity`` is the settled, unpledged part only. Pledged shares
+    move to ``collateral_quantity`` and unsettled buys sit in ``t1_quantity``,
+    so a fully pledged holding arrives as ``quantity: 0`` while Kite's own
+    ``pnl`` is still worked out on every share. Add them back so quantity,
+    holding value and investment value agree with that pnl and the Kite app.
+    """
+    return (
+        _to_int(holding.get("quantity"))
+        + _to_int(holding.get("t1_quantity"))
+        + _to_int(holding.get("collateral_quantity"))
+    )
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -356,7 +372,7 @@ def transform_holdings_data(holdings_data):
         transformed_position = {
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
-            "quantity": _to_int(holdings.get("quantity", 0)),
+            "quantity": _holding_quantity(holdings),
             "product": holdings.get("product", ""),
             "average_price": average_price,
             # Kite calls it last_price. It was already being read to derive
@@ -399,6 +415,17 @@ def map_portfolio_data(portfolio_data):
         # raw, which no product in OpenAlgo would have matched.
         portfolio["product"] = "CNC"
 
+        # Kite's tradingsymbol is not always OpenAlgo's symbol: a stock traded
+        # in the BE or RR series is HFCL-BE on Kite and HFCL in OpenAlgo. Map
+        # it back as the order, trade and position books do, keeping Kite's
+        # symbol for a holding the master contract does not list.
+        br_symbol = portfolio.get("tradingsymbol")
+        exchange = portfolio.get("exchange")
+        if br_symbol and exchange:
+            portfolio["tradingsymbol"] = (
+                get_oa_symbol(brsymbol=br_symbol, exchange=exchange) or br_symbol
+            )
+
     return portfolio_data
 
 
@@ -408,11 +435,10 @@ def calculate_portfolio_statistics(holdings_data):
     # or pnl used to fail the entire holdings request rather than one row.
     holdings_data = holdings_data or []
     totalholdingvalue = sum(
-        _to_float(item.get("last_price")) * _to_int(item.get("quantity")) for item in holdings_data
+        _to_float(item.get("last_price")) * _holding_quantity(item) for item in holdings_data
     )
     totalinvvalue = sum(
-        _to_float(item.get("average_price")) * _to_int(item.get("quantity"))
-        for item in holdings_data
+        _to_float(item.get("average_price")) * _holding_quantity(item) for item in holdings_data
     )
     totalprofitandloss = sum(_to_float(item.get("pnl")) for item in holdings_data)
 

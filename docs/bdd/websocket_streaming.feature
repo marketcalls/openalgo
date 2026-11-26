@@ -41,4 +41,18 @@ Feature: WebSocket streaming
     Given the WebSocket proxy and one or more broker adapters are running
     When the proxy creates the SUB side of the market-data bus
     Then the proxy binds the ZMQ endpoint
-    And broker PUB sockets connect so ticks from multiple publishers fan in
+    And broker and cache-invalidation PUB sockets connect so publishers fan in
+    And the configured ZMQ port never falls back to another port
+
+  # Source: websocket_proxy/app_integration.py:resolve_proxy_mode, start.sh
+  Scenario Outline: Proxy lifecycle follows the actual server mode
+    Given OpenAlgo runs under "<runtime>"
+    When the market-data proxy starts
+    Then it runs as "<lifecycle>"
+
+    Examples:
+      | runtime | lifecycle |
+      | Gunicorn eventlet | a child Python process |
+      | Gunicorn gthread | a supervised child Python process |
+      | direct development startup | a real OS thread with its own asyncio loop |
+      | Docker start.sh | a separately started Python process |

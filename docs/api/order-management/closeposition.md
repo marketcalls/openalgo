@@ -1,6 +1,6 @@
 # ClosePosition
 
-Close all open positions across all exchanges in a single request. This is a square-off operation that places counter orders for all open positions.
+Request a square-off of all open positions supported by the active broker. `strategy` is a tracking label, not a position filter: this can close positions created by other strategies or manually. Analyzer mode routes to sandbox positions instead.
 
 ## Endpoint URL
 
@@ -53,7 +53,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/closeposition \
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Tracking label; does not restrict which positions are closed | Optional | - |
 
 ## Response Fields
 
@@ -86,11 +86,11 @@ curl -X POST http://127.0.0.1:5000/api/v1/closeposition \
 
 ## Notes
 
-- This is a **destructive operation** - all positions will be squared off
-- Closing orders are placed as **MARKET orders** for immediate execution
+- This is an account-wide operation; verify the remaining position book after the request
+- Closing orders use **MARKET orders** where supported; acceptance does not guarantee a fill, its timing, or price
 - CNC (delivery) positions are also closed if they have intraday quantity
 - Use with caution - there is no confirmation prompt
-- The operation affects **all positions** across all exchanges
+- The live broker adapter determines the supported exchanges/products and reports failures; a summary success is not proof that the account is flat
 - For selective closing, use individual orders instead
 
 ## Use Cases

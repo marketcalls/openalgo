@@ -134,7 +134,7 @@ class IbullsWebSocketClient:
 
             if response.status_code == 200:
                 result = response.json()
-                self.logger.info(f"[MARKET DATA LOGIN] Response: {result}")
+                self.logger.info(f"[MARKET DATA LOGIN] Response type: {result.get('type')}")
 
                 if result.get("type") == "success":
                     login_result = result.get("result", {})
@@ -180,7 +180,7 @@ class IbullsWebSocketClient:
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
 
-            self.logger.info(f"Connecting to Ibulls XTS Socket.IO: {connection_url}")
+            self.logger.info(f"Connecting to Ibulls XTS Socket.IO: {self.base_url}")
 
             # Connect to Socket.IO server
             self.sio.connect(

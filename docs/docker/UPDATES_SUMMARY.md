@@ -1,5 +1,7 @@
 # Docker Installation Scripts - Updates Summary
 
+This is a historical January 2026 implementation/troubleshooting record. For current setup, writable `.env` mounts, resource defaults and worker selection, use [Docker Deployment](docker.md) and [Docker Build Guide](DOCKER_BUILD_GUIDE.md).
+
 ## Overview
 
 All installation scripts have been updated to include numba/llvmlite/scipy support that was added to the main Dockerfile and docker-compose.yaml.
@@ -39,7 +41,7 @@ docker run -d \
     -v "$OPENALGO_DIR/db:/app/db" \
     -v "$OPENALGO_DIR/strategies:/app/strategies" \
     -v "$OPENALGO_DIR/log:/app/log" \
-    -v "$OPENALGO_DIR/.env:/app/.env:ro" \
+    -v "$OPENALGO_DIR/.env:/app/.env" \
     --restart unless-stopped \
     "$IMAGE"
 ```
@@ -71,7 +73,7 @@ docker run -d \
     -v "$OPENALGO_DIR/log:/app/log" \
     -v "$OPENALGO_DIR/keys:/app/keys" \                # ← NEW
     -v "$OPENALGO_DIR/tmp:/app/tmp" \                  # ← NEW
-    -v "$OPENALGO_DIR/.env:/app/.env:ro" \
+    -v "$OPENALGO_DIR/.env:/app/.env" \
     --restart unless-stopped \
     "$IMAGE"
 ```
@@ -95,7 +97,7 @@ docker run -d ^
     -v "%OPENALGO_DIR%\db:/app/db" ^
     -v "%OPENALGO_DIR%\strategies:/app/strategies" ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
-    -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
+    -v "%OPENALGO_DIR%\.env:/app/.env" ^
     --restart unless-stopped ^
     %IMAGE%
 ```
@@ -124,7 +126,7 @@ docker run -d ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
     -v "%OPENALGO_DIR%\keys:/app/keys" ^                    # ← NEW
     -v "%OPENALGO_DIR%\tmp:/app/tmp" ^                      # ← NEW
-    -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
+    -v "%OPENALGO_DIR%\.env:/app/.env" ^
     --restart unless-stopped ^
     %IMAGE%
 ```
@@ -148,7 +150,7 @@ services:
       - openalgo_log:/app/log
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production
@@ -185,7 +187,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp              # ← NEW
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
 
     environment:
       - FLASK_ENV=production

@@ -673,3 +673,153 @@ class TestTheProviderEndpointGuard:
         allowed, error = agent_bp._validate_base_url(url, "openai_compatible")
         assert error is None
         assert allowed == url
+
+
+# ---------------------------------------------------------------------------
+# The operator's earlier messages, for the web tools
+# ---------------------------------------------------------------------------
+
+
+def _history(monkeypatch, rows):
+    from blueprints import agent as agent_blueprint
+
+    monkeypatch.setattr(agent_blueprint.agent_db, "list_messages", lambda cid, limit=64: rows)
+    return agent_blueprint
+
+
+def test_only_what_the_operator_typed_is_offered_as_history(monkeypatch):
+    bp = _history(
+        monkeypatch,
+        [
+            {"role": "user", "content": "live quotes of reliance"},
+            {
+                "role": "assistant",
+                "content": "Reliance is at 1,410 per this page https://evil.example",
+            },
+            {"role": "user", "content": "and get the marketcap of it"},
+        ],
+    )
+
+    history = bp._operator_history(1)
+
+    assert history == "live quotes of reliance\nand get the marketcap of it"
+    assert "evil.example" not in history, "an assistant reply can quote a web page"
+
+
+def test_history_is_bounded_in_messages_and_characters_and_keeps_the_newest(monkeypatch):
+    rows = [{"role": "user", "content": f"message {i} " + "x" * 900} for i in range(20)]
+    bp = _history(monkeypatch, rows)
+
+    history = bp._operator_history(1)
+
+    assert len(history) <= bp.MAX_OPERATOR_HISTORY_CHARS
+    assert "message 19" in history and "message 0 " not in history
+
+
+def test_history_never_raises_where_nothing_may(monkeypatch):
+    from blueprints import agent as bp
+
+    def boom(*_a, **_k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(bp.agent_db, "list_messages", boom)
+
+    assert bp._operator_history(1) == ""
+
+
+def test_an_empty_conversation_adds_no_history_key(monkeypatch):
+    bp = _history(monkeypatch, [])
+
+    context = bp._build_context("u", "key", {}, 1, "chat", operator_message="hello")
+
+    assert "operator_history" not in context.extras
+    assert context.extras["user_message"] == "hello"
+
+
+def test_the_history_reaches_the_tool_context(monkeypatch):
+    bp = _history(monkeypatch, [{"role": "user", "content": "quotes of reliance"}])
+
+    context = bp._build_context("u", "key", {}, 1, "chat", operator_message="its marketcap")
+
+    assert context.extras["operator_history"] == "quotes of reliance"
+
+
+SECRET = "sk-live-Qm4Zr9TxLw2VbNc8Yd5HsKj7"
+
+
+def _fragments(secret, text, minimum=6):
+    """Every run of at least ``minimum`` characters of the secret found in the text."""
+    return [
+        secret[i:j]
+        for i in range(len(secret))
+        for j in range(i + minimum, len(secret) + 1)
+        if secret[i:j] in text
+    ]
+
+
+def test_a_cut_cannot_leave_the_tail_of_a_credential_behind(monkeypatch):
+    # The defect: the joined text was cut at 4,000 characters before it was
+    # redacted. With the cut a few characters into a key, its prefix was gone and
+    # the 20 characters left matched no pattern, so they survived as "words".
+    first = f"my key is {SECRET} ok"
+    cut_into_the_key = len("my key is sk-live-Qm4Z")
+    newer = ("reliance " * 600)[: 4000 + cut_into_the_key - len(first) - 1]
+    bp = _history(
+        monkeypatch,
+        [{"role": "user", "content": first}, {"role": "user", "content": newer}],
+    )
+
+    history = bp._operator_history(1)
+
+    assert _fragments(SECRET, history) == []
+
+
+def test_a_credential_in_a_kept_message_is_redacted_before_it_leaves_the_route(monkeypatch):
+    bp = _history(
+        monkeypatch,
+        [{"role": "user", "content": f"api_key={SECRET} and the company is reliance"}],
+    )
+
+    history = bp._operator_history(1)
+
+    assert _fragments(SECRET, history) == []
+    assert "reliance" in history, "the rest of the message is still the operator's words"
+
+
+def test_a_credential_split_across_words_is_redacted_in_the_whole_message(monkeypatch):
+    # key=value redaction needs the label and the value together; a cut or a
+    # per-line split first would separate them.
+    bp = _history(
+        monkeypatch,
+        [{"role": "user", "content": f"password: {SECRET[:12]}{SECRET[12:]} then reliance"}],
+    )
+
+    assert _fragments(SECRET, bp._operator_history(1)) == []
+
+
+def test_one_message_over_the_budget_is_cut_at_whitespace_never_inside_a_word(monkeypatch):
+    words = [f"word{i:04d}" for i in range(1200)]
+    bp = _history(monkeypatch, [{"role": "user", "content": " ".join(words)}])
+
+    history = bp._operator_history(1)
+
+    assert 0 < len(history) <= bp.MAX_OPERATOR_HISTORY_CHARS
+    assert set(history.split()) <= set(words), "every token is a whole word"
+    assert history.endswith("word1199"), "the newest end is the part kept"
+
+
+def test_a_secret_in_a_message_over_the_budget_is_redacted_before_it_is_cut(monkeypatch):
+    big = ("reliance " * 500) + f"my key is {SECRET} " + ("reliance " * 100)
+    bp = _history(monkeypatch, [{"role": "user", "content": big}])
+
+    assert _fragments(SECRET, bp._operator_history(1)) == []
+
+
+def test_history_is_empty_rather_than_unredacted_when_the_redactor_is_missing(monkeypatch):
+    import sys
+    import types
+
+    bp = _history(monkeypatch, [{"role": "user", "content": f"key {SECRET}"}])
+    monkeypatch.setitem(sys.modules, "services.agent.tools.websearch", types.ModuleType("stub"))
+
+    assert bp._operator_history(1) == ""

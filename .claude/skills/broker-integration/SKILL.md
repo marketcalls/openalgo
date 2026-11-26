@@ -10,7 +10,7 @@ description: Integrate a new Indian broker into OpenAlgo, or modify an existing 
 > specific shapes into those common contracts (and back). Copy the closest
 > reference broker, then adapt the broker-specific bits.
 
-36 broker plugins already exist. Almost every problem you will hit has been solved in
+39 broker plugins already exist. Almost every problem you will hit has been solved in
 one of them — the skill is knowing **which one to copy**, and which details are
 genuinely broker-specific.
 
@@ -27,9 +27,10 @@ Two consequences worth internalizing:
 
 - **You never emit events.** `events/` and `utils/event_bus.py` are a
   services-layer concern (order placed, cancelled, GTT triggered). Broker
-  modules do not import them. The one exception in the tree
-  (`broker/iiflcapital/streaming/iiflcapital_order_adapter.py`) is an
-  order-update stream, not the REST path — do not copy that pattern by default.
+  modules do not import them. The two exceptions in the tree
+  (`broker/iiflcapital/streaming/iiflcapital_order_adapter.py` and
+  `broker/nuvama/streaming/nuvama_order_adapter.py`) are non-WebSocket
+  order-update streams, not the REST path — do not copy that pattern by default.
 - **Analyze mode never reaches you.** `get_analyze_mode()` in the service
   short-circuits to `sandbox_service` before any broker call. So "it works in
   analyzer" proves nothing about your integration.
@@ -41,15 +42,16 @@ families, and picking the right template saves days:
 
 | Family | Members already in the tree | Auth shape | Copy |
 | --- | --- | --- | --- |
-| **OAuth2 / checksum redirect** | zerodha, upstox, fyers, dhan, arrow, groww, paytm, aliceblue, definedge | Redirect to broker, get `request_token`/`code` back on callback, exchange it (often SHA256 checksum of `api_key + token + secret`) | **`broker/zerodha/`** |
-| **Noren / Finvasia** | shoonya, flattrade, tradesmart, zebu, ibulls, wisdom | Shared upstream codebase. Near-identical endpoints, `jData=`/`jKey=` form bodies, susurl/scrip-master CSVs per exchange | **`broker/shoonya/`** or `broker/flattrade/` |
-| **Symphony XTS** | fivepaisaxts, jainamxts, compositedge, rmoney, iiflcapital | Dual credentials: interactive + market-data. `BROKER_API_KEY_MARKET` / `_SECRET_MARKET` | **`broker/fivepaisaxts/`** |
-| **Direct login + TOTP** | angel, mstock, motilal, kotak, firstock, samco, nubra, tradejini, fivepaisa | User submits clientcode/password/TOTP in a form; no redirect | **`broker/angel/`** |
+| **OAuth2 / checksum redirect** | zerodha, upstox, fyers, dhan, arrow, groww, paytm, aliceblue, definedge, rupeezy, nuvama, pocketful, iiflcapital, hdfcsky, hdfcsecurities | Redirect to broker, get `request_token`/`code` back on callback, exchange it (often SHA256 checksum of `api_key + token + secret`) | **`broker/zerodha/`** |
+| **Noren / Finvasia** | shoonya, flattrade, tradesmart, zebu | Shared upstream codebase. Near-identical endpoints, `jData=`/`jKey=` form bodies, susurl/scrip-master CSVs per exchange | **`broker/shoonya/`** or `broker/flattrade/` |
+| **Symphony XTS** | fivepaisaxts, jainamxts, compositedge, rmoney, iifl, ibulls, wisdom | Dual credentials: interactive + market-data. `BROKER_API_KEY_MARKET` / `_SECRET_MARKET` | **`broker/fivepaisaxts/`** |
+| **Direct login + TOTP** | angel, mstock, motilal, kotak, firstock, samco, nubra, tradejini, fivepaisa, sahi, indmoney | User submits clientcode/password/TOTP in a form; no redirect | **`broker/angel/`** |
 
 Special cases: **`broker/fyers/`** if the broker offers depth beyond 5 levels
 (dual WebSocket, 50-level TBT socket). **`broker/deltaexchange/`** is the only
 `broker_type: "crypto"` plugin and the only one with `leverage_config: true` —
-ignore it for Indian equity brokers.
+ignore it for Indian equity brokers. `broker/dhan_sandbox/` mirrors dhan
+against Dhan's sandbox.
 
 If the broker is a white-label of one of the above (very common — many Indian
 brokers resell Noren or XTS), the family template is often 90% correct as-is.
@@ -85,7 +87,7 @@ reference is gone.
 
 Before deciding what is normal for a broker — batch caps, rate limits, depth
 levels, which capabilities OpenAlgo even has a contract for — read
-**`references/cross-broker-reference.md`**. It records how all 35 existing
+**`references/cross-broker-reference.md`**. It records how the existing
 plugins actually behave, measured from the tree, so you are not guessing at
 defaults or reinventing a decision someone already made.
 
@@ -137,12 +139,13 @@ Services do `importlib.import_module(f"broker.{broker}.api.<module>")` and call
 | intervals | `api.data` | `BrokerData(auth).timeframe_map` (attribute) | dict |
 | master | `database.master_contract_db` | `master_contract_download()` | emits socketio event |
 | margin | `api.margin_api` | `calculate_margin_api(positions, auth)` | `(response, data)`; `data.data` = `{total_margin_required, span_margin, exposure_margin}` (+ optional `total_charges`) |
-| GTT | `api.gtt_api` | `place_gtt_order`, `modify_gtt_order`, `cancel_gtt_order`, `get_gtt_book` | **optional** — only Dhan and Zerodha have one; the capability gate returns **501** when absent |
+| GTT | `api.gtt_api` | `place_gtt_order`, `modify_gtt_order`, `cancel_gtt_order`, `get_gtt_book` | **optional** — angel, dhan, fyers, pocketful, rupeezy, upstox and zerodha have one; the capability gate returns **501** when absent |
 
 `auth` is always the decrypted broker token string (last positional arg).
 
 There is one more optional surface: an **order-update stream** (real-time fills,
-rejections, cancellations pushed to the client). 17 of 36 brokers implement it.
+rejections, cancellations pushed to the client). 24 of 39 brokers have one
+(22 push adapters, 2 polled); HDFC Sky and HDFC Securities deliberately have none.
 It is registered separately in `services/order_update_service.py`, not in the
 table above — see `references/order-updates.md`.
 
@@ -172,7 +175,19 @@ benefits (an Arrow NIFTY short straddle priced at ~207k via basket vs ~337k as a
 naive per-leg sum). Include Dhan's two guards: a JSON-decode guard (non-JSON
 broker reply -> 502) and `_normalise_success_response` (broker sends an error
 payload with HTTP 200 -> convert to a 400 response object, because
-`margin_service` trusts HTTP 200).
+`margin_service` trusts HTTP 200; any non-200 status works).
+
+Read which figure the basket endpoint returns. Flattrade's `marginused` is
+pre-hedge, and `marginusedtrade` is post-hedge but includes margin the account
+already uses, so subtract `Limits.marginused` (#2156, #2436). Kotak's
+`reqdMrgn` adds existing usage to each leg; report `ordMrgn`. A leg that is
+unknown or failed (an unsupported exchange such as NSE_INDEX included) fails
+the whole basket with the leg named: dropping it reports another basket's
+margin. MARKET and SL-M legs are priced as order emulation prices them (off the
+trigger for SL-M, on the SymToken tick, never a limit at price 0). Re-raise
+`BrokerBusyError` from any catch-all (#2439). After a refactor, confirm
+`calculate_margin_api` still exists: losing it made every Flattrade `/margin`
+call "not implemented".
 
 ### Symbol translation helpers you must use
 
@@ -217,23 +232,28 @@ broker/<name>/
 
 `plugin.json` fields that actually do something: `supported_exchanges` (drives
 capability checks and what you must live-test), `broker_type` (`IN_stock` for
-all 35 Indian brokers, `crypto` for deltaexchange), `leverage_config` (false for
+all 38 Indian brokers, `crypto` for deltaexchange), `leverage_config` (false for
 every Indian broker in the tree).
 
 ## Shared `utils/` a broker plugin depends on
 
 Never hand-roll these — the shared helper is the contract, and bypassing it is
 how FD leaks, unredacted secrets and rate-limit breaches get introduced. Usage
-counts across the 36 existing plugins:
+counts across the 39 existing plugins:
 
 | Module | Uses | What you must take from it |
 | --- | --- | --- |
-| `utils.logging` | ~361 | `logger = get_logger(__name__)` in every module. Its `SensitiveDataFilter` is what stops broker tokens reaching the logs — a bare `print()` or `logging.getLogger()` bypasses that redaction. Errors use `logger.exception()`. |
-| `utils.httpx_client` | ~197 | `get_httpx_client()` — the shared pooled HTTP/2 client. Never construct a per-call client. Always pass an explicit `timeout=`. |
-| `utils.mpp_slab` | ~18 | Market Price Protection slabs for emulating MARKET/SL-M. See `references/order-type-emulation.md`. |
+| `utils.logging` | ~361 | `logger = get_logger(__name__)` in every module; errors use `logger.exception()`. Its `SensitiveDataFilter` masks known credential patterns, and a bare `print()` or `logging.getLogger()` bypasses it, but it is a backstop, not the control: never log a token, key or secret, any slice of one (prefix, suffix, `[:20]`), a login reply or connect URL carrying one, or header values. Log the length, the type or the header names. A JainamXTS token's first and last four characters passed the filter (#2313). `test/test_xts_credential_logging.py` is the guard; extend it to your broker. |
+| `utils.httpx_client` | ~210 files | `get_httpx_client()` — the shared pooled HTTP/2 client. Never construct a per-call client. Always pass an explicit `timeout=`. |
+| `utils.mpp_slab` | ~25 files | Market Price Protection slabs for emulating MARKET/SL-M. See `references/order-type-emulation.md`. |
 | `utils.config` | ~5 | `get_broker_api_key()`, `get_broker_api_secret()`, `get_host_server()`, rate-limit getters. Prefer these over raw `os.getenv` so composite `:::` keys and defaults resolve consistently. |
 | `utils.constants` | 2 | `EXCHANGE_NSE`, `EXCHANGE_NFO`, ... — canonical exchange codes. Use them instead of string literals. |
 | `utils.plugin_loader` | — | Discovers `broker/*/plugin.json` at startup and requires the exact name `authenticate_broker`. You do not call it; it calls you. |
+| `utils.runtime` | — | `gthread_active()`, `is_monkey_patched()`. Never test `"eventlet" in sys.modules` or import eventlet to find out. |
+| `utils.broker_backpressure` | — | `check_queue_wait`, `BrokerBusyError`, `busy_response`, `cap_server_delay`: the gthread refusal path, see Step 5b. |
+| `utils.smart_order_guard` | — | `SymbolLocks` and `PositionBookCache` for smart orders; never a hand-rolled lock dict or position cache. |
+| `utils.position_read` | — | `read_position_book` and `refuse_smart_order_on_read_failure`: a failed position read places nothing. |
+| `utils.shared_executors`, `utils.lazy`, `utils.thread_safe_cache`, `utils.real_threading` | — | `get_executor(name, n)`, `LazyInit`, `LockedTTLCache`, `wait_for`: see Step 5b. |
 
 `utils.event_bus` exists but is a **services-layer** concern — broker modules do
 not publish events.
@@ -262,6 +282,52 @@ See the capability list in `references/cross-broker-reference.md`.
   `finally` for background-thread work.
 - After building, run the **`fd-audit`** skill on your change.
 
+## Step 5b — correct under eventlet, gthread and the dev server
+
+Production runs eventlet by default and gthread (64 real request threads) when
+an install opts in; `uv run app.py` is neither. Under gthread anything that
+sleeps or waits holds a request thread. Gate trader-visible behaviour on
+`utils.runtime.gthread_active()` and keep eventlet and the dev server exactly
+as before. None of this shows on Windows: run `test/test_gthread_*.py` on Linux
+(root `CLAUDE.md`).
+
+- **A pacer refuses instead of sleeping.** Before booking a slot, call
+  `check_queue_wait(wait, kind)` (`"order"` for writes); it raises
+  `BrokerBusyError` and books nothing. A `Retry-After` beyond
+  `cap_server_delay` ends the retry. Order writes get their own clock where the
+  broker caps them separately (Upstox, TradeSmart, IIFL, IndMoney, then
+  AliceBlue, Flattrade, Dhan, Fyers, Angel, Definedge).
+- **A refusal reaches the caller as busy (429), never as data.** Let
+  `BrokerBusyError` through every generic `except`. A refused positions read is
+  never a flat position (the smart order returns `busy_response` and sends
+  nothing); a refused order-book read is never "nothing to cancel"; close-all
+  says how many positions were left open; quote, depth and history raise rather
+  than return zeros or an empty frame (Upstox, IndMoney, Motilal, Tradejini,
+  Pocketful, Nubra, IIFL).
+- **Requests that wait on a feed for a quote are capped**: a bounded
+  semaphore, re-entrant per thread, refused after the data queue wait or
+  answered from REST (Motilal, Pocketful, Nubra, Tradejini, mStock).
+- **Fan out through `utils.shared_executors.get_executor(name, n)`** under
+  gthread, never a `ThreadPoolExecutor` per call; keep the per-call pool under
+  eventlet, where the health monitor's thread thresholds expect it. No task
+  submits to the pool it runs on.
+- **asyncio only on the dev server**:
+  `USE_ASYNC = not (runtime.is_monkey_patched() or runtime.gthread_active())`,
+  checked at call time, and the async path still goes through the pacer
+  (Shoonya, Zebu, Flattrade, Definedge).
+- **A client built lazily is built once under a lock** (`utils.lazy.LazyInit`;
+  Dhan's GTT client was built twice under concurrent first use).
+- **No `Model.query` in broker code**: `with db_session() as session:` and
+  materialise rows before it closes. A pooled thread never reaches the app
+  teardown that would have closed it (Delta Exchange).
+- **A request waiting on an Event a real thread sets** uses
+  `utils.real_threading.wait_for`, never `Event.wait()` (HDFC Securities and
+  HDFC Sky snapshot feeds).
+- **Caches are `LockedTTLCache` with a size cap**, never an unbounded dict.
+- **Import every module on a headless Linux Python.** An editor auto-import
+  (`from turtle import position`) needs tkinter, which servers lack, and broke
+  the order books of six XTS brokers.
+
 ## Detailed references — load the one for the phase you are in
 
 | Phase | Read |
@@ -281,8 +347,8 @@ See the capability list in `references/cross-broker-reference.md`.
 
 1. **Research** — API docs, pick the family template, read the common contracts, inspect a live `symtoken`, download the broker SDK.
 2. **`plugin.json` + `api/auth_api.py`** — get login working end-to-end first. Nothing else can be tested until a token is stored.
-3. **Platform wiring** — `VALID_BROKERS`, install scripts, `BrokerSelect.tsx`, `websocket_proxy/__init__.py`, `brlogin.py` branch. See `references/auth-and-login.md`. Without this the broker will not even appear in the dropdown.
-4. **`database/master_contract_db.py`** — symbols must exist before quotes/orders can be tested. Validate offline against the live symtoken reference.
+3. **Platform wiring** — `VALID_BROKERS` in `.sample.env` and the `start.sh` fallback (installers take it from `.sample.env`), `utils/broker_login.py` (how the login starts and how its answer is checked), `utils/broker_keys.BROKER_NAMES`, `utils/broker_setup_guide.py` (its Broker Configuration fields and sign-in sentence; Select Broker lists brokers from the server, so there is no frontend list), `websocket_proxy/__init__.py`, `brlogin.py` branch that ends in `_complete_login(...)`, and `BrokerTOTP.tsx` for a form broker. See `references/auth-and-login.md`, which also covers the state a broker must return, account checks from the broker's own answer, the refusal codes and the tests a login needs. Without this the broker will not even appear on Select Broker, or its login answer is refused.
+4. **`database/master_contract_db.py`**: symbols must exist before quotes/orders can be tested. Validate offline against the live symtoken reference, then run the **Nifty 500 check** until it prints `NIFTY 500 COMPLETE` (see below). A missing constituent is fixed in the master contract, never worked around in a consumer.
 5. **`mapping/` + `api/data.py`** — quotes, depth, history.
 6. **`api/order_api.py` + `mapping/order_data.py`** — orders and books.
 7. **`api/funds.py`, `api/margin_api.py`** — funds and margin.
@@ -294,3 +360,28 @@ See the capability list in `references/cross-broker-reference.md`.
 - **Analyze mode passing proves nothing.** It routes to the sandbox and never calls your code.
 - **A clean code review proves little.** All six Arrow bugs survived review; every one needed a live probe.
 - **NSE working proves nothing about the other exchanges.** Test every exchange listed in your `plugin.json` — that list is a promise.
+- **A symbol search that finds HFCL proves nothing about its symbol.** Search matches substrings, so it shows HFCL-BE for "HFCL". Only an exact lookup of NSE's own list does: the Nifty 500 check below.
+
+## The Nifty 500 check (required for every broker)
+
+OpenAlgo's NSE equity symbol is the exchange's base symbol, which is exactly the
+`Symbol` column of NSE's index constituent list. Every broker plugin must store
+all 500 constituents under that symbol on `NSE`, each exactly once:
+
+```bash
+# After the broker's master contract download (log in first): checks the live symtoken
+uv run python .claude/skills/broker-integration/scripts/check_nifty500.py
+
+# Before anything is written: check the plugin's processed rows
+#   process_<broker>_csv(path)[["symbol", "brsymbol", "exchange"]].to_csv("rows.csv", index=False)
+uv run python .claude/skills/broker-integration/scripts/check_nifty500.py --rows-csv rows.csv
+```
+
+It downloads NSE's `ind_nifty500list.csv` (or takes `--nifty-csv` for a saved
+copy), skips rows NSE marks as placeholders (ISIN beginning `DUM`, such as
+`DUMMYHEG`) and prints `NIFTY 500 COMPLETE` with exit code 0. Anything else is
+a master contract defect to fix before the broker ships: for each missing
+constituent it prints what the master contract holds instead. The usual cause
+is a series suffix kept in the OpenAlgo symbol (see `references/master-contract.md`,
+"series suffixes"). Zerodha failed it with 495 of 500 until HFCL-BE, STLTECH-BE,
+EMBASSY-RR, BIRET-RR and BAGMANE-RR were given their base symbols.

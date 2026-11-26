@@ -26,6 +26,7 @@ The sample environment currently names `HISTORIFY_DATABASE_URL`, while `database
 | Module | Main tables/concern |
 |---|---|
 | `auth_db.py`, `user_db.py` | Broker auth, API keys, active sessions, login audit, local user |
+| `broker_keys_db.py` | Encrypted per-broker application keys and one-use pending-login digests |
 | `settings_db.py`, `leverage_db.py` | Analyzer and application settings |
 | `chartink_db.py`, `flow_db.py` | Automation definitions and executions |
 | `action_center_db.py` | Pending semi-auto requests and approval outcome |
@@ -61,8 +62,8 @@ The history REST service reads it only when `source="db"`; default history remai
 
 ## Schema Changes
 
-Most modules use idempotent `create_all` plus targeted startup migrations for compatible column/index additions. There is no general Alembic migration layer. A schema change must therefore be safe on an existing file, safe after partial initialization, and tested against both a fresh and pre-existing database.
+There is no general Alembic migration layer. Every schema change requires an idempotent script in `upgrade/`, registered in `upgrade/migrate_all.py`, because existing installations upgrade through that runner. Startup `create_all` or a startup-only repair is not a substitute. Scripts support `--status`, preserve customized values, and backfill from existing data. Test on both fresh files and populated copies with the prior schema; handle SQLite constraint changes with a table rebuild or appropriate index migration.
 
 ## Backups
 
-Back up all six configured stores before an upgrade. Copying only `openalgo.db` omits traffic/security history, latency/health telemetry, sandbox state, and local historical candles.
+Back up all six configured stores before an upgrade. Keep the original `.env` with the backup: its pepper and Fernet salt protect saved broker keys and tokens. Copying only `openalgo.db` omits traffic/security history, latency/health telemetry, sandbox state, and local historical candles.

@@ -1,6 +1,6 @@
 # The shapes a strategy takes
 
-Six worked files sit in `examples/`, and every one of them compiles: that is
+Seven worked files sit in `examples/`, and every one of them compiles: that is
 checked, not claimed. This page is the map between what somebody asks for and
 which file answers it, plus the decisions each shape forces.
 
@@ -12,6 +12,7 @@ which file answers it, plus the decisions each shape forces.
 | a stop and a target | `stop-and-target.oscript` | distances, and the size that makes the stop cost what you meant |
 | intraday, flat by the close | `intraday-session.oscript` | the window is not the session |
 | a study, no orders | `study-bands.oscript` | whether this should be placing orders at all |
+| another timeframe, labels on a crossing | `mtf-ema-crossover.oscript` | which bars the average runs on, and when a coarse bar counts |
 
 Read the file. Each carries its reasoning in comments, at the line the reasoning
 is about, because that is where somebody changing it will be standing.

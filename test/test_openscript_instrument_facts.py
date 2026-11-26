@@ -182,12 +182,25 @@ def test_a_special_session_day_keeps_the_regular_window_and_states_the_day_apart
         "date": "2026-11-08",
         "open": True,
         "isSpecial": True,
-        "session": {"start": "18:00", "end": "19:15", "days": [7]},
+        "session": {"start": "14:20", "end": "15:30", "days": [7]},
     }
 
 
+def _overnight_mcx_muhurat(calendar):
+    """Run MCX's Muhurat from 18:00 to 00:15 the next morning, as an admin could
+    on the Holidays page. The published 2026 session ends at 15:30, so the seed
+    no longer carries a window that crosses midnight."""
+    holiday = calendar.Holiday.query.filter_by(holiday_date=MUHURAT_SUNDAY).one()
+    row = calendar.HolidayExchange.query.filter_by(holiday_id=holiday.id, exchange_code="MCX").one()
+    row.start_time, row.end_time = 1794141000000, 1794163500000  # 18:00, 00:15 IST
+    calendar.db_session.commit()
+    calendar.clear_market_calendar_cache()
+    facts_service.clear_instrument_facts_cache()
+
+
 def test_a_window_that_runs_past_midnight_is_written_as_the_clock_reads_it(calendar, contracts):
-    """MCX Muhurat closes at 00:15 the next morning; the record reads end < start."""
+    """A session closing at 00:15 the next morning; the record reads end < start."""
+    _overnight_mcx_muhurat(calendar)
     today = facts("CRUDEOIL", "MCX", on_date=MUHURAT_SUNDAY)["today"]
     assert today["session"] == {"start": "18:00", "end": "00:15", "days": [7]}
     assert today["isSpecial"] is True

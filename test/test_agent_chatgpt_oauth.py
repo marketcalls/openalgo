@@ -380,7 +380,6 @@ def test_the_litellm_names_this_module_is_pinned_to_still_resolve():
         "_write_auth_file",
         "_build_auth_record",
         "_get_expires_at",
-        "_extract_account_id",
         "_record_device_code_request",
     ):
         assert hasattr(bits.authenticator_cls, name), f"litellm Authenticator lost {name}"
@@ -1246,7 +1245,12 @@ def test_the_subscription_models_are_offered_by_the_catalogue():
     for name in chatgpt_models.SUPPLEMENTAL:
         assert f"chatgpt/{name}" in ids, name
     assert len(models) >= 10
-    assert all(model.supports_function_calling for model in models)
+    # LiteLLM lists `gpt-rosalind-discovery` with no capability flags at all, so
+    # the picker shows it as "tool support unknown". No plan model may read as
+    # unable to call tools, and no other may lose its answer.
+    assert not [model.id for model in models if model.supports_function_calling is False]
+    unknown = {model.id for model in models if model.supports_function_calling is None}
+    assert unknown <= {"chatgpt/gpt-rosalind-discovery"}
     assert all(model.input_price_per_million is None for model in models)
 
 

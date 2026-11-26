@@ -495,10 +495,13 @@ build_order(*, symbol, exchange, action, quantity, product, strategy_name,
             pricetype="MARKET", price=0, trigger_price=0) -> dict
 exit_action(position) -> str            # "B" -> SELL, "S" -> BUY; raises otherwise
 resolve_live_auth(api_key) -> (auth_token, broker, error)
-dispatch_order(*, mode, api_key, order) -> DispatchResult(ok, broker_order_id, response, error)
+resolve_bound_auth(api_key, binding) -> (auth_token, broker, error)
+dispatch_order(*, mode, api_key, order, binding=None) -> DispatchResult(ok, broker_order_id, response, error)
+cancel_order(*, mode, api_key, broker_order_id, binding=None) -> DispatchResult
+fetch_order_status(*, mode, api_key, broker_order_id, binding=None) -> OrderStatusResult
 ```
 
-Five departures from how the rest of the product places orders:
+Six departures from how the rest of the product places orders:
 
 - **Mode is per run, not global.** The analyzer setting is one platform-wide
   switch and `place_order` consults it, but two runs may disagree. This module
@@ -529,6 +532,34 @@ Five departures from how the rest of the product places orders:
   Indian broker tokens expire daily around 3 AM IST and a run can be open across
   that boundary. When authorisation cannot be resolved, the order is refused and
   reported rather than attempted.
+- **The broker is the run's, not the session's.** The token is fresh per order,
+  but the broker, and the account when the login names one (`Auth.user_id`),
+  are recorded when the run starts (`SmStrategyRun.broker`, `broker_account`)
+  and passed to every live order, cancel and status read as a `BrokerBinding`
+  (`broker_binding.for_run`). A call whose session is on another broker or
+  account is refused before anything is sent: an exit resolved against the
+  session of the moment, after the trader logged out of one broker and in to
+  another, sent a short's cover to the second broker, opening a position there
+  and leaving the first unmanaged. On a refusal the exit claim is released, the
+  leg stays open and priced, a stop stays pending and completes once the trader
+  logs back in to the run's broker, and the tick path reports the mismatch once
+  per episode. A run opened with no broker logged in is bound by its first live
+  order (a conditional write only one caller wins); a check that only asks never
+  binds, and never refuses a run that has sent nothing. A run that sent orders
+  before recording its broker (one open across the upgrade that added the
+  record) is bound to the broker logged in when its first order went out, read
+  from the login attempts, never to the session of the moment; with no such
+  record it stays unbound and its orders are refused. An unbound run holds no
+  login back. A run that recorded no
+  account (its broker's login names none, or it predates the record) is bound
+  by broker alone. A run that recorded one reads its token and the current
+  account in one read (`resolve_session`), compares them without regard to
+  case, and refuses when the current account is unknown: a known account is
+  never reduced to the broker alone. A same-account token refresh keeps
+  working. Sandbox runs are never bound. A login to another broker is refused
+  while a Live run is bound elsewhere (`utils/broker_switch.refusal_for_login`).
+  The broker-backed books in `views.py` still read the current session: they
+  are display-only.
 
 `exit_action` derives from the side the leg *actually holds*. The original reads
 the configured side, which defaults to `"B"` for every leg including short ones,

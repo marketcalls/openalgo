@@ -33,11 +33,23 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
 from .flattrade_mapping import FlattradeCapabilityRegistry, FlattradeExchangeMapper
+from .flattrade_order_relay import (
+    ALIVE_INTERVAL_SECONDS,
+    KIND_ALIVE,
+    KIND_CLAIM,
+    KIND_ORDER,
+    KIND_READY,
+    KIND_RELEASE,
+    OrderRelayPublisher,
+)
 from .flattrade_websocket import FlattradeWebSocket
 
 
 # Configuration constants
 class Config:
+    # Attempts after which the delay sits at MAX_RECONNECT_DELAY and the log
+    # reports a long outage. It is not a give-up limit: a network outage keeps
+    # retrying until the broker is reachable again (issue #2324).
     MAX_RECONNECT_ATTEMPTS = 10
     BASE_RECONNECT_DELAY = 5
     MAX_RECONNECT_DELAY = 60
@@ -64,6 +76,10 @@ class Config:
     MSG_TOUCHLINE_PARTIAL = "tk"
     MSG_DEPTH_FULL = "df"
     MSG_DEPTH_PARTIAL = "dk"
+    # Order updates ride this socket too (PiConnect allows one session per uid,
+    # issue #1806); t="om" frames are relayed to the Flask process (#2386).
+    MSG_ORDER_UPDATE = "om"
+    MSG_ORDER_UNSUBSCRIBE_ACK = "uok"
 
 
 class MarketDataCache:
@@ -355,6 +371,9 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
         self._reconnect_timer = None  # Track reconnection timer for cleanup
+        # Set once a long outage has been reported, so the error is logged once
+        # per outage rather than on every 60s retry. Cleared on reconnect.
+        self._long_outage_logged = False
 
         # Auth-failure retry counter - deliberately SEPARATE from and much
         # tighter-bounded than reconnect_attempts/Config.MAX_RECONNECT_ATTEMPTS
@@ -387,6 +406,13 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.subscription_queue = []
         self.batch_timer = None
         self.batch_delay = 0.5  # 500ms window to collect subscriptions before flushing
+
+        # Order-update relay to the Flask process (flattrade_order_relay.py,
+        # issue #2386). This adapter owns the only PiConnect session, so it
+        # subscribes order updates and forwards them, and tells the Flask side
+        # when it holds the session so that side never opens a second one.
+        self._order_relay = None
+        self._order_relay_thread = None
 
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -431,6 +457,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
 
         self.running = True
+        self._start_order_relay()
 
     def connect(self) -> None:
         """Establish connection to Flattrade WebSocket endpoint"""
@@ -439,14 +466,23 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return
 
         self.logger.info("Connecting to Flattrade WebSocket...")
+        # Announce the session first: the Flask side closes any order socket it
+        # holds, so the broker has nothing of ours to evict.
+        self._start_order_relay()
+        self._relay_publish(KIND_CLAIM)
         connected = self.ws_client.connect()
 
         if connected:
             self.connected = True
             self.reconnect_attempts = 0
             self.auth_refresh_retries = 0
+            self._long_outage_logged = False
             self.logger.info("Connected to Flattrade WebSocket successfully")
         else:
+            # The proxy drops an adapter whose first connect raises without
+            # calling disconnect(), so release here or the Flask side would
+            # wait on this adapter's "alive" forever.
+            self._stop_order_relay()
             raise ConnectionError("Failed to connect to Flattrade WebSocket")
 
     def disconnect(self) -> None:
@@ -477,6 +513,9 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # did not terminate within timeout" (issue #1965).
         if ws_client:
             ws_client.stop()
+
+        # The session is free now; the Flask side may take order updates over.
+        self._stop_order_relay()
 
         # Clean up market data cache (outside lock - has its own lock)
         self.market_cache.clear()
@@ -838,6 +877,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = True
         self._session_started_at = time.monotonic()
         self._resubscribe_all()
+        self._subscribe_order_updates()
 
     def _on_error(self, ws, error):
         """Handle WebSocket connection error"""
@@ -895,23 +935,29 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.running:
                 return
 
-            if self.auth_refresh_retries >= self.max_auth_refresh_retries:
+            gave_up = self.auth_refresh_retries >= self.max_auth_refresh_retries
+            if gave_up:
                 self.logger.error(
                     f"Auth failure retries exhausted ({self.auth_refresh_retries}/"
                     f"{self.max_auth_refresh_retries}) - giving up. Last reason: {reason}"
                 )
                 self.running = False
-                return
+            else:
+                self.auth_refresh_retries += 1
+                self.logger.warning(
+                    f"Auth failure detected (attempt {self.auth_refresh_retries}/"
+                    f"{self.max_auth_refresh_retries}): {reason}. Will retry with a fresh token."
+                )
 
-            self.auth_refresh_retries += 1
-            self.logger.warning(
-                f"Auth failure detected (attempt {self.auth_refresh_retries}/"
-                f"{self.max_auth_refresh_retries}): {reason}. Will retry with a fresh token."
-            )
+                # Don't inherit a long exponential delay meant for network blips -
+                # an auth retry should attempt again promptly.
+                self.reconnect_attempts = 0
 
-            # Don't inherit a long exponential delay meant for network blips -
-            # an auth retry should attempt again promptly.
-            self.reconnect_attempts = 0
+        if gave_up:
+            # The session is dead; say so, so the Flask side stops waiting on
+            # this adapter (it reconnects only after the next broker login).
+            self._stop_order_relay()
+            return
 
         self._schedule_reconnection()
 
@@ -963,14 +1009,28 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug("Skipping reconnection schedule - adapter stopped")
                 return
 
-            if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
-                self.logger.error("Maximum reconnection attempts reached")
-                self.running = False
-                return
+            # A network outage never stops the feed for good (issue #2324):
+            # setting running=False here left it down for the rest of the day,
+            # and the pool still reported it connected, so a reconnecting
+            # client was handed the dead feed. The delay stays at
+            # MAX_RECONNECT_DELAY until the broker is reachable. Only an auth
+            # rejection gives up, through _handle_auth_failure's own counter.
+            if (
+                self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS
+                and not self._long_outage_logged
+            ):
+                self._long_outage_logged = True
+                self.logger.error(
+                    f"Flattrade market data is still disconnected after "
+                    f"{self.reconnect_attempts} attempts. Retrying every "
+                    f"{Config.MAX_RECONNECT_DELAY}s until the connection is back."
+                )
 
             # Back off on whichever is worse: failed connect attempts, or
             # sessions that connected and were evicted seconds later.
-            backoff_level = max(self.reconnect_attempts, self._backoff_level)
+            backoff_level = min(
+                max(self.reconnect_attempts, self._backoff_level), Config.MAX_RECONNECT_ATTEMPTS
+            )
             delay = min(
                 Config.BASE_RECONNECT_DELAY * (2**backoff_level), Config.MAX_RECONNECT_DELAY
             )
@@ -1051,16 +1111,25 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # and _resubscribe_all() sends through self.ws_client.
                 self.ws_client = ws_client
 
+            self._relay_publish(KIND_CLAIM)
             if ws_client.connect():
                 self.connected = True
                 self.reconnect_attempts = 0
                 self.auth_refresh_retries = 0
+                self._long_outage_logged = False
                 self.logger.info("Reconnected successfully")
-            else:
-                self.logger.error("Reconnection failed")
+                return
+            self.logger.error("Reconnection failed")
 
         except Exception as e:
             self.logger.error(f"Reconnection error: {e}")
+
+        # Schedule the next attempt here rather than relying on the socket's
+        # close callback: an error raised before the socket opened produces no
+        # callback at all, and that left the feed down for the day with
+        # running still True (issue #2324). _schedule_reconnection() replaces
+        # any timer a callback already set, so only one attempt is ever pending.
+        self._schedule_reconnection()
 
     def _resubscribe_all(self):
         """Resubscribe to all active subscriptions after reconnect"""
@@ -1115,6 +1184,14 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Handle authentication acknowledgment
             if msg_type == Config.MSG_AUTH:
                 self.logger.info(f"Authentication response: {data}")
+                return
+
+            # Order updates are not market data: hand them to the Flask
+            # process verbatim, where they become order-update events.
+            if msg_type == Config.MSG_ORDER_UPDATE:
+                self._relay_publish(KIND_ORDER, frame=message)
+                return
+            if msg_type == Config.MSG_ORDER_UNSUBSCRIBE_ACK:
                 return
 
             # Process market data messages
@@ -1279,6 +1356,55 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def clear_market_data_cache(self, scrip: str = None) -> None:
         """Clear market data cache for a scrip (``"NFO|65872"``), or all scrips"""
         self.market_cache.clear(scrip)
+
+    # -- order-update relay (issue #2386) ------------------------------------
+
+    def _start_order_relay(self) -> None:
+        """Open the relay and start the alive beat. Idempotent."""
+        if self._order_relay is None:
+            self._order_relay = OrderRelayPublisher(self.user_id, self.actid)
+        thread = self._order_relay_thread
+        if thread is None or not thread.is_alive():
+            self._order_relay_thread = threading.Thread(
+                target=self._order_relay_beat,
+                daemon=True,
+                name=f"flattrade-order-relay-beat-{self.user_id}",
+            )
+            self._order_relay_thread.start()
+
+    def _order_relay_beat(self) -> None:
+        """Say "alive" while this adapter owns the session.
+
+        Sent while running, connected or not: during a reconnect backoff the
+        session is still this adapter's to reopen, and a Flask-side socket
+        opened in that gap would be evicted by the reconnect anyway.
+        """
+        while self.running and self._order_relay is not None:
+            self._relay_publish(KIND_ALIVE)
+            slept = 0.0
+            while slept < ALIVE_INTERVAL_SECONDS and self.running and self._order_relay is not None:
+                time.sleep(0.5)
+                slept += 0.5
+
+    def _stop_order_relay(self) -> None:
+        relay = self._order_relay
+        self._order_relay = None
+        if relay is not None:
+            relay.publish(KIND_RELEASE)
+            relay.close()
+
+    def _relay_publish(self, kind: str, frame: str | None = None) -> None:
+        relay = self._order_relay
+        if relay is not None:
+            relay.publish(kind, frame=frame)
+
+    def _subscribe_order_updates(self) -> None:
+        """Subscribe order updates on this session (doc: t="o", no ack)."""
+        client = self.ws_client
+        if client is None:
+            return
+        if client._send_message({"t": "o", "actid": self.actid}, "order update subscribe"):
+            self._relay_publish(KIND_READY)
 
     def unsubscribe_all(self) -> dict[str, Any]:
         """

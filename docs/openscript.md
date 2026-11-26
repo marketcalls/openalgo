@@ -1,7 +1,7 @@
 # OpenScript on the charting terminal
 
 OpenScript is an open trading language. You write a study once, plot it on the
-`/trading` chart, and later backtest and trade the same file.
+`/trading` chart, and backtest or deploy a strategy from the same file.
 
 It is not a replacement for the custom indicators described in
 [custom-indicators.md](custom-indicators.md). The two sit side by side and are
@@ -11,7 +11,7 @@ worth reading before you choose between them.
 ## Writing one
 
 Open the chart at `/trading`, choose **Scripts** on the right rail, and select
-**New**. You get a working study to edit rather than an empty file.
+**New script**. Choose Study or Strategy to start from its working template.
 
 The panel is an editor, a compiler and the chart, in that order:
 
@@ -27,8 +27,7 @@ The panel is an editor, a compiler and the chart, in that order:
   disk. Being half way through a thought is not a reason to lose it. What you
   get back is a saved script with no compiled program beside it, which means it
   is yours to keep editing and nothing on the server will run it.
-- **Add to chart** puts the study on the focused chart without going near the
-  indicator picker. It is available once the script is saved and compiling.
+- **Add to chart** puts a study on the focused chart. For a strategy, **Run on chart** opens its backtest and draws its plots and historical fills. Both require the saved source to compile; neither starts a server deployment.
 - **Ctrl+S** saves, so the browser does not open its own save dialog over the
   panel.
 
@@ -36,10 +35,7 @@ Colours come from the language's own lexer, which is the same one the compiler
 runs. A word added to the language is coloured the day it lexes, because nothing
 here keeps a second list of what the keywords are.
 
-Editing is a plain text area today, deliberately. The language ships its editor
-intelligence, completion, hover, signature help and inline diagnostics, as
-headless functions in a later release, built to drop into a full code editor
-component. Wiring one in now would mean wiring it twice.
+The editor has syntax colours, a line-number gutter, compiler diagnostics, Tab/Shift+Tab indentation and Ctrl+S saving. Unsaved drafts stay per script in this browser when you switch scripts or panels; discard is a separate action. Save to persist source on the server before backtesting or deploying it.
 
 ## Where your scripts live
 
@@ -76,16 +72,14 @@ console.
 
 An OpenScript file is not code the page runs. It is text a compiler turns into a
 list of instructions, and an engine walks that list. A script can only name what
-the instruction set gives it, which is bars, arithmetic and things to draw.
+the instruction set gives it: market data, calculations, drawings and, for a strategy, order instructions.
 There is no way to spell a network call, a file, or a reach into the page,
 because those names do not exist in the language. Nothing was handed over, so
 there is nothing to escape from.
 
 Two consequences worth knowing:
 
-- **A script from a stranger is a much smaller decision.** It can draw a wrong
-  line on your chart. It cannot place an order you did not write, and it cannot
-  send your positions anywhere.
+- **A study cannot use arbitrary browser or server APIs.** It can still draw misleading values. A strategy can issue order instructions when you explicitly deploy and start it, including live orders in Live mode, so review its trading logic and sizing before running it. OpenScript has no general network/file API for sending your positions elsewhere.
 - **It needs no change to the security policy.** OpenAlgo serves pages with
   scripts restricted to its own origin and no permission to build code out of
   text. A language that compiled to JavaScript would need that permission
@@ -95,7 +89,7 @@ Two consequences worth knowing:
 The sources are served as plain text and never as JavaScript, deliberately, so
 that the page cannot import one even by mistake. The compiled program is held to
 the same rule and it is the harder half, because a program is the thing that
-will one day be handed to an engine: it is stored as data under a name ending
+is handed to an engine: it is stored as data under a name ending
 `.program.json`, served as JSON, and nothing in the platform imports it,
 evaluates it or builds anything callable out of it. It is read as bytes and
 walked as instructions.
@@ -200,7 +194,7 @@ to it or a source with no program at all.
    honoured by the same code that honours them everywhere else. An engine
    reports what a script asked for; it does not reach a broker.
 
-### What the platform does not do
+### What saving does not do
 
 Said plainly, because a contract is worth less than nothing if a reader assumes
 more of it than it promises.
@@ -212,7 +206,7 @@ more of it than it promises.
   saved with it. Whether the program is well formed, whether its instructions
   are consistent, whether it is the canonical encoding: all of that is the
   engine's work, done at load.
-- **It does not run anything.** Saving a script starts nothing, schedules
+- **Saving does not run anything.** Saving a script starts nothing, schedules
   nothing and places no order. Storage is storage. Running a saved script is a
   separate act on a separate surface, and
   [Running one as a strategy](#running-one-as-a-strategy) is where it is
@@ -253,155 +247,85 @@ not a copy of anything anybody wrote, it is derived from the source, and the
 source is what is kept. The write is atomic: a save that is interrupted leaves
 the previous script whole rather than half of the new one.
 
+## Backtesting on the Chart
+
+Save a compiling Strategy, then choose **Run on chart** in Scripts or open **Backtest** on the right rail and choose the file. A study is not an order-generating strategy.
+
+The run uses the selected chart's instrument and interval with historical bars. Choose From/To dates, set the script's inputs or leave them blank for its defaults, and choose **Run backtest** after changing dates or inputs. Selecting a strategy, changing the charted instrument or changing its interval can run the test automatically.
+
+Results include the summary, equity, drawdown and trades. **Show trades on chart** controls fill markers, and **Clear marks** removes them. Markers also leave when their strategy is removed from the chart. These are historical engine results: the browser backtest sends no orders to a broker and does not start a server run. Backtest inputs do not change a deployment's saved inputs.
+
 ## Running one as a strategy
 
-Saving a script starts nothing. A script that has compiled is also something the
-server can run on its own, in a process of its own, against a live feed, placing
-orders the way every hosted strategy places them. That is the runner, and it is
-under `/openscript/runner`.
+A deployment is a saved strategy, instrument, exchange and interval, with an optional product and input overrides. The same script can have several deployments on different instruments or intervals, each with its own run, attributed orders, trades, positions and log. A second deployment on the same script/instrument/interval is refused.
 
-A run is one script, one instrument, one process. It writes a log, it can be
-stopped, and it can be given times to start and stop by itself. It outlives the
-request that started it, which is the fact the rest of this section follows
-from.
+### Deploy and Start
 
-### Before it can start: what it runs on
+1. Open **Strategies** on `/trading`'s right rail and choose **Deploy a strategy**.
+2. Choose a saved, compiling Strategy. Pick the instrument from the symbol master, its exchange, an available interval and the product where needed (`CNC`, `NRML` or `MIS`).
+3. Set the script's inputs, or leave them empty to use its defaults, then choose **Deploy** to save the settings. Saving settings does not start a process.
+4. Check the panel's **Live/Analyzer** badge. Choose **Start live** or **Start in sandbox**, as the current platform mode requires.
+5. Read the status, Activity books and log. A start response identifies a process; it is not a trade result or proof that the process remained running.
 
-A start carries nothing. What a script runs on is saved against that script, and
-the run reads it when it begins:
+The instrument and interval are part of a deployment's identity. Changing either creates another deployment; it does not move a running strategy to a new instrument. Inputs are read when the process starts. Pause or stop, save the intended changes, and start again to apply them.
 
-| Field | Means |
-| --- | --- |
-| `symbol` | The instrument, in the platform's own symbol format |
-| `exchange` | The exchange that instrument trades on |
-| `interval` | The bar interval, for example `5m` |
-| `product` | Optional. `CNC`, `NRML` or `MIS`. Left empty, the script's own declaration decides |
+The current server runner sizes orders from units or lots, using known contract metadata; money-based and percent-of-equity sizing are refused. It sends whole-unit order quantities, so a fractional quantity that another API path accepts is not automatically supported here. Read startup refusals in the log.
 
-Saved settings live in `strategies/openscript_run_configs.json`, beside the
-Python strategy host's own configuration file and inside the same folder a
-container install keeps on a named volume, so what you set survives a rebuild
-and an upgrade leaves it alone. The write goes through a temporary file and a
-rename, so an interrupted save leaves the previous settings whole.
+A server run outlives the browser tab. Closing `/trading` does not stop it. Its orders use OpenAlgo's own order path and key; it does not bypass order-mode checks or choose a destination independently of the platform's Live/Analyze setting.
 
-**A script with nothing saved against it is refused by name.** The refusal names
-the script and says which of the instrument, the exchange and the interval is
-missing, and nothing is started. This is deliberate and it is the reason the
-start route takes no body at all: if a start could carry the instrument, a run
-started from a page and a run started by a schedule could differ by one typed
-character, and the difference would first be visible as an order on something
-nobody meant to trade. A body carrying anything is refused rather than ignored,
-because a caller that believes it asked for something and was silently not given
-it is worse off than one that was told no.
+### Pause and Stop Have Different Effects
 
-### Starting answers with an identifier, never an outcome
+| Control | Effect |
+|---|---|
+| Pause | Ends the process and leaves its position for you to manage |
+| Stop | Asks the run to cancel its outstanding orders, close its own position, then end; asks for confirmation |
+| Start live / Start in sandbox | Starts a stopped deployment with its saved settings, in the platform's current mode |
+| Activity | Opens that deployment's order book, trade book and positions |
+| Remove | Removes a stopped deployment's settings and schedule; does not close a broker position |
 
-A start replies at once with the identity of the run: its id, the file, the
-instrument, the exchange, the interval, the product, the process id, the time it
-started and the log it is writing to. Nothing in that reply says what the
-strategy did, because at the moment it is written the strategy has not done
-anything yet.
+Read any close refusal carefully. A failed close can leave the strategy running and holding, or a terminated process can leave a close unconfirmed. Verify actual orders and positions rather than assuming a stopped process means a flat account. A scheduled stop uses the pause behavior and does not itself close a position.
 
-That is a property of the deployment rather than a preference. A request has a
-few minutes before the web server gives up on it and the response is buffered on
-the way back, so a route that waited for a run to finish would time out with the
-strategy still on the market and the operator told nothing about it. The two
-things to do next are both on this page: read the status route, and read the
-log.
+### Settings, Schedules and Logs
 
-### The runner routes
+Settings live in `strategies/openscript_run_configs.json`. Schedules live in `strategies/openscript_runner_schedules.json` and are restored on the Python strategy host's shared scheduler at startup. On Docker these files are inside the strategies volume.
 
-All of them need a logged-in session, and all of them name a script the way the
-source routes name one.
+Schedule times are 24-hour `HH:MM` in IST; `days` uses three-letter names and defaults to Monday through Friday. Start is required and stop is optional. A supplied stop must be later than start. The calendar is the exchange saved in the deployment's settings. Removing a schedule does not pause or close a running strategy.
 
-| Method and path | Does |
-| --- | --- |
-| `POST /openscript/runner/start/<name>.oscript` | Starts it and answers with the identity of the run. Refused when there is no such script, no compiled program beside it, no run settings saved, or it is already running |
-| `POST /openscript/runner/stop/<name>.oscript` | Stops the run and reaps its process. A script that is not running is told so and is never told it was stopped |
-| `GET /openscript/runner/status` | Everything running, everything scheduled, what every script is run on, and the folder logs are written to |
-| `GET /openscript/runner/status/<name>.oscript` | The same for one script, plus the names of the recent logs it has written |
-| `GET /openscript/runner/config` | What every script with settings saved is run on, and the products this platform sends |
-| `GET /openscript/runner/config/<name>.oscript` | What one script is run on |
-| `POST /openscript/runner/config/<name>.oscript` | Saves that, from a body carrying `symbol`, `exchange`, `interval` and optionally `product` |
-| `DELETE /openscript/runner/config/<name>.oscript` | Forgets it. A run already started is not touched, since that run is the one on the market |
-| `POST /openscript/runner/schedule/<name>.oscript` | Sets the times it starts and stops, from a body carrying `start_time`, optionally `stop_time`, and optionally `days` |
-| `DELETE /openscript/runner/schedule/<name>.oscript` | Removes the schedule. Nothing running is touched |
+Per-run logs live under `log/strategies/`. The runner's status response identifies its log directory and recent log files. Deployment IDs, rather than script names alone, identify runs and attribute their books.
 
-The settings body refuses a field it does not know, by name, rather than
-dropping it. Schedule times are 24 hour `HH:MM` in IST and days are the three
-letter names; with no days given a schedule runs Monday to Friday. A schedule
-carries no exchange of its own: the calendar it checks is the one the script's
-own run settings name, so a venue is typed in one place and not two that can
-disagree.
+### Runner Routes
 
-### Where the logs go
+These are authenticated browser-session routes under `/openscript/runner`, not public API-key routes under `/api/v1`. Mutations require CSRF protection. Use the returned deployment ID for lifecycle calls. A script filename is accepted for compatibility only when it resolves unambiguously to one deployment.
 
-`log/strategies/`, the same folder every hosted strategy writes into. There is
-one file per run, named `openscript_<name>_<date>_<time>_IST.log`, where
-`<name>` is the script without its extension. Everything the run prints, on both
-of its output streams, goes there; the first line records when it started. On a
-container install `log/` is a named volume, so the logs of a run survive a
-rebuild.
+| Method and path | Purpose |
+|---|---|
+| `POST /config/<name>.oscript` | Create a deployment with `symbol`, `exchange`, `interval`, optional `product` and `inputs`; include `deployment` to edit that deployment |
+| `GET /config` | List deployment settings |
+| `GET /config/<deployment>` | Read one deployment's settings |
+| `DELETE /config/<deployment>` | Remove a stopped deployment's settings and schedule |
+| `POST /start/<deployment>` | Start from saved settings; no request-body options; responds `202` with run identity |
+| `POST /pause/<deployment>` | End the process and leave its position |
+| `POST /stop/<deployment>` | Compatibility alias for **pause**, not a position close |
+| `POST /close/<deployment>` | Close and stop; the UI's confirmed Stop calls this |
+| `GET /status` or `GET /status/<deployment>` | Read runs, settings, schedules and log information |
+| `POST /schedule/<deployment>` | Save `start_time`, optional `stop_time` and `days` |
+| `DELETE /schedule/<deployment>` | Remove a schedule without touching a running process |
+| `GET /orderbook/<deployment>` | Deployment's attributed orders |
+| `GET /tradebook/<deployment>` | Deployment's attributed trades |
+| `GET /positions/<deployment>` | Deployment's attributed positions |
+| `GET /instruments?q=<query>&exchange=<exchange>` | Search the symbol master |
+| `GET /intervals` | Read the active broker's interval choices |
 
-The status route names the folder and the recent log files for a script, and the
-strategy log viewer reads them, because the runner deliberately writes where the
-Python strategy host already writes rather than inventing a second place an
-operator has to know about.
-
-### Where the orders go, and the one thing this surface does not offer
-
-A run places orders through this platform's own order API with the platform's
-own key, exactly as a hosted Python strategy does. That path reads the
-platform-wide analyzer setting before anything else, so **sandbox mode and
-analyzer mode are honoured by the same code that honours them everywhere else**.
-An engine reports what a script asked for; it never reaches a broker itself.
-
-There is no route, field or flag anywhere on this surface that chooses a
-destination, and a settings body that invents one is refused by name. Where an
-order goes is one question with one answer, decided in the platform's own
-setting, and a second switch here would be a second answer to it.
-
-### What actually runs
-
-`openscript_host/openscript_runner.py`, a program that ships with the platform.
-It is deliberately not under `strategies/`: that folder is a named volume on a
-container install, a named volume is seeded from the image only while it is
-empty, and a platform file put there would reach a brand new install and no
-existing one. An install that still has it in the old place keeps working and
-says so in the log on every start.
-
-Schedules go on the one scheduler this platform runs, the Python strategy host's
-own, with job identifiers prefixed so they cannot collide with a strategy that
-happens to share a name. They are stored in
-`strategies/openscript_runner_schedules.json` and put back on the scheduler at
-startup.
-
-## The language itself
-
-OpenScript is developed as its own open source project so that other platforms
-can adopt it, under Apache-2.0, with a written specification and a conformance
-suite. The language reference, the error catalogue and the integration guides
-live there rather than being restated here.
+Unknown settings fields are refused. There is no `mode`, destination or `force_live` setting on this surface. The runner process ships at `openscript_host/openscript_runner.py`; it is separate from user files in the strategies volume.
 
 ## Where a run's orders go, and what happens if that changes
 
-A strategy run sends its orders through the platform's own order path, the same
-one every other surface uses, so sandbox mode and analyzer mode are honoured
-without this runner knowing anything about them. It does **not** pass
-`force_live`.
+The platform-wide analyzer setting decides the destination of each order. Live mode can send real broker orders; Analyze uses the sandbox. The runner does not pass `force_live`. Rehearse in Analyze and reconcile positions before changing mode.
 
-That is a deliberate decision and it has a consequence worth stating plainly.
-The destination is decided per order and not per run, so an operator who turns
-the analyzer on while a strategy is holding a position would send that
-strategy's exits to the sandbox while the broker still holds what its entries
-opened. The platform describes this failure in its own words in
-`services/place_order_service.py`.
+The runner remembers the destination of accepted orders. If it detects a destination change while holding a position, it stops and records what must be checked manually. If it was flat, it can follow the new destination. This safeguard does not move or close the old position, and a response can already have arrived from the changed destination when the difference is detected. Check both books and the broker terminal.
 
-So the run watches for it. The destination of the first order the platform
-accepts is remembered, every later order is checked against it, and a run whose
-destination changes underneath it **stops immediately** and says so in its log,
-naming what is open. It does not try to put the position back: the entry is
-where it is, and a run that can no longer reason about what it holds should not
-be sending anything. Whatever is open at that point has to be checked and closed
-by a person.
+Broker switching is refused while relevant live automation, including Live OpenScript runs, is still running. See [Broker Connection](userguide/06-broker-connection/README.md). Pausing or logging out is not an instruction to close a position.
 
-A run that stays where it started is never interrupted by this.
+## The language itself
+
+OpenScript is developed separately from the platform under Apache-2.0. The installed language and engine versions must agree on the compiled program format; a program that an engine cannot load is refused in its log. Use the [charting guide](userguide/32-charting-terminal/README.md) for terminal workflows and the language's bundled reference when writing a study or strategy.

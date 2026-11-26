@@ -558,7 +558,7 @@ _CONSENT_TEMPLATE = """\
       {% for s in scopes %}
       <li>
         <div class="scope-name">{{ s }}</div>
-        <div class="scope-desc">{% if s == 'read:market' %}Read live and historical market data — quotes, depth, history.{% elif s == 'read:account' %}Read your portfolio — orders, holdings, positions, funds.{% elif s == 'write:orders' %}Place, modify and cancel real orders on your behalf.{% else %}{{ s }}{% endif %}</div>
+        <div class="scope-desc">{% if s == 'read:market' %}Read live and historical market data — quotes, depth, history.{% elif s == 'read:account' %}Read your portfolio: orders, holdings, positions, funds. Send alerts to your own Telegram, and to the Slack and Discord channels you switched on.{% elif s == 'write:orders' %}Place, modify and cancel real orders on your behalf.{% else %}{{ s }}{% endif %}</div>
       </li>
       {% endfor %}
     </ul>

@@ -15,8 +15,11 @@ OPENALGO_TO_KOTAK_EXCHANGE = {
     "bfo": "bse_fo",
     "CDS": "cde_fo",
     "cds": "cde_fo",
-    "BCD": "bcs-fo",
-    "bcd": "bcs-fo",
+    # The market-data feed's name for BSE currency derivatives (SFeed exchange
+    # id 7, sfeed_protocol.EXCHANGE_NAME_TO_ID). "bcs-fo" matched nothing the
+    # feed sends, so BCD ticks were dropped. Order-side code keeps its own map.
+    "BCD": "bse_cd",
+    "bcd": "bse_cd",
     "MCX": "mcx_fo",
     "mcx": "mcx_fo",
     "NSE_INDEX": "nse_cm",

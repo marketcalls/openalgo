@@ -75,6 +75,24 @@ export interface BacktestMessage {
    * that never trades and a report that looks entirely normal.
    */
   instrument: RunInstrument
+  /**
+   * Bars fetched before the run for the reads the engine cannot fold from the
+   * chart's own bars: an interval that is not a whole multiple of the chart's,
+   * finer ones included, and another instrument (openalgo-script 0.9.0,
+   * `stdlib.md` 15.2). Absent when the strategy has none, and then the engine
+   * is given no provider at all, exactly as before.
+   */
+  served?: readonly ServedBars[]
+}
+
+/** One series a read asked for, keyed the way the engine asks for it. */
+export interface ServedBars {
+  instrument: string
+  exchange: string | null
+  /** The interval the engine asked for. The bars may be at a finer one dividing it. */
+  interval: string
+  /** Already converted to the milliseconds the engine counts. */
+  bars: readonly unknown[]
 }
 
 /**

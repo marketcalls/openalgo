@@ -6,7 +6,7 @@
 # with a price buffer based on configurable protection percentages.
 
 import math
-from typing import Optional
+import re
 
 from utils.logging import get_logger
 
@@ -33,26 +33,58 @@ OPT_MPP_SLABS = [
 # Instrument types that use Options slabs
 OPTIONS_INSTRUMENT_TYPES = ["CE", "PE"]
 
+# Cash-market exchanges: everything traded there is equity, whatever the
+# symbol ends with.
+CASH_EXCHANGES = {"NSE", "BSE"}
 
-def get_instrument_type_from_symbol(symbol: str) -> str:
+# OpenAlgo derivative symbols always carry the expiry (DDMMMYY) before the
+# suffix: options are [Base][Expiry][Strike][CE/PE] (NIFTY28MAR2420800CE,
+# VEDL25APR24292.5CE) and futures [Base][Expiry]FUT (BANKNIFTY24APR24FUT).
+# Equity symbols never do, so a cash symbol that merely ends in CE or PE
+# (RELIANCE, BAJFINANCE, PRINCEPIPE, REDTAPE) is not mistaken for an option.
+_OPTION_SYMBOL_RE = re.compile(r"^.+\d{2}[A-Z]{3}\d{2}\d+(?:\.\d+)?(CE|PE)$")
+_FUTURE_SYMBOL_RE = re.compile(r"^.+\d{2}[A-Z]{3}\d{2}FUT$")
+
+
+def is_option_instrument_type(instrument_type: str | None) -> bool:
     """
-    Determine instrument type from symbol name.
+    Whether an instrument type uses the options slabs.
+
+    Accepts OpenAlgo's 'CE'/'PE' as well as the master contract types some
+    brokers store in SymToken.instrumenttype ('OPTIDX', 'OPTSTK', 'OPTFUT',
+    'OPTCUR', ...).
+    """
+    if not instrument_type:
+        return False
+    instrument_type = str(instrument_type).upper()
+    return instrument_type in OPTIONS_INSTRUMENT_TYPES or instrument_type.startswith("OPT")
+
+
+def get_instrument_type_from_symbol(symbol: str, exchange: str | None = None) -> str:
+    """
+    Determine instrument type from an OpenAlgo symbol.
+
+    An option needs the full option shape (expiry, strike, CE/PE) and a future
+    the expiry before FUT; anything else is equity. The suffix alone is not
+    enough: RELIANCE ends in CE and is a stock.
 
     Args:
-        symbol: Trading symbol (e.g., 'RELIANCE', 'NIFTY24DEC25000CE', 'NIFTY24DECFUT')
+        symbol: OpenAlgo trading symbol (e.g., 'RELIANCE', 'NIFTY24DEC2425000CE',
+            'NIFTY24DEC24FUT')
+        exchange: Optional OpenAlgo exchange. NSE and BSE are always 'EQ'.
 
     Returns:
         str: 'CE', 'PE', 'FUT', or 'EQ'
     """
-    symbol_upper = symbol.upper()
-    if symbol_upper.endswith("CE"):
-        return "CE"
-    elif symbol_upper.endswith("PE"):
-        return "PE"
-    elif symbol_upper.endswith("FUT"):
-        return "FUT"
-    else:
+    if exchange and str(exchange).upper() in CASH_EXCHANGES:
         return "EQ"
+    symbol_upper = (symbol or "").strip().upper()
+    option_match = _OPTION_SYMBOL_RE.match(symbol_upper)
+    if option_match:
+        return option_match.group(1)
+    if _FUTURE_SYMBOL_RE.match(symbol_upper):
+        return "FUT"
+    return "EQ"
 
 
 def get_mpp_slabs(instrument_type: str) -> list:
@@ -60,12 +92,13 @@ def get_mpp_slabs(instrument_type: str) -> list:
     Get the appropriate MPP slabs based on instrument type.
 
     Args:
-        instrument_type: 'EQ', 'FUT', 'CE', or 'PE'
+        instrument_type: 'EQ', 'FUT', 'CE', 'PE', or a master contract type
+            such as 'OPTIDX' / 'OPTSTK' / 'FUTSTK'
 
     Returns:
         list: The MPP slabs to use
     """
-    if instrument_type in OPTIONS_INSTRUMENT_TYPES:
+    if is_option_instrument_type(instrument_type):
         return OPT_MPP_SLABS
     else:
         return EQ_FUT_MPP_SLABS
@@ -96,7 +129,7 @@ def get_mpp_percentage(price: float, instrument_type: str = "EQ") -> float:
     if not math.isfinite(price):
         raise ValueError(f"MPP price must be finite, got {price!r}")
     slabs = get_mpp_slabs(instrument_type)
-    slab_type = "OPT" if instrument_type in OPTIONS_INSTRUMENT_TYPES else "EQ/FUT"
+    slab_type = "OPT" if is_option_instrument_type(instrument_type) else "EQ/FUT"
 
     # Find the appropriate slab for the price
     for max_price, percentage in slabs:
@@ -143,6 +176,7 @@ def calculate_protected_price(
     instrument_type: str = None,
     tick_size: float = None,
     custom_percentage: float = None,
+    exchange: str = None,
 ) -> float:
     """
     Calculate the protected limit price for a market order with tick size rounding.
@@ -154,6 +188,7 @@ def calculate_protected_price(
         instrument_type: 'EQ', 'FUT', 'CE', or 'PE' (if None, derived from symbol)
         tick_size: Tick size for price rounding (from database)
         custom_percentage: Optional custom percentage to override slab-based calculation
+        exchange: Optional OpenAlgo exchange, used with symbol to derive the type
 
     Returns:
         float: The adjusted limit price with protection, rounded to tick size
@@ -164,7 +199,7 @@ def calculate_protected_price(
     """
     # Determine instrument type from symbol if not provided
     if instrument_type is None and symbol:
-        instrument_type = get_instrument_type_from_symbol(symbol)
+        instrument_type = get_instrument_type_from_symbol(symbol, exchange)
     elif instrument_type is None:
         instrument_type = "EQ"  # Default to EQ
 
@@ -201,7 +236,11 @@ def calculate_protected_price(
 
 
 def get_mpp_info(
-    price: float, symbol: str = None, instrument_type: str = None, tick_size: float = None
+    price: float,
+    symbol: str = None,
+    instrument_type: str = None,
+    tick_size: float = None,
+    exchange: str = None,
 ) -> dict:
     """
     Get detailed MPP information for a given price.
@@ -211,17 +250,18 @@ def get_mpp_info(
         symbol: Trading symbol
         instrument_type: 'EQ', 'FUT', 'CE', or 'PE'
         tick_size: Tick size for rounding (from database)
+        exchange: Optional OpenAlgo exchange, used with symbol to derive the type
 
     Returns:
         dict: Dictionary with MPP details
     """
     if instrument_type is None and symbol:
-        instrument_type = get_instrument_type_from_symbol(symbol)
+        instrument_type = get_instrument_type_from_symbol(symbol, exchange)
     elif instrument_type is None:
         instrument_type = "EQ"
 
     percentage = get_mpp_percentage(price, instrument_type)
-    slab_type = "OPT" if instrument_type in OPTIONS_INSTRUMENT_TYPES else "EQ/FUT"
+    slab_type = "OPT" if is_option_instrument_type(instrument_type) else "EQ/FUT"
 
     return {
         "base_price": price,

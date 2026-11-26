@@ -4,9 +4,10 @@ WhatsApp Alert Service — outbound notifier.
 Mirrors services/telegram_alert_service.py one-for-one: a small ThreadPoolExecutor
 dispatches send calls asynchronously so the publisher (eventbus worker, REST
 handler) is never blocked. send_order_alert() is the single entry point that
-the event-bus subscriber wraps; it formats the order/position/batch payload
-using the same templates as the Telegram service, prefixes LIVE/ANALYZE mode,
-and hands it to the bot service for transmission.
+the WhatsApp alert channel (services/alerts/channels/whatsapp.py) calls; it
+formats the order/position/batch payload with the shared alert formatter
+(services/alerts/formatting.py), prefixes LIVE/ANALYZE mode, and hands it to
+the bot service for transmission.
 
 The actual WhatsApp protocol work happens inside wars (Rust). This module
 never touches sockets, keys, or the Signal Protocol — it only formats text
@@ -16,7 +17,6 @@ and asks the bot service to send it.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from typing import Any
 
 from database.auth_db import get_username_by_apikey
@@ -26,6 +26,7 @@ from database.whatsapp_db import (
     get_bot_config,
     get_whatsapp_user_by_username,
 )
+from services.alerts.formatting import SEPARATOR, AlertMessage, build_message
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -40,214 +41,31 @@ class WhatsAppAlertService:
 
     def __init__(self) -> None:
         self.enabled = True
-        # Plain-text templates (no Markdown). WhatsApp's *bold*, _italic_,
-        # ```mono``` markup is preserved as-is.
-        self.alert_templates = {
-            "placeorder": "*Order Placed*\n{details}",
-            "placesmartorder": "*Smart Order Placed*\n{details}",
-            "basketorder": "*Basket Order Executed*\n{details}",
-            "splitorder": "*Split Order Executed*\n{details}",
-            "optionsorder": "*Options Order Executed*\n{details}",
-            "optionsmultiorder": "*Options Multi-Order Executed*\n{details}",
-            "modifyorder": "*Order Modified*\n{details}",
-            "cancelorder": "*Order Cancelled*\n{details}",
-            "cancelallorder": "*All Orders Cancelled*\n{details}",
-            "closeposition": "*Position Closed*\n{details}",
-        }
 
     # ------------------------------------------------------------------
-    # Formatting — kept symmetric with telegram_alert_service so users see
-    # the same fields and tone on both channels.
+    # Formatting. The fields come from services/alerts/formatting.py, which
+    # Slack and Discord alerts share; WhatsApp bolds with single asterisks.
     # ------------------------------------------------------------------
 
-    def format_order_details(
+    @staticmethod
+    def render(message: AlertMessage) -> str:
+        """An alert as WhatsApp text: bold title and banner, then the lines."""
+        parts = [f"*{message.title}*"]
+        if message.strategy:
+            parts.append(f"Strategy: {message.strategy}")
+        if message.banner:
+            parts.extend([f"*{message.banner}*", SEPARATOR])
+        parts.extend(message.lines)
+        return "\n".join(parts)
+
+    def format_order_alert(
         self,
         order_type: str,
         order_data: dict[str, Any],
         response: dict[str, Any],
     ) -> str:
-        try:
-            lines: list[str] = []
-            timestamp = datetime.now().strftime("%H:%M:%S")
-
-            mode = response.get("mode", "live")
-            if mode == "analyze":
-                lines.append("*ANALYZE MODE - No Real Order*")
-            else:
-                lines.append("*LIVE MODE - Real Order*")
-            lines.append("---------------------")
-
-            if order_type == "placeorder":
-                lines.extend(
-                    [
-                        f"Symbol: {order_data.get('symbol', 'N/A')}",
-                        f"Action: {order_data.get('action', 'N/A')}",
-                        f"Quantity: {order_data.get('quantity', 'N/A')}",
-                        f"Price Type: {order_data.get('pricetype', 'N/A')}",
-                        f"Exchange: {order_data.get('exchange', 'N/A')}",
-                        f"Product: {order_data.get('product', 'N/A')}",
-                    ]
-                )
-                if response.get("status") == "success":
-                    lines.append(f"Order ID: {response.get('orderid', 'N/A')}")
-                else:
-                    lines.append(f"Error: {response.get('message', 'Failed')}")
-
-            elif order_type == "placesmartorder":
-                lines.extend(
-                    [
-                        f"Symbol: {order_data.get('symbol', 'N/A')}",
-                        f"Action: {order_data.get('action', 'N/A')}",
-                        f"Quantity: {order_data.get('quantity', 'N/A')}",
-                        f"Position Size: {order_data.get('position_size', 'N/A')}",
-                        f"Exchange: {order_data.get('exchange', 'N/A')}",
-                    ]
-                )
-                if response.get("status") == "success":
-                    lines.append(f"Order ID: {response.get('orderid', 'N/A')}")
-
-            elif order_type == "basketorder":
-                if response.get("status") == "success":
-                    results = response.get("results", [])
-                    success_count = len([r for r in results if r.get("status") == "success"])
-                    failed_count = len(results) - success_count
-                    lines.extend(
-                        [
-                            f"Total Orders: {len(results)}",
-                            f"Successful: {success_count}",
-                            f"Failed: {failed_count}",
-                        ]
-                    )
-                    for r in results[:3]:
-                        mark = "OK" if r.get("status") == "success" else "X"
-                        lines.append(
-                            f"[{mark}] {r.get('symbol', 'N/A')}: "
-                            f"{r.get('orderid', r.get('message', 'N/A'))}"
-                        )
-                    if len(results) > 3:
-                        lines.append(f"... and {len(results) - 3} more")
-
-            elif order_type == "splitorder":
-                results = response.get("results", [])
-                success_count = len([r for r in results if r.get("status") == "success"])
-                failed_count = len(results) - success_count
-                lines.extend(
-                    [
-                        f"Symbol: {order_data.get('symbol', 'N/A')}",
-                        f"Total Quantity: {response.get('total_quantity', 'N/A')}",
-                        f"Split Size: {response.get('split_size', 'N/A')}",
-                        f"Total Orders: {len(results)}",
-                        f"Successful: {success_count}",
-                        f"Failed: {failed_count}",
-                    ]
-                )
-                if failed_count > 0 and success_count == 0:
-                    lines.append("All orders rejected")
-                elif failed_count > 0:
-                    lines.append("Partial fill")
-                    first_fail = next(
-                        (r for r in results if r.get("status") != "success"), None
-                    )
-                    if first_fail and first_fail.get("message"):
-                        lines.append(f"Reason: {first_fail['message']}")
-
-            elif order_type == "modifyorder":
-                lines.extend(
-                    [
-                        f"Order ID: {order_data.get('orderid', 'N/A')}",
-                        f"Symbol: {order_data.get('symbol', 'N/A')}",
-                        f"New Quantity: {order_data.get('quantity', 'N/A')}",
-                        f"New Price: {order_data.get('price', 'N/A')}",
-                    ]
-                )
-                lines.append(
-                    "Modification Successful"
-                    if response.get("status") == "success"
-                    else f"Error: {response.get('message', 'Failed')}"
-                )
-
-            elif order_type == "cancelorder":
-                lines.append(f"Order ID: {order_data.get('orderid', 'N/A')}")
-                lines.append(
-                    "Cancellation Successful"
-                    if response.get("status") == "success"
-                    else f"Error: {response.get('message', 'Failed')}"
-                )
-
-            elif order_type == "cancelallorder":
-                if response.get("status") == "success":
-                    canceled = response.get("canceled_orders", [])
-                    failed = response.get("failed_cancellations", [])
-                    lines.extend(
-                        [
-                            f"Cancelled: {len(canceled)} orders",
-                            f"Failed: {len(failed)} orders",
-                        ]
-                    )
-                    if canceled and len(canceled) <= 5:
-                        lines.append(f"Order IDs: {', '.join(canceled[:5])}")
-
-            elif order_type == "closeposition":
-                if response.get("status") == "success":
-                    if order_data.get("symbol"):
-                        lines.extend(
-                            [
-                                f"Symbol: {order_data.get('symbol', 'N/A')}",
-                                f"Exchange: {order_data.get('exchange', 'N/A')}",
-                                f"Product: {order_data.get('product', 'N/A')}",
-                                f"Order ID: {response.get('orderid', 'N/A')}",
-                            ]
-                        )
-                    else:
-                        closed = response.get("closed_positions", 0)
-                        failed = response.get("failed_closures", 0)
-                        if closed or failed:
-                            lines.extend(
-                                [
-                                    f"Closed: {closed} positions",
-                                    f"Failed: {failed} positions",
-                                ]
-                            )
-                        else:
-                            lines.append("All positions closed successfully")
-                else:
-                    lines.append(f"Error: {response.get('message', 'Failed')}")
-
-            elif order_type in ("optionsorder", "optionsmultiorder"):
-                lines.append(f"Underlying: {order_data.get('underlying', 'N/A')}")
-                results = response.get("results", [])
-                if response.get("status") == "success":
-                    success_count = len([r for r in results if r.get("status") == "success"])
-                    failed_count = len(results) - success_count
-                    if results:
-                        lines.extend(
-                            [
-                                f"Total Legs: {len(results)}",
-                                f"Successful: {success_count}",
-                                f"Failed: {failed_count}",
-                            ]
-                        )
-                        for r in results[:5]:
-                            mark = "OK" if r.get("status") == "success" else "X"
-                            symbol = r.get("symbol", "N/A")
-                            action = r.get("action", "")
-                            oid = r.get("orderid", r.get("message", "N/A"))
-                            lines.append(f"[{mark}] {symbol} {action} -> {oid}")
-                    if response.get("underlying_ltp"):
-                        lines.append(f"Underlying LTP: {response.get('underlying_ltp')}")
-                else:
-                    lines.append(f"Error: {response.get('message', 'Failed')}")
-
-            lines.append(f"Time: {timestamp}")
-
-            if order_data.get("strategy"):
-                lines.insert(0, f"Strategy: {order_data.get('strategy')}")
-
-            return "\n".join(lines)
-
-        except Exception:
-            logger.exception("Error formatting WhatsApp order details")
-            return f"Order Type: {order_type}\nStatus: {response.get('status', 'unknown')}"
+        """The full WhatsApp message for one order event."""
+        return self.render(build_message(order_type, order_data, response))
 
     # ------------------------------------------------------------------
     # Transmission — delegates to the bot service (which holds the wars
@@ -336,9 +154,7 @@ class WhatsAppAlertService:
                 logger.debug("WhatsApp alert: api_key did not resolve to any user")
                 return
 
-            template = self.alert_templates.get(order_type, "*Order Update*\n{details}")
-            details = self.format_order_details(order_type, order_data, response)
-            message = template.format(details=details)
+            message = self.format_order_alert(order_type, order_data, response)
 
             # Primary path: send to the paired-device owner. This is the
             # only path that actually fires in the current single-user

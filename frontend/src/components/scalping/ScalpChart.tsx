@@ -10,34 +10,44 @@
  *     20-30s timer (so multiple charts never hit the API at the same instant).
  *
  * Works for any exchange (options/futures/equity/indices). Index symbols carry
- * volume 0. Uses the bundled lightweight-charts v5 (no CDN).
+ * volume 0.
+ *
+ * Drawn by openalgo-charts, the engine /trading uses, driven the way the other
+ * read-only charts drive it (`CandleViz`): `createChart` on a host div, the
+ * app's theme tokens through `buildChartTheme`, and volume on the price pane's
+ * hidden overlay scale, coloured by direction as /trading colours it. The
+ * engine also supplies the countdown to the candle close. The legend stays this
+ * component's own DOM overlay, as /trading keeps its own: the engine's status
+ * line belongs to its widget tier, which this chart does not use.
+ *
+ * Two things differ from /trading because this chart sits inside an order
+ * entry screen:
+ *   - The engine's keyboard shortcuts are off. The scalper places orders on
+ *     the arrow keys from a window listener, and a chart that claimed a chord
+ *     would pan or swallow a keystroke the trader meant as an order.
+ *   - No trade layer, drawings or indicators. Orders are placed from the
+ *     scalper's own controls, so the chart only reads.
  */
 
-import {
-  CandlestickSeries,
-  ColorType,
-  CrosshairMode,
-  createChart,
-  HistogramSeries,
-  type IChartApi,
-  type ISeriesApi,
-  type UTCTimestamp,
-} from 'lightweight-charts'
+import { type Chart, compactVolume, createChart, type SeriesApi } from 'openalgo-charts'
 import { useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { useMarketData } from '@/hooks/useMarketData'
 import { priceDecimals } from '@/lib/scalpingPrice'
+import { buildChartTheme, quietVolumeStyle } from '@/lib/trading/chartTheme'
+import { buildChartLegend, legendHtml } from '@/lib/trading/legend'
+import { volumePoint } from '@/lib/trading/volumeSettings'
 import { useThemeStore } from '@/stores/themeStore'
 
 // Matches the IST shift the backend bakes into bar times so live bars line up
 // with history bars. 5h30m = 19800s, a whole multiple of 60/300/900s.
+//
+// The bucket model below keeps that shifted base. The engine wants real UTC
+// seconds and shows them in IST itself (its default zone), so the shift comes
+// off at the one place a bar is handed to the chart. Handing it shifted times
+// would label every candle 5h30m late and push the countdown out by as much.
 const IST_OFFSET = 19800
 const INTERVAL_SEC: Record<string, number> = { '1m': 60, '5m': 300, '15m': 900 }
-
-const UP = '#26a69a'
-const DOWN = '#ef5350'
-const VOL_UP = 'rgba(38,166,154,0.45)'
-const VOL_DOWN = 'rgba(239,83,80,0.45)'
 
 interface Candle {
   time: number
@@ -48,19 +58,10 @@ interface Candle {
   volume: number
 }
 
-function fmtPrice(n: number, decimals = 2): string {
-  return n.toLocaleString('en-IN', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  })
-}
-function fmtVol(n: number): string {
-  const a = Math.abs(n)
-  if (a >= 1e9) return `${(n / 1e9).toFixed(2)}B`
-  if (a >= 1e6) return `${(n / 1e6).toFixed(2)}M`
-  if (a >= 1e3) return `${(n / 1e3).toFixed(2)}K`
-  return String(Math.round(n))
-}
+// Indices trade no volume of their own (the backend sends 0), so their charts
+// draw no volume bars and no volume readout, as /trading treats its quote-only
+// exchanges. Every one of those ends in `_INDEX`.
+const hasVolume = (exchange: string) => !exchange.endsWith('_INDEX')
 
 export function ScalpChart({
   symbol,
@@ -73,16 +74,20 @@ export function ScalpChart({
   interval: string
   title?: string
 }) {
-  const { mode } = useThemeStore()
-  const isDark = mode === 'dark'
+  const mode = useThemeStore((s) => s.mode)
+  const appMode = useThemeStore((s) => s.appMode)
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const legendRef = useRef<HTMLDivElement | null>(null)
-  const chartRef = useRef<IChartApi | null>(null)
-  const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const volRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const chartRef = useRef<Chart | null>(null)
+  const candleRef = useRef<SeriesApi | null>(null)
+  const volRef = useRef<SeriesApi | null>(null)
   const renderLegendRef = useRef<(time?: number) => void>(() => {})
-  const colorsRef = useRef({ title: '#d6dde6', muted: '#8a97a5' })
+  // The bar under the pointer, in the model's time base, or null when the
+  // pointer is off the chart. Kept so a live tick redraws the legend for the
+  // bar being read rather than snapping it to the latest one.
+  const hoveredTimeRef = useRef<number | null>(null)
+  const intervalRef = useRef<string>(interval)
 
   // Authoritative model: bucket time -> candle. Completed bars are reconciled
   // from broker history; the current bucket is built live from ticks.
@@ -92,7 +97,6 @@ export function ScalpChart({
   const currentBucketRef = useRef<number | null>(null)
   const tradingDateRef = useRef<string | null>(null)
   const intervalSecRef = useRef<number>(INTERVAL_SEC[interval] ?? 60)
-  const intervalRef = useRef<string>(interval)
   const barStartVolRef = useRef<number | null>(null)
   const readyRef = useRef(false)
 
@@ -106,10 +110,20 @@ export function ScalpChart({
     autoReconnect: true,
   })
 
-  // Create the chart once per symbol/exchange (candles + volume + legend).
-  // isDark is used only for the initial colors; theme changes are applied by the
+  // Volume as /trading draws it by default: the candle pair, half way to the
+  // background. Read from the chart's live theme, so a theme switch recolours it.
+  const volumeBar = (k: Candle, prevClose: number | undefined) => {
+    const theme = chartRef.current?.theme()
+    const style = theme
+      ? quietVolumeStyle({ upColor: theme.upColor, downColor: theme.downColor }, theme.background)
+      : {}
+    return volumePoint(toBar(k), prevClose, k.volume, style, true)
+  }
+
+  // Create the chart once per symbol/exchange (candles + volume). The theme is
+  // read for the initial colours only; theme changes are applied by the
   // separate re-theme effect below, so it is intentionally not a dependency.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: isDark excluded; theme handled by the re-theme effect
+  // biome-ignore lint/correctness/useExhaustiveDependencies: theme excluded; handled by the re-theme effect
   useEffect(() => {
     const container = containerRef.current
     if (!container || !enabled) return
@@ -118,44 +132,39 @@ export function ScalpChart({
     const decimals = priceDecimals(exchange)
 
     const chart = createChart(container, {
-      autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: colorsRef.current.muted,
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: isDark ? 'rgba(120,130,145,0.06)' : 'rgba(0,0,0,0.05)' },
-        horzLines: { color: isDark ? 'rgba(120,130,145,0.06)' : 'rgba(0,0,0,0.05)' },
-      },
-      rightPriceScale: { borderColor: isDark ? '#1b2330' : '#e2e8f0' },
-      timeScale: {
-        borderColor: isDark ? '#1b2330' : '#e2e8f0',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      crosshair: { mode: CrosshairMode.Normal },
+      theme: buildChartTheme(mode, appMode),
+      // See the module docstring: the arrow keys belong to order entry.
+      shortcuts: false,
+      // The hover zoom rail is chrome a 340px chart has no room for.
+      timeNavigator: false,
+      // The countdown to the forming candle's close, under the last price, as
+      // /trading shows it. Off in the engine by default; a live chart is the
+      // case it is for.
+      axisChrome: { barCountdown: true },
+      ariaLabel: `${symbol} ${exchange} price chart`,
     })
-    const candle = chart.addSeries(CandlestickSeries, {
-      upColor: UP,
-      downColor: DOWN,
-      borderVisible: false,
-      wickUpColor: UP,
-      wickDownColor: DOWN,
+    chart.setDataContext({ symbol, exchange, interval })
+    const candle = chart.addSeries('candlestick', {
       priceFormat: { type: 'price', precision: decimals, minMove: 10 ** -decimals },
     })
-    const vol = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
+    // '' is the hidden overlay scale: the histogram sits under the candles and
+    // draws no axis of its own, pinned to the bottom fifth.
+    const vol = chart.addSeries('histogram', {
+      paneIndex: 0,
       priceScaleId: '',
+      priceFormat: { type: 'volume' },
     })
-    vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
+    vol.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
+    if (!hasVolume(exchange)) vol.applyOptions({ visible: false })
 
     chartRef.current = chart
     candleRef.current = candle
     volRef.current = vol
 
     // OHLC legend overlay: hovered bar, or the last bar when not hovering.
-    const renderLegend = (time?: number) => {
+    // `time` is in the model's IST-shifted base. Built and rendered by the same
+    // two functions as the /trading legend, so the two read alike.
+    const renderLegend = (time = hoveredTimeRef.current ?? undefined) => {
       const el = legendRef.current
       const arr = sortedRef.current
       if (!el) return
@@ -169,26 +178,37 @@ export function ScalpChart({
         if (i != null) idx = i
       }
       const bar = arr[idx]
-      const ref = idx > 0 ? arr[idx - 1].close : bar.open
-      const chg = bar.close - ref
-      const pct = ref ? (chg / ref) * 100 : 0
-      const col = chg >= 0 ? UP : DOWN
-      const sign = chg >= 0 ? '+' : ''
-      const { title: titleColor, muted } = colorsRef.current
-      el.innerHTML =
-        `<div style="color:${titleColor};font-weight:600">${symbol} ` +
-        `<span style="color:${muted};font-weight:500">· ${intervalRef.current} · ${exchange}</span></div>` +
-        `<div style="color:${col};margin-top:1px">O${fmtPrice(bar.open, decimals)} H${fmtPrice(bar.high, decimals)} ` +
-        `L${fmtPrice(bar.low, decimals)} C${fmtPrice(bar.close, decimals)} ${sign}${fmtPrice(chg, decimals)} (${sign}${pct.toFixed(2)}%)</div>` +
-        `<div style="color:${muted};margin-top:1px">Volume <span style="color:${col}">${fmtVol(bar.volume)}</span></div>`
+      const runs = buildChartLegend({
+        symbol,
+        interval: intervalRef.current,
+        exchange,
+        lotsize: null,
+        bar: hasVolume(exchange) ? bar : { ...bar, volume: undefined },
+        prevClose: idx > 0 ? arr[idx - 1].close : null,
+        fmt: (n) => n.toFixed(decimals),
+        fmtVolume: compactVolume,
+      })
+      // The volume readout is a show/hide switch on /trading. The scalper has
+      // no such switch, so it renders as plain text rather than as a control
+      // that does nothing.
+      el.innerHTML = legendHtml(runs.map((run) => ({ ...run, action: undefined })))
     }
     renderLegendRef.current = renderLegend
-    chart.subscribeCrosshairMove((param) => {
-      renderLegend(typeof param.time === 'number' ? param.time : undefined)
+    // The engine reports the hovered bar in real UTC seconds; the model is keyed
+    // in the shifted base, so the shift goes back on for the lookup.
+    const offCrosshair = chart.subscribeCrosshairMove((e) => {
+      hoveredTimeRef.current = e.time == null ? null : e.time + IST_OFFSET
+      renderLegend()
     })
 
     return () => {
-      chart.remove()
+      offCrosshair()
+      hoveredTimeRef.current = null
+      chart.destroy()
+      // `destroy` releases the engine's listeners; clearing the host is what
+      // guarantees the next symbol starts on an empty div rather than stacking
+      // a second canvas on the first.
+      container.innerHTML = ''
       chartRef.current = null
       candleRef.current = null
       volRef.current = null
@@ -197,6 +217,7 @@ export function ScalpChart({
 
   // Load history for the selected interval and run the reconcile loop. Re-runs
   // on timeframe change (instant flip; chart instance reused).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: volumeBar reads refs only
   useEffect(() => {
     const chart = chartRef.current
     const candle = candleRef.current
@@ -214,6 +235,9 @@ export function ScalpChart({
     intervalSecRef.current = INTERVAL_SEC[interval] ?? 60
     intervalRef.current = interval
     readyRef.current = false
+    chart.setDataContext({ symbol, exchange, interval })
+    candle.setData([])
+    vol.setData([])
     setStatus('loading...')
 
     const applyModel = (preserveRange: boolean) => {
@@ -223,26 +247,17 @@ export function ScalpChart({
       arr.forEach((k, i) => idxMap.set(k.time, i))
       idxByTimeRef.current = idxMap
 
-      const ts = chart.timeScale()
-      const range = preserveRange ? ts.getVisibleLogicalRange() : null
-      candle.setData(
-        arr.map((k) => ({ time: k.time as UTCTimestamp, open: k.open, high: k.high, low: k.low, close: k.close }))
-      )
-      vol.setData(
-        arr.map((k) => ({
-          time: k.time as UTCTimestamp,
-          value: k.volume,
-          color: k.close >= k.open ? VOL_UP : VOL_DOWN,
-        }))
-      )
+      const range = preserveRange ? chart.getVisibleLogicalRange() : null
+      candle.setData(arr.map(toBar))
+      vol.setData(arr.map((k, i) => volumeBar(k, arr[i - 1]?.close)))
       if (range) {
         try {
-          ts.setVisibleLogicalRange(range)
+          chart.setVisibleLogicalRange(range)
         } catch {
           /* range no longer valid */
         }
       } else {
-        ts.fitContent()
+        chart.fitContent()
       }
       renderLegendRef.current()
     }
@@ -335,38 +350,34 @@ export function ScalpChart({
     }
   }, [symbol, exchange, interval, enabled])
 
-  // Re-theme the chart and legend without recreating it.
+  // Re-theme the chart without recreating it, and recolour the volume, whose
+  // colours are baked into each bar. The legend inherits the page's text colour,
+  // so it follows the theme on its own.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: volumeBar reads refs only
   useEffect(() => {
-    colorsRef.current = isDark
-      ? { title: '#d6dde6', muted: '#8a97a5' }
-      : { title: '#0f172a', muted: '#64748b' }
     const chart = chartRef.current
-    if (chart) {
-      chart.applyOptions({
-        layout: { textColor: colorsRef.current.muted },
-        grid: {
-          vertLines: { color: isDark ? 'rgba(120,130,145,0.06)' : 'rgba(0,0,0,0.05)' },
-          horzLines: { color: isDark ? 'rgba(120,130,145,0.06)' : 'rgba(0,0,0,0.05)' },
-        },
-        rightPriceScale: { borderColor: isDark ? '#1b2330' : '#e2e8f0' },
-        timeScale: { borderColor: isDark ? '#1b2330' : '#e2e8f0' },
-      })
-    }
-    renderLegendRef.current()
-  }, [isDark])
+    const vol = volRef.current
+    if (!chart || !vol) return
+    chart.setTheme(buildChartTheme(mode, appMode))
+    const arr = sortedRef.current
+    vol.setData(arr.map((k, i) => volumeBar(k, arr[i - 1]?.close)))
+  }, [mode, appMode])
 
   // Update the forming candle (and its volume) from each live tick.
   const tick = data.get(`${exchange}:${symbol}`)?.data
   const ltp = tick?.ltp
   const ts = tick?.timestamp
   const tickVol = typeof tick?.volume === 'number' ? tick.volume : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: volumeBar reads refs only
   useEffect(() => {
     const candle = candleRef.current
     const vol = volRef.current
     if (!candle || !vol || !readyRef.current || ltp == null || !Number.isFinite(ltp)) return
 
     const parsed = ts ? Date.parse(ts) : Number.NaN
-    const epochUtc = Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000)
+    const epochUtc = Number.isNaN(parsed)
+      ? Math.floor(Date.now() / 1000)
+      : Math.floor(parsed / 1000)
     const sec = intervalSecRef.current
     const bucket = Math.floor((epochUtc + IST_OFFSET) / sec) * sec
     const cur = currentBucketRef.current
@@ -407,9 +418,8 @@ export function ScalpChart({
       arr[arr.length - 1] = bar
     }
 
-    const color = bar.close >= bar.open ? VOL_UP : VOL_DOWN
-    candle.update({ time: bar.time as UTCTimestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
-    vol.update({ time: bar.time as UTCTimestamp, value: bar.volume, color })
+    candle.update(toBar(bar))
+    vol.update(volumeBar(bar, arr[arr.length - 2]?.close))
     renderLegendRef.current()
     // Clear the live-only "waiting for ticks" placeholder once a bar exists.
     setStatus((s) => (s ? '' : s))
@@ -423,13 +433,14 @@ export function ScalpChart({
     )
   }
 
+  // The engine tracks its own container size, so there is no ResizeObserver
+  // here; the absolute fill gives it a box with a real height to measure.
   return (
     <div className="relative h-full w-full overflow-hidden rounded-lg border bg-card">
       <div ref={containerRef} className="absolute inset-0" />
-      <div
-        ref={legendRef}
-        className="pointer-events-none absolute left-2.5 top-2 z-10 font-mono text-[11px] leading-tight"
-      />
+      <div className="pointer-events-none absolute left-3 top-1.5 z-10">
+        <div ref={legendRef} className="text-xs font-medium text-foreground" />
+      </div>
       {status && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
           {status}
@@ -437,4 +448,16 @@ export function ScalpChart({
       )}
     </div>
   )
+}
+
+/** A model candle as the engine takes it: real UTC seconds, volume included. */
+function toBar(k: Candle) {
+  return {
+    time: k.time - IST_OFFSET,
+    open: k.open,
+    high: k.high,
+    low: k.low,
+    close: k.close,
+    volume: k.volume,
+  }
 }

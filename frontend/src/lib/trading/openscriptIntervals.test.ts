@@ -113,6 +113,21 @@ describe('what the terminal offers, and why it was wrong for a script', () => {
   })
 })
 
+describe('any minute timeframe on an intraday chart', () => {
+  it('offers finer and non-multiple intervals on a ten minute chart', () => {
+    // Before openalgo-script 0.9.0 only 20, 30 and 40 minutes would run on a ten
+    // minute chart; the engine now builds the rest from bars the terminal serves.
+    const values = scriptIntervalChoices(OFFERED, '10m', '').choices.map((one) => one.value)
+    expect(values).toEqual(expect.arrayContaining(['1m', '3m', '5m', '15m', '30m', '1h']))
+  })
+
+  it('still leaves minutes out on a daily chart', () => {
+    const values = scriptIntervalChoices(OFFERED, 'D', '').choices.map((one) => one.value)
+    expect(values).not.toContain('15m')
+    expect(values).toContain('1D')
+  })
+})
+
 describe('the language spelling', () => {
   it('turns broker codes into timeframes the language reads', () => {
     expect(languageInterval('D')).toBe('1D')

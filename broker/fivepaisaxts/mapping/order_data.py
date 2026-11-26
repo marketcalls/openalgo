@@ -2,8 +2,25 @@ import json
 
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
+from utils.xts_order_data import exact_order_id, position_rows, traded_average_price
 
 logger = get_logger(__name__)
+
+# XTS OrderStatus (Order Status enum, XTS v2 docs) -> OpenAlgo order_status.
+# New, Replaced and PartiallyFilled are what XTS calls open; the Pending
+# states are still working at the exchange.
+ORDER_STATUS_MAPPING = {
+    "New": "open",
+    "Open": "open",
+    "PartiallyFilled": "open",
+    "Replaced": "open",
+    "PendingNew": "open",
+    "PendingReplace": "open",
+    "PendingCancel": "open",
+    "Filled": "complete",
+    "Rejected": "rejected",
+    "Cancelled": "cancelled",
+}
 
 
 def map_order_data(order_data):
@@ -77,11 +94,12 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            if order["OrderStatus"] == "Filled":
+            status = ORDER_STATUS_MAPPING.get(order.get("OrderStatus"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif order["OrderStatus"] == "New":
+            elif status == "open":
                 total_open_orders += 1
-            elif order["OrderStatus"] == "Rejected":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -119,13 +137,7 @@ def transform_order_data(orders):
         "StopLimit": "SL",
         "StopMarket": "SL-M",
     }
-    # Define order status mappings
-    order_status_mapping = {
-        "Filled": "complete",
-        "Rejected": "rejected",
-        "Cancelled": "cancelled",
-        "New": "open",
-    }
+    order_status_mapping = ORDER_STATUS_MAPPING
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
@@ -155,7 +167,7 @@ def transform_order_data(orders):
             "trigger_price": order.get("OrderStopPrice", 0.0),
             "pricetype": mapped_order_type,
             "product": order.get("ProductType", ""),
-            "orderid": str(int(float(order.get("AppOrderID", 0) or 0))),
+            "orderid": exact_order_id(order.get("AppOrderID")),
             "order_status": mapped_order_status,
             "timestamp": order.get("LastUpdateDateTime", ""),
         }
@@ -227,9 +239,18 @@ def transform_tradebook_data(tradebook_data):
         exchange = trade.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
 
-        # Ensure quantity and average price are converted to the correct types
-        quantity = int(trade.get("OrderQuantity", 0))
-        average_price = float(trade.get("OrderAverageTradedPrice", 0.0))
+        # Each trade-book row is one fill: XTS reports that fill's quantity and
+        # price in LastTradedQuantity and LastTradedPrice. OrderQuantity is the
+        # whole order, so a part-filled order counted it on every fill. A row
+        # without the fill fields keeps the order-level ones, as before.
+        fill_qty = trade.get("LastTradedQuantity")
+        fill_price = trade.get("LastTradedPrice")
+        if fill_qty not in (None, "") and fill_price not in (None, ""):
+            quantity = int(float(fill_qty))
+            average_price = float(fill_price)
+        else:
+            quantity = int(float(trade.get("OrderQuantity", 0) or 0))
+            average_price = float(trade.get("OrderAverageTradedPrice", 0.0) or 0.0)
 
         transformed_trade = {
             "symbol": trade.get("TradingSymbol", ""),
@@ -239,34 +260,21 @@ def transform_tradebook_data(tradebook_data):
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
-            "orderid": str(int(float(trade.get("AppOrderID", 0) or 0))),
-            "timestamp": trade.get("OrderGeneratedDateTime", ""),
+            "orderid": exact_order_id(trade.get("AppOrderID")),
+            "timestamp": trade.get("LastExecutionTransactTime")
+            or trade.get("OrderGeneratedDateTime", ""),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
 
 
 def map_position_data(position_data):
+    """The position container transform_positions_data reads.
+
+    An XTS error answer raises a sentence for the trader instead of reading
+    as an empty book (utils/xts_order_data.py, issue #633).
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
-
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
-
-    Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
-    """
-    # Check if 'data' is None
-    # logger.info(f"position_data: {position_data}")
-    if "result" not in position_data or not position_data["result"]:
-        logger.info("No data available.")
-        return []  # Return an empty list if no orders are available
-
-    position_data = position_data["result"]
-
-    # logger.info(f"position_data: {position_data}")
-
-    return position_data
+    return position_rows(position_data, "fivepaisaxts")
 
 
 def transform_positions_data(positions_data):
@@ -303,12 +311,9 @@ def transform_positions_data(positions_data):
             position["TradingSymbol"] = symbol_from_db
 
         netqty = float(position.get("Quantity", 0))
-        if netqty > 0:
-            net_amount = float(position.get("BuyAveragePrice", 0))
-        elif netqty < 0:
-            net_amount = float(position.get("SellAveragePrice", 0))
-        else:
-            net_amount = 0
+        # The traded average, not the previous close a carried position is
+        # marked to (utils/xts_order_data.py, issue #2462).
+        net_amount = traded_average_price(position, netqty)
 
         average_price = net_amount
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places

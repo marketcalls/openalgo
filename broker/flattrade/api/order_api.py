@@ -13,6 +13,7 @@ from broker.flattrade.api.rate_limit import (
 )
 from broker.flattrade.mapping.order_data import normalize_order_status
 from broker.flattrade.mapping.transform_data import (
+    SLMOrderRefused,
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -59,7 +60,20 @@ def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
 
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.request(method, url, content=payload, headers=headers)
-    parsed = json.loads(response.text)
+    try:
+        parsed = json.loads(response.text)
+    except ValueError:
+        # After the daily rollover Flattrade answers a dead session with a body
+        # that is not JSON (issue #2386). Hand back the broker's own failure
+        # shape so the mapping layer logs one line instead of a traceback.
+        logger.debug(
+            f"Flattrade {endpoint} answered HTTP {response.status_code} with a body "
+            f"that is not JSON: {response.text[:200]!r}"
+        )
+        return {
+            "stat": "Not_Ok",
+            "emsg": "Flattrade did not return data. If this continues, log in to the broker again.",
+        }
 
     # Pacing alone is not enough: an account provisioned below the configured
     # cap only reveals its real ceiling in the rejection text, so learn from it
@@ -146,7 +160,6 @@ def _invalidate_position_cache(auth):
     _position_cache.invalidate(auth)
 
 
-
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
@@ -176,6 +189,18 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     return net_qty
 
 
+class _RejectedResponse:
+    """Stands in for a broker response to an order refused before sending.
+
+    The service layer reads ``.status`` and the message from the response
+    data, so the trader sees a 400 naming the problem instead of the
+    "internal error" an escaped exception would produce.
+    """
+
+    status = 400
+    status_code = 400
+
+
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
 
@@ -183,7 +208,12 @@ def place_order_api(data, auth):
     BROKER_API_KEY = full_api_key.split(":::")[0]
     data["apikey"] = BROKER_API_KEY
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token, AUTH_TOKEN)
+    try:
+        newdata = transform_data(data, token, AUTH_TOKEN)
+    except SLMOrderRefused as refused:
+        # Refused before anything reached the broker; the message names the fix.
+        logger.warning(f"PlaceOrder refused: {refused}")
+        return _RejectedResponse(), {"status": "error", "message": str(refused)}, None
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN

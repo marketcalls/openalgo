@@ -1,26 +1,63 @@
 """HDFC Sky WebSocket adapter -> OpenAlgo unified streaming.
 
 Subclasses BaseBrokerWebSocketAdapter. Resolves OpenAlgo (symbol, exchange) to
-HDFC Sky scripIds, drives the HDFCSkyWebSocket client, normalizes protobuf
-ticks and publishes them to the ZeroMQ bus via the inherited
+HDFC Sky scripIds, drives the HDFCSkyWebSocket client, normalizes
+protobuf ticks and publishes them to the ZeroMQ bus via the inherited
 publish_market_data().
 
 NSE_INDEX / BSE_INDEX are first-class: the feed has dedicated NSE_INDEX_ /
 BSE_INDEX_ scripId prefixes, and the publish topic keeps the OpenAlgo exchange
 (the proxy already recognizes both as two-segment prefixes when splitting
 topics).
+
+Two properties of the feed shape the state kept here:
+
+  - `instrumentId` is unique only WITHIN an exchange. 840 tokens in the live
+    security master appear on more than one OpenAlgo exchange, so subscription
+    state is keyed (exchange, token) and the exchange is taken from the tick's
+    packet type, never guessed from the token alone.
+  - The *_CIRC and *_OI packets are partial refreshes carrying no price. They
+    are merged into the last full snapshot for that instrument rather than
+    published as a quote of their own, which would blank the live price.
 """
 
+import threading
+
 from broker.hdfcsky.mapping.transform_data import ws_scrip_id
-from broker.hdfcsky.streaming.hdfcsky_mapping import HDFCSkyCapabilityRegistry
+from broker.hdfcsky.streaming.hdfcsky_mapping import (
+    HDFCSkyCapabilityRegistry,
+)
 from broker.hdfcsky.streaming.hdfcsky_websocket import HDFCSkyWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
-# OpenAlgo numeric mode -> topic suffix. The proxy fans a higher mode down to
-# lower-mode subscribers, so publishing to the tick's own mode topic suffices.
+# OpenAlgo numeric mode -> topic suffix. The proxy fans a published mode DOWN to
+# lower-mode subscribers (server.py: `for m in range(1, mode + 1)`) and never
+# up, so publishing below the highest subscribed mode starves the higher-mode
+# clients. It also tags each client with ONE mode per publish -- the highest it
+# holds -- so a client holding LTP and Quote on the same symbol would only ever
+# see Quote frames. Every subscribed mode is therefore published, as the
+# Zerodha adapter does (issue #1664).
 _MODE_TO_TOPIC = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
+
+# The feed runs on a real OS thread (see hdfcsky_websocket), so the
+# subscription-state lock must be a real lock too -- an eventlet-patched one
+# taken from a foreign thread does not block correctly.
+# Chosen by whether eventlet patched this process (utils.runtime), never by
+# whether it was imported: under the gthread worker eventlet can be imported
+# without patching anything, and asking its patcher for an original there
+# builds a second copy of the threading module.
+from utils import runtime as _runtime
+
+_real_threading = _runtime.original("threading")
+
+# Partial-refresh packet kinds and the fields each one is allowed to carry over
+# into the merged snapshot.
+_PARTIAL_TICK_FIELDS = {
+    "circuit": ("lower_limit", "upper_limit"),
+    "oi": ("oi",),
+}
 
 
 class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -30,8 +67,22 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.user_id = None
         self.ws_client: HDFCSkyWebSocket | None = None
         self.running = False
-        # token(int) -> {"symbol", "exchange", "mode", "scrip_id"}
-        self.token_info: dict[int, dict] = {}
+        # (exchange, token) -> {"symbol", "exchange", "modes", "scrip_id"}
+        self.token_info: dict[tuple[str, int], dict] = {}
+        # (exchange, token) -> last full snapshot, so a partial circuit/OI
+        # packet can be merged instead of replacing the quote.
+        self.last_snapshot: dict[tuple[str, int], dict] = {}
+        # Serializes subscribe/unsubscribe against each other, and the tick
+        # thread's snapshot merge against the removal and clearing of
+        # snapshots. Held only for in-memory bookkeeping.
+        self._state_lock = _real_threading.Lock()
+        # A new number for every instrument that goes from unsubscribed to
+        # subscribed, kept in its token_info entry across mode changes. A tick
+        # resolved against one subscription is never merged into the next.
+        self._subscription_seq = 0
+        # Bumped whenever the snapshots are dropped for a connection change, so
+        # a tick taken off the old connection cannot rebuild one afterwards.
+        self._feed_epoch = 0
 
     # --- lifecycle ------------------------------------------------------
 
@@ -47,7 +98,8 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             if not access_token:
                 return self._create_error_response(
-                    "NO_AUTH_TOKEN", f"No HDFC Sky auth token found for user {user_id}"
+                    "NO_AUTH_TOKEN",
+                    f"No HDFC Sky auth token found for user {user_id}",
                 )
 
             self.ws_client = HDFCSkyWebSocket(
@@ -68,9 +120,23 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_ws_connect(self):
         self.connected = True
+        # Also dropped here: a socket can end without a close callback (an
+        # exception out of run_forever), and the new connection must start
+        # from its own first full quote either way.
+        self._drop_snapshots()
 
     def _on_ws_disconnect(self):
         self.connected = False
+        # The client reconnects by itself, and nothing on the new connection
+        # vouches for a price from the old one: a circuit or OI packet that
+        # arrives before the first full quote must not republish it.
+        self._drop_snapshots()
+
+    def _drop_snapshots(self):
+        """Forget every merge baseline; they rebuild from the next full tick."""
+        with self._state_lock:
+            self._feed_epoch += 1
+            self.last_snapshot.clear()
 
     def connect(self):
         try:
@@ -95,10 +161,40 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.exception(f"Error disconnecting HDFC Sky WebSocket: {e}")
         finally:
+            # Drop the merge baselines: they rebuild from the first full tick
+            # after a reconnect, and a pre-disconnect price must never be
+            # republished as current. token_info deliberately survives -- the
+            # client resubscribes its scrips and the ticks still need mapping.
+            self._drop_snapshots()
             # Always release ZMQ resources (FD hygiene).
             self.cleanup_zmq()
 
     # --- subscription ---------------------------------------------------
+
+    def _store_info(self, key, symbol, exchange, scrip_id, modes, generation):
+        """Publish a NEW immutable state entry for an instrument.
+
+        The tick thread reads this map without locking, so an entry is never
+        edited in place: `modes` is a frozenset and the whole dict is replaced,
+        which under the GIL means a reader sees either the old entry or the new
+        one but never a half-updated one. `topic_modes` is precomputed here as
+        an immutable tuple so the tick path never iterates a live set --
+        calling max() over a set that subscribe/unsubscribe was mutating is
+        what dropped ticks. Returns the entry stored.
+        """
+        entry = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "scrip_id": scrip_id,
+            "modes": modes,
+            "generation": generation,
+            "topic_modes": tuple(
+                _MODE_TO_TOPIC[m] for m in sorted(modes, reverse=True) if m in _MODE_TO_TOPIC
+            )
+            or ("QUOTE",),
+        }
+        self.token_info[key] = entry
+        return entry
 
     def _resolve_token(self, symbol, exchange):
         token = get_token(symbol, exchange)
@@ -121,22 +217,45 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "TOKEN_NOT_FOUND", f"No token for {exchange}:{symbol}"
                 )
 
+            key = (exchange, token)
             scrip_id = ws_scrip_id(exchange, token)
-            subscription_type = HDFCSkyCapabilityRegistry.get_subscription_type_for_numeric(mode)
 
-            self.token_info[token] = {
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": mode,
-                "scrip_id": scrip_id,
-            }
-            self.ws_client.subscribe_scrips([scrip_id], subscription_type)
+            # Several clients can hold the same instrument at different modes.
+            # Keep every subscribed mode so publishing (and the broker-side
+            # subscription tier) always follows the highest one.
+            with self._state_lock:
+                existing = self.token_info.get(key)
+                if existing:
+                    generation = existing["generation"]
+                else:
+                    self._subscription_seq += 1
+                    generation = self._subscription_seq
+                modes = (existing["modes"] if existing else frozenset()) | {mode}
+                stored = self._store_info(key, symbol, exchange, scrip_id, modes, generation)
 
-            # HDFC Sky publishes 5-level depth only; advertise the actual depth
-            # so the proxy reports it back to the client.
-            actual_depth = HDFCSkyCapabilityRegistry.get_fallback_depth_level(
-                depth_level, exchange
+            subscription_type = HDFCSkyCapabilityRegistry.get_subscription_type_for_numeric(
+                max(modes)
             )
+            if not self.ws_client.subscribe_scrips([scrip_id], subscription_type):
+                # Refused (the feed's instrument limit, or the client has
+                # stopped): undo the mode just added, unless another subscribe
+                # or unsubscribe has replaced the entry since, and tell the
+                # caller rather than reporting a subscription that never runs.
+                with self._state_lock:
+                    if self.token_info.get(key) is stored:
+                        if existing:
+                            self.token_info[key] = existing
+                        else:
+                            self.token_info.pop(key, None)
+                            self.last_snapshot.pop(key, None)
+                return self._create_error_response(
+                    "SUBSCRIPTION_REFUSED",
+                    f"HDFC Sky feed did not accept {exchange}:{symbol}",
+                )
+
+            # HDFC Sky publishes 5-level depth only; advertise the actual
+            # depth so the proxy reports it back to the client.
+            actual_depth = HDFCSkyCapabilityRegistry.get_fallback_depth_level(depth_level, exchange)
             return self._create_success_response(
                 f"Subscribed {exchange}:{symbol}",
                 symbol=symbol,
@@ -157,8 +276,29 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return self._create_error_response(
                     "TOKEN_NOT_FOUND", f"No token for {exchange}:{symbol}"
                 )
-            self.ws_client.unsubscribe([ws_scrip_id(exchange, token)])
-            self.token_info.pop(token, None)
+
+            key = (exchange, token)
+            scrip_id = ws_scrip_id(exchange, token)
+
+            with self._state_lock:
+                info = self.token_info.get(key)
+                # The proxy only calls this once the last client at THIS mode
+                # has gone; other modes may still have clients, so drop the
+                # broker subscription only when no mode is left.
+                modes = (info["modes"] - {mode}) if info else frozenset()
+                if modes:
+                    self._store_info(key, symbol, exchange, scrip_id, modes, info["generation"])
+                else:
+                    self.token_info.pop(key, None)
+                    self.last_snapshot.pop(key, None)
+
+            if modes:
+                self.ws_client.subscribe_scrips(
+                    [scrip_id],
+                    HDFCSkyCapabilityRegistry.get_subscription_type_for_numeric(max(modes)),
+                )
+            else:
+                self.ws_client.unsubscribe([scrip_id])
             return self._create_success_response(f"Unsubscribed {exchange}:{symbol}")
         except Exception as e:
             self.logger.exception(f"Error unsubscribing {exchange}:{symbol}: {e}")
@@ -166,12 +306,44 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     # --- tick handling --------------------------------------------------
 
+    def _subscription_key(self, tick):
+        """(exchange, token) for a tick, or None when it is not ours.
+
+        The exchange comes from the packet type. It is absent only for packet
+        types outside the documented enum, and those fall back to a token
+        lookup that is used only when it is unambiguous -- guessing would
+        publish one instrument's ticks under another's symbol.
+        """
+        token = tick.get("token")
+        if token is None:
+            return None
+        exchange = tick.get("exchange")
+        if exchange:
+            key = (exchange, token)
+            return key if key in self.token_info else None
+
+        # list() snapshots the keys in one C-level step, so a concurrent
+        # subscribe cannot break this scan.
+        matches = [key for key in list(self.token_info) if key[1] == token]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            self.logger.debug(
+                f"Dropping HDFC Sky tick for token {token}: no exchange on packet type "
+                f"{tick.get('packet_type')} and {len(matches)} subscribed instruments share it"
+            )
+        return None
+
     def _on_ticks(self, ticks):
+        # Read before any tick is resolved: a snapshot drop after this point
+        # makes every tick of this batch stale for merging.
+        epoch = self._feed_epoch
         for tick in ticks:
             try:
-                info = self.token_info.get(tick.get("token"))
-                if not info:
+                key = self._subscription_key(tick)
+                if key is None:
                     continue
+                info = self.token_info[key]
                 # Greek packets have no price fields; they arrive alongside the
                 # MBP stream for options and are not part of the OpenAlgo tick
                 # contract, so they are dropped here.
@@ -180,12 +352,61 @@ class HDFCSkyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 symbol = info["symbol"]
                 exchange = info["exchange"]
-                topic_mode = _MODE_TO_TOPIC.get(info["mode"], "QUOTE")
+                # Precomputed at subscribe time: every subscribed mode, highest
+                # first, as an immutable tuple, so a concurrent
+                # subscribe/unsubscribe cannot make the tick path fail
+                # mid-iteration.
+                topic_modes = info["topic_modes"]
 
-                data = self._normalize(tick, symbol, exchange, topic_mode)
-                self.publish_market_data(f"{exchange}_{symbol}_{topic_mode}", data)
+                tick = self._merge_partial(key, tick, info["generation"], epoch)
+                if tick is None:
+                    continue
+
+                for topic_mode in topic_modes:
+                    data = self._normalize(tick, symbol, exchange, topic_mode)
+                    self.publish_market_data(f"{exchange}_{symbol}_{topic_mode}", data)
             except Exception as e:
                 self.logger.error(f"Error handling HDFC Sky tick: {e}")
+
+    def _merge_partial(self, key, tick, generation, epoch):
+        """Resolve a partial circuit/OI packet against the last full snapshot.
+
+        Circuit and OI packets share MBPData with the full quote but populate
+        only their own fields, so every price on them reads as the proto3
+        default of 0. Publishing one as-is would replace a live quote with
+        zeros. Returns the tick to publish, or None when there is no snapshot
+        to merge into yet, or when the subscription (`generation`) or the
+        connection (`epoch`) the tick was resolved against has gone.
+
+        The check and the snapshot write share `_state_lock` with unsubscribe
+        and the snapshot drops, so a tick in flight cannot rebuild a snapshot
+        they have just removed for a later subscription to merge into.
+        """
+        kind = tick.get("kind")
+        fields = _PARTIAL_TICK_FIELDS.get(kind)
+        with self._state_lock:
+            current = self.token_info.get(key)
+            if current is None or current["generation"] != generation or epoch != self._feed_epoch:
+                return None
+
+            if fields is None:
+                # A full quote or index packet: this is the new baseline.
+                self.last_snapshot[key] = tick
+                return tick
+
+            snapshot = self.last_snapshot.get(key)
+            if snapshot is None:
+                # Nothing to attach the update to; a standalone band or OI
+                # value is not a publishable tick.
+                return None
+
+            merged = dict(snapshot)
+            for field in fields:
+                if field in tick:
+                    merged[field] = tick[field]
+            merged["timestamp"] = tick.get("timestamp", merged.get("timestamp"))
+            self.last_snapshot[key] = merged
+            return merged
 
     def _normalize(self, tick, symbol, exchange, topic_mode):
         """Build the OpenAlgo normalized tick (same key set as the Zerodha

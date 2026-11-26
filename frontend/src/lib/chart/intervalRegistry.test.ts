@@ -1,4 +1,9 @@
-import { isKnownInterval, registeredIntervals, unregisterInterval } from 'openalgo-charts'
+import {
+  bucketStartOf,
+  isKnownInterval,
+  registeredIntervals,
+  unregisterInterval,
+} from 'openalgo-charts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ensureInterval } from './intervalRegistry'
 
@@ -45,9 +50,14 @@ describe('ensureInterval', () => {
     expect(byCode.Y).toMatchObject({ mode: 'calendar', unit: 'year', count: 1 })
   })
 
-  it('opens a calendar bar in IST, which decides what day a month starts on', () => {
+  it('lets each exchange calendar determine its own month boundary', () => {
     ensureInterval('M')
-    expect(registeredIntervals()[0].bucketing).toMatchObject({ timezone: 'Asia/Kolkata' })
+    const rule = registeredIntervals()[0].bucketing
+    const time = Date.parse('2026-10-31T20:00:00Z') / 1000
+    expect(bucketStartOf(rule, time, 'UTC')).toBe(Date.parse('2026-10-01') / 1000)
+    expect(bucketStartOf(rule, time, 'Asia/Kolkata')).toBe(
+      Date.parse('2026-10-31T18:30:00Z') / 1000
+    )
   })
 
   it('handles the multiples the custom interval builder can compose', () => {

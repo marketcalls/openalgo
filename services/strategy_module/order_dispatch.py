@@ -31,6 +31,17 @@ state.** Indian broker tokens expire daily around 3 AM IST, and a run may be
 open across that boundary. If authorisation cannot be resolved, an automated
 exit is refused and reported rather than attempted: leaving the position open
 and telling the operator is recoverable, and pretending to have exited is not.
+
+**The broker is the run's, not the session's.** The token is fresh per order,
+but which broker (and, when the session names one, which account) the order
+belongs to was fixed when the run started, and is passed in as a
+:class:`BrokerBinding`. OpenAlgo lets a trader log out of one broker and in to
+another. Resolving the broker at send time sent a run's exits to whichever
+broker was logged in by then: the cover for a short held at the first opened a
+new position at the second and left the first with nothing managing it. A live
+order, cancel or status read whose session is on another broker or account is
+refused here, before anything is sent, and the run keeps its position and its
+risk management until the trader logs back in to the right one.
 """
 
 from __future__ import annotations
@@ -72,6 +83,114 @@ class OrderStatusResult:
     ok: bool
     order: dict[str, Any] | None = None
     error: str | None = None
+
+
+#: What a live run's broker column holds before the run knows its broker. A
+#: batch run records "" when no session could be read at start, and a signal
+#: run opened while no broker was logged in records its mode, "live".
+UNBOUND_BROKERS = frozenset({"", "live"})
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerBinding:
+    """The broker a live run's orders belong to, recorded when the run started.
+
+    ``account`` is the broker account id the session carried at the time, when
+    the broker's login gives one (``Auth.user_id``), and None otherwise. It is
+    compared only when both it and the current session's are known, so a broker
+    whose login names no account is bound by broker alone.
+
+    ``user_id`` is the OpenAlgo user whose stored session is compared; it is how
+    the current account is read, and nothing else.
+    """
+
+    broker: str
+    account: str | None = None
+    user_id: str | None = None
+
+    @property
+    def known(self) -> bool:
+        """Whether the run has a broker to be held to."""
+        return _broker_key(self.broker) not in UNBOUND_BROKERS
+
+
+def _broker_key(broker: Any) -> str:
+    return str(broker or "").strip().lower()
+
+
+def _account_key(account: Any) -> str:
+    # Client codes are typed by hand on some brokers' login forms, so the same
+    # account can arrive as "ab1234" one day and "AB1234" the next. Treating
+    # those as two accounts would refuse a stop loss on the account it belongs to.
+    return str(account or "").strip().upper()
+
+
+def _broker_name(broker: str) -> str:
+    try:
+        from utils.broker_keys import broker_title
+
+        return broker_title(broker)
+    except Exception:
+        return (broker or "").capitalize()
+
+
+def session_account(user_id: str | None) -> str | None:
+    """The broker account id the user's stored session carries, or None.
+
+    Only some brokers' logins record one. None is "not known", never "none":
+    the binding is then held by broker alone.
+    """
+    if not user_id:
+        return None
+    try:
+        from database.auth_db import get_user_id
+
+        account = str(get_user_id(user_id) or "").strip()
+        return account or None
+    except Exception:
+        logger.exception("Could not read the broker account of the stored session")
+        return None
+
+
+def binding_refusal(
+    binding: BrokerBinding | None,
+    broker: str | None,
+    account: str | None,
+) -> str | None:
+    """Why a live call for ``binding`` may not go through this session, or None.
+
+    ``broker`` and ``account`` describe the session OpenAlgo is logged in to
+    now. The sentence is for a trader: it names both brokers and what to do.
+    """
+    if binding is None or not binding.known:
+        return (
+            "OpenAlgo could not confirm which broker this strategy's run trades on, so "
+            "nothing was sent. Try again; if this repeats, check the run's positions at "
+            "your broker."
+        )
+    bound = _broker_name(_broker_key(binding.broker))
+    if _broker_key(binding.broker) != _broker_key(broker):
+        current = _broker_name(_broker_key(broker))
+        return (
+            f"OpenAlgo is logged in to {current}, but this strategy's run trades on "
+            f"{bound}, so nothing was sent to {current}. Log in to {bound} to manage it."
+        )
+    if binding.account and not account:
+        # A known account is never reduced to the broker alone: a login that
+        # records no account, or a read that failed, does not show the session
+        # is still that account's.
+        return (
+            f"OpenAlgo could not confirm which {bound} account is logged in, so nothing was "
+            f"sent. This strategy's run trades on {bound} account {binding.account}. Log in "
+            f"to {bound} with that account to manage it."
+        )
+    if binding.account and _account_key(binding.account) != _account_key(account):
+        return (
+            f"OpenAlgo is logged in to {bound} account {account}, but this strategy's run "
+            f"trades on {bound} account {binding.account}, so nothing was sent. Log in to "
+            f"{bound} with account {binding.account} to manage it."
+        )
+    return None
 
 
 # Which venues list derivatives, for the purpose of naming the product.
@@ -177,21 +296,71 @@ def resolve_live_auth(api_key: str) -> tuple[str | None, str | None, str | None]
         return None, None, "Could not resolve broker authorisation"
 
 
+def resolve_session(api_key: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """``(auth_token, broker, account, error)`` from one read of the stored session.
+
+    The token and the account come from the same row, so a login landing in
+    between cannot pair one account's token with another account's id.
+    """
+    try:
+        from database.auth_db import get_session_identity
+
+        auth_token, broker, account = get_session_identity(api_key)
+    except Exception:
+        logger.exception("Could not resolve broker authorisation for a live order")
+        return None, None, None, "Could not resolve broker authorisation"
+    if not auth_token or not broker:
+        return None, None, None, "Broker session is not available or has expired"
+    return auth_token, broker, account, None
+
+
+def resolve_bound_auth(
+    api_key: str,
+    binding: BrokerBinding | None,
+) -> tuple[str | None, str | None, str | None]:
+    """``(auth_token, broker, error)`` for a live call on behalf of a bound run.
+
+    The session is resolved first, so a missing or expired one is reported as
+    that rather than as a mismatch. A run bound to an account reads the token,
+    the broker and the account in one read (resolve_session), and the token
+    sent is the one read with the account that was checked.
+    """
+    if binding is not None and binding.account:
+        auth_token, broker, account, error = resolve_session(api_key)
+    else:
+        auth_token, broker, error = resolve_live_auth(api_key)
+        account = None
+    if error:
+        return None, None, error
+    refusal = binding_refusal(binding, broker, account)
+    if refusal:
+        logger.warning(
+            "Live strategy call refused: the run is bound to %s, the session is on %s",
+            _broker_key(binding.broker if binding else ""),
+            _broker_key(broker),
+        )
+        return None, None, refusal
+    return auth_token, broker, None
+
+
 def dispatch_order(
     *,
     mode: str,
     api_key: str,
     order: dict[str, Any],
+    binding: BrokerBinding | None = None,
 ) -> DispatchResult:
     """Place one order, live or sandbox, and normalise the answer.
 
     Both pipes return ``(success, response, status_code)``, so the caller gets
-    one shape whichever ran.
+    one shape whichever ran. ``binding`` is the run's broker; a live order
+    without one, or whose session is on another broker or account, is refused
+    without being sent. The sandbox pipe does not read it.
     """
     if mode == "sandbox":
         return _dispatch_sandbox(api_key, order)
     if mode == "live":
-        return _dispatch_live(api_key, order)
+        return _dispatch_live(api_key, order, binding)
     return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
 
@@ -200,12 +369,15 @@ def cancel_order(
     mode: str,
     api_key: str,
     broker_order_id: str,
+    binding: BrokerBinding | None = None,
 ) -> DispatchResult:
     """Cancel a strategy order through the run's own execution pipe.
 
     Used both for an entry whose run is stopping and for an exit retry made too
     large by a late cumulative correction. Like placement, this bypasses the
-    platform analyzer toggle because ``mode`` was fixed durably at run start.
+    platform analyzer toggle because ``mode`` was fixed durably at run start,
+    and a live cancel goes only to the run's own broker: an order id from one
+    broker sent to another names nothing, or names somebody else's order.
     """
     if not broker_order_id:
         return DispatchResult(ok=False, error="Broker order id is unavailable")
@@ -233,7 +405,7 @@ def cancel_order(
     if mode != "live":
         return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
-    auth_token, broker, error = resolve_live_auth(api_key)
+    auth_token, broker, error = resolve_bound_auth(api_key, binding)
     if error:
         return DispatchResult(ok=False, broker_order_id=broker_order_id, error=error)
 
@@ -271,12 +443,14 @@ def cancel_exit_order(
     mode: str,
     api_key: str,
     broker_order_id: str,
+    binding: BrokerBinding | None = None,
 ) -> DispatchResult:
     """Backward-compatible name for correction-retry cancellation."""
     return cancel_order(
         mode=mode,
         api_key=api_key,
         broker_order_id=broker_order_id,
+        binding=binding,
     )
 
 
@@ -285,8 +459,15 @@ def fetch_order_status(
     mode: str,
     api_key: str,
     broker_order_id: str,
+    binding: BrokerBinding | None = None,
 ) -> OrderStatusResult:
-    """Read one order through the run's sandbox or live order-status path."""
+    """Read one order through the run's sandbox or live order-status path.
+
+    A live read goes only to the run's own broker. Its answer is folded into
+    run state as a fill or a cancellation, so a fact read from another broker
+    about an order id that happens to exist there would be applied to a
+    position it does not describe.
+    """
     if not broker_order_id:
         return OrderStatusResult(ok=False, error="Broker order id is unavailable")
 
@@ -301,7 +482,7 @@ def fetch_order_status(
             logger.exception("Sandbox strategy status lookup raised for %s", broker_order_id)
             return OrderStatusResult(ok=False, error="Sandbox order status lookup failed")
     elif mode == "live":
-        auth_token, broker, error = resolve_live_auth(api_key)
+        auth_token, broker, error = resolve_bound_auth(api_key, binding)
         if error:
             return OrderStatusResult(ok=False, error=error)
 
@@ -343,12 +524,18 @@ def _dispatch_sandbox(api_key: str, order: dict[str, Any]) -> DispatchResult:
     return _normalise(ok, response)
 
 
-def _dispatch_live(api_key: str, order: dict[str, Any]) -> DispatchResult:
-    auth_token, broker, error = resolve_live_auth(api_key)
+def _dispatch_live(
+    api_key: str,
+    order: dict[str, Any],
+    binding: BrokerBinding | None,
+) -> DispatchResult:
+    auth_token, broker, error = resolve_bound_auth(api_key, binding)
     if error:
         # Deliberately not attempted. See the module docstring: refusing and
         # saying so leaves a recoverable situation, and a silent failure does
-        # not.
+        # not. That holds for a session on another broker or account as much
+        # as for a missing one: an exit sent there opens a position instead of
+        # closing one.
         return DispatchResult(ok=False, error=error)
 
     from services.place_order_service import place_order_with_auth

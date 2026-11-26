@@ -1,0 +1,67 @@
+version 1
+
+// A MULTI TIMEFRAME STUDY, meant for a 5 minute chart: the 15 minute EMA and
+// the hourly EMA, each computed on its own timeframe's bars, with BUY and SELL
+// labels where the 15 minute line crosses the hourly one, and a step line at
+// the level of the last crossing.
+//
+// A study draws and places no orders. To trade the crossings, the same logic
+// goes into a strategy() with buy and sell calls.
+
+fastTf    = input("15m", "Fast timeframe", kind = "interval")
+fastLen   = input(20, "Fast EMA length", min = 1, max = 500)
+slowTf    = input("1h", "Slow timeframe", kind = "interval")
+slowLen   = input(20, "Slow EMA length", min = 1, max = 500)
+showLevel = input(true, "Show the last crossing level")
+levelBars = input(75, "Crossing level length, in bars", min = 1, max = 5000)
+
+study("MTF EMA crossover", overlay = true, precision = 2)
+
+// The EMA is written INSIDE the read, so it is an EMA of 15 minute closes and
+// of hourly closes. ema(close, 20) on the 5 minute chart, read afterwards,
+// would be a 20 bar average of 5 minute closes, which is a different line.
+//
+// The default mode is "confirmed": each read holds the value of the last
+// 15 minute or hourly bar that has closed and steps only when the next one
+// closes, so nothing here repaints. Intraday bars are counted from the session
+// open, so on NSE the hourly bars are 09:15 to 10:15, 10:15 to 11:15 and on,
+// and the 09:15 bar enters the hourly EMA on the 10:15 chart bar. Until then
+// the line holds the last hourly bar of the session before. mode = "developing"
+// would move with the forming hour instead, and repaint inside it.
+fastEma = req.timeframe(fastTf, ema(close, fastLen))
+slowEma = req.timeframe(slowTf, ema(close, slowLen))
+
+plot(fastEma, "Fast EMA", aqua, width = 2, style = "step")
+plot(slowEma, "Slow EMA", orange, width = 2, style = "step")
+
+// Both are absent until enough coarse bars have closed (20 hourly bars is about
+// three sessions), and a cross needs both, so no label fires during warmup.
+bullish = crossUp(fastEma, slowEma)
+bearish = crossDown(fastEma, slowEma)
+
+// The level of a crossing is where the fast line went through the slow one,
+// which is the slow EMA on the bar it happened. var keeps it until the next
+// crossing replaces it; side remembers which way that crossing went, and
+// sinceCross how many bars ago. A crossing weeks old is a level far from the
+// price, and drawing it would stretch the price scale, so the line is drawn
+// for levelBars bars after the crossing: 75 is one NSE session on 5 minutes.
+var crossLevel: number = none
+var side = 0
+var sinceCross = 0
+sinceCross = sinceCross + 1
+
+if bullish
+    crossLevel = slowEma
+    side = 1
+    sinceCross = 0
+    signal("BUY " + text(slowEma, 2), color = lime, at = "below", shape = "label")
+
+if bearish
+    crossLevel = slowEma
+    side = -1
+    sinceCross = 0
+    signal("SELL " + text(slowEma, 2), color = red, at = "above", shape = "label")
+
+// Hidden by plotting none, never by wrapping the plot in an if (OS3006).
+plot(showLevel and sinceCross < levelBars ? crossLevel : none, "Last crossing level",
+     color = side > 0 ? lime : red, width = 1, style = "step")

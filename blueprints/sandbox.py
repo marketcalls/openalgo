@@ -353,6 +353,12 @@ def _reset_config_locked():
             "option_sell_leverage": "1",
         }
 
+        # The dialog promises every setting goes back to its default, and the
+        # brokerage plan on /sandbox/commissions is one of them.
+        from sandbox.charges import default_config_values
+
+        default_configs.update(default_config_values())
+
         # Reset all configurations
         for key, value in default_configs.items():
             set_config(key, value)
@@ -474,6 +480,8 @@ def _wipe_sandbox_account(user_id, starting_capital_value):
             fund.realized_pnl = Decimal("0.00")
             fund.today_realized_pnl = Decimal("0.00")
             fund.total_pnl = Decimal("0.00")
+            fund.total_charges = Decimal("0.00")
+            fund.today_charges = Decimal("0.00")
             fund.last_reset_date = datetime.now(pytz.timezone("Asia/Kolkata"))
             fund.reset_count = (fund.reset_count or 0) + 1
             logger.info(f"Reset sandbox funds for user {user_id}")
@@ -488,6 +496,8 @@ def _wipe_sandbox_account(user_id, starting_capital_value):
                 realized_pnl=Decimal("0.00"),
                 today_realized_pnl=Decimal("0.00"),
                 total_pnl=Decimal("0.00"),
+                total_charges=Decimal("0.00"),
+                today_charges=Decimal("0.00"),
                 last_reset_date=datetime.now(pytz.timezone("Asia/Kolkata")),
                 reset_count=1,
             )
@@ -648,6 +658,7 @@ def api_my_pnl_data():
                     "quantity": trade.quantity,
                     "price": float(trade.price),
                     "product": trade.product,
+                    "charges": float(trade.total_charges or 0),
                     "timestamp": trade.trade_timestamp.strftime("%Y-%m-%d %H:%M:%S")
                     if trade.trade_timestamp
                     else "",
@@ -677,6 +688,8 @@ def api_my_pnl_data():
                         + (record.holdings_unrealized_pnl or 0)
                     ),
                     "total_mtm": float(record.total_mtm or 0),
+                    "charges": float(record.charges or 0),
+                    "net_mtm": float((record.total_mtm or 0) - (record.charges or 0)),
                     "portfolio_value": float(record.portfolio_value or 0),
                 }
             )
@@ -686,6 +699,12 @@ def api_my_pnl_data():
         total_unrealized = positions_unrealized + holdings_unrealized
         today_total_mtm = today_realized + total_unrealized
 
+        # Brokerage and statutory charges. Every P&L figure above is gross, as
+        # a broker's position book is; these are what the trades cost on top.
+        today_charges = Decimal(str(funds.today_charges or 0)) if funds else Decimal("0.00")
+        total_charges = Decimal(str(funds.total_charges or 0)) if funds else Decimal("0.00")
+        all_time_realized = Decimal(str(funds.realized_pnl or 0)) if funds else Decimal("0.00")
+
         # Summary data
         summary = {
             "today_realized_pnl": float(today_realized),
@@ -694,6 +713,10 @@ def api_my_pnl_data():
             "holdings_unrealized_pnl": float(holdings_unrealized),
             "total_unrealized_pnl": float(total_unrealized),
             "today_total_mtm": float(today_total_mtm),
+            "today_charges": float(today_charges),
+            "total_charges": float(total_charges),
+            "today_net_mtm": float(today_total_mtm - today_charges),
+            "all_time_net_realized_pnl": float(all_time_realized - total_charges),
             "total_pnl": float(funds.total_pnl or 0) if funds else 0.0,
             "available_balance": float(funds.available_balance or 0) if funds else 0.0,
             "total_capital": float(funds.total_capital or 0) if funds else 0.0,
@@ -819,6 +842,7 @@ def my_pnl():
                     "quantity": trade.quantity,
                     "price": float(trade.price),
                     "product": trade.product,
+                    "charges": float(trade.total_charges or 0),
                     "timestamp": trade.trade_timestamp.strftime("%Y-%m-%d %H:%M:%S")
                     if trade.trade_timestamp
                     else "",
@@ -848,6 +872,8 @@ def my_pnl():
                         + (record.holdings_unrealized_pnl or 0)
                     ),
                     "total_mtm": float(record.total_mtm or 0),
+                    "charges": float(record.charges or 0),
+                    "net_mtm": float((record.total_mtm or 0) - (record.charges or 0)),
                     "portfolio_value": float(record.portfolio_value or 0),
                 }
             )
@@ -857,6 +883,12 @@ def my_pnl():
         total_unrealized = positions_unrealized + holdings_unrealized
         today_total_mtm = today_realized + total_unrealized
 
+        # Brokerage and statutory charges. Every P&L figure above is gross, as
+        # a broker's position book is; these are what the trades cost on top.
+        today_charges = Decimal(str(funds.today_charges or 0)) if funds else Decimal("0.00")
+        total_charges = Decimal(str(funds.total_charges or 0)) if funds else Decimal("0.00")
+        all_time_realized = Decimal(str(funds.realized_pnl or 0)) if funds else Decimal("0.00")
+
         # Summary data
         summary = {
             "today_realized_pnl": float(today_realized),
@@ -865,6 +897,10 @@ def my_pnl():
             "holdings_unrealized_pnl": float(holdings_unrealized),
             "total_unrealized_pnl": float(total_unrealized),
             "today_total_mtm": float(today_total_mtm),
+            "today_charges": float(today_charges),
+            "total_charges": float(total_charges),
+            "today_net_mtm": float(today_total_mtm - today_charges),
+            "all_time_net_realized_pnl": float(all_time_realized - total_charges),
             "total_pnl": float(funds.total_pnl or 0) if funds else 0.0,
             "available_balance": float(funds.available_balance or 0) if funds else 0.0,
             "total_capital": float(funds.total_capital or 0) if funds else 0.0,
@@ -888,6 +924,13 @@ def my_pnl():
 def validate_config(config_key, config_value):
     """Validate configuration values"""
     try:
+        # The brokerage plan and the charges switch (see /sandbox/commissions)
+        from sandbox.charges import validate_config_value
+
+        charge_error = validate_config_value(config_key, config_value)
+        if charge_error:
+            return charge_error
+
         # Validate numeric values
         if config_key in [
             "starting_capital",
@@ -1010,6 +1053,8 @@ def generate_daily_pnl_csv(daily_pnl_records):
         "Total Unrealized",
         "Total MTM",
         "Portfolio Value",
+        "Charges",
+        "Net MTM",
     ]
     writer.writerow(headers)
 
@@ -1023,6 +1068,8 @@ def generate_daily_pnl_csv(daily_pnl_records):
             float((record.positions_unrealized_pnl or 0) + (record.holdings_unrealized_pnl or 0)),
             float(record.total_mtm or 0),
             float(record.portfolio_value or 0),
+            float(record.charges or 0),
+            float((record.total_mtm or 0) - (record.charges or 0)),
         ]
         writer.writerow(row)
 
@@ -1125,6 +1172,7 @@ def generate_trades_csv(trades):
         "Product",
         "Strategy",
         "Timestamp",
+        "Charges",
     ]
     writer.writerow(headers)
 
@@ -1141,6 +1189,7 @@ def generate_trades_csv(trades):
             sanitize_csv_value(trade.product),
             sanitize_csv_value(trade.strategy or ""),
             trade.trade_timestamp.strftime("%Y-%m-%d %H:%M:%S") if trade.trade_timestamp else "",
+            float(trade.total_charges or 0),
         ]
         writer.writerow(row)
 
@@ -1275,3 +1324,189 @@ def export_trades():
     except Exception as e:
         logger.exception(f"Error exporting trades: {str(e)}")
         return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Brokerage plan and transaction cost report (the /sandbox/commissions page)
+# and the brokerage calculator (the /sandbox/calculator page)
+# ---------------------------------------------------------------------------
+
+
+def _charge_market() -> str:
+    """Which rate card this browser is shown: the Indian one or the crypto one.
+
+    Decided by the broker the browser is logged in to, from what that broker's
+    plugin says it is. A trader on an Indian broker is shown the Indian
+    segments and calculator, a trader on a crypto venue the crypto ones, and
+    neither is ever shown both. A session with no broker reads as Indian.
+    """
+    from sandbox.charges import market_for_broker_type
+    from utils.broker_keys import broker_type
+
+    return market_for_broker_type(broker_type(session.get("broker")))
+
+
+@sandbox_bp.route("/commissions/api/settings")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_get_charge_settings():
+    """The brokerage plan and the statutory schedule it is charged with."""
+    try:
+        from sandbox.charge_manager import get_charge_settings
+
+        return jsonify({"status": "success", "data": get_charge_settings(_charge_market())})
+    except Exception:
+        logger.exception("Error loading the sandbox charge settings")
+        return jsonify(
+            {"status": "error", "message": "The charge settings could not be loaded."}
+        ), 500
+
+
+@sandbox_bp.route("/commissions/api/settings", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_save_charge_settings():
+    """Save the brokerage plan and the charges switch in one commit."""
+    try:
+        from sandbox.charge_manager import get_charge_settings, save_charge_settings
+
+        ok, message = save_charge_settings(request.get_json(silent=True))
+        if not ok:
+            return jsonify({"status": "error", "message": message}), 400
+        logger.info("Sandbox charge settings updated")
+        return jsonify(
+            {
+                "status": "success",
+                "message": message,
+                "data": get_charge_settings(_charge_market()),
+            }
+        )
+    except Exception:
+        logger.exception("Error saving the sandbox charge settings")
+        return jsonify(
+            {"status": "error", "message": "The settings could not be saved. Please try again."}
+        ), 500
+
+
+@sandbox_bp.route("/commissions/api/reset", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_reset_charge_settings():
+    """Put the brokerage plan back to its defaults. Trades and funds are untouched."""
+    try:
+        from sandbox.charge_manager import get_charge_settings, reset_charge_settings
+
+        if not reset_charge_settings():
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "The defaults could not be restored. Please try again.",
+                }
+            ), 500
+        logger.info("Sandbox charge settings reset to defaults")
+        return jsonify(
+            {
+                "status": "success",
+                "message": "Charges are back to the defaults. They apply from the next trade.",
+                "data": get_charge_settings(_charge_market()),
+            }
+        )
+    except Exception:
+        logger.exception("Error resetting the sandbox charge settings")
+        return jsonify(
+            {
+                "status": "error",
+                "message": "The defaults could not be restored. Please try again.",
+            }
+        ), 500
+
+
+@sandbox_bp.route("/calculator/api/estimate", methods=["POST"])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_estimate_charges():
+    """A buy and a sell under a brokerage plan, for the brokerage calculator."""
+    try:
+        from sandbox.charge_manager import estimate
+
+        ok, result = estimate(request.get_json(silent=True), _charge_market())
+        if not ok:
+            return jsonify({"status": "error", "message": result}), 400
+        return jsonify({"status": "success", "data": result})
+    except Exception:
+        logger.exception("Error estimating sandbox charges")
+        return jsonify(
+            {
+                "status": "error",
+                "message": "The charges could not be worked out. Please try again.",
+            }
+        ), 500
+
+
+@sandbox_bp.route("/commissions/api/report")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_cost_report():
+    """Charges paid in a date range: totals, by segment, by day and by trade."""
+    try:
+        from sandbox.charge_manager import cost_report, parse_report_range
+
+        from_date, to_date, error = parse_report_range(
+            request.args.get("from"), request.args.get("to")
+        )
+        if error:
+            return jsonify({"status": "error", "message": error}), 400
+        report = cost_report(session.get("user"), from_date, to_date)
+        return jsonify({"status": "success", "data": report})
+    except Exception:
+        logger.exception("Error building the sandbox transaction cost report")
+        return jsonify(
+            {"status": "error", "message": "The report could not be loaded. Please try again."}
+        ), 500
+
+
+@sandbox_bp.route("/commissions/export")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def export_cost_report():
+    """The transaction cost report as CSV: every trade in the range, no limit."""
+    try:
+        from sandbox.charge_manager import (
+            REPORT_CSV_COLUMNS,
+            cost_report_trades,
+            parse_report_range,
+        )
+
+        from_date, to_date, error = parse_report_range(
+            request.args.get("from"), request.args.get("to")
+        )
+        if error:
+            return jsonify({"status": "error", "message": error}), 400
+
+        rows = cost_report_trades(session.get("user"), from_date, to_date)
+        if not rows:
+            return jsonify(
+                {"status": "error", "message": "There are no trades between those dates."}
+            ), 404
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([heading for heading, _key in REPORT_CSV_COLUMNS])
+        for row in rows:
+            writer.writerow(
+                [
+                    sanitize_csv_value(row[key]) if isinstance(row[key], str) else row[key]
+                    for _heading, key in REPORT_CSV_COLUMNS
+                ]
+            )
+
+        response = Response(output.getvalue(), mimetype="text/csv")
+        response.headers["Content-Disposition"] = (
+            f"attachment; filename=sandbox_transaction_costs_{from_date}_to_{to_date}.csv"
+        )
+        return response
+    except Exception:
+        logger.exception("Error exporting the sandbox transaction cost report")
+        return jsonify(
+            {"status": "error", "message": "The report could not be exported. Please try again."}
+        ), 500

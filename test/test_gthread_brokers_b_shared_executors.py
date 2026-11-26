@@ -9,7 +9,7 @@ refreshing at once.
 
 Under gthread each now submits to one named, process-wide pool from
 ``utils.shared_executors``: the thread count is bounded by the pool, and a
-second request starts no new threads. Under eventlet and the dev server the
+second request reuses that pool. Under eventlet and the dev server the
 per-call pool is kept exactly as it was.
 """
 
@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 
@@ -40,30 +42,62 @@ def not_gthread(monkeypatch):
     monkeypatch.setattr(runtime, "gthread_active", lambda: False)
 
 
-class PeakThreads:
-    """Samples threading.active_count() while a block runs."""
+@pytest.fixture
+def background_job():
+    """Start an unrelated worker during a request, like the suite's scheduler."""
+    stop = threading.Event()
+    started = threading.Event()
 
-    def __enter__(self):
-        self._stop = threading.Event()
-        self.peak = 0
-        self._sampler = threading.Thread(target=self._sample, daemon=True)
-        self._sampler.start()
-        time.sleep(0.02)
-        self.baseline = threading.active_count()
-        return self
+    def job():
+        started.set()
+        stop.wait(10)
 
-    def _sample(self):
-        while not self._stop.is_set():
-            self.peak = max(self.peak, threading.active_count())
-            time.sleep(0.002)
+    with ThreadPoolExecutor(max_workers=1) as pool:
 
-    def __exit__(self, *exc):
-        self._stop.set()
-        self._sampler.join(2)
+        def start():
+            pool.submit(job)
+            assert started.wait(5), "background job did not start"
 
-    @property
-    def added(self) -> int:
-        return self.peak - self.baseline
+        try:
+            yield start
+        finally:
+            stop.set()
+
+
+def _record_pools(monkeypatch, module, factory):
+    """Observe real broker executors without counting unrelated scheduler threads."""
+    original = getattr(module, factory)
+    pools = []
+
+    @contextmanager
+    def recording(*args, **kwargs):
+        with original(*args, **kwargs) as pool:
+            pools.append(pool)
+            yield pool
+
+    monkeypatch.setattr(module, factory, recording)
+    return pools
+
+
+def _assert_shared_pool(pools, name, workers):
+    assert len(pools) == 2
+    first, second = pools
+    assert first is second, "a second request must reuse the same executor"
+    assert first is shared_executors.get_executor(name, workers)
+    assert first._max_workers == workers
+    # Workers start lazily: reuse need not mean zero additional threads if the
+    # first request completed before the shared executor reached its capacity.
+    assert 0 < len(first._threads) <= workers
+    assert all(thread.is_alive() for thread in first._threads)
+
+
+def _assert_per_call_pools(pools, workers):
+    assert len(pools) == 2
+    assert pools[0] is not pools[1], "off gthread each request owns its executor"
+    for pool in pools:
+        assert pool._max_workers == workers, "the per-call fan-out width is unchanged"
+        assert pool._threads, "the fan-out did not execute any work"
+        assert not any(thread.is_alive() for thread in pool._threads)
 
 
 def _slow(result):
@@ -87,29 +121,27 @@ def _iifl(monkeypatch):
 
 def test_iifl_oi_fanout_uses_one_bounded_pool_under_gthread(gthread, monkeypatch):
     data, broker, legs = _iifl(monkeypatch)
+    pools = _record_pools(monkeypatch, data, "_oi_pool")
 
-    with PeakThreads() as first:
+    for _ in range(2):
         oi = broker._fetch_openinterest_map(legs)
-    assert len(oi) == 60 and set(oi.values()) == {7}
-    assert first.added <= data._OI_SHARED_WORKERS
+        assert len(oi) == 60 and set(oi.values()) == {7}
 
-    with PeakThreads() as second:
-        broker._fetch_openinterest_map(legs)
-    assert second.added <= 0, "a second option chain must not start new threads"
-    assert "iifl-open-interest" in shared_executors.executor_stats()
+    _assert_shared_pool(pools, "iifl-open-interest", data._OI_SHARED_WORKERS)
 
 
 def test_iifl_oi_fanout_keeps_its_own_pool_outside_gthread(not_gthread, monkeypatch):
     data, broker, legs = _iifl(monkeypatch)
+    pools = _record_pools(monkeypatch, data, "_oi_pool")
     monkeypatch.setattr(
         data, "get_executor", lambda *a: pytest.fail("shared pool used outside gthread")
     )
 
-    with PeakThreads() as run:
+    for _ in range(2):
         oi = broker._fetch_openinterest_map(legs)
+        assert len(oi) == 60 and set(oi.values()) == {7}
 
-    assert len(oi) == 60
-    assert run.added > data._OI_SHARED_WORKERS, "the per-call fan-out width is unchanged"
+    _assert_per_call_pools(pools, 32)
 
 
 # --- TradeSmart REST quote fallback --------------------------------------------
@@ -129,30 +161,40 @@ def _tradesmart(monkeypatch):
     return data, data.BrokerData("uid:::tok"), symbols
 
 
-def test_tradesmart_rest_fallback_uses_one_bounded_pool_under_gthread(gthread, monkeypatch):
+@pytest.mark.parametrize("start_background_job", [False, True], ids=["idle", "background-job"])
+def test_tradesmart_rest_fallback_uses_one_bounded_pool_under_gthread(
+    gthread, monkeypatch, background_job, start_background_job
+):
     data, broker, symbols = _tradesmart(monkeypatch)
+    pools = _record_pools(monkeypatch, data, "_rest_quote_pool")
 
-    with PeakThreads() as first:
-        quotes = broker.get_multiquotes(symbols)
+    quotes = broker.get_multiquotes(symbols)
     assert len(quotes) == 82
-    assert first.added <= data._REST_QUOTE_SHARED_WORKERS
 
-    with PeakThreads() as second:
-        broker.get_multiquotes(symbols)
-    assert second.added <= 0
+    if start_background_job:
+
+        def pending_with_job(self, prep, res):
+            background_job()
+            return prep
+
+        monkeypatch.setattr(data.BrokerData, "_extend_from_stream", pending_with_job)
+
+    assert len(broker.get_multiquotes(symbols)) == 82
+    _assert_shared_pool(pools, "tradesmart-rest-quotes", data._REST_QUOTE_SHARED_WORKERS)
 
 
 def test_tradesmart_rest_fallback_keeps_its_own_pool_outside_gthread(not_gthread, monkeypatch):
     data, broker, symbols = _tradesmart(monkeypatch)
+    pools = _record_pools(monkeypatch, data, "_rest_quote_pool")
     monkeypatch.setattr(
         data, "get_executor", lambda *a: pytest.fail("shared pool used outside gthread")
     )
 
-    with PeakThreads() as run:
+    for _ in range(2):
         quotes = broker.get_multiquotes(symbols)
+        assert len(quotes) == 82
 
-    assert len(quotes) == 82
-    assert run.added > data._REST_QUOTE_SHARED_WORKERS
+    _assert_per_call_pools(pools, 82)
 
 
 # --- Nubra REST quote fan-out --------------------------------------------------
@@ -170,20 +212,21 @@ def _nubra(monkeypatch):
 
 def test_nubra_fanout_reuses_one_pool_under_gthread(gthread, monkeypatch):
     data, broker, symbols = _nubra(monkeypatch)
+    pools = _record_pools(monkeypatch, data, "_quote_fanout_pool")
 
-    with PeakThreads() as first:
+    for _ in range(2):
         quotes = broker._get_multiquotes_sequential(symbols)
-    assert len(quotes) == 20
-    assert first.added <= data._QUOTE_FANOUT_WORKERS
+        assert len(quotes) == 20
 
-    with PeakThreads() as second:
-        broker._get_multiquotes_sequential(symbols)
-    assert second.added <= 0
+    _assert_shared_pool(pools, "nubra-quotes", data._QUOTE_FANOUT_WORKERS)
 
 
 def test_nubra_fanout_keeps_its_own_pool_outside_gthread(not_gthread, monkeypatch):
     data, broker, symbols = _nubra(monkeypatch)
+    pools = _record_pools(monkeypatch, data, "_quote_fanout_pool")
     monkeypatch.setattr(
         data, "get_executor", lambda *a: pytest.fail("shared pool used outside gthread")
     )
-    assert len(broker._get_multiquotes_sequential(symbols)) == 20
+    for _ in range(2):
+        assert len(broker._get_multiquotes_sequential(symbols)) == 20
+    _assert_per_call_pools(pools, 5)

@@ -105,11 +105,13 @@ instruments = [
 def on_depth(data):
     print(f"Depth: {data['symbol']}")
     market = data['data']
-    print(f"  LTP: {market['ltp']}")
-    print(f"  Best Bid: {market['depth']['buy'][0]['price']} x {market['depth']['buy'][0]['quantity']}")
-    print(f"  Best Ask: {market['depth']['sell'][0]['price']} x {market['depth']['sell'][0]['quantity']}")
-    print(f"  Total Buy Qty: {market['totalbuyqty']}")
-    print(f"  Total Sell Qty: {market['totalsellqty']}")
+    print(f"  LTP: {market.get('ltp')}")
+    book = market.get("depth", {})
+    bids, asks = book.get("buy", []), book.get("sell", [])
+    if bids:
+        print("  Best Bid:", bids[0].get("price"), bids[0].get("quantity"))
+    if asks:
+        print("  Best Ask:", asks[0].get("price"), asks[0].get("quantity"))
 
 # Connect and subscribe
 client.connect()
@@ -181,7 +183,9 @@ finally:
 - Depth mode provides the requested number of order-book levels when the
   broker supports it; `5` is the default
 - Highest bandwidth consumption among streaming modes
-- Updates on every order book change
+- Cadence and field availability depend on the broker and instrument; updates are not a guarantee of every exchange order-book change
+- Quote fields, OI, total buy/sell quantities and order counts can be absent in raw Depth frames. Some brokers publish a book before a positive LTP is available
+- Python SDK 2.0.5 retains only `ltp`, `timestamp` and `depth` in Depth callbacks/cache, dropping extra quote fields present on raw server frames
 - Use for:
   - Scalping strategies
   - Order flow analysis

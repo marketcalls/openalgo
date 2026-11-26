@@ -29,9 +29,10 @@ import pytest
 from utils import runtime
 from utils.broker_backpressure import BrokerBusyError
 
+# Pocketful left this gate when it moved quotes and depth to REST; its paced
+# requests refuse the same way (test/test_pocketful_data.py).
 GATED = {
     "motilal": ("broker.motilal.api.data", "get_depth", ("SBIN", "NSE")),
-    "pocketful": ("broker.pocketful.api.data", "_get_quotes_compact", ("SBIN", "NSE")),
     "tradejini": ("broker.tradejini.api.data", "get_quotes", ("SBIN", "NSE")),
 }
 

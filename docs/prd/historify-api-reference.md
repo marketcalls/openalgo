@@ -20,6 +20,8 @@ All routes below require a valid OpenAlgo app session. Download and job creation
 | POST | `/historify/api/download` | Download one symbol, interval, and date range |
 | POST | `/historify/api/download/watchlist` | Download all watchlist symbols for an interval/date range |
 
+Watchlist adds check each symbol against the master contract (index exchanges are not checked). Symbols are stored exactly as the master contract holds them (the `symbol` column, as the search page shows it), hyphen and ampersand included (`BAJAJ-AUTO`, `M&M`). A symbol not found as written that contains an underscore has each underscore read as `-` or `&` (`BAJAJ_AUTO`, as TradingView names it, becomes `BAJAJ-AUTO`), and is added only when exactly one master contract symbol fits; a symbol with two possible matches is refused. Nothing else is rewritten: a series suffix is neither added nor dropped here. The bulk add answers with `added`, `skipped` (already in the watchlist), `failed` (`symbol`, `exchange`, `error` for each symbol not added) and `renamed` (`from`, `to`, `exchange` for each symbol added under its master contract spelling). The Bulk Add dialog keeps the symbols that were not added, with each reason, so they can be corrected and sent again.
+
 ### Data, Catalog, And Export
 
 | Method | Path | Purpose |

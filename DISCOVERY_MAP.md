@@ -35,7 +35,7 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 - Key backend packages include Flask `3.1.3`, Flask-RESTX `1.3.2`, Flask-SocketIO `5.6.1`, httpx `0.28.1`, websockets `15.0.1`, openalgo SDK `2.0.2`, and pytest `9.1.1`. Source: `pyproject.toml:37` through `pyproject.toml:144`.
 - Frontend requires Node `>=20.20.0 || >=22.22.0 || >=24.13.0`. Source: `frontend/package.json:6`.
 - Frontend scripts include Vite dev/build, Vitest, and Playwright e2e. Source: `frontend/package.json:9` through `frontend/package.json:24`.
-- Frontend dependencies include React `^19.2.3`, React Router `^7.15.0`, TanStack Query, XYFlow, Plotly, lightweight-charts, Socket.IO client, Tailwind CSS 4, and Zustand. Source: `frontend/package.json:26` through `frontend/package.json:71`.
+- Frontend dependencies include React `^19.2.3`, React Router `^7.15.0`, TanStack Query, XYFlow, Plotly, openalgo-charts, Socket.IO client, Tailwind CSS 4, and Zustand. Source: `frontend/package.json:26` through `frontend/package.json:71`.
 
 ## Data Stores
 
@@ -262,7 +262,7 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 - All EventBus subscribers are registered during app creation. Source: `app.py:141` through `app.py:144`.
 - Subscriber registration wires order, GTT, basket, split, options, multi-order, analyzer, and sandbox engine events to logging, Socket.IO, Telegram, and WhatsApp as appropriate. Source: `subscribers/__init__.py:19` through `subscribers/__init__.py:126`.
 - Socket.IO emits live order events as `order_event`, `modify_order_event`, `cancel_order_event`, `close_position_event`, and analyzer-mode updates as `analyzer_update`. Source: `subscribers/socketio_subscriber.py:15` through `subscribers/socketio_subscriber.py:247`.
-- Telegram and WhatsApp subscribers notify successful order-related events and intentionally skip failure and analyzer-error notification. Sources: `subscribers/telegram_subscriber.py:26` through `subscribers/telegram_subscriber.py:83`, `subscribers/whatsapp_subscriber.py:23` through `subscribers/whatsapp_subscriber.py:78`.
+- The alert subscriber raises an `alert.raised` event for the order topics listed in `services/alerts/categories.py` (orders placed, including smart orders with nothing to do, modified, cancelled, positions closed, batch orders and GTT events), only when at least one channel receives that group, and one delivery callback hands it to each routed channel in `services/alerts/registry.py` (Telegram, WhatsApp, Slack, Discord). Failure and analyzer-error events have no group and raise no alert. Sources: `subscribers/alert_subscriber.py:38-58`, `services/alerts/categories.py:36-89`, `services/alerts/router.py:23-57`, `services/alerts/registry.py:17-22`.
 - Traffic logging uses a separate `logs.db` and stores client IP, method, path, status, duration, host, error, and user ID. Source: `database/traffic_db.py:61` through `database/traffic_db.py:90`.
 - Health monitoring stores FD, memory, DB, WebSocket, and thread health metrics with pass, warn, and fail statuses. Source: `database/health_db.py:1` through `database/health_db.py:80`.
 

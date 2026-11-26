@@ -32,6 +32,15 @@ raw seconds (`+ 19800`). Upstox and flattrade use `timedelta(hours=5, minutes=30
 Diagnostic: a daily candle landing at 18:30 the previous day means the shift is
 missing; one landing at 05:30 means it was applied twice.
 
+## 1a. Never use the host's clock or time zone
+
+Build request windows in IST explicitly (`pd.Timestamp.now(tz="Asia/Kolkata")`)
+and parse the broker's offset-carrying timestamps as aware datetimes. A bare
+`pd.Timestamp.now()` is UTC on Docker, which moves "today" and the end time
+(Angel #2176). The same rewrite dropped the daily +5:30 and dated every daily
+candle on the previous day until #2290, and daily OI needs the same shift as
+the candle. Rerun the 18:30 diagnostic after any timestamp refactor.
+
 ## 2. Chunk limits differ by roughly 80x
 
 Every broker caps the date range per request, and you must loop. Real values:
@@ -98,13 +107,19 @@ the pacing strategy that matches the broker's published limit shape — see
 **`references/rate-limiting.md`** for the three patterns (fyers global, dhan
 per-category, flattrade dual rolling window) and the invariants they share.
 
-### NUANCE — a failed chunk can become a silent data gap
+### NUANCE — empty is not failed, and failed is not empty
 
-Fyers retries a chunk with exponential backoff, and **on exhausting retries it
-advances to the next chunk and continues** rather than raising. The caller gets
-a DataFrame with a hole in it and no error. If you copy that pattern, at minimum
-log the skipped range loudly; preferably fail the request. A silently
-short series is worse than an error, because it looks like a market holiday.
+An empty window (weekend, holiday, before listing) is a normal answer: Fyers'
+`no_data`, Shoonya's "no data". Move to the next chunk at once. Anything else
+the broker refuses (bad symbol, rejected token) comes back the same on retry,
+so raise it with the broker's message. Retry only 429 (honouring
+`Retry-After`) and dropped connections. Fyers used to retry every non-ok chunk
+for 2+4+6 s and then skip it, which cost 13 s per empty chunk, returned an empty
+success for a bad symbol, and left silent holes that looked like holidays
+(#2438). If every chunk fails, the request is an error (Shoonya).
+
+Clamp the start to the broker's lookback horizon: a range wholly beyond it
+returns empty, not an error (Kotak answers 400 past five years, #2094).
 
 ## 3. Intraday and daily may be different endpoints
 
@@ -132,6 +147,15 @@ plugins patch it explicitly, from **different** sources:
 Always test a range whose `end_date` is today, and confirm the last row is
 today. This is the single most common "the chart is a day behind" bug.
 
+The patch must look the quote up with the **OpenAlgo** exchange, not the broker
+code the request was translated to: Flattrade sent `BSE` for SENSEX and every
+BSE index daily chart failed (#2196).
+
+The history endpoint can have its own index vocabulary, distinct from the
+master and the quote API: TradeSmart's EODChartData wants `Nifty 50`, not the
+master's `NIFTY INDEX`. Resolve it from the broker by token and cache it for a
+day (#2475).
+
 ## 5. Date boundaries are inclusive or exclusive, not both
 
 Dhan and upstox add `+ timedelta(days=1)` to the end date to make it inclusive.
@@ -150,6 +174,8 @@ day's candles rather than nothing.
 
 - **Only upstox supports W and M.** A `if timeframe in ("D","W","M")` guard is
   wrong for the other four — they never receive W or M.
+  Outside these five, Arrow serves W and M, and Groww and Kotak serve W: read
+  each plugin's `timeframe_map`, not this table, before copying a guard.
 - **Zerodha has no native hourly**; `1h` is aliased onto `60minute`.
 - **Fyers is the only one with sub-minute data**, and it carries an extra
   ~30-day lookback ceiling.
@@ -164,8 +190,53 @@ parser branches on which. Assuming 7 columns breaks equity; assuming 6 loses OI
 on F&O. Normalize to the full 7-column contract, filling `oi` with 0 where the
 broker omits it.
 
+## 8. Repair what chart clients reject, and drop bars no session holds
+
+The /trading chart rejects the whole series over one candle that breaks
+`low <= open, close <= high` or `volume >= 0`. Brokers return such bars:
+Kotak's pre-open open outside its bar, Shoonya and Flattrade negative bar
+volume when NSE's running total resets at 15:20, Flattrade BSE index EOD closes
+outside the range, Tradejini MCX opens below the low (#2094, #2154, #2196,
+#2198, #2341). Copy `_repair_candles` (`broker/shoonya/api/data.py`): widen
+high and low to cover open and close (they traded), zero a negative volume,
+drop rows missing an OHLC value. Parse a null, NaN or inf price as missing,
+never as 0. Never fabricate a candle: an empty reply returns the empty
+7-column frame (Dhan Sandbox, #2114).
+
+Drop bars no session contains:
+
+- **Out-of-range candles.** Some brokers answer a range with no sessions with
+  the latest candle (5paisa): keep only candles inside the requested window
+  (#2195).
+- **The pre-open bar.** Noren TPSeries puts a 09:14 bar at the start of NSE and
+  BSE cash sessions. Recognise it by shape (first bar of the date, flat, zero
+  volume, more bars follow), not by clock (#2475, #2198).
+- **A bar after the close.** Dhan appends one to index intraday history. Drop
+  bars starting at or after the close from `get_market_timings_for_date`; index
+  exchanges follow their cash exchange's session, GIFTNIFTY is exempt (#2308).
+  Session times come from the market calendar, never from constants in the
+  broker folder.
+
+Stamp each intraday bar at its open on the exchange session grid (09:15 for
+NSE cash, pre-open folded in). /trading derives 45m, 2h, 3h and 4h from the
+base bars and refuses a series whose bars sit off the grid with "Unknown source
+candle boundaries" (Nuvama #2461).
+
+Check two more things against the broker's own chart:
+
+- **Intraday volume is per bar**, not the day's running total (Groww's
+  candle/range endpoint, #2194). Choose the endpoint per timeframe by data
+  quality, for example the EOD one that matches the bhavcopy. Leave OI at 0
+  rather than ship a summed OI.
+- **A multi-day reply matches single-day replies.** Shoonya folded the next
+  day's first 1m bar into each day's last bar on 3m to 4h; it now rebuilds that
+  bar from 1m bars, without assuming session times (#2360).
+
 ## Verification
 
+- [ ] Results are identical with the server's TZ set to UTC
+- [ ] Every candle obeys low <= open, close <= high and volume >= 0; no bar outside the session
+- [ ] An invalid symbol is an error; a holiday-only window is a quick empty success
 - [ ] Daily candles land at IST midnight; intraday candles at the true IST bar time
 - [ ] Round-trip one known candle against the broker's own web chart
 - [ ] A range longer than the chunk limit returns continuous data with no gaps at chunk seams and no duplicate rows
@@ -179,8 +250,8 @@ broker omits it.
 
 ## When the broker has no historical API at all
 
-`broker/kotak/` is the case in point: Kotak Neo serves no historical data, so
-`get_history` is a placeholder that logs a warning and `timeframe_map` is empty.
 That is a legitimate integration — do not fake it by stitching candles from
-quotes. Leave `timeframe_map` empty so `intervals_service` advertises nothing,
-and let the UI show the capability as absent rather than broken.
+quotes. Make `get_history` a placeholder that logs a warning, leave
+`timeframe_map` empty so `intervals_service` advertises nothing, and let the UI
+show the capability as absent rather than broken. (Kotak was the example here
+until it gained history in #2094; it now serves 1m to 1h, D and W.)

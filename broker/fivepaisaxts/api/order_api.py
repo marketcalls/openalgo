@@ -19,6 +19,7 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
+from utils.xts_order_data import exact_order_id
 
 logger = get_logger(__name__)
 
@@ -121,24 +122,83 @@ def _invalidate_position_cache(auth):
 
 
 
-def get_open_position(tradingsymbol, exchange, producttype, auth):
-    # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
+# OpenAlgo exchange -> XTS ExchangeSegment, as the position book reports it.
+_XTS_SEGMENT = {
+    "NSE": "NSECM",
+    "BSE": "BSECM",
+    "NFO": "NSEFO",
+    "BFO": "BSEFO",
+    "MCX": "MCXFO",
+    "CDS": "NSECD",
+}
 
-    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+# XTS treats New, Replaced and PartiallyFilled as open; the Pending states are
+# still working at the exchange (Order Status enum in the XTS v2 docs).
+# PendingCancel is left out: a cancel is already on its way.
+_CANCELLABLE_STATUSES = {
+    "New",
+    "Open",
+    "Replaced",
+    "PartiallyFilled",
+    "PendingNew",
+    "PendingReplace",
+}
+
+# The XTS Unified Order limit is 10 requests a second, shared by place, modify
+# and cancel. Cancel all and close all send one request per order.
+_ORDER_REQUEST_GAP_SECONDS = 0.11
+
+
+def _xts_message(data, fallback):
+    """The reason XTS gave for an answer, or ``fallback`` when it gave none."""
+    if isinstance(data, dict):
+        reason = str(data.get("description") or data.get("message") or "").strip()
+        if reason:
+            return reason
+    return fallback
+
+
+def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """Net quantity of one position, as text ("0" when none is held).
+
+    XTS answers {"type": "success", "result": {"positionList": [...]}} with
+    rows keyed TradingSymbol, ExchangeSegment, ExchangeInstrumentId and
+    ProductType. XTS names an F&O position its own way ("NIFTY 27OCT2026 CE
+    22400"), not as the contract list does, so a row is matched by instrument
+    and falls back to the name only when it carries no instrument id.
+    """
+    token = get_token(tradingsymbol, exchange)
+    br_symbol = get_br_symbol(tradingsymbol, exchange)
+    xts_exchange = _XTS_SEGMENT.get(exchange, exchange)
     positions_data = _get_cached_positions(auth)
 
     net_qty = "0"
+    if not _position_book_ok(positions_data):
+        return net_qty
 
-    if positions_data and positions_data.get("status") and positions_data.get("data"):
-        for position in positions_data["data"]:
-            if (
-                position.get("tradingsymbol") == tradingsymbol
-                and position.get("exchange") == exchange
-                and position.get("producttype") == producttype
-            ):
-                net_qty = position.get("Quantity", "0")
-                # logger.debug(f"Net Quantity: {net_qty}")
-                break  # Assuming you need the first match
+    result = positions_data.get("result")
+    if isinstance(result, dict):
+        position_list = result.get("positionList") or []
+    elif isinstance(result, list):
+        position_list = result
+    else:
+        position_list = []
+
+    for position in position_list:
+        if not isinstance(position, dict):
+            continue
+        pos_token = position.get("ExchangeInstrumentID", position.get("ExchangeInstrumentId"))
+        if pos_token not in (None, "") and token:
+            same_instrument = str(pos_token) == str(token)
+        else:
+            same_instrument = position.get("TradingSymbol") == br_symbol
+        if (
+            same_instrument
+            and position.get("ExchangeSegment") == xts_exchange
+            and position.get("ProductType") == producttype
+        ):
+            net_qty = str(position.get("Quantity", 0))
+            break
 
     return net_qty
 
@@ -156,7 +216,7 @@ def place_order_api(data, auth):
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data["symbol"], data["exchange"])
-        logger.debug(f"token: {token}")
+        logger.debug("Order API token available")
         newdata = transform_data(data, token)
 
     headers = {
@@ -294,6 +354,7 @@ def close_all_positions(current_api_key, auth):
         return {"message": "No Open Positions Found"}, 200
 
     # If response has positions
+    sent_any = False
     for position in positions_list:
         # Skip if net quantity is zero
         if int(position["Quantity"]) == 0:
@@ -304,7 +365,12 @@ def close_all_positions(current_api_key, auth):
         quantity = abs(int(position["Quantity"]))
 
         exchange_segment = position["ExchangeSegment"]
-        instrument_id = position["ExchangeInstrumentId"]
+        # The docs spell it ExchangeInstrumentID; live servers send ...Id.
+        instrument_id = position.get("ExchangeInstrumentID", position.get("ExchangeInstrumentId"))
+
+        if sent_any:
+            time.sleep(_ORDER_REQUEST_GAP_SECONDS)
+        sent_any = True
 
         logger.debug(f"Exchange Segment: {exchange_segment}")
         logger.debug(f"Exchange Instrument ID: {instrument_id}")
@@ -349,26 +415,27 @@ def cancel_order(orderid, auth):
         "Content-Type": "application/json",
     }
 
-    # Prepare the payload
-    payload = json.dumps({"appOrderID": orderid, "orderUniqueIdentifier": "openalgo"})
-
     # Make the request using the shared client
-    response = client.delete(f"{INTERACTIVE_URL}/orders?appOrderID={orderid}", headers=headers)
+    response = client.delete(
+        f"{INTERACTIVE_URL}/orders",
+        headers=headers,
+        params={"appOrderID": orderid},
+    )
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
 
-    # Check if the request was successful
-    if data.get("status"):
-        # Return a success response
+    # XTS answers {"type": "success", ...} or {"type": "error", "description": ...}
+    if response.status_code == 200 and data.get("type") == "success":
         return {"status": "success", "orderid": orderid}, 200
-    else:
-        # Return an error response
-        return {
-            "status": "error",
-            "message": data.get("message", "Failed to cancel order"),
-        }, response.status
+    return {
+        "status": "error",
+        "message": _xts_message(data, "Failed to cancel order"),
+    }, (response.status if response.status != 200 else 400)
 
 
 def modify_order(data, auth):
@@ -378,6 +445,7 @@ def modify_order(data, auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
+    data_orderid = data.get("orderid")
     token = get_token(data["symbol"], data["exchange"])
     data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])
 
@@ -397,15 +465,20 @@ def modify_order(data, auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
     logger.debug(f"Response of modify order :{response.status}")
-    data = json.loads(response.text)
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
-    else:
-        return {
-            "status": "error",
-            "message": data.get("message", "Failed to modify order"),
-        }, response.status
+    # XTS answers {"type": "success", "result": {"AppOrderID": ...}}
+    if response.status_code == 200 and data.get("type") == "success":
+        result = data.get("result") if isinstance(data.get("result"), dict) else {}
+        orderid = result.get("AppOrderID") or data_orderid
+        return {"status": "success", "orderid": exact_order_id(orderid)}, 200
+    return {
+        "status": "error",
+        "message": _xts_message(data, "Failed to modify order"),
+    }, (response.status if response.status != 200 else 400)
 
 
 def cancel_all_orders_api(data, auth):
@@ -420,18 +493,20 @@ def cancel_all_orders_api(data, auth):
 
     orders = order_book_response.get("result", [])
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
-    # logger.debug(f"Orders: {orders}")
+    # Every order still working at the exchange, including modified (Replaced)
+    # and part-filled ones.
     orders_to_cancel = [
-        order for order in orders if order["OrderStatus"] in ["New", "Trigger Pending"]
+        order for order in orders if order.get("OrderStatus") in _CANCELLABLE_STATUSES
     ]
     logger.debug(f"Orders to cancel: {orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
-    for order in orders_to_cancel:
-        orderid = order["AppOrderID"]
+    for index, order in enumerate(orders_to_cancel):
+        if index:
+            time.sleep(_ORDER_REQUEST_GAP_SECONDS)
+        orderid = exact_order_id(order["AppOrderID"])
         cancel_response, status_code = cancel_order(orderid, auth)
         if status_code == 200:
             logger.debug(f"Canceled order {orderid}")

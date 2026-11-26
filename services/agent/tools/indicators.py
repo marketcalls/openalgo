@@ -1,6 +1,6 @@
-"""Indicator tools: 127 indicators behind five tool slots.
+"""Indicator tools: 128 indicators behind five tool slots.
 
-One tool per indicator would spend 127 schema slots, cost that schema on every
+One tool per indicator would spend 128 schema slots, cost that schema on every
 turn whether or not the operator asks about an indicator, and swamp the model's
 selection. Instead the model picks an indicator by **name**, discovered through
 ``list_indicators`` and pinned down by ``describe_indicator``, and one
@@ -350,9 +350,10 @@ class IndicatorsToolkit(OpenAlgoToolkit):
     def list_indicators(self, query: str = "", category: str = "") -> str:
         """List the technical indicators that can be computed, by keyword or category.
 
-        There are 127. Confirm a name here before computing it rather than
+        There are 128. Confirm a name here before computing it rather than
         guessing from memory: several are named differently from the textbook
-        (the Relative Vigor Index is ``rvi``, the Ultimate Oscillator is
+        (the Relative Vigor Index is ``rvi``, the Relative Volatility Index is
+        ``rvi_volatility`` and the Ultimate Oscillator is
         ``ultimate_oscillator``), and a guessed name costs a whole round trip.
 
         Args:

@@ -1,116 +1,39 @@
 # OpenAlgo Installation Guide
 
-## Prerequisites
+The maintained installation instructions live under [`docs/`](docs/INDEX.md):
 
-Before installing OpenAlgo, ensure you have the following prerequisites installed:
+- [Local installation and first start](docs/userguide/04-installation/README.md)
+- [Administrator and broker setup](docs/userguide/05-first-time-setup/README.md)
+- [Ubuntu server](docs/installation-guidelines/getting-started/ubuntu-server-installation.md)
+- [Docker](docs/docker/README.md)
+- [Optional gthread worker and rollback](docs/gthread/README.md)
+- [Contributor environment](docs/devsprint/README.md)
 
-- **Visual Studio Code (VS Code)** installed on Windows.
-- **Python** version 3.12 or newer installed.
-- **Git** for cloning the repository (Download from [https://git-scm.com/downloads](https://git-scm.com/downloads)).
-- **Node.js** for CSS compilation (Download from [https://nodejs.org/](https://nodejs.org/)).
+## Local quick start
 
-## Installation Steps
+Install Git, Python 3.12 or newer, and `uv`, then run:
 
-1. **Install VS Code Extensions**: 
-   - Open VS Code
-   - Navigate to the Extensions section on the left tab
-   - Install the Python, Pylance, and Jupyter extensions
-
-2. **Clone the Repository**: 
-   Open the VS Code Terminal and clone the OpenAlgo repository:
-   ```bash
-   git clone https://github.com/marketcalls/openalgo
-   ```
-
-3. **Install Python Dependencies**: 
-
-   For Windows users:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   For Linux/Nginx users:
-   ```bash
-   pip install -r requirements-nginx.txt
-   ```
-
-4. **Install Node.js Dependencies**: 
-   ```bash
-   cd openalgo
-   npm install
-   ```
-
-5. **Configure Environment Variables**: 
-   - Rename `.sample.env` to `.env` in the `openalgo` folder
-   - Update the `.env` file with your specific configurations
-
-## CSS Compilation Setup
-
-The project uses TailwindCSS and DaisyUI for styling. The CSS needs to be compiled before running the application.
-
-### Development Mode
-
-For development with auto-recompilation (watches for changes):
 ```bash
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
+cd openalgo
+uv run app.py
+```
+
+Open `http://127.0.0.1:5000`, create your administrator account, sign in and
+configure your broker at **Select Broker → Configure**. A fresh checkout creates
+`.env` with unique installation secrets on first start. Keep those secrets with
+the database when upgrading or restoring an existing instance.
+
+The `main` branch includes the CI-built React frontend. Node.js is needed only
+for frontend development. Use the version required by `frontend/package.json`
+and run frontend commands inside `frontend/`:
+
+```bash
+cd frontend
+npm ci
 npm run dev
 ```
 
-### Production Build
-
-For production deployment:
-```bash
-npm run build
-```
-
-### CSS File Structure
-
-- Source file: `src/css/styles.css`
-- Compiled output: `static/css/main.css`
-
-When making style changes:
-1. Edit the source file at `src/css/styles.css`
-2. Run the appropriate npm script to compile
-3. The compiled CSS will be automatically used by the templates
-
-## Running the Application
-
-1. **Start the Flask Application**: 
-
-   For development:
-   ```bash
-   python app.py
-   ```
-
-   For production with Nginx (using eventlet):
-   ```bash
-   gunicorn --worker-class eventlet -w 1 app:app
-   ```
-
-   Note: When using Gunicorn, `-w 1` specifies one worker process. This is important because WebSocket connections are persistent and stateful.
-
-2. **Access the Application**:
-   - Open your browser and navigate to [http://127.0.0.1:5000](http://127.0.0.1:5000)
-   - Set up your account at [http://127.0.0.1:5000/setup](http://127.0.0.1:5000/setup)
-   - Log in with your credentials
-
-## Troubleshooting
-
-If you encounter any issues during installation:
-
-1. **CSS not updating**:
-   - Ensure Node.js is properly installed
-   - Run `npm install` again
-   - Check if the CSS compilation script is running
-   - Clear your browser cache
-
-2. **Python dependencies**:
-   - Use a virtual environment
-   - Ensure you're using Python 3.12 or newer
-   - Try upgrading pip: `pip install --upgrade pip`
-
-3. **WebSocket issues**:
-   - Ensure you're using only one worker with Gunicorn
-   - Check if your firewall allows WebSocket connections
-   - Verify Socket.IO client version matches server version
-
-For more detailed configuration instructions, visit [https://docs.openalgo.in](https://docs.openalgo.in)
+Use the deployment guides for production. Both supported Gunicorn workers use
+exactly one worker process; eventlet is the default and gthread is opt-in. The
+development command above uses normal threading.

@@ -1,6 +1,6 @@
 # ModifyGTTOrder
 
-Modify an active GTT trigger. The body is a **full replacement** of the trigger spec — same shape as `PlaceGTTOrder` plus `trigger_id`. The broker's underlying PUT replaces trigger prices, leg limits, and order params atomically.
+Modify an active GTT trigger. The body is a **full replacement** of the trigger spec — same shape as `PlaceGTTOrder` plus `trigger_id`. Broker adapters translate this into their own write methods; a multi-leg modification is not guaranteed atomic.
 
 > **Send everything you want to keep.** Modify is not a patch — fields you omit are not preserved.
 
@@ -11,7 +11,7 @@ You can modify any of the price levels, the quantity, or the pricetype, but you 
 | Type | Use when… | Triggers | Orders fired |
 |------|-----------|----------|--------------|
 | **SINGLE** | You set up one entry/exit at a level. | 1 | 1 |
-| **OCO** (One-Cancels-Other) | You set up a stoploss + target bracket. | 2 | 1 of 2 (the other is auto-cancelled) |
+| **OCO** (One-Cancels-Other) | You set up a stoploss + target bracket. | 2 | Broker-dependent; see placement notes |
 
 > In SINGLE there is no second leg and no automatic cancel — once your one trigger fires and the order is placed, the GTT is finished.
 
@@ -157,7 +157,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifygttorder \
 
 | Parameter | Modifiable | Notes |
 |-----------|------------|-------|
-| Trigger prices (`triggerprice_sl` / `triggerprice_tg`) | Yes | For OCO, both legs swap atomically. |
+| Trigger prices (`triggerprice_sl` / `triggerprice_tg`) | Yes | Multi-leg atomicity depends on the broker; reconcile partial failures. |
 | Limit prices (`price` / `stoploss` / `target`) | Yes | |
 | `quantity` | Yes | Must be a valid lot size for F&O. |
 | `pricetype` | Yes | `LIMIT` ↔ `MARKET` (see broker-specific notes below). |
@@ -171,10 +171,9 @@ curl -X POST http://127.0.0.1:5000/api/v1/modifygttorder \
 - **Modify is a full replacement** — every field on the trigger is replaced. Always send all fields you want to keep, not just the diff.
 - **Only active GTTs can be modified.** Triggered, cancelled, or expired GTTs are immutable.
 - **`last_price` is fetched server-side** from the broker's quotes endpoint. You don't need to send it.
-- **OCO modify atomicity**: OpenAlgo aims to update both legs of an OCO atomically; some brokers expose a per-leg modify under the hood and may, in rare failure cases, leave the OCO in a half-modified state — re-issue the modify or cancel and re-place if the response indicates partial failure.
+- **OCO modify is broker-dependent.** Angel updates two independent rules sequentially, and Rupeezy resolves per-leg IDs from its current book. Partial failure can leave different leg states. Read the broker book and reconcile both legs before retrying or replacing; do not assume a failed response rolled back the earlier write. See [broker-specific GTT behavior](placegttorder.md#broker-specific-behaviour).
 - **MARKET handling**: same auto-conversion behaviour as [PlaceGTTOrder](./placegttorder.md#notes) — broker-specific quirks are absorbed in the broker layer.
 - **Semi-auto mode** blocks GTT modify (parity with `ModifyOrder`) — switch to Auto mode if you see a 403.
-- **Analyzer (sandbox) mode** modifies the sandbox trigger and answers with `"mode": "analyze"`. The same immutability rules apply: trigger type, symbol, exchange and action cannot change.
 - **Analyzer (sandbox) mode** modifies the sandbox trigger and answers with `"mode": "analyze"`. The same immutability rules apply: trigger type, symbol, exchange and action cannot change.
 
 ## Error Scenarios

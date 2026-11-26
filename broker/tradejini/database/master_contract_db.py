@@ -112,6 +112,17 @@ SCRIP_GROUPS_URL = f"{TRADEJINI_BASE_URL}/api/mkt-data/scrips/symbol-store"
 SCRIP_DATA_URL = f"{TRADEJINI_BASE_URL}/api/mkt-data/scrips/symbol-store/{{group}}"
 
 
+# Groups whose ids follow instrument_symbol_series_exchange. Tradejini added
+# "ETF" to the symbol store (not yet in the published docs); its rows use the
+# Securities layout and today are also listed under Securities.
+SECURITIES_GROUPS = ("Securities", "ETF")
+FUTURE_GROUPS = ("FutureContracts", "CurrencyFuture", "CommodityFuture")
+OPTION_GROUPS = ("NSEOptions", "BSEOptions", "CurrencyOptions", "CommodityOptions")
+# Groups this module turns into symbols. Spot holds underlying spot prices,
+# which OpenAlgo does not trade, so it is not downloaded.
+SUPPORTED_GROUPS = (*SECURITIES_GROUPS, *FUTURE_GROUPS, *OPTION_GROUPS, "Index")
+
+
 def get_scrip_groups():
     """Fetch available scrip groups from Tradejini API"""
     logger.info("Fetching scrip groups")
@@ -256,7 +267,9 @@ def process_scrip_data(scrip_data, group_info):
                         "expiry": "",
                         "strike": 0,
                         "lotsize": 1,
-                        "instrumenttype": "INDEX",
+                        # No INDEX type in OpenAlgo: an index is EQ on
+                        # NSE_INDEX / BSE_INDEX, as Zerodha's master has it.
+                        "instrumenttype": "EQ",
                         "tick_size": 0.05,
                     }
                     records.append(record)
@@ -283,7 +296,7 @@ def process_scrip_data(scrip_data, group_info):
                     continue
 
                 # Handle different groups
-                if group_name == "Securities":
+                if group_name in SECURITIES_GROUPS:
                     # Format: instrument_symbol_series_exchange
                     if len(parts) >= 4:
                         components = parse_scrip_id(item["id"], id_format)
@@ -303,7 +316,7 @@ def process_scrip_data(scrip_data, group_info):
                         }
                         records.append(record)
 
-                elif group_name in ["FutureContracts", "CurrencyFuture", "CommodityFuture"]:
+                elif group_name in FUTURE_GROUPS:
                     # Format: instrument_symbol_exchange_expiry
                     components = parse_scrip_id(item["id"], id_format)
                     base_symbol = (
@@ -347,12 +360,7 @@ def process_scrip_data(scrip_data, group_info):
                     except Exception as e:
                         logger.info(f"Error processing future {item['id']}: {e}")
 
-                elif group_name in [
-                    "NSEOptions",
-                    "BSEOptions",
-                    "CurrencyOptions",
-                    "CommodityOptions",
-                ]:
+                elif group_name in OPTION_GROUPS:
                     # Format: instrument_symbol_exchange_expiry_strike_optType
                     components = parse_scrip_id(item["id"], id_format)
                     base_symbol = (
@@ -540,6 +548,12 @@ def master_contract_download():
             group_name = group.get("name")
             if not group_name:
                 logger.warning(f"Skipping scrip group without a name: {group}")
+                continue
+
+            if group_name not in SUPPORTED_GROUPS:
+                # Spot, or a group Tradejini added that this module does not map
+                # yet; skip it rather than fail the whole download.
+                logger.info(f"Skipping Tradejini scrip group {group_name}")
                 continue
 
             logger.info(f"Processing group: {group_name} (format: {group.get('idFormat')})")

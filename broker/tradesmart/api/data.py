@@ -21,6 +21,7 @@ from utils import runtime
 from utils.broker_backpressure import BrokerBusyError
 from utils.logging import get_logger
 from utils.shared_executors import get_executor
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -59,6 +60,68 @@ def _as_int(value, default=0):
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+# Index tsym as /GetSecurityInfo reports it, keyed (exchange, token). The scrip
+# master's TradingSymbol for an NSE index ('NIFTY INDEX', 'FINNIFTY') is not the
+# name /EODChartData accepts ('Nifty 50', 'Nifty Fin Service'), and neither file
+# column matches it for every index. Index tsyms change rarely; a day's TTL keeps
+# a rename from sticking past the next session.
+_index_tsym_cache = LockedTTLCache(maxsize=64, ttl=24 * 3600)
+
+
+def _index_eod_symbol(exchange: str, token: str, fallback: str, auth_token: str) -> str:
+    """The tsym /EODChartData needs for an index, resolved by token.
+
+    Falls back to the stored broker symbol when /GetSecurityInfo does not
+    answer, so a failed lookup costs nothing that was working before.
+    """
+    key = (exchange, str(token))
+    cached = _index_tsym_cache.get(key)
+    if cached:
+        return cached
+    try:
+        apply_rate_limit("/GetSecurityInfo")
+        info = post(
+            "/GetSecurityInfo",
+            {"uid": resolve_uid(auth_token), "exch": exchange, "token": str(token)},
+            auth_token,
+        ).json()
+    except Exception:
+        logger.exception(f"GetSecurityInfo failed for {exchange}:{token}")
+        return fallback
+    tsym = info.get("tsym") if isinstance(info, dict) and info.get("stat") == "Ok" else None
+    if not tsym:
+        return fallback
+    _index_tsym_cache[key] = tsym
+    return tsym
+
+
+def _drop_preopen_bars(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop the pre-open bar TPSeries puts at the start of a session.
+
+    On NSE/BSE cash and indices, 1m TPSeries opens each date with a bar holding
+    the pre-open discovered price: flat OHLC and zero volume (RELIANCE
+    18-11-2026 09:14 1370.0 x4, vol 0, before the 09:15 bar that opens at
+    1367.0). It is not a trade, and the session's first candle is the one after
+    it (QA HS-07). F&O and MCX send no such bar.
+
+    It is recognised by its shape, not a session time, so special sessions are
+    covered too: the first bar of an IST date that is flat, has zero volume and
+    is followed by more bars that date. Index bars always carry zero volume,
+    but their first trading bar is not flat, so it is kept.
+    """
+    if df.empty:
+        return df
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    day = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert("Asia/Kolkata").dt.date
+    first_of_day = ~day.duplicated(keep="first")
+    more_that_day = day.duplicated(keep=False)
+    flat = (df["open"] == df["high"]) & (df["high"] == df["low"]) & (df["low"] == df["close"])
+    preopen = first_of_day & more_that_day & flat & (df["volume"] == 0)
+    if preopen.any():
+        logger.debug(f"Dropped {int(preopen.sum())} pre-open bar(s) from TPSeries history")
+    return df[~preopen].reset_index(drop=True)
 
 
 def _normalize_data_exchange(exchange):
@@ -703,8 +766,13 @@ class BrokerData:
             )
 
             if interval == "D":
+                eod_symbol = br_symbol
+                if exchange in ("NSE_INDEX", "BSE_INDEX"):
+                    eod_symbol = _index_eod_symbol(
+                        api_exchange, token, br_symbol, self.auth_token
+                    )
                 payload = {
-                    "sym": f"{api_exchange}:{br_symbol}",
+                    "sym": f"{api_exchange}:{eod_symbol}",
                     "from": str(start_ts),
                     "to": str(end_ts),
                 }
@@ -788,6 +856,8 @@ class BrokerData:
                 df = pd.DataFrame(
                     columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
                 )
+            elif interval != "D":
+                df = _drop_preopen_bars(df)
 
             # For daily data, append today's candle from quotes if missing. Use an
             # IST-midnight epoch (+5:30) to match the cross-broker daily convention.

@@ -263,6 +263,13 @@ const SHAPES = [
     needs: ['strategy(', 'session.isIn(', 'session.isLastBar', 'close()'],
     kind: 'strategy',
   },
+  {
+    what: 'a multi-timeframe study that marks crossings',
+    // The average is computed inside the read, so it is an average of the
+    // coarse bars; one taken of the read's result is a different line.
+    needs: ['study(', 'req.timeframe(', 'ema(close', 'crossUp(', 'signal('],
+    kind: 'study',
+  },
   { what: 'inputs a trader can change', needs: ['input('], kind: null },
   { what: 'shading between two plots', needs: ['fill('], kind: null },
 ]

@@ -14,6 +14,8 @@ import os
 import sys
 import threading
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 # Add parent directory to path
@@ -23,9 +25,91 @@ from database.sandbox_db import SandboxOrders, db_session
 from services.market_data_service import get_market_data_service
 from services.websocket_service import subscribe_to_symbols, unsubscribe_from_symbols
 from utils import real_threading as _real_threading
+from utils.db_sessions import session_cleanup
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Feed subscribe and unsubscribe calls never run on the caller. They are made
+# from the order path (placing, cancelling and filling an order, opening and
+# closing a position, placing a GTT), and each one reads the database and then
+# waits up to 12 seconds for the websocket proxy to acknowledge. Inline, that
+# wait was added to the order response although the order needs none of it.
+#
+# Each call is appended to _feed_calls while the engine's lock is still held,
+# in the same hold as the refcount change that decided it, so the queue order
+# is the refcount order: a place and a cancel racing on two threads can never
+# queue the cancel's unsubscribe ahead of the place's subscribe. Queueing
+# never waits on I/O (it takes only _feed_lock, which nothing holds across a
+# call), which is what makes it safe under that real lock; submitting to the
+# executor can (its first submit starts the worker thread), so that happens
+# after the release, in _start_feed_calls(). One worker drains the
+# queue in order. It is shared by every engine instance, so order also holds
+# across a stop and a start, and it is a plain executor thread: green under
+# eventlet, like the callers that feed it.
+#
+# While the proxy is not answering, the worker spends up to 12 seconds on each
+# call, and the order path no longer waits for any of them. Without a bound
+# the queue would then grow with every order. An unsubscribe therefore cancels
+# its symbol's subscribe if that subscribe has not started yet (see
+# _queue_feed_call), so no symbol ever has more than two calls waiting.
+_feed_calls: deque = deque()
+# Guards _feed_calls between callers, which look back along it to cancel a
+# waiting subscribe, and the worker, which takes from the front. A real lock,
+# held only for in-memory list work: never across a feed call, a log line or
+# anything else that can yield.
+_feed_lock = _real_threading.Lock()
+_feed_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sandbox-feed-subscribe")
+
+
+def _queue_feed_call(kind, call, user_id, symbols):
+    """Queue a feed subscribe or unsubscribe. Call while holding the engine's lock.
+
+    An unsubscribe for one symbol cancels that symbol's subscribe while the
+    subscribe is still waiting: neither reaches the proxy, and the symbol ends
+    unsubscribed, as it would have. Only that pair is cancelled. An
+    unsubscribe followed by a subscribe is always kept, because the subscribe
+    before that unsubscribe may have failed, and the new one is then the only
+    one that will reach the proxy. Calls for several symbols at once (the index
+    rebuild, a stop) are never cancelled and never cancel anything.
+    """
+    symbols = list(symbols)
+    with _feed_lock:
+        if kind == "unsubscribe" and len(symbols) == 1:
+            for index in range(len(_feed_calls) - 1, -1, -1):
+                queued_kind, _, queued_user, queued_symbols = _feed_calls[index]
+                if queued_user != user_id or symbols[0] not in queued_symbols:
+                    continue
+                if queued_kind == "subscribe" and len(queued_symbols) == 1:
+                    del _feed_calls[index]
+                    return
+                break
+        _feed_calls.append((kind, call, user_id, symbols))
+
+
+def _drain_feed_calls():
+    """Run every queued feed call, oldest first. Runs on the feed worker."""
+    while True:
+        with _feed_lock:
+            if not _feed_calls:
+                return
+            _, call, user_id, symbols = _feed_calls.popleft()
+        try:
+            with session_cleanup():
+                call(user_id, symbols)
+        except Exception:
+            logger.exception(f"Feed subscription call failed for user {user_id}")
+
+
+def _start_feed_calls():
+    """Have the feed worker run what has been queued. Call after releasing the lock."""
+    if not _feed_calls:
+        return
+    try:
+        _feed_executor.submit(_drain_feed_calls)
+    except RuntimeError:
+        # The interpreter is exiting, and the proxy goes with it.
+        logger.debug("Feed subscription calls not run: the process is shutting down")
 
 
 class WebSocketExecutionEngine:
@@ -195,6 +279,8 @@ class WebSocketExecutionEngine:
                     pos_subscribed += 1
 
             monitored = len(self._monitored_symbols)
+            for user_id, symbols in subscriptions_to_add.items():
+                self._queue_subscribe(user_id, symbols)
 
         logger.debug(
             f"Built order index: {len(order_entries)} orders and "
@@ -204,9 +290,7 @@ class WebSocketExecutionEngine:
         if pos_subscribed:
             logger.info(f"Position feed: {pos_subscribed} open-position symbols added to index")
 
-        # Subscribe for all users
-        for user_id, symbols in subscriptions_to_add.items():
-            self._subscribe_ws_symbols(user_id, symbols)
+        _start_feed_calls()
 
     @staticmethod
     def _read_index_sources():
@@ -276,8 +360,6 @@ class WebSocketExecutionEngine:
     def notify_order_placed(self, order):
         """Called when a new order is placed to update the index"""
         symbol_key = f"{order.exchange}:{order.symbol}"
-        subscribe_user = None
-        subscribe_symbol = None
 
         with self._lock:
             if symbol_key not in self._pending_orders_index:
@@ -290,18 +372,12 @@ class WebSocketExecutionEngine:
 
             # Increment refcount and decide if we need to subscribe
             if self._increment_user_symbol_refcount(order.user_id, symbol_key):
-                subscribe_user = order.user_id
-                subscribe_symbol = symbol_key
+                self._queue_subscribe(order.user_id, [(order.symbol, order.exchange)])
 
-        if subscribe_user and subscribe_symbol:
-            exchange, symbol = subscribe_symbol.split(":", 1)
-            self._subscribe_ws_symbols(subscribe_user, [(symbol, exchange)])
+        _start_feed_calls()
 
     def notify_order_completed(self, order_id: str, symbol_key: str, user_id: str | None = None):
         """Called when an order is completed/cancelled to update the index"""
-        unsubscribe_user = None
-        unsubscribe_symbol = None
-
         with self._lock:
             if symbol_key and symbol_key in self._pending_orders_index:
                 if order_id in self._pending_orders_index[symbol_key]:
@@ -319,12 +395,10 @@ class WebSocketExecutionEngine:
             # Decrement refcount and decide if we should unsubscribe
             if user_id and symbol_key:
                 if self._decrement_user_symbol_refcount(user_id, symbol_key):
-                    unsubscribe_user = user_id
-                    unsubscribe_symbol = symbol_key
+                    exchange, symbol = symbol_key.split(":", 1)
+                    self._queue_unsubscribe(user_id, [(symbol, exchange)])
 
-        if unsubscribe_user and unsubscribe_symbol:
-            exchange, symbol = unsubscribe_symbol.split(":", 1)
-            self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
+        _start_feed_calls()
 
     def notify_position_opened(self, user_id: str, symbol: str, exchange: str):
         """Hold a feed subscription for an open position (event-driven MTM).
@@ -342,9 +416,11 @@ class WebSocketExecutionEngine:
             if (user_id, symbol_key) not in self._position_refs:
                 self._position_refs.add((user_id, symbol_key))
                 subscribe = self._increment_user_symbol_refcount(user_id, symbol_key)
+                if subscribe:
+                    self._queue_subscribe(user_id, [(symbol, exchange)])
         if subscribe:
             logger.info(f"Position feed: subscribing {symbol_key} for MTM (user {user_id})")
-            self._subscribe_ws_symbols(user_id, [(symbol, exchange)])
+            _start_feed_calls()
 
     def notify_position_closed(self, user_id: str, symbol: str, exchange: str):
         """Release the position's feed subscription once the symbol is flat.
@@ -375,9 +451,11 @@ class WebSocketExecutionEngine:
             if (user_id, symbol_key) in self._position_refs:
                 self._position_refs.discard((user_id, symbol_key))
                 unsubscribe = self._decrement_user_symbol_refcount(user_id, symbol_key)
+                if unsubscribe:
+                    self._queue_unsubscribe(user_id, [(symbol, exchange)])
         if unsubscribe:
             logger.info(f"Position feed: releasing {symbol_key} (user {user_id}, flat)")
-            self._unsubscribe_ws_symbols(user_id, [(symbol, exchange)])
+            _start_feed_calls()
 
     def _on_market_data(self, data: dict):
         """
@@ -472,9 +550,6 @@ class WebSocketExecutionEngine:
         alive for a symbol nothing is watching any more, for the life of the
         process.
         """
-        unsubscribe_user = None
-        unsubscribe_symbol = None
-
         with self._lock:
             legs = self._pending_gtt_index.get(symbol_key)
             if legs and leg_id in legs:
@@ -485,12 +560,10 @@ class WebSocketExecutionEngine:
                     self._monitored_symbols.discard(symbol_key)
 
             if user_id and self._decrement_user_symbol_refcount(user_id, symbol_key):
-                unsubscribe_user = user_id
-                unsubscribe_symbol = symbol_key
+                exchange, symbol = symbol_key.split(":", 1)
+                self._queue_unsubscribe(user_id, [(symbol, exchange)])
 
-        if unsubscribe_user and unsubscribe_symbol:
-            exchange, symbol = unsubscribe_symbol.split(":", 1)
-            self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
+        _start_feed_calls()
 
     def notify_gtt_placed(self, gtt):
         """Start watching a newly placed GTT without waiting for a rebuild.
@@ -513,11 +586,11 @@ class WebSocketExecutionEngine:
                 # One ref per leg, matching the per-leg decrement on resolve.
                 if self._increment_user_symbol_refcount(gtt.user_id, symbol_key):
                     subscribe_user = gtt.user_id
+                    self._queue_subscribe(gtt.user_id, [(gtt.symbol, gtt.exchange)])
 
         if subscribe_user:
-            exchange, symbol = symbol_key.split(":", 1)
-            self._subscribe_ws_symbols(subscribe_user, [(symbol, exchange)])
-            logger.debug(f"Subscribed {symbol_key} for GTT {gtt.gtt_id}")
+            _start_feed_calls()
+            logger.debug(f"Subscribing {symbol_key} for GTT {gtt.gtt_id}")
 
     def _check_and_execute_order(self, order_id: str, ltp: Decimal):
         """
@@ -675,8 +748,25 @@ class WebSocketExecutionEngine:
             del self._pending_orders_index[symbol_key]
             self._monitored_symbols.discard(symbol_key)
 
+    def _queue_subscribe(self, user_id: str, symbols: list[tuple[str, str]]):
+        """Queue a feed subscribe. Call while holding self._lock.
+
+        Never waits; _start_feed_calls() runs it after the lock is released.
+        """
+        _queue_feed_call("subscribe", self._subscribe_ws_symbols, user_id, symbols)
+
+    def _queue_unsubscribe(self, user_id: str, symbols: list[tuple[str, str]]):
+        """Queue a feed unsubscribe. Call while holding self._lock.
+
+        Never waits; _start_feed_calls() runs it after the lock is released.
+        """
+        _queue_feed_call("unsubscribe", self._unsubscribe_ws_symbols, user_id, symbols)
+
     def _subscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
-        """Subscribe to LTP via WebSocket for the given user and symbols."""
+        """Subscribe to LTP via WebSocket for the given user and symbols.
+
+        Runs on the feed worker, never on the order path; see _feed_calls.
+        """
         if not symbols:
             return
 
@@ -704,7 +794,10 @@ class WebSocketExecutionEngine:
             logger.exception(f"Error subscribing WebSocket symbols for user {user_id}: {e}")
 
     def _unsubscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
-        """Unsubscribe from LTP via WebSocket for the given user and symbols."""
+        """Unsubscribe from LTP via WebSocket for the given user and symbols.
+
+        Runs on the feed worker, never on the order path; see _feed_calls.
+        """
         if not symbols:
             return
 
@@ -733,7 +826,6 @@ class WebSocketExecutionEngine:
 
     def _unsubscribe_all_ws(self):
         """Unsubscribe all WebSocket symbols for all users."""
-        users_to_unsub = []
         with self._lock:
             for user_id, symbols in self._user_symbol_refcounts.items():
                 symbol_list = []
@@ -741,11 +833,10 @@ class WebSocketExecutionEngine:
                     exchange, symbol = symbol_key.split(":", 1)
                     symbol_list.append((symbol, exchange))
                 if symbol_list:
-                    users_to_unsub.append((user_id, symbol_list))
+                    self._queue_unsubscribe(user_id, symbol_list)
             self._user_symbol_refcounts.clear()
 
-        for user_id, symbols in users_to_unsub:
-            self._unsubscribe_ws_symbols(user_id, symbols)
+        _start_feed_calls()
 
 
 # Global instance for singleton access

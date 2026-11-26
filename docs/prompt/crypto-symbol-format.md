@@ -27,14 +27,14 @@ Perpetual (no-expiry) futures are the dominant crypto derivative.
 
 **Format:** `[DeltaSymbol]FUT`
 
-| Instrument | Venue native | OpenAlgo symbol | Quote (current) |
+| Instrument | Venue native | OpenAlgo symbol | Illustrative quote |
 | --- | --- | --- | --- |
 | BTC perpetual | `BTCUSD` | `BTCUSDFUT` | ≈ $62,000 |
 | ETH perpetual | `ETHUSD` | `ETHUSDFUT` | — |
 
 `instrumenttype = PERPFUT`, `expiry = ""` (empty — perpetuals never expire). The
 symbol never encodes price — `BTCUSDFUT` marks the contract; its last-traded
-value (≈ 62,000 USD today) lives in quotes, not the symbol.
+value (for example, 62,000 USD) lives in quotes, not the symbol.
 
 > **Known discrepancy (tracked for P7 cleanup):** the code currently emits
 > `…FUT` (e.g. `BTCUSDFUT`) while an in-code comment and some search aliases
@@ -59,7 +59,7 @@ convention.
 **Format:** `[Underlying][ExpiryDate][Strike][CE/PE]` — identical to Indian
 options.
 
-With BTC ≈ **$62,000**, the at-the-money strike is `62000`:
+For an illustrative BTC price of **$62,000**, a matching strike is `62000`:
 
 | Instrument | Venue native | OpenAlgo symbol |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ synth-put (`SYNPE`) → `PE`.
 
 **Format:** `[Base][Quote]` — the venue pair with the underscore removed.
 
-| Instrument | Venue native | OpenAlgo symbol | Price (current) |
+| Instrument | Venue native | OpenAlgo symbol | Illustrative price |
 | --- | --- | --- | --- |
 | BTC/INR spot | `BTC_INR` | `BTCINR` | ≈ ₹59,52,000 |
 | ETH/USDT spot | `ETH_USDT` | `ETHUSDT` | — |
@@ -84,7 +84,7 @@ synth-put (`SYNPE`) → `PE`.
 `instrumenttype = SPOT`, `expiry = ""`. The quote currency is part of the pair,
 not the symbol grammar: `BTCINR` settles in INR, `BTCUSDT` in USDT.
 
-**Worked currency example (current market):** BTC ≈ **$62,000**, USD/INR ≈ **96**,
+**Hypothetical currency example (not a market quote):** BTC ≈ **$62,000**, USD/INR ≈ **96**,
 so `BTCINR` ≈ 62,000 × 96 = **₹59,52,000** (₹59.52 L). This is exactly why the
 **Currency resolver** is keyed on the *instrument's* quote currency, not the
 account's home currency — the same BTC contract is quoted ~62,000 on `BTCUSDFUT`

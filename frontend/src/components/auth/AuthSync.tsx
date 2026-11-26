@@ -4,6 +4,67 @@ import { useBrokerStore } from '@/stores/brokerStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useThemeStore } from '@/stores/themeStore'
 
+interface SessionStatus {
+  status?: string
+  authenticated?: boolean
+  logged_in?: boolean
+  user?: string
+  broker?: string
+  api_key?: string
+  active_sessions?: number
+}
+
+async function fetchSessionStatus(): Promise<SessionStatus | null> {
+  const response = await fetch('/auth/session-status', { credentials: 'include' })
+  if (!response.ok) return null
+  return (await response.json()) as SessionStatus
+}
+
+function isBrokerSession(data: SessionStatus): boolean {
+  return data.status === 'success' && !!data.logged_in && !!data.broker
+}
+
+/**
+ * Copies a broker-logged-in session into the stores: user, API key, broker
+ * capabilities, app mode and session count. Everything that reads the API key
+ * from the auth store (the order tickets, live quotes) depends on this.
+ */
+async function applyBrokerSession(data: SessionStatus): Promise<void> {
+  useAuthStore.getState().setUser({
+    username: data.user ?? '',
+    broker: data.broker ?? null,
+    isLoggedIn: true,
+    loginTime: new Date().toISOString(),
+  })
+  if (data.api_key) {
+    useAuthStore.getState().setApiKey(data.api_key)
+  }
+  await useBrokerStore.getState().fetchCapabilities()
+  await useThemeStore.getState().syncAppMode()
+  if (data.active_sessions !== undefined) {
+    useSessionStore.getState().setActiveSessionCount(data.active_sessions)
+  }
+}
+
+/**
+ * Re-reads the session after a broker login that completes inside the app
+ * (the TOTP and Samco pages). AuthSync only runs on a full page load, and
+ * those logins move on without one, so without this the API key, capabilities
+ * and app mode stay unset until the trader reloads the page. Returns whether
+ * the server reported a broker session.
+ */
+export async function syncBrokerSession(): Promise<boolean> {
+  try {
+    const data = await fetchSessionStatus()
+    if (!data || !isBrokerSession(data)) return false
+    await applyBrokerSession(data)
+    return true
+  } catch {
+    // The next page load syncs it.
+    return false
+  }
+}
+
 interface AuthSyncProps {
   children: React.ReactNode
 }
@@ -15,57 +76,29 @@ interface AuthSyncProps {
  */
 export function AuthSync({ children }: AuthSyncProps) {
   const [isChecking, setIsChecking] = useState(true)
-  const { setUser, setApiKey, logout } = useAuthStore()
-  const { fetchCapabilities, clearCapabilities } = useBrokerStore()
-  const { setActiveSessionCount } = useSessionStore()
-  const { syncAppMode } = useThemeStore()
 
   useEffect(() => {
     const syncSession = async () => {
+      const { setUser, logout } = useAuthStore.getState()
+      const { clearCapabilities } = useBrokerStore.getState()
       try {
-        const response = await fetch('/auth/session-status', {
-          credentials: 'include',
-        })
+        const data = await fetchSessionStatus()
 
-        if (response.ok) {
-          const data = await response.json()
-
-          if (data.status === 'success' && data.logged_in && data.broker) {
-            // Flask session is authenticated with broker - sync to Zustand
-            setUser({
-              username: data.user,
-              broker: data.broker,
-              isLoggedIn: true,
-              loginTime: new Date().toISOString(),
-            })
-            // Store the API key for trading API calls
-            if (data.api_key) {
-              setApiKey(data.api_key)
-            }
-            // Fetch broker capabilities (exchanges, type, features)
-            await fetchCapabilities()
-            // Also sync app mode from backend
-            await syncAppMode()
-            // Sync active session count
-            if (data.active_sessions !== undefined) {
-              setActiveSessionCount(data.active_sessions)
-            }
-          } else if (data.status === 'success' && data.authenticated && !data.logged_in) {
-            // User is logged in but hasn't connected broker yet
-            setUser({
-              username: data.user,
-              broker: null,
-              isLoggedIn: false,
-              loginTime: null,
-            })
-            clearCapabilities()
-          } else {
-            // Not authenticated or status is not success - clear Zustand store
-            logout()
-            clearCapabilities()
-          }
+        if (data && isBrokerSession(data)) {
+          // Flask session is authenticated with broker - sync to Zustand
+          await applyBrokerSession(data)
+        } else if (data && data.status === 'success' && data.authenticated && !data.logged_in) {
+          // User is logged in but hasn't connected broker yet
+          setUser({
+            username: data.user ?? '',
+            broker: null,
+            isLoggedIn: false,
+            loginTime: null,
+          })
+          clearCapabilities()
         } else {
-          // Any non-OK response (401, 500, etc.) - clear Zustand store
+          // Not authenticated, status is not success, or a non-OK response
+          // (401, 500, etc.) - clear Zustand store
           logout()
           clearCapabilities()
         }
@@ -77,7 +110,7 @@ export function AuthSync({ children }: AuthSyncProps) {
     }
 
     syncSession()
-  }, [setUser, setApiKey, logout, fetchCapabilities, clearCapabilities, syncAppMode, setActiveSessionCount])
+  }, [])
 
   // Show nothing while checking - prevents flash of wrong content
   if (isChecking) {

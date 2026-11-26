@@ -1,6 +1,6 @@
 # CancelAllOrder
 
-Cancel all open orders and trigger pending orders in a single request.
+Cancel all open orders and trigger-pending orders in the active account. `strategy` is a tracking label, not a filter: this can cancel orders placed by other strategies or manually. Analyzer mode applies to the user's sandbox orders instead.
 
 ## Endpoint URL
 
@@ -76,7 +76,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/cancelallorder \
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Tracking label; does not restrict which orders are cancelled | Optional | - |
 
 ## Response Fields
 
@@ -110,7 +110,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/cancelallorder \
 
 - **Emergency exit**: Cancel all pending orders when market moves unexpectedly
 - **End of day cleanup**: Cancel unfilled orders before market close
-- **Strategy reset**: Clear all pending orders before starting fresh
+- **Account reset**: Clear eligible pending account orders before starting fresh
 
 ---
 

@@ -1,0 +1,397 @@
+[
+ {
+  "api_type": "placeorder",
+  "request": {
+   "symbol": "SBIN",
+   "action": "BUY",
+   "quantity": "10",
+   "pricetype": "MARKET",
+   "exchange": "NSE",
+   "product": "MIS",
+   "strategy": "Momentum"
+  },
+  "response": {
+   "status": "success",
+   "orderid": "250101000001",
+   "mode": "live"
+  },
+  "message": "*Order Placed*\nStrategy: Momentum\n*LIVE MODE - Real Order*\n---------------------\nSymbol: SBIN\nAction: BUY\nQuantity: 10\nPrice Type: MARKET\nExchange: NSE\nProduct: MIS\nOrder ID: 250101000001\nTime: 09:15:30"
+ },
+ {
+  "api_type": "placeorder",
+  "request": {
+   "symbol": "SBIN",
+   "action": "SELL",
+   "quantity": "5",
+   "pricetype": "LIMIT",
+   "exchange": "NSE",
+   "product": "CNC"
+  },
+  "response": {
+   "status": "error",
+   "message": "Insufficient funds",
+   "mode": "analyze"
+  },
+  "message": "*Order Placed*\n*ANALYZE MODE - No Real Order*\n---------------------\nSymbol: SBIN\nAction: SELL\nQuantity: 5\nPrice Type: LIMIT\nExchange: NSE\nProduct: CNC\nError: Insufficient funds\nTime: 09:15:30"
+ },
+ {
+  "api_type": "placesmartorder",
+  "request": {
+   "symbol": "INFY",
+   "action": "BUY",
+   "quantity": "1",
+   "position_size": "3",
+   "exchange": "NSE"
+  },
+  "response": {
+   "status": "success",
+   "orderid": "77",
+   "mode": "live"
+  },
+  "message": "*Smart Order Placed*\n*LIVE MODE - Real Order*\n---------------------\nSymbol: INFY\nAction: BUY\nQuantity: 1\nPosition Size: 3\nExchange: NSE\nOrder ID: 77\nTime: 09:15:30"
+ },
+ {
+  "api_type": "placesmartorder",
+  "request": {
+   "symbol": "INFY",
+   "action": "BUY",
+   "quantity": "0",
+   "position_size": "0",
+   "exchange": "NSE"
+  },
+  "response": {
+   "status": "success",
+   "message": "No action needed",
+   "mode": "live"
+  },
+  "message": "*Smart Order Placed*\n*LIVE MODE - Real Order*\n---------------------\nSymbol: INFY\nAction: BUY\nQuantity: 0\nPosition Size: 0\nExchange: NSE\nOrder ID: N/A\nTime: 09:15:30"
+ },
+ {
+  "api_type": "basketorder",
+  "request": {
+   "strategy": "Basket"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "results": [
+    {
+     "symbol": "A",
+     "status": "success",
+     "orderid": "1"
+    },
+    {
+     "symbol": "B",
+     "status": "error",
+     "message": "rejected"
+    },
+    {
+     "symbol": "C",
+     "status": "success",
+     "orderid": "3"
+    },
+    {
+     "symbol": "D",
+     "status": "success",
+     "orderid": "4"
+    }
+   ]
+  },
+  "message": "*Basket Order Executed*\nStrategy: Basket\n*LIVE MODE - Real Order*\n---------------------\nTotal Orders: 4\nSuccessful: 3\nFailed: 1\n[OK] A: 1\n[X] B: rejected\n[OK] C: 3\n... and 1 more\nTime: 09:15:30"
+ },
+ {
+  "api_type": "basketorder",
+  "request": {},
+  "response": {
+   "status": "error",
+   "message": "bad",
+   "mode": "live"
+  },
+  "message": "*Basket Order Executed*\n*LIVE MODE - Real Order*\n---------------------\nTime: 09:15:30"
+ },
+ {
+  "api_type": "splitorder",
+  "request": {
+   "symbol": "NIFTY",
+   "strategy": "Split"
+  },
+  "response": {
+   "status": "success",
+   "mode": "analyze",
+   "total_quantity": 300,
+   "split_size": 100,
+   "results": [
+    {
+     "status": "success"
+    },
+    {
+     "status": "error",
+     "message": "Freeze limit"
+    },
+    {
+     "status": "success"
+    }
+   ]
+  },
+  "message": "*Split Order Executed*\nStrategy: Split\n*ANALYZE MODE - No Real Order*\n---------------------\nSymbol: NIFTY\nTotal Quantity: 300\nSplit Size: 100\nTotal Orders: 3\nSuccessful: 2\nFailed: 1\nPartial fill\nReason: Freeze limit\nTime: 09:15:30"
+ },
+ {
+  "api_type": "splitorder",
+  "request": {
+   "symbol": "NIFTY"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "total_quantity": 200,
+   "split_size": 100,
+   "results": [
+    {
+     "status": "error",
+     "message": "x"
+    },
+    {
+     "status": "error"
+    }
+   ]
+  },
+  "message": "*Split Order Executed*\n*LIVE MODE - Real Order*\n---------------------\nSymbol: NIFTY\nTotal Quantity: 200\nSplit Size: 100\nTotal Orders: 2\nSuccessful: 0\nFailed: 2\nAll orders rejected\nTime: 09:15:30"
+ },
+ {
+  "api_type": "modifyorder",
+  "request": {
+   "orderid": "9",
+   "symbol": "TCS",
+   "quantity": "2",
+   "price": "3500"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live"
+  },
+  "message": "*Order Modified*\n*LIVE MODE - Real Order*\n---------------------\nOrder ID: 9\nSymbol: TCS\nNew Quantity: 2\nNew Price: 3500\nModification Successful\nTime: 09:15:30"
+ },
+ {
+  "api_type": "modifyorder",
+  "request": {
+   "orderid": "9",
+   "symbol": "TCS",
+   "quantity": "2",
+   "price": "3500"
+  },
+  "response": {
+   "status": "error",
+   "message": "Order not found",
+   "mode": "live"
+  },
+  "message": "*Order Modified*\n*LIVE MODE - Real Order*\n---------------------\nOrder ID: 9\nSymbol: TCS\nNew Quantity: 2\nNew Price: 3500\nError: Order not found\nTime: 09:15:30"
+ },
+ {
+  "api_type": "cancelorder",
+  "request": {
+   "orderid": "9"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live"
+  },
+  "message": "*Order Cancelled*\n*LIVE MODE - Real Order*\n---------------------\nOrder ID: 9\nCancellation Successful\nTime: 09:15:30"
+ },
+ {
+  "api_type": "cancelorder",
+  "request": {
+   "orderid": "9"
+  },
+  "response": {
+   "status": "error",
+   "mode": "analyze"
+  },
+  "message": "*Order Cancelled*\n*ANALYZE MODE - No Real Order*\n---------------------\nOrder ID: 9\nError: Failed\nTime: 09:15:30"
+ },
+ {
+  "api_type": "cancelallorder",
+  "request": {},
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "canceled_orders": [
+    "1",
+    "2"
+   ],
+   "failed_cancellations": []
+  },
+  "message": "*All Orders Cancelled*\n*LIVE MODE - Real Order*\n---------------------\nCancelled: 2 orders\nFailed: 0 orders\nOrder IDs: 1, 2\nTime: 09:15:30"
+ },
+ {
+  "api_type": "cancelallorder",
+  "request": {},
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "canceled_orders": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6"
+   ],
+   "failed_cancellations": [
+    "7"
+   ]
+  },
+  "message": "*All Orders Cancelled*\n*LIVE MODE - Real Order*\n---------------------\nCancelled: 6 orders\nFailed: 1 orders\nTime: 09:15:30"
+ },
+ {
+  "api_type": "closeposition",
+  "request": {
+   "symbol": "SBIN",
+   "exchange": "NSE",
+   "product": "MIS"
+  },
+  "response": {
+   "status": "success",
+   "orderid": "5",
+   "mode": "live"
+  },
+  "message": "*Position Closed*\n*LIVE MODE - Real Order*\n---------------------\nSymbol: SBIN\nExchange: NSE\nProduct: MIS\nOrder ID: 5\nTime: 09:15:30"
+ },
+ {
+  "api_type": "closeposition",
+  "request": {},
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "closed_positions": 3,
+   "failed_closures": 1
+  },
+  "message": "*Position Closed*\n*LIVE MODE - Real Order*\n---------------------\nClosed: 3 positions\nFailed: 1 positions\nTime: 09:15:30"
+ },
+ {
+  "api_type": "closeposition",
+  "request": {},
+  "response": {
+   "status": "success",
+   "mode": "live"
+  },
+  "message": "*Position Closed*\n*LIVE MODE - Real Order*\n---------------------\nAll positions closed successfully\nTime: 09:15:30"
+ },
+ {
+  "api_type": "closeposition",
+  "request": {},
+  "response": {
+   "status": "error",
+   "message": "No open positions",
+   "mode": "live"
+  },
+  "message": "*Position Closed*\n*LIVE MODE - Real Order*\n---------------------\nError: No open positions\nTime: 09:15:30"
+ },
+ {
+  "api_type": "optionsorder",
+  "request": {
+   "underlying": "NIFTY"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "underlying_ltp": 24050.5,
+   "results": [
+    {
+     "status": "success",
+     "symbol": "NIFTY25NOV2624000CE",
+     "action": "BUY",
+     "orderid": "11"
+    }
+   ]
+  },
+  "message": "*Options Order Executed*\n*LIVE MODE - Real Order*\n---------------------\nUnderlying: NIFTY\nTotal Legs: 1\nSuccessful: 1\nFailed: 0\n[OK] NIFTY25NOV2624000CE BUY -> 11\nUnderlying LTP: 24050.5\nTime: 09:15:30"
+ },
+ {
+  "api_type": "optionsmultiorder",
+  "request": {
+   "underlying": "BANKNIFTY",
+   "strategy": "Iron"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "results": [
+    {
+     "status": "success",
+     "symbol": "L0",
+     "action": "SELL",
+     "orderid": "0"
+    },
+    {
+     "status": "success",
+     "symbol": "L1",
+     "action": "SELL",
+     "orderid": "1"
+    },
+    {
+     "status": "success",
+     "symbol": "L2",
+     "action": "SELL",
+     "orderid": "2"
+    },
+    {
+     "status": "success",
+     "symbol": "L3",
+     "action": "SELL",
+     "orderid": "3"
+    },
+    {
+     "status": "success",
+     "symbol": "L4",
+     "action": "SELL",
+     "orderid": "4"
+    },
+    {
+     "status": "success",
+     "symbol": "L5",
+     "action": "SELL",
+     "orderid": "5"
+    }
+   ]
+  },
+  "message": "*Options Multi-Order Executed*\nStrategy: Iron\n*LIVE MODE - Real Order*\n---------------------\nUnderlying: BANKNIFTY\nTotal Legs: 6\nSuccessful: 6\nFailed: 0\n[OK] L0 SELL -> 0\n[OK] L1 SELL -> 1\n[OK] L2 SELL -> 2\n[OK] L3 SELL -> 3\n[OK] L4 SELL -> 4\nTime: 09:15:30"
+ },
+ {
+  "api_type": "optionsorder",
+  "request": {
+   "underlying": "NIFTY"
+  },
+  "response": {
+   "status": "error",
+   "message": "Expiry not found",
+   "mode": "live"
+  },
+  "message": "*Options Order Executed*\n*LIVE MODE - Real Order*\n---------------------\nUnderlying: NIFTY\nError: Expiry not found\nTime: 09:15:30"
+ },
+ {
+  "api_type": "placegttorder",
+  "request": {
+   "symbol": "SBIN"
+  },
+  "response": {
+   "status": "success",
+   "mode": "live",
+   "trigger_id": "T1"
+  },
+  "message": "*Order Update*\n*LIVE MODE - Real Order*\n---------------------\nTime: 09:15:30"
+ },
+ {
+  "api_type": "unknowntype",
+  "request": {},
+  "response": {
+   "mode": "live"
+  },
+  "message": "*Order Update*\n*LIVE MODE - Real Order*\n---------------------\nTime: 09:15:30"
+ },
+ {
+  "api_type": "placeorder",
+  "request": {},
+  "response": {},
+  "message": "*Order Placed*\n*LIVE MODE - Real Order*\n---------------------\nSymbol: N/A\nAction: N/A\nQuantity: N/A\nPrice Type: N/A\nExchange: N/A\nProduct: N/A\nError: Failed\nTime: 09:15:30"
+ }
+]

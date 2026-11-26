@@ -121,13 +121,17 @@ export const DRAW_GROUPS: DrawGroupDef[] = [
     iconKey: 'xabcd-pattern',
     sections: [
       {
-        head: 'Patterns and waves',
+        head: 'Patterns',
+        tools: tools('xabcd-pattern', 'abcd-pattern', 'head-shoulders'),
+      },
+      {
+        head: 'Elliott waves',
         tools: tools(
-          'xabcd-pattern',
-          'abcd-pattern',
-          'head-shoulders',
           'elliott-impulse',
-          'elliott-correction'
+          'elliott-correction',
+          'elliott-triangle',
+          'elliott-double-combo',
+          'elliott-triple-combo'
         ),
       },
       {

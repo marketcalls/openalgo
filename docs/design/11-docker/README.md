@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo provides Docker support for containerized deployment with **3-stage builds** (Python builder, Frontend builder, Production), IST timezone configuration, and proper security isolation. The Docker setup uses Python 3.12, Gunicorn with Eventlet workers, and runs as a non-root user. It includes Railway/cloud deployment support with automatic `.env` generation.
+OpenAlgo provides Docker support for containerized deployment with **3-stage builds** (Python builder, Frontend builder, Production), IST timezone configuration, and proper security isolation. The Docker setup uses Python 3.12, Gunicorn with one eventlet worker by default or one optional gthread worker with 64 threads, and runs as a non-root user. It includes Railway/cloud deployment support with automatic `.env` generation.
 
 ## Architecture Diagram
 
@@ -20,7 +20,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 │  │  2. Copy pyproject.toml                                               │  │
 │  │  3. Create virtual environment with uv                                │  │
 │  │  4. Install dependencies: uv sync                                     │  │
-│  │  5. Add gunicorn + eventlet>=0.40.3                                   │  │
+│  │  5. Add gunicorn>=25.0,<26 + eventlet==0.41.2                                   │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
@@ -68,140 +68,33 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 │  │  3. Database Migrations (if /app/upgrade/migrate_all.py exists)     │    │
 │  │  4. WebSocket Proxy (background, PID tracked)                       │    │
 │  │  5. Signal Handling (SIGTERM, SIGINT cleanup)                       │    │
-│  │  6. Gunicorn with Eventlet                                          │    │
+│  │  6. Gunicorn: eventlet default / optional gthread                                          │    │
 │  │     - Single worker (-w 1) for WebSocket compatibility              │    │
 │  │     - Timeout: 300s, Graceful timeout: 30s                          │    │
 │  │     - Worker temp dir: /tmp/gunicorn_workers                        │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
-│  Exposed Ports:                                                             │
+│  Application ports:                                                             │
 │  - 5000: Flask application (or PORT env var for Railway)                    │
 │  - 8765: WebSocket proxy                                                    │
-│  - 5555: ZeroMQ message bus (internal)                                      │
+│  - 5555: ZeroMQ message bus (loopback only, not published)                                      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Dockerfile
+## Build And Compose Sources
 
-```dockerfile
-# ------------------------------ Python Builder Stage ----------------------- #
-FROM python:3.12-trixie AS python-builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl build-essential && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY pyproject.toml .
-# Create isolated virtual-env with uv, then add gunicorn and eventlet
-RUN pip install --no-cache-dir uv && \
-    uv venv .venv && \
-    uv pip install --upgrade pip && \
-    uv sync && \
-    uv pip install gunicorn eventlet>=0.40.3 && \
-    rm -rf /root/.cache
+The maintained build is [`Dockerfile`](../../../Dockerfile); [`docker-compose.yaml`](../../../docker-compose.yaml) is the runnable Compose source. Use those files instead of a copied Dockerfile or service definition from an older guide.
 
-# ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:22-trixie-slim AS frontend-builder
-WORKDIR /app
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci
-COPY frontend/ ./frontend/
-RUN cd frontend && npm run build
+- Python and production stages use Python 3.12 on Debian trixie; the frontend builder uses Node 22.
+- Gunicorn is pinned to `>=25.0,<26` while eventlet `0.41.2` remains the default/fallback.
+- Production includes BLAS/OpenMP/Fortran libraries plus Chromium and fonts for Kaleido chart export.
+- `appuser` has fixed UID/GID 1000, owns `/app` for atomic file replacement, and runs the application without root.
+- The `.env` bind mount is read/write and must exist as a file. UID 1000 needs write access for placeholder rotation and server-setting saves.
+- Named volumes persist `/app/db`, `/app/log`, `/app/strategies`, `/app/keys`, and `/app/tmp`.
+- Repository Compose defaults shared memory to `${SHM_SIZE:-512m}`; install helpers size shared memory and numerical-library threads from available RAM.
+- The Compose health check uses `/auth/check-setup`, not the HTML `/health` page.
 
-# ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-trixie AS production
-
-# Set timezone to IST and install runtime dependencies for scipy/numba
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    tzdata \
-    curl \
-    libopenblas0 \
-    libgomp1 \
-    libgfortran5 && \
-    ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
-    dpkg-reconfigure -f noninteractive tzdata && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN useradd --create-home appuser
-WORKDIR /app
-
-# Copy venv from python-builder
-COPY --from=python-builder --chown=appuser:appuser /app/.venv /app/.venv
-COPY --chown=appuser:appuser . .
-
-# Copy built frontend from frontend-builder
-COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
-
-# Create directories with proper permissions (including tmp for numba/matplotlib)
-RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache \
-             /app/tmp/matplotlib /app/strategies /app/strategies/scripts \
-             /app/strategies/examples /app/keys && \
-    chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
-    chmod -R 755 /app/strategies /app/log /app/tmp && \
-    chmod 700 /app/keys && \
-    touch /app/.env && chown appuser:appuser /app/.env && chmod 666 /app/.env
-
-# Entrypoint script (fix line endings for Windows compatibility)
-COPY --chown=appuser:appuser start.sh /app/start.sh
-RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
-
-# Environment variables
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    TZ=Asia/Kolkata \
-    APP_MODE=standalone \
-    TMPDIR=/app/tmp \
-    NUMBA_CACHE_DIR=/app/tmp/numba_cache \
-    LLVMLITE_TMPDIR=/app/tmp \
-    MPLCONFIGDIR=/app/tmp/matplotlib
-
-USER appuser
-EXPOSE 5000
-CMD ["/app/start.sh"]
-```
-
-## Docker Compose
-
-```yaml
-# docker-compose.yaml (note: .yaml extension, not .yml)
-version: '3.8'
-
-services:
-  openalgo:
-    build: .
-    ports:
-      - "5000:5000"
-      - "8765:8765"
-    volumes:
-      # Named volumes for better persistence management
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log
-      - openalgo_strategies:/app/strategies
-      - openalgo_keys:/app/keys
-      - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro       # Environment config (read-only)
-    environment:
-      - FLASK_HOST_IP=0.0.0.0
-      - FLASK_PORT=5000
-      - WEBSOCKET_HOST=0.0.0.0
-      - WEBSOCKET_PORT=8765
-    shm_size: '2gb'                # Required for scipy/numba operations
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-volumes:
-  openalgo_db:
-  openalgo_log:
-  openalgo_strategies:
-  openalgo_keys:
-  openalgo_tmp:
-```
+The first-run helpers create `.env` with fresh installation secrets and no broker; keys are then added through Broker Configuration. Existing `.env` broker settings retain precedence. See [Docker Deployment](../../docker/docker.md) and [environment settings](../../docker/docker_env_changes.md).
 
 ### Named Volumes vs Bind Mounts
 
@@ -239,92 +132,13 @@ Container /app/
 └── app.py                 # Main application
 ```
 
-## Start Script
+## Start Script And Worker Lifecycle
 
-The `start.sh` script is a sophisticated 246-line entrypoint that handles:
+`start.sh` prepares directories, generates configuration for supported cloud environments, runs `upgrade/migrate_all.py`, and starts the market-data proxy separately. The normal production path uses one eventlet worker. When `.env` selects gthread, it uses `install/openalgo-gunicorn.sh` with one worker and 64 request threads, supervision for the proxy, and graceful shutdown handling.
 
-1. **Railway/Cloud Environment Detection** - Auto-generates `.env` from environment variables
-2. **Directory Setup** - Creates required directories with proper permissions
-3. **Database Migrations** - Runs `upgrade/migrate_all.py` if present
-4. **WebSocket Proxy** - Starts in background with PID tracking
-5. **Signal Handling** - Graceful shutdown on SIGTERM/SIGINT
-6. **Gunicorn Startup** - Eventlet worker with optimized settings
+Both modes keep the proxy outside the web worker. The proxy SUB socket binds the fixed loopback ZMQ endpoint; all broker and cache-invalidation PUB sockets connect. Port 5555 is internal and is not mapped to the host.
 
-```bash
-#!/bin/bash
-# start.sh (simplified overview - actual script is 246 lines)
-
-echo "[OpenAlgo] Starting up..."
-
-# ============================================
-# RAILWAY/CLOUD ENVIRONMENT DETECTION
-# ============================================
-# If HOST_SERVER is set and no .env exists, auto-generate .env
-# with 40+ configuration variables including:
-# - Broker configuration
-# - Database URLs
-# - CORS, CSP, CSRF settings
-# - Rate limiting
-# - WebSocket/ZeroMQ configuration
-
-# ============================================
-# DIRECTORY SETUP
-# ============================================
-for dir in db log log/strategies strategies strategies/scripts keys; do
-    mkdir -p "$dir" 2>/dev/null || true
-done
-
-# ============================================
-# DATABASE MIGRATIONS
-# ============================================
-if [ -f "/app/upgrade/migrate_all.py" ]; then
-    /app/.venv/bin/python /app/upgrade/migrate_all.py
-fi
-
-# ============================================
-# WEBSOCKET PROXY SERVER
-# ============================================
-/app/.venv/bin/python -m websocket_proxy.server &
-WEBSOCKET_PID=$!
-
-# ============================================
-# SIGNAL HANDLING
-# ============================================
-cleanup() {
-    echo "[OpenAlgo] Shutting down..."
-    kill $WEBSOCKET_PID 2>/dev/null
-    exit 0
-}
-trap cleanup SIGTERM SIGINT
-
-# ============================================
-# GUNICORN STARTUP
-# ============================================
-APP_PORT="${PORT:-5000}"  # Railway uses PORT env var
-mkdir -p /tmp/gunicorn_workers
-
-exec /app/.venv/bin/gunicorn \
-    --worker-class eventlet \
-    --workers 1 \
-    --bind 0.0.0.0:${APP_PORT} \
-    --timeout 300 \
-    --graceful-timeout 30 \
-    --worker-tmp-dir /tmp/gunicorn_workers \
-    --log-level warning \
-    app:app
-```
-
-### Key Differences from Simple Script
-
-| Feature | Old (6 lines) | Actual (246 lines) |
-|---------|---------------|-------------------|
-| Cloud Support | None | Full Railway/Render support |
-| .env Generation | None | 40+ variables auto-generated |
-| Migrations | None | Auto-runs on startup |
-| Signal Handling | None | Graceful shutdown |
-| Timeout | 120s | 300s |
-| Graceful Timeout | None | 30s |
-| Worker Temp Dir | Default | /tmp/gunicorn_workers |
+For gthread, configure at least 45 seconds of container stop grace to allow the 30-second request drain plus cleanup. The supplied desktop runners set this; Compose users must add `stop_grace_period: 45s`. See the [gthread guide](../../gthread/README.md#switch-on-docker) for selection, verification and rollback.
 
 ## Build Commands
 
@@ -339,14 +153,15 @@ docker run -d \
   -p 8765:8765 \
   -v $(pwd)/db:/app/db \
   -v $(pwd)/log:/app/log \
-  -v $(pwd)/.env:/app/.env:ro \
+  --stop-timeout 45 \
+  -v $(pwd)/.env:/app/.env \
   openalgo
 
 # View logs
 docker logs -f openalgo
 
 # Stop container
-docker stop openalgo
+docker stop --time 45 openalgo
 
 # Remove container
 docker rm openalgo
@@ -456,7 +271,7 @@ fi
 | Aspect | Implementation |
 |--------|----------------|
 | Non-root user | Runs as `appuser` |
-| Read-only .env | Mounted with `:ro` flag |
+| Private writable .env | Bind-mounted read/write for UID 1000; retain original installation secrets |
 | Keys directory | 700 permissions |
 | No build tools | Slim production image |
 | Minimal packages | Only runtime dependencies |
@@ -465,10 +280,12 @@ fi
 
 | Volume | Purpose | Required |
 |--------|---------|----------|
-| `/app/db` | SQLite databases | Yes |
+| `/app/db` | SQLite databases and Historify DuckDB | Yes |
 | `/app/log` | Application logs | Recommended |
 | `/app/strategies` | User strategies | Optional |
-| `/app/.env` | Configuration | Yes |
+| `/app/keys` | API keys/certificates used by integrations | Yes when used |
+| `/app/tmp` | Scientific-library temporary/cache files | Writable storage required |
+| `/app/.env` | Configuration and installation encryption secrets | Yes |
 
 ## Key Files Reference
 

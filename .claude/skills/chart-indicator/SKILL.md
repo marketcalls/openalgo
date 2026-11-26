@@ -59,6 +59,110 @@ The descriptor contract has only gained optional fields since this skill was
 written, so an existing indicator keeps working on the pinned build. What
 changed, newest first:
 
+- **2.7.5: nothing for an indicator author.** Three fixes to host
+  surfaces; nothing a descriptor declares changed, and the registry stays
+  at 113 built-ins and the index at 439 names. The indicator tier is byte
+  for byte 2.7.4's, so every built-in computes what it did. A fit now
+  returns to the `timeScale.rightOffset` its host configured instead of
+  the built-in four bars (no chart in OpenAlgo sets one, so every chart
+  here opens and resets as before); the widget's own right-click menu
+  gains a Reset view row; and the widget's centred dialogs move by their
+  title bar. The last is the one a trader meets: on the Historify and
+  strategy charts, an indicator's settings form can be slid off the plot
+  it edits. `/trading` draws its own forms, which stay where they open.
+
+- **2.7.4: one more built-in, so one more reserved id.** Pivot Points
+  Standard (`pivot-points`, exported as `PIVOT_POINTS`) takes the registry
+  from 112 to 113 and the index from 438 to 439 names. A custom module
+  registered under `pivot-points` now replaces it (pitfall 13). It draws the
+  pivot and up to five support and resistance pairs as step lines (`p`,
+  `s1` to `s5`, `r1` to `r5`) from the finished period before the one on
+  screen, in six level sets (`kind`: `traditional`, `fibonacci`, `woodie`,
+  `classic`, `demark`, `camarilla`) over a `frame` of `daily`, `weekly`,
+  `monthly`, `quarterly`, `yearly` or `auto`. Like CPR it never reads the
+  forming period, so a live tick moves no level, and it prints nothing
+  through the first two loaded periods. Call its `calc` rather than porting
+  six sets of formulas. Nothing a descriptor declares changed. The
+  release's other additions are host surfaces, not descriptor ones: rows a
+  host adds to the widget's right-click menu, a full screen button, study
+  placement from the widget's own menu, a regular or extended hours switch
+  and a list of thirty timezones.
+
+- **2.7.3: one refusal to know about, three built-ins re-derived.** A
+  correctness release; nothing a descriptor declares changed and the registry
+  stays at 112 and the index at 438 names. A study timeframe the chart's bars
+  do not divide into (5m on a 3m chart) is refused with an
+  `IndicatorInputError` instead of folded into buckets of the wrong length,
+  for a built-in and for a study of your own wrapped in `withTimeframe`
+  (pitfall 24); a day or longer still takes any intraday bar. CPR prints no
+  levels from a partly loaded first period, KAMA steps over a missing value
+  and HalfTrend seeds from the first complete bar, so a study measured
+  against one of those re-derives its expectations. Renko on a decimal box,
+  point and figure reversals and Kagi thickness change where they were
+  wrong, so a study on those elements (`ctx.transformed`) can see different
+  ones. Fills paint only the bars in view, which is faster and draws the
+  same.
+
+- **2.7.2: nothing for a descriptor to change.** Elliott wave counts leave
+  their origin unlabelled and number their waves from the second anchor,
+  default to the Intermediate degree, `(1)` to `(5)`, centre each label on
+  its point and are drawn as they are placed. The drawing tool contract
+  gains an optional `progressive` field for that; the indicator descriptor
+  is untouched, the registry stays at 112 and the index at 438 names.
+
+- **2.7.1: nothing for a descriptor to change.** Three Elliott wave drawing
+  tools (triangle, double and triple combination) join the impulse and the
+  correction, every count starts at an origin anchor, and a count is labelled
+  by degree (`props.degree`, `props.labelStyle`). The impulse and the
+  correction take 6 and 4 anchors where they took 5 and 3; a saved count is
+  given its origin on load. No indicator, descriptor field or export is added
+  or removed: the registry stays at 112 and the index at 438 names.
+
+- **2.7.0: nothing for a descriptor to change.** The drawing tool icons are
+  redrawn with an open ring at each anchor, and `DRAWING_TOOL_ACCENTS` now
+  fills only the magnet. The packaged widget and the reference host get
+  interface fixes. No indicator, descriptor field or export is added or
+  removed: the registry stays at 112 and the index at 438 names.
+
+- **2.6.9: nothing for a descriptor to change.** A security release for the
+  library's build toolchain and documentation site; the published code is
+  2.6.8's apart from the version string. The registry stays at 112 and the
+  index at 438 names.
+
+- **2.6.8: volume on price-driven elements.** Renko, range bar, line break
+  and point and figure elements now carry the volume traded while they
+  formed (all of a source bar's volume on the first element it completes, 0
+  on the rest), so a custom study reading `bar.volume` on Chart bars sees
+  real volume there instead of nothing. Kagi still keeps its line thickness
+  in `volume`, so a volume study on a Kagi chart needs Underlying bars. An
+  instrument that reports no volume, such as an index, still leaves it
+  undefined: guard for that. Higher-timeframe warmup now crosses weekends and
+  holidays instead of failing with "Insufficient confirmed history", and OHLC
+  bars widen with the zoom. No descriptor field or export changed.
+
+- **2.6.7: independent confirmed study history.** `/trading` and Historify
+  attach `createTimeframeProvider`, so built-in higher-timeframe studies fetch
+  their own warmup, including daily EMA 200 on a five-minute chart. Custom
+  requested descriptors can declare `historyBars`; consume snapshot availability
+  rather than assuming the last source candle is closed. A live-only provider
+  is not a historical replay snapshot. Hosts derive custom intervals through
+  `withTimeframes` using real source capabilities and exchange sessions. Shared
+  favorites are UI preferences, not proof that a broker supplies an interval.
+  Existing descriptors and legacy providers remain supported.
+
+- **2.6.6: nothing for a descriptor to change.** Legend actions now sit
+  before changing readings, so crosshair movement and live ticks keep the
+  same click targets. The packaged widget opens the selected study's settings;
+  `/trading` keeps its existing host dialog. The registry stays at 112 and
+  the generated index at 433 names.
+
+- **2.6.5: nothing for a descriptor to change.** The packaged widget puts
+  running studies before its catalog and adds searchable, grouped mobile
+  drawing tools with shared favorites. Historify uses the widget's drawing
+  controls; both pages keep their custom indicator pickers. The trade-feed adapter
+  also serializes order modifications and requires reconciliation after an
+  uncertain outcome. Indicator calculations and saved descriptors are unchanged.
+
 - **2.6.4: nothing for a descriptor to change.** An order flow release in the
   profile tier: the footprint compares a cell beside an untraded row with
   zero, gains a delta-shaded volume view, zone alerts (`onZoneAlert`), a
@@ -347,7 +451,7 @@ changed, newest first:
    resets per day or per session.
 2. **Before writing a formula, check `reference/cookbook.md`.** Every
    author-facing call is demonstrated there, and the first section is the one
-   that saves the most work: the 112 built-ins are descriptors, so
+   that saves the most work: the 113 built-ins are descriptors, so
    `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
    rather than a reimplementation that can drift from the chart's.
 3. **Load the context you need.** `reference/contract.md` for the descriptor

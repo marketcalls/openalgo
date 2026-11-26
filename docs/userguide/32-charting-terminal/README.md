@@ -3,9 +3,9 @@
 ## Introduction
 
 The **Charting Terminal** at `/trading` is where you read a chart and trade from
-it. The terminal uses published `openalgo-charts` 2.6.0: a from-scratch canvas
-charting engine with 19 chart types, 112 built-in indicators plus any you write
-yourself, and 87 drawing tools, wired to the same broker session and market-data
+it. The terminal uses the pinned `openalgo-charts` package: a from-scratch canvas
+charting engine with 19 chart types, 113 built-in indicators plus any you write
+yourself, and 90 drawing tools, wired to the same broker session and market-data
 feed as the rest of OpenAlgo.
 
 Price updates arrive over the WebSocket feed. History refreshes reconcile bars
@@ -21,31 +21,30 @@ says so and links to `/apikey`.
 
 ## The Layout
 
+The terminal occupies the full viewport with no application navbar. **Dashboard**, the mode switch, theme toggle and profile menu stay accessible in its toolbar; the other controls can scroll or collapse to icons as the screen narrows. The broker badge appears where space permits. **Live/Analyze** has the same instance-wide effect as it does elsewhere in OpenAlgo.
+
 | Region | What it holds |
 |---|---|
 | Top bar | Symbol, interval, chart type, product, quantity, indicators, comparisons, layout, sync, One-Click, replay, undo and redo, feed light, full screen, camera and CSV export |
 | Left rail | Drawing tools in eleven groups, magnet, keep-tool-selected lock, undo, redo, delete |
 | Centre | Chart grid with up to eight panes in presets, or sixteen in an imported workspace |
-| Right panel | Watchlist, option chain, Objects, or the chart assistant |
-| Right rail | The four controls that open those panels |
+| Right panel | Watchlist, option chain, Objects, Alerts, Data window, Scripts, Backtest, Strategies or Assistant |
+| Right rail | Controls that open or close those panels |
+| Bottom bar | Range presets, Go to, market status, clock/timezone and price-scale controls |
 | Bottom dock | Orders, positions, trades and GTT across every symbol |
 
-The chart grid takes whatever the rails and panels leave. Only the right panel
-and the dock can be resized; the panes follow the layout preset you pick.
+The chart grid takes whatever the rails and panels leave. Resize the right panel or dock by its divider. Drag the gaps between chart panes to change their proportions; double-click a gap to reset the split. Workspaces retain the split, and the unnamed grid remembers it per layout in this browser.
 
 One toolbar serves the whole grid. Click a chart, move keyboard focus to its
-chart region, or use the **Chart 1 / Chart 2** selector to choose the chart that
+chart region, or use **Layout > Selected chart** to choose the chart that
 the toolbar controls. The selected chart has a highlighted border. Its symbol,
 interval, chart type, studies, alerts, comparisons and quantity remain
 independent when you select another chart. Enabled sync options still apply.
 Replay keeps the chart that started it as its owner until the session ends.
 
 Adding panes does not repeat the toolbar. Removing the selected pane selects a
-surviving chart, and a saved workspace restores its selected chart. In full
-screen, the selected chart's controls move inside that chart; grid controls
-return when you leave full screen. On narrow screens, scroll the toolbar
-horizontally to reach its remaining controls. The selected-chart selector stays
-visible as the controls scroll.
+surviving chart, and a saved workspace restores its selected chart. The shared toolbar continues to act on the selected chart in full screen. On narrow screens, scroll the toolbar
+horizontally to reach its remaining controls. Dashboard and the account controls remain accessible as the chart controls scroll.
 
 ## Comparing Symbols
 
@@ -55,14 +54,20 @@ You can add several independent symbols. The menu lists each one with its
 colour and shows loading or unavailable-history messages beside that symbol.
 **Remove** affects only the comparison on that row.
 
-Choose **Price** to compare quoted prices or **Percentage** to compare relative
-moves. Comparisons use the selected chart's interval. Missing observations stay
+Choose **Price** for real prices on the chart's price axis, **Percentage** for change since the first shared bar, **Indexed to 100** for the same rebasing starting at 100, or **Own scale** to fit each line to its own range. Comparisons use the selected chart's interval. Missing observations stay
 as gaps. Comparison search accepts instruments; arithmetic expressions remain
 available through the chart's main symbol search.
 
-Each chart retains its comparison list and scale mode. Named workspaces save
-these settings with the rest of that chart. Comparison controls are unavailable
+Each chart remembers its comparison list and scale choice in this browser. Named workspace comparison modes currently retain the older two-mode representation: Price reopens as Own scale, and Indexed to 100 reopens as Percentage. Hide/show keeps a comparison configured; Remove deletes it. Use Retry if its history load failed. Comparison controls are unavailable
 during replay selection, loading and playback.
+
+## Quick Entry, Data Window and Bottom Bar
+
+With focus on the chart and no text field or dialog taking input, type a letter to open symbol search or a digit from 1 to 9 to open quick interval entry. A bare number means minutes (`15`); unit forms include `1h`, `D` and `M`. Lowercase `m` means minutes and uppercase `M` means months. Enter applies a supported interval and Esc cancels. `0` retains the chart's reset-view shortcut.
+
+Open **Data window** on the right rail for the bar and study values under the crosshair. It follows the selected chart and makes missing values visible instead of substituting zero. Chart loading/error overlays and replay readouts explain the current chart state.
+
+The strip above the order dock controls the selected chart: choose a preset history range or **Go to** a date/time. It loads older broker history when needed and reports when the requested history is unavailable. The bar also provides market/session status, clock/timezone and scale toggles. Changing the display timezone relabels the chart; Indian exchange sessions remain aligned to IST.
 
 ## Saving Images and Data
 
@@ -138,23 +143,47 @@ have a meaningful position level and omit OI.
 
 ## Studies on Another Timeframe
 
+The interval menu groups seconds, minutes, hours and calendar periods. Choose
+**Add custom interval**, select the unit and enter a whole-number count. Use the
+star to save a shortcut and the remove button to delete a custom choice. Favorites
+are shared across chart panes and Historify; choosing an interval changes only
+the selected pane. Removing the active interval from the list keeps its chart open.
+
+Custom intervals use compatible broker history: seven minutes uses one-minute
+candles, two hours can use hourly candles, and weeks, months and quarters use
+daily candles. Unsupported choices are disabled. A broker without seconds history
+cannot supply historical seconds charts from minute candles. Exchange sessions
+and calendar boundaries determine aggregation; the display timezone only relabels
+the axis.
+
 Twenty-nine built-in studies have a **Timeframe** row in their settings: the
 moving averages (SMA, EMA, WMA, VWMA, HMA, DEMA, TEMA, ALMA, SMMA, T3, LSMA,
 KAMA, McGinley Dynamic, Zero Lag EMA, VIDYA), the bands and channels
 (Bollinger, Keltner, Donchian, Envelope), Supertrend, Parabolic SAR, ATR, RSI,
 MACD, Stochastic, Stochastic RSI, Williams %R, CCI and ADX. It offers **Chart
-interval** and the intervals your broker serves. Chart interval, the default,
-draws the study exactly as before. Pick a longer interval, such as 15m on a 5m
-chart, and the study is computed on the chart's bars folded into that interval:
-each value appears once its period has closed and does not change afterwards,
-and the legend names the interval (`EMA 9 close 15m`). Sub-day periods start at
-the session open, so 15-minute periods on NSE start at 09:15. An interval no
-longer than the chart's is the chart's own.
+interval**, available native intervals and supported custom choices. Chart interval,
+the default, draws the study exactly as before. Pick Daily and set EMA length to
+200 on a five-minute chart: the study fetches its own daily history, including its
+warmup, independently of the shorter chart window. Historify uses downloaded daily
+history for the same setting.
+
+Only confirmed values appear. During the session, a daily study uses completed
+daily observations. The legend names the requested interval. Missing history or a
+failed request produces a study status message rather than a made-up line.
+Recursive calculations depend on the fetched seed history, so compare equal input
+history when comparing readings. Independent history is unavailable in replay
+unless the data source supplies historical value versions.
 
 A setting the chart cannot use, such as a timeframe on a Renko or Heikin Ashi
 chart's own bars, keeps the study on the chart without drawing it, and a message
 says why. Set **Compute on** to **Underlying bars** (below) or pick Chart
 interval to draw it again.
+
+When a study cannot fetch its timeframe's own history and is computed from the
+chart's bars instead, a timeframe those bars do not divide into, such as 5
+minutes on a 3-minute chart, is refused with a message. Before, it was drawn
+from buckets of the wrong length (6 and 3 minutes, each read as 5) with nothing
+to say so. A day or longer still works on any intraday chart.
 
 Seven studies are new in this version: **ZigZag**, **52 Week High/Low**, **Zero
 Lag EMA**, **Variable Index Dynamic Average**, **Elder-Ray Index**, **Schaff
@@ -169,7 +198,9 @@ again until the bar closes. The brick, range or box size is set from the
 instrument's price when the chart opens (about 0.15 percent of the last close,
 rounded to the tick; a Kagi reversal is twice that) and stays the same as the
 chart pages in older history. Volume under each element is the sum of the time
-bars it was built from.
+bars it was built from, and volume studies such as On-Balance Volume and VWAP
+read the same volume on Chart bars. Kagi is the exception: set a volume study
+on a Kagi chart to **Underlying bars**.
 
 **Chart settings > Price** shows the chart type's own options: the box or range
 size, the reversal, the lines to break, and for Point & Figure how the box is
@@ -382,10 +413,19 @@ Pick a tool from the left rail. A group button selects whatever you last used
 from that group again; the small corner wedge opens the full list without
 changing the selected tool.
 
-The terminal exposes all 87 drawing tools from openalgo-charts 2.6.0. Channels
-include regression and pitchfork variants; Fibonacci and Gann include fans,
-arcs, circles and squares. Patterns include XABCD, Elliott waves and harmonic
-patterns with measured ratios. Geometric studies include tessellation and
+The terminal exposes all 90 drawing tools from openalgo-charts 2.7.5. Each
+tool's icon shows its drawing with an open ring at every point you place.
+Channels include regression and pitchfork variants; Fibonacci and Gann include
+fans, arcs, circles and squares. Patterns include XABCD, head and shoulders and
+harmonic patterns with measured ratios. The **Elliott waves** section holds
+five counts: impulse (1 2 3 4 5), correction (A B C), triangle (A B C D E),
+double combination (W X Y) and triple combination (W X Y X Z). Click the
+origin first, point 0, where the first wave starts, then the end of each
+wave. The origin has no label; the waves are numbered from the second point,
+in parentheses, each label centred over its point, and the count is drawn as
+you place it. An impulse or correction drawn before the upgrade to 2.7.1 has
+its origin on the end of its first wave; drag that point away to draw the
+first wave. Geometric studies include tessellation and
 wavefronts. The **Volume studies** group holds **Anchored VWAP** and **Fixed
 Range Volume Profile**, each placed by clicking on the chart. Use the scrollable
 group menus to reach the complete catalogue.
@@ -429,6 +469,47 @@ and automatic price scaling.
 On a narrow screen, the pane toolbar scrolls horizontally to keep its actions
 reachable. Use the drawing rail, side panels and bottom dock for the remaining
 chart and trading controls.
+
+## Watchlist
+
+The **Watchlist** control on the right rail opens your lists of instruments
+with their prices. Click a row to chart that instrument in the selected chart;
+the charted row is marked.
+
+| Column | Shows |
+|---|---|
+| Symbol | The instrument, with a letter and its exchange |
+| Last | The last traded price |
+| Chg | The move from the previous close, in price |
+| Chg% | The same move, in percent |
+
+Those four are shown to begin with. **Customise columns** (the three dots at
+the top of the panel) adds Volume, High, Low and Open, removes any column, and
+hides the letter or the exchange. Your choice is remembered in this browser.
+
+A gain is printed with a plus sign in green and a loss with a minus sign in
+red. An instrument sitting exactly on its previous close reads `0.00` and
+`0.00%` with no sign and no colour. A dash means the figure is not known yet:
+no price has arrived, or there is no previous close to measure from.
+
+Prices and moves are shown to the paisa, and currency contracts on CDS and BCD
+to four decimals. An instrument quoted finer than that elsewhere (some crypto
+contracts) is still shown to two decimals here, so its Chg can read `0.00`
+while its Chg% shows the move.
+
+When the panel is too narrow for a name and its exchange, the exchange gives
+way first and the name is shortened last. Hold the pointer over a row to read
+both in full, or drag the panel's left edge to widen it. Each column you add
+makes the panel's narrowest width a little larger.
+
+The name at the top of the panel opens the list menu: create, copy, rename,
+import, export, clear or delete a list, and switch between your lists. **+**
+adds an instrument. Drag a row to reorder the list. Hover a row and use the bin
+to remove it, or focus the row and press `Delete`.
+
+While the market is open the prices come from the live feed. When the feed is
+unavailable or the market is closed, the panel says so at the bottom and shows
+the last traded prices.
 
 ## Objects Panel
 
@@ -678,6 +759,21 @@ updated live chart.
 including sibling charts, the dock and the GTT tab, refuses during selection,
 history loading and playback. Replay is
 a simulation, and the prices on screen are not the market's.
+
+## OpenScript, Backtests and Server Strategies
+
+**Scripts** on the right rail edits [OpenScript](../../openscript.md) studies and strategies. Choose New script, select Study or Strategy, save and read compiler diagnostics. **Add to chart** plots a study. For a strategy, **Run on chart** opens Backtest and displays its plots and historical fills.
+
+**Backtest** uses the selected chart's instrument and interval. Choose a saved Strategy, dates and inputs, then Run backtest after changing dates or inputs. Inspect summary, equity, drawdown and trade results; Show trades on chart and Clear marks control the fill markers. The browser backtest sends no broker orders and its input overrides do not change deployed runs.
+
+**Strategies** manages deployments on the server. Deploy a saved strategy on an instrument, exchange and interval, optionally choose product and inputs, then explicitly Start live or Start in sandbox after checking the platform mode. One script can have independent deployments on different instruments or intervals.
+
+- **Pause** ends the process and leaves its position for you to manage.
+- **Stop** asks to close its position and end the process, and requires confirmation. Read any refusal and verify actual orders and positions.
+- **Activity** opens the deployment's orders, trades and positions.
+- Closing the browser stops no server strategy. Logging out is not a position close.
+
+Read [OpenScript](../../openscript.md#running-one-as-a-strategy) for lifecycle routes, schedules, logs, mode changes and the compatibility `/stop` route, which means pause. JavaScript [custom chart indicators](../../custom-indicators.md) and Python `openalgo.ta` indicators are separate systems.
 
 ## The Chart Assistant
 

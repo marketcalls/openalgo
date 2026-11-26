@@ -41,6 +41,7 @@ import {
   setWebSearchKey,
   testWebSearchProvider,
   updateWebSearchConfig,
+  type WebFetchProviderId,
   type WebSearchConfig,
   type WebSearchConfigResponse,
   type WebSearchConfigUpdate,
@@ -88,6 +89,8 @@ const SLOW_TEST_MS = 5000
 /** The editable half of the configuration, held as text while it is typed. */
 interface Draft {
   provider: WebSearchProviderId
+  fetchProvider: WebFetchProviderId
+  preferredSources: string
   perplexityModel: string
   maxCallsPerTurn: string
   dailyCap: string
@@ -96,6 +99,8 @@ interface Draft {
 function toDraft(config: WebSearchConfig): Draft {
   return {
     provider: config.provider,
+    fetchProvider: config.fetch_provider,
+    preferredSources: config.preferred_sources.join(', '),
     perplexityModel: config.perplexity_model,
     maxCallsPerTurn: String(config.max_calls_per_turn),
     dailyCap: String(config.daily_cap),
@@ -105,6 +110,8 @@ function toDraft(config: WebSearchConfig): Draft {
 function sameDraft(a: Draft, b: Draft): boolean {
   return (
     a.provider === b.provider &&
+    a.fetchProvider === b.fetchProvider &&
+    a.preferredSources === b.preferredSources &&
     a.perplexityModel === b.perplexityModel &&
     a.maxCallsPerTurn === b.maxCallsPerTurn &&
     a.dailyCap === b.dailyCap
@@ -155,6 +162,17 @@ function routingState(config: WebSearchConfig): { text: string; warn: boolean } 
   const selected = config.providers.find((entry) => entry.id === config.provider)
   const ready = selected?.ready ?? false
 
+  if (config.provider === 'firecrawl' || config.provider === 'tinyfish') {
+    return ready
+      ? { text: `Link searches run on ${selected?.label}.`, warn: false }
+      : {
+          text:
+            `${selected?.label} is selected but no ${selected?.label} key is stored, so link ` +
+            'searches fall back to DuckDuckGo.',
+          warn: true,
+        }
+  }
+
   if (config.provider === 'duckduckgo') {
     return {
       text: 'Link searches run on DuckDuckGo, which needs no key and works out of the box.',
@@ -186,6 +204,36 @@ function routingState(config: WebSearchConfig): { text: string; warn: boolean } 
           'Link searches run on DuckDuckGo either way.',
         warn: true,
       }
+}
+
+/**
+ * What the saved configuration does when the agent opens a page.
+ *
+ * Fetch is the one web tool with no keyless provider, so an unconfigured install
+ * is told plainly that pages cannot be read, and what to do about it. Without
+ * this the agent just reports it, and the operator learns it from a chat answer.
+ */
+function fetchRoutingState(config: WebSearchConfig): { text: string; warn: boolean } {
+  const label = (id: string) => config.providers.find((entry) => entry.id === id)?.label ?? id
+  if (!config.fetch_ready) {
+    return {
+      text:
+        'The agent cannot open pages yet: web_fetch needs a Firecrawl or TinyFish key. Add one ' +
+        'below. Until then it can search but only read the short extracts.',
+      warn: true,
+    }
+  }
+  const chosen = config.providers.find((entry) => entry.id === config.fetch_provider)
+  if (chosen && !chosen.ready) {
+    const other = config.providers.find((entry) => entry.fetch && entry.ready)
+    return {
+      text:
+        `${chosen.label} is chosen for opening pages but has no key, so ` +
+        `${label(other?.id ?? '')} is used instead.`,
+      warn: false,
+    }
+  }
+  return { text: `Pages are opened with ${label(config.fetch_provider)}.`, warn: false }
 }
 
 /** A test outcome, whether the route answered it or the request itself failed. */
@@ -310,7 +358,7 @@ export function WebSearchPanel() {
 
     const calls = parseWhole(form.maxCallsPerTurn)
     if (calls === null) {
-      setFormError('Searches per turn must be a whole number.')
+      setFormError('Web calls per turn must be a whole number.')
       return
     }
     const cap = parseWhole(form.dailyCap)
@@ -323,6 +371,14 @@ export function WebSearchPanel() {
     // rejected write ambiguous about which field the server refused.
     const values: WebSearchConfigUpdate = {}
     if (form.provider !== config.provider) values.provider = form.provider
+    if (form.fetchProvider !== config.fetch_provider) values.fetch_provider = form.fetchProvider
+    if (form.preferredSources.trim() !== config.preferred_sources.join(', ')) {
+      // The server validates each entry and names the one it refuses. An empty
+      // box is an empty list, which turns the preference off.
+      values.preferred_sources = form.preferredSources
+        .split(/[\s,]+/)
+        .filter((entry) => entry !== '')
+    }
     if (form.perplexityModel.trim() !== config.perplexity_model) {
       values.perplexity_model = form.perplexityModel.trim()
     }
@@ -341,13 +397,15 @@ export function WebSearchPanel() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Globe className="h-4 w-4 text-muted-foreground" aria-hidden />
-          Web search
+          Web search and page fetch
         </CardTitle>
         <CardDescription>
-          DuckDuckGo needs no key and answers link searches out of the box; Tavily replaces it for
-          link searches once its key is stored; Perplexity answers questions with citations through
-          a separate tool, so choosing it leaves link searches on DuckDuckGo. Keys are stored
-          encrypted in your own database and never in a configuration file.
+          DuckDuckGo needs no key and answers link searches out of the box. Tavily, Firecrawl and
+          TinyFish replace it for link searches once a key is stored. Firecrawl and TinyFish also
+          open a whole page, so the agent can search, read the page it found and answer from it.
+          Perplexity answers questions with citations through a separate tool, so choosing it leaves
+          link searches where they were. Keys are stored encrypted in your own database and never in
+          a configuration file.
         </CardDescription>
       </CardHeader>
 
@@ -400,6 +458,55 @@ export function WebSearchPanel() {
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor={`${fieldId}-fetch-provider`}>Page fetch provider</Label>
+                <Select
+                  value={form.fetchProvider}
+                  onValueChange={(next) =>
+                    setDraft({ ...form, fetchProvider: next as WebFetchProviderId })
+                  }
+                >
+                  <SelectTrigger id={`${fieldId}-fetch-provider`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {config.providers
+                      .filter((provider) => provider.fetch)
+                      .map((provider) => (
+                        <SelectItem key={provider.id} value={provider.id}>
+                          {provider.label}
+                          {!provider.has_api_key ? ' (no key stored)' : ''}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Opens a page for the web_fetch tool. If it fails, the other one is tried. Reverts
+                  to {labelOf(config, defaults.fetch_provider)}.
+                </p>
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor={`${fieldId}-preferred`}>
+                  Preferred sources for company figures
+                </Label>
+                <Input
+                  id={`${fieldId}-preferred`}
+                  value={form.preferredSources}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="screener.in, scanx.trade"
+                  onChange={(event) => setDraft({ ...form, preferredSources: event.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  For anything about a company's fundamentals (market cap, P/E, results, ratios) the
+                  agent looks here first, in this order, and searches the open web only when none of
+                  them has the page. If one is blocked it carries on with the next. Up to 5, comma
+                  separated. Leave empty to search the open web straight away. Reverts to{' '}
+                  {defaults.preferred_sources.join(', ')}.
+                </p>
+              </div>
+
+              <div className="space-y-2">
                 <Label htmlFor={`${fieldId}-perplexity-model`}>Perplexity model</Label>
                 <Input
                   id={`${fieldId}-perplexity-model`}
@@ -415,7 +522,7 @@ export function WebSearchPanel() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor={`${fieldId}-calls`}>Searches per turn</Label>
+                <Label htmlFor={`${fieldId}-calls`}>Web calls per turn</Label>
                 <Input
                   id={`${fieldId}-calls`}
                   type="number"
@@ -426,7 +533,9 @@ export function WebSearchPanel() {
                   onChange={(event) => setDraft({ ...form, maxCallsPerTurn: event.target.value })}
                 />
                 <p className="text-xs text-muted-foreground">
-                  0 to {MAX_CALLS_PER_TURN}. Default {defaults.max_calls_per_turn}.
+                  0 to {MAX_CALLS_PER_TURN}. Default {defaults.max_calls_per_turn}. A search, a page
+                  fetch and a research question each count as one; reading further down a page
+                  already opened does not.
                 </p>
               </div>
 
@@ -448,7 +557,8 @@ export function WebSearchPanel() {
               </div>
             </div>
 
-            <RoutingNotice config={config} />
+            <RoutingNotice state={routingState(config)} />
+            <RoutingNotice state={fetchRoutingState(config)} />
 
             <UsageMeter config={config} />
 
@@ -536,10 +646,7 @@ export function WebSearchPanel() {
             <AlertDialogTitle>Remove the {clearing?.label} key</AlertDialogTitle>
             <AlertDialogDescription>
               The stored key cannot be read back, so removing it means pasting it again from
-              wherever you keep it. {clearing?.id === 'tavily' ? 'Link searches fall back to ' : ''}
-              {clearing?.id === 'tavily'
-                ? 'DuckDuckGo until a key is stored again.'
-                : 'The web_research tool cannot run until a key is stored again.'}
+              wherever you keep it. {removalConsequence(clearing)}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -559,13 +666,27 @@ export function WebSearchPanel() {
   )
 }
 
+/** What the agent loses when a key is removed, said for the provider concerned. */
+function removalConsequence(provider: WebSearchProvider | null): string {
+  if (!provider) return ''
+  if (provider.id === 'perplexity') {
+    return 'The web_research tool cannot run until a key is stored again.'
+  }
+  if (provider.fetch) {
+    return (
+      'Link searches fall back to DuckDuckGo if this provider was selected, and web_fetch uses ' +
+      'the other provider, or stops working if it has no key either.'
+    )
+  }
+  return 'Link searches fall back to DuckDuckGo until a key is stored again.'
+}
+
 /** The display name of a provider id, falling back to the id itself. */
 function labelOf(config: WebSearchConfig, id: WebSearchProviderId): string {
   return config.providers.find((provider) => provider.id === id)?.label ?? id
 }
 
-function RoutingNotice({ config }: { config: WebSearchConfig }) {
-  const state = routingState(config)
+function RoutingNotice({ state }: { state: { text: string; warn: boolean } }) {
   return (
     <div
       className={cn(
@@ -593,7 +714,7 @@ function UsageMeter({ config }: { config: WebSearchConfig }) {
   if (cap === 0) {
     return (
       <div className="rounded-md border border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-600 dark:bg-amber-950/50 dark:text-amber-200">
-        The daily cap is 0, so the agent will not search the web at all.
+        The daily cap is 0, so the agent will not search or open web pages at all.
       </div>
     )
   }
@@ -601,7 +722,7 @@ function UsageMeter({ config }: { config: WebSearchConfig }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs">
-        <span className="font-medium">Searches left today</span>
+        <span className="font-medium">Web calls left today</span>
         <span className="tabular-nums text-muted-foreground">
           {usage.remaining} of {cap}
         </span>
@@ -656,6 +777,11 @@ function ProviderRow({
             <Badge variant="outline" className="font-mono text-[11px]">
               {provider.tool}
             </Badge>
+            {provider.fetch ? (
+              <Badge variant="outline" className="font-mono text-[11px]">
+                web_fetch
+              </Badge>
+            ) : null}
           </div>
           <p className="max-w-2xl text-xs text-muted-foreground">{provider.description}</p>
         </div>

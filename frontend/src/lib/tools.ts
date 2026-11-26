@@ -49,6 +49,13 @@ export const tools: Tool[] = [
     color: 'bg-sky-500',
   },
   {
+    title: 'Sector Rotation',
+    description:
+      'Which NSE sectors, stocks and indices are leading, weakening, lagging or improving against a benchmark, with daily or weekly trails',
+    href: '/sector-rotation',
+    color: 'bg-cyan-500',
+  },
+  {
     title: 'Option Chain',
     description: 'Real-time option chain with live Greeks, OI data, and quick order placement',
     href: '/optionchain',
@@ -105,6 +112,13 @@ export const tools: Tool[] = [
     description: 'Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes',
     href: '/gex',
     color: 'bg-indigo-500',
+  },
+  {
+    title: 'Strike Profile',
+    description:
+      'GEX and DEX heatmap by strike and expiry with per-expiry peaks, gamma flip, call and put walls',
+    href: '/strikeprofile',
+    color: 'bg-blue-600',
   },
   {
     title: 'Gamma Density',

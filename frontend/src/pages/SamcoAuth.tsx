@@ -11,6 +11,7 @@ import {
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
+import { syncBrokerSession } from '@/components/auth/AuthSync'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -59,6 +60,9 @@ export default function SamcoAuth() {
 
       if (data.status === 'success') {
         login('', 'samco')
+        // No page reload follows, so load the API key, capabilities and app
+        // mode now; without the key every order ticket stays disabled.
+        await syncBrokerSession()
         setConnected(true)
         showToast.success('Connected to Samco')
         await checkIpStatus()

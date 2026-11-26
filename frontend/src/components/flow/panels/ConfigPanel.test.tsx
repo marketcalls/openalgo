@@ -240,3 +240,45 @@ describe('the options node strike offset', () => {
     expect(offered).not.toContain('OTM26')
   })
 })
+
+describe.each([
+  { type: 'slackAlert', title: 'Slack Alert', page: 'Slack', limit: '4000' },
+  { type: 'discordAlert', title: 'Discord Alert', page: 'Discord', limit: '2000' },
+])('the $title node', ({ type, title, page, limit }) => {
+  beforeEach(() => useFlowWorkflowStore.getState().resetWorkflow())
+
+  it('edits its message and says where it posts', () => {
+    useFlowWorkflowStore.setState({
+      nodes: [
+        {
+          id: 'alert',
+          type,
+          position: { x: 0, y: 0 },
+          data: { message: 'Workflow executed successfully' },
+        },
+      ],
+      selectedNodeId: 'alert',
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    })
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <ConfigPanel />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+
+    expect(screen.getByText(title)).toBeInTheDocument()
+    const message = screen.getByDisplayValue('Workflow executed successfully')
+    fireEvent.change(message, { target: { value: 'Bought {{quote.ltp}}' } })
+    expect(useFlowWorkflowStore.getState().nodes[0].data.message).toBe('Bought {{quote.ltp}}')
+    expect(
+      screen.getByText(new RegExp(`saved on the ${page} page. ${page} must be turned on`))
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(new RegExp(`over ${limit} characters are shortened`))
+    ).toBeInTheDocument()
+  })
+})

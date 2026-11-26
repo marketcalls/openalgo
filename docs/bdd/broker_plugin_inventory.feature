@@ -35,9 +35,12 @@ Feature: Broker plugin inventory
       | motilal | IN_stock |
       | mstock | IN_stock |
       | nubra | IN_stock |
+      | nuvama | IN_stock |
       | paytm | IN_stock |
       | pocketful | IN_stock |
       | rmoney | IN_stock |
+      | rupeezy | IN_stock |
+      | sahi | IN_stock |
       | samco | IN_stock |
       | shoonya | IN_stock |
       | tradejini | IN_stock |

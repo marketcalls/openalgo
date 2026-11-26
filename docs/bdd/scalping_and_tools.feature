@@ -56,3 +56,19 @@ Feature: Scalping terminal and current analytics tools
     When gamma density or OI range is opened
     Then Gamma Density returns gamma-times-OI and convexity-zone data
     And OI Range applies its strike-range view to option-chain data
+
+  # Source: blueprints/strike_profile.py:profile_data, services/strike_profile_service.py
+  Scenario: Strike Profile compares exposure across selected expiries
+    Given the user selects valid underlying exchange and expiry dates
+    When a strike profile is requested
+    Then each selected expiry contributes option-chain GEX and DEX per strike
+    And exposure values use the same rupees-crore units across expiries
+    And a gamma flip is absent when no sign change exists in the loaded range
+
+  # Source: restx_api/sector_rotation.py, services/sector_rotation_service.py:compute_sector_rotation
+  Scenario: Sector Rotation retains usable members when one history is missing
+    Given a valid benchmark and several cash or index instruments
+    When daily or weekly rotation is computed from Historify or broker history
+    Then each member is aligned with the benchmark independently
+    And members with missing or short history return a reason without removing usable members
+    And weekly alignment occurs before resampling

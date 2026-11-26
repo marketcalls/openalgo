@@ -1,9 +1,9 @@
 """Quote and depth waits on a broker feed end when the data is complete.
 
-Motilal, Pocketful, Tradejini and Nubra answer a quote or depth request by
+Motilal, Tradejini and Nubra answer a quote or depth request by
 subscribing on a WebSocket and waiting for the data. They used to wait a fixed
 time (Motilal three seconds for a book, Nubra two), or look once a second
-(Pocketful, Tradejini), or once every half second (a Nubra book), whatever had
+(Tradejini), or once every half second (a Nubra book), whatever had
 arrived. Each wait holds the request's thread, which under gthread is one of a
 fixed pool.
 
@@ -13,7 +13,7 @@ the fixed wait gave for the same packets, only sooner; and when the data is
 not complete the wait lasts exactly as long as before. "Complete" is decided
 per feed, because one packet is not always the whole answer:
 
-* Pocketful and a Tradejini book: one packet is the whole quote or book.
+* A Tradejini book: one packet is the whole book.
 * Motilal: one packet per field group, so every group the read uses.
 * Tradejini L1: a snapshot plus changes, so every field the answer reads.
 * Nubra: a book needs five priced levels a side and the greeks' open
@@ -27,7 +27,6 @@ from __future__ import annotations
 import struct
 import threading
 import time
-from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -35,7 +34,6 @@ import pytest
 from broker.motilal.api import data as motilal
 from broker.motilal.api.motilal_websocket import MotilalWebSocket
 from broker.nubra.api import data as nubra
-from broker.pocketful.api import data as pocketful
 from broker.tradejini.api import data as tradejini
 from utils import runtime
 
@@ -209,120 +207,8 @@ def test_has_snapshot_needs_every_packet_group():
     assert client.has_snapshot("NSE", 1, need_oi=True) is False
 
 
-# ---------------------------------------------------------------- Pocketful
-
-
-class _PocketfulFeed:
-    """The one module-level Pocketful socket: the latest packet, and nothing else."""
-
-    def __init__(self, packets, delay):
-        self.packets = packets
-        self.delay = delay
-        self.latest_detailed = {}
-        self.latest_snap = {}
-
-    def subscribe_detailed_marketdata(self, payload):
-        for i, packet in enumerate(self.packets):
-            later(self.delay * (i + 1), lambda p=packet: setattr(self, "latest_detailed", p))
-        return True
-
-    def subscribe_snapquote_data(self, payload):
-        for i, packet in enumerate(self.packets):
-            later(self.delay * (i + 1), lambda p=packet: setattr(self, "latest_snap", p))
-        return True
-
-    def read_detailed_marketdata(self):
-        return self.latest_detailed
-
-    def read_snapquote_data(self):
-        return self.latest_snap
-
-    def unsubscribe_detailed_marketdata(self, payload):
-        return True
-
-    def unsubscribe_snapquote_data(self, payload):
-        return True
-
-
-@contextmanager
-def _one_row_session():
-    row = SimpleNamespace(token="2885")
-    query = SimpleNamespace(filter=lambda *a, **k: SimpleNamespace(first=lambda: row))
-    yield SimpleNamespace(query=lambda *a, **k: query)
-
-
-def _pocketful(monkeypatch, packets, delay=0.1):
-    broker = pocketful.BrokerData("tok")
-    broker.ws_connection = _PocketfulFeed(packets, delay)
-    broker.ws_connected = True
-    monkeypatch.setattr(pocketful, "db_session", _one_row_session)
-    monkeypatch.setattr(pocketful, "get_br_symbol", lambda symbol, exchange: symbol)
-    return broker
-
-
-def _pf_detailed(token=2885, ltp=50050):
-    return {
-        "instrument_token": token,
-        "exchange_code": 1,
-        "last_traded_price": ltp,
-        "best_bid_price": 50025,
-        "best_ask_price": 50075,
-        "high_price": 50250,
-        "low_price": 49425,
-        "open_price": 49500,
-        "close_price": 49800,
-        "trade_volume": 90000,
-        "currentOpenInterest": 0,
-    }
-
-
-def test_pocketful_quote_takes_its_packet_as_soon_as_it_arrives(monkeypatch):
-    broker = _pocketful(monkeypatch, [_pf_detailed()])
-    quote, elapsed = timed(lambda: broker._get_quotes_compact("SBIN", "NSE"))
-    assert elapsed < 0.8, f"waited {elapsed:.2f}s for a packet that arrived at 0.1s"
-    assert quote["ltp"] == 500.5 and quote["bid"] == 500.25 and quote["prev_close"] == 498.0
-
-
-def test_pocketful_quote_skips_another_instruments_packet(monkeypatch):
-    broker = _pocketful(monkeypatch, [_pf_detailed(token=11, ltp=10), _pf_detailed()], delay=0.1)
-    quote, elapsed = timed(lambda: broker._get_quotes_compact("SBIN", "NSE"))
-    assert elapsed < 0.8
-    assert quote["ltp"] == 500.5
-
-
-def test_pocketful_quote_keeps_the_full_wait_without_its_packet(monkeypatch):
-    monkeypatch.setattr(pocketful, "_QUOTE_WAIT_SECONDS", 0.4)
-    broker = _pocketful(monkeypatch, [])
-    started = time.monotonic()
-    with pytest.raises(pocketful.PocketfulAPIError):
-        broker._get_quotes_compact("SBIN", "NSE")
-    assert time.monotonic() - started >= 0.4
-
-
-def test_pocketful_depth_takes_its_book_as_soon_as_it_arrives(monkeypatch):
-    book = {
-        "instrument_token": 2885,
-        "exchange_code": 1,
-        "bidPrices": [50025, 50000, 49975, 49950, 49925],
-        "bidQtys": [10, 20, 30, 40, 50],
-        "buyers": [1, 2, 3, 4, 5],
-        "askPrices": [50075, 50100, 50125, 50150, 50175],
-        "askQtys": [15, 25, 35, 45, 55],
-        "sellers": [1, 2, 3, 4, 5],
-        "averageTradePrice": 50050,
-        "open": 49500,
-        "high": 50250,
-        "low": 49425,
-        "close": 49800,
-        "totalBuyQty": 1500,
-        "totalSellQty": 1750,
-        "volume": 90000,
-    }
-    broker = _pocketful(monkeypatch, [book])
-    depth, elapsed = timed(lambda: broker._get_market_depth_websocket("SBIN", "NSE"))
-    assert elapsed < 0.8
-    assert depth["bids"][4] == {"price": 499.25, "quantity": 50, "orders": 5}
-    assert depth["totalsellqty"] == 1750
+# Pocketful answers quotes and depth over REST since its new API, so it has no
+# feed wait to return early from: test/test_pocketful_data.py covers it.
 
 
 # ---------------------------------------------------------------- Tradejini

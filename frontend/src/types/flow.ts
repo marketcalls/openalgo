@@ -570,6 +570,18 @@ export interface WhatsappAlertNodeData {
   message: string
 }
 
+/** Slack Alert - Post to the webhook saved on the /slack page */
+export interface SlackAlertNodeData {
+  label?: string
+  message: string
+}
+
+/** Discord Alert - Post to the webhook saved on the /discord page */
+export interface DiscordAlertNodeData {
+  label?: string
+  message: string
+}
+
 /** Delay Node - Wait for duration */
 export interface DelayNodeData {
   label?: string
@@ -731,6 +743,8 @@ export type DataNodeData =
 export type UtilityNodeData =
   | TelegramAlertNodeData
   | WhatsappAlertNodeData
+  | SlackAlertNodeData
+  | DiscordAlertNodeData
   | DelayNodeData
   | WaitUntilNodeData
   | LogNodeData

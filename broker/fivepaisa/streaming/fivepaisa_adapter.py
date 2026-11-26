@@ -133,9 +133,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     client_code = parts[2]  # client_id is the third part
                     self.logger.debug(f"Using client_code from BROKER_API_KEY: {client_code}")
                     return client_code
-                self.logger.warning(
-                    "BROKER_API_KEY format incorrect, using user_id as client_code"
-                )
+                self.logger.warning("BROKER_API_KEY format incorrect, using user_id as client_code")
             except Exception as e:
                 self.logger.error(f"Error parsing BROKER_API_KEY: {e}")
             return user_id
@@ -153,17 +151,13 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         fresh_token = get_auth_token(self.user_id, bypass_cache=True)
         if not fresh_token:
-            self.logger.warning(
-                "No fresh auth token found on reconnect; reusing existing token"
-            )
+            self.logger.warning("No fresh auth token found on reconnect; reusing existing token")
             return
 
         with self.lock:
             client_code = self.client_code or self._resolve_client_code(self.user_id)
             try:
-                new_client = FivePaisaWebSocket(
-                    access_token=fresh_token, client_code=client_code
-                )
+                new_client = FivePaisaWebSocket(access_token=fresh_token, client_code=client_code)
                 new_client.on_open = self._on_open
                 new_client.on_data = self._on_data
                 new_client.on_error = self._on_error
@@ -200,9 +194,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if self._connect_thread and self._connect_thread.is_alive():
                 self.logger.debug("Connect thread already running; not starting another.")
                 return
-            self._connect_thread = threading.Thread(
-                target=self._connect_with_retry, daemon=True
-            )
+            self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
             self._connect_thread.start()
 
     def _connect_with_retry(self) -> None:
@@ -454,7 +446,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # MarketFeedV3). Computed BEFORE inserting, so the new subscription does
         # not mask itself, and mirrored by _methods_still_needed() on the way out.
         with self.lock:
-            already_live = self._methods_still_needed(token)
+            already_live = self._methods_still_needed(token, scrip_data[0])
             self.subscriptions[correlation_id] = {
                 "symbol": symbol,
                 "exchange": exchange,
@@ -501,9 +493,8 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         that zero overwrote the correct REST LTP and the whole chain read 0.00.
 
         Adding MarketFeedV3 alongside makes LastRate arrive for the same token;
-        _on_data fans every frame out to all subscriptions for that token, so
-        _apply_snapshot records LastRate and carries it onto the depth frames
-        that lack it.
+        _update_snapshot keeps the latest MarketFeedV3 fields per scrip, and
+        _on_data merges them into every depth payload.
         """
         method = FivePaisaCapabilityRegistry.get_method_for_mode(mode)
         if mode == 3:
@@ -512,17 +503,28 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return [method, feed]
         return [method]
 
-    def _methods_still_needed(self, token: str) -> set:
+    def _methods_still_needed(self, token: str, scrip: dict | None = None) -> set:
         """Methods still required by the remaining subscriptions for `token`.
 
         Callers hold self.lock. Used so unsubscribing a depth stream does not
-        tear down MarketFeedV3 while another subscription on the same token
-        (another mode, or another client's depth stream) still needs it.
+        tear down MarketFeedV3 while another subscription on the same scrip
+        (another mode, or another client's depth stream) still needs it. With
+        `scrip` ({"Exch", "ExchType"}), only subscriptions on that exchange and
+        segment count: the same scrip code on another exchange is another
+        instrument.
         """
+        key = (
+            self._scrip_key(scrip.get("Exch"), scrip.get("ExchType"), token)
+            if scrip is not None
+            else None
+        )
         needed = set()
         for sub in self.subscriptions.values():
-            if str(sub["token"]) == str(token):
-                needed.update(sub.get("methods") or [sub["method"]])
+            if str(sub["token"]) != str(token):
+                continue
+            if key is not None and self._sub_scrip_key(sub) != key:
+                continue
+            needed.update(sub.get("methods") or [sub["method"]])
         return needed
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
@@ -568,32 +570,36 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             # The stored correlation_id carries the depth level for mode 3, so
             # match on the prefix rather than requiring the caller to know it.
-            for key in [k for k in self.subscriptions if k == correlation_id
-                        or k.startswith(f"{correlation_id}_")]:
+            for key in [
+                k
+                for k in self.subscriptions
+                if k == correlation_id or k.startswith(f"{correlation_id}_")
+            ]:
                 del self.subscriptions[key]
 
             # Only drop methods no remaining subscription on this token needs —
             # MarketFeedV3 may still be feeding another mode (or another depth
             # stream) for the same scrip.
-            still_needed = self._methods_still_needed(token)
+            still_needed = self._methods_still_needed(token, scrip_data[0])
             to_unsubscribe = [m for m in methods if m not in still_needed]
 
             # Release this token's held-last-value snapshot. Nothing used to
             # remove these, so the dict grew for the life of the worker - one
             # entry per (token, mode) that ever ticked, in a process that never
-            # restarts. The staleness matters as much as the size: _apply_snapshot
+            # restarts. The staleness matters as much as the size: the snapshot
             # merges a remembered non-zero value over any field the current tick
             # reports as 0, so an entry left behind by an unsubscribe can surface
             # hours later on a re-subscribe as a price that never traded.
             #
-            # Keyed by (token, mode), and another mode on the same scrip keeps
-            # its own entry - so check for a remaining subscription on this exact
-            # pair rather than on the token alone.
+            # Keyed by (Exch, ExchType, Token) and shared by every mode on the
+            # scrip, so it is released only when no subscription on it remains.
+            scrip_key = self._scrip_key(
+                scrip_data[0].get("Exch"), scrip_data[0].get("ExchType"), token
+            )
             if not any(
-                str(sub["token"]) == str(token) and sub["mode"] == mode
-                for sub in self.subscriptions.values()
+                self._sub_scrip_key(sub) == scrip_key for sub in self.subscriptions.values()
             ):
-                self.last_snapshot.pop(f"{token}_{mode}", None)
+                self.last_snapshot.pop(scrip_key, None)
 
             if self.pending_subscriptions:
                 targets = {(m, tuple(sorted(scrip_data[0].items()))) for m in to_unsubscribe}
@@ -637,7 +643,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             seen = set()
             for sub in self.subscriptions.values():
                 for m in sub.get("methods") or [sub["method"]]:
-                    key = (m, str(sub["token"]))
+                    key = (m, self._sub_scrip_key(sub))
                     if key in seen:
                         continue
                     seen.add(key)
@@ -665,29 +671,64 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback for text messages from the WebSocket"""
         self.logger.debug(f"Received message: {message}")
 
+    @staticmethod
+    def _scrip_key(exch, exch_type, token) -> tuple:
+        """Identity of one instrument on the feed: the scrip code alone is not
+        unique across exchanges and segments."""
+        return (str(exch).upper(), str(exch_type).upper(), str(token))
+
+    @classmethod
+    def _sub_scrip_key(cls, sub: dict) -> tuple:
+        scrip = (sub.get("scrip_data") or [{}])[0]
+        return cls._scrip_key(scrip.get("Exch"), scrip.get("ExchType"), sub["token"])
+
     def _on_data(self, wsapp, message: dict) -> None:
-        """Callback for market data from the WebSocket"""
+        """Callback for market data from the WebSocket.
+
+        MarketFeedV3 frames (LastRate, OHLC, quantities, TickDt) are routed to
+        LTP and QUOTE subscriptions; MarketDepthService frames (Details, TBidQ,
+        TOffQ) to DEPTH subscriptions. Each frame first updates the snapshot of
+        its (Exch, ExchType, Token), and every payload is built from that
+        snapshot, so a depth payload carries the latest quote fields and a
+        quote payload is never built from a depth frame.
+        """
         try:
             self.logger.debug(f"RAW 5PAISA DATA: {message}")
 
-            # Extract token from message
-            token = str(message.get("Token"))
-
-            # Find ALL subscriptions that match this token
-            # Fivepaisa sends one message that should update all modes subscribed to that token
-            matching_subscriptions = []
-            with self.lock:
-                for sub in self.subscriptions.values():
-                    if str(sub["token"]) == token:
-                        matching_subscriptions.append(sub)
-
-            if not matching_subscriptions:
-                self.logger.warning(f"Received data for unsubscribed token: {token}")
+            if not isinstance(message, dict) or message.get("Token") is None:
                 return
 
-            # Publish data to ALL matching subscriptions
+            key = self._scrip_key(message.get("Exch"), message.get("ExchType"), message["Token"])
+
+            if "Details" in message:
+                target_modes = (3,)
+            elif "LastRate" in message:
+                target_modes = (1, 2)
+            else:
+                # e.g. an OI frame: nothing is published from it on its own
+                target_modes = ()
+
+            matching_subscriptions = []
+            with self.lock:
+                # Only an instrument something still subscribes keeps a
+                # snapshot: a late frame after unsubscribe, or a frame for a
+                # scrip never subscribed, must not recreate one (the dict would
+                # grow without bound). Any mode counts, not only this frame's,
+                # since a Depth subscription needs the feed frames merged in.
+                subscribed = [
+                    sub for sub in self.subscriptions.values() if self._sub_scrip_key(sub) == key
+                ]
+                if not subscribed:
+                    self.logger.debug(f"No subscription for frame {key}")
+                    return
+                snapshot = self._update_snapshot(key, message)
+                matching_subscriptions = [sub for sub in subscribed if sub["mode"] in target_modes]
+
+            if not matching_subscriptions:
+                self.logger.debug(f"No subscription for frame {key} (modes {target_modes})")
+                return
+
             for subscription in matching_subscriptions:
-                # Create topic for ZeroMQ
                 symbol = subscription["symbol"]
                 exchange = subscription["exchange"]
                 mode = subscription["mode"]
@@ -695,14 +736,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}[mode]
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
-                # Apply snapshot logic - merge current message with last known values
-                token_key = f"{token}_{mode}"
-                message_with_snapshot = self._apply_snapshot(message, token_key)
-
-                # Normalize the data based on the mode
-                market_data = self._normalize_market_data(message_with_snapshot, mode)
-
-                # Add metadata
+                market_data = self._normalize_market_data(snapshot, mode)
+                if not market_data:
+                    continue
                 market_data.update(
                     {
                         "symbol": symbol,
@@ -712,111 +748,119 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     }
                 )
 
-                # Log the market data we're sending
                 self.logger.debug(
-                    f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, mode={mode}, ltp={market_data.get('ltp', 'N/A')}"
+                    f"Publishing to topic '{topic}': symbol={symbol}, exchange={exchange}, "
+                    f"mode={mode}, ltp={market_data.get('ltp', 'N/A')}"
                 )
-                self.logger.debug(f"Full market data: {market_data}")
-
-                # Publish to ZeroMQ
                 self.publish_market_data(topic, market_data)
 
-        except Exception as e:
-            self.logger.error(f"Error processing market data: {e}", exc_info=True)
+        except Exception:
+            self.logger.exception("Error processing market data")
 
-    def _apply_snapshot(self, message: dict, token_key: str) -> dict[str, Any]:
+    # Price fields that hold their last non-zero value when a MarketFeedV3
+    # frame reports 0 for them.
+    _HELD_PRICE_FIELDS = (
+        "LastRate",
+        "OpenRate",
+        "High",
+        "Low",
+        "PClose",
+        "BidRate",
+        "OffRate",
+        "AvgRate",
+    )
+
+    def _update_snapshot(self, key: tuple, message: dict) -> dict[str, Any]:
+        """Merge one frame into the (Exch, ExchType, Token) snapshot.
+
+        Callers hold self.lock. The snapshot keeps the latest MarketFeedV3
+        fields under "feed" (prices held at their last non-zero value,
+        quantities as sent) and the latest MarketDepthService fields under
+        "depth". Returns a copy that is safe to read outside the lock.
         """
-        Apply snapshot logic - merge current message with last known values.
-        If current value is 0, use the last known non-zero value.
+        snapshot = self.last_snapshot.setdefault(key, {})
+        if "Details" in message:
+            snapshot["depth"] = dict(message)
+        elif "LastRate" in message:
+            previous = snapshot.get("feed", {})
+            feed = dict(message)
+            for field in self._HELD_PRICE_FIELDS:
+                if not feed.get(field) and previous.get(field):
+                    feed[field] = previous[field]
+            snapshot["feed"] = feed
+        else:
+            snapshot.setdefault("extra", {}).update(message)
+        return {k: dict(v) for k, v in snapshot.items()}
 
-        Args:
-            message: Current market data message
-            token_key: Unique key for this token and mode combination
-
-        Returns:
-            Dict: Message with snapshot values applied
-        """
-        # Fields that should use snapshot logic (hold last value if current is 0)
-        snapshot_fields = [
-            "LastRate",
-            "OpenRate",
-            "High",
-            "Low",
-            "PClose",
-            "BidRate",
-            "OffRate",
-            "AvgRate",
-        ]
-
-        # Get last snapshot for this token
-        last_snapshot = self.last_snapshot.get(token_key, {})
-
-        # Create new message with snapshot values
-        merged_message = message.copy()
-
-        for field in snapshot_fields:
-            current_value = message.get(field, 0)
-
-            # If current value is 0 or None, use last known value
-            if current_value == 0 or current_value is None:
-                if field in last_snapshot and last_snapshot[field] != 0:
-                    merged_message[field] = last_snapshot[field]
-                    self.logger.debug(f"Using snapshot value for {field}: {last_snapshot[field]}")
-            else:
-                # Update snapshot with new non-zero value
-                last_snapshot[field] = current_value
-
-        # Store updated snapshot
-        self.last_snapshot[token_key] = last_snapshot
-
-        return merged_message
+    def _quote_fields(self, feed: dict) -> dict[str, Any]:
+        """OpenAlgo quote fields from a MarketFeedV3 snapshot."""
+        result = {
+            "ltp": feed.get("LastRate", 0),
+            "volume": feed.get("TotalQty", 0),
+            "open": feed.get("OpenRate", 0),
+            "high": feed.get("High", 0),
+            "low": feed.get("Low", 0),
+            "close": feed.get("PClose", 0),
+            "last_trade_quantity": feed.get("LastQty", 0),
+            "last_quantity": feed.get("LastQty", 0),
+            "average_price": feed.get("AvgRate", 0),
+        }
+        if feed.get("ChgPcnt") is not None:
+            result["percent_change"] = feed["ChgPcnt"]
+        ltt = self._parse_fivepaisa_time(feed.get("TickDt", ""))
+        if ltt:
+            result["ltt"] = ltt
+            result["last_trade_time"] = ltt
+        return result
 
     def _normalize_market_data(self, message: dict, mode: int) -> dict[str, Any]:
         """
-        Normalize broker-specific data format to a common format
+        Normalize a scrip snapshot ({"feed": ..., "depth": ...}) to OpenAlgo's
+        format. A bare MarketFeedV3 or MarketDepthService frame is accepted too.
 
         Args:
-            message: The raw message from the broker
+            message: Snapshot of the scrip, or one raw frame
             mode: Subscription mode
 
         Returns:
-            Dict: Normalized market data
+            Dict: Normalized market data ({} when the needed frame has not arrived)
         """
-        if mode == 1:  # LTP mode
-            return {
-                "ltp": message.get("LastRate", 0),
-                "ltt": self._parse_fivepaisa_time(message.get("TickDt", "")),
-            }
-        elif mode == 2:  # Quote mode
-            return {
-                "ltp": message.get("LastRate", 0),
-                "ltt": self._parse_fivepaisa_time(message.get("TickDt", "")),
-                "volume": message.get("TotalQty", 0),
-                "open": message.get("OpenRate", 0),
-                "high": message.get("High", 0),
-                "low": message.get("Low", 0),
-                "close": message.get("PClose", 0),
-                "last_trade_quantity": message.get("LastQty", 0),
-                "average_price": message.get("AvgRate", 0),
-                "total_buy_quantity": message.get("TBidQ", 0),
-                "total_sell_quantity": message.get("TOffQ", 0),
-                "bid_price": message.get("BidRate", 0),
-                "bid_quantity": message.get("BidQty", 0),
-                "ask_price": message.get("OffRate", 0),
-                "ask_quantity": message.get("OffQty", 0),
-            }
-        elif mode == 3:  # Depth mode (MarketDepthService)
-            result = {
-                "ltp": message.get("LastRate", 0),
-                "total_buy_quantity": message.get("TBidQ", 0),
-                "total_sell_quantity": message.get("TOffQ", 0),
-                "timestamp": message.get("Time", ""),
-            }
+        if "feed" not in message and "depth" not in message:
+            message = {"depth" if "Details" in message else "feed": message}
+        feed = message.get("feed")
+        depth = message.get("depth")
 
-            # Add depth data if available
-            if "Details" in message:
-                result["depth"] = self._extract_depth_data(message["Details"])
-
+        if mode in (1, 2):
+            if not feed:
+                return {}
+            quote = self._quote_fields(feed)
+            if mode == 1:
+                result = {"ltp": quote["ltp"]}
+                if "ltt" in quote:
+                    result["ltt"] = quote["ltt"]
+                    result["last_trade_time"] = quote["last_trade_time"]
+                return result
+            quote.update(
+                {
+                    "total_buy_quantity": feed.get("TBidQ", 0),
+                    "total_sell_quantity": feed.get("TOffQ", 0),
+                    "bid_price": feed.get("BidRate", 0),
+                    "bid_quantity": feed.get("BidQty", 0),
+                    "ask_price": feed.get("OffRate", 0),
+                    "ask_quantity": feed.get("OffQty", 0),
+                }
+            )
+            return quote
+        elif mode == 3:  # Depth mode (MarketDepthService + latest MarketFeedV3)
+            if not depth:
+                return {}
+            # Quote fields only once a MarketFeedV3 frame has supplied them: the
+            # proxy forwards DEPTH to QUOTE/LTP clients, so zeros would blank them.
+            result = self._quote_fields(feed) if feed else {}
+            result["total_buy_quantity"] = depth.get("TBidQ", 0)
+            result["total_sell_quantity"] = depth.get("TOffQ", 0)
+            if "Details" in depth:
+                result["depth"] = self._extract_depth_data(depth["Details"])
             return result
         else:
             return {}
@@ -868,10 +912,13 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         try:
             # Extract timestamp from /Date(timestamp)/ format
-            match = re.search(r"/Date\((\d+)", time_str)
+            # The feed sends /Date(-62135596800000)/ (DateTime.MinValue) when
+            # it has no tick time; only a positive epoch is a real time.
+            match = re.search(r"/Date\((-?\d+)", str(time_str))
             if match:
-                return int(match.group(1))
+                value = int(match.group(1))
+                return value if value > 0 else 0
             return 0
-        except Exception as e:
-            self.logger.error(f"Error parsing time {time_str}: {e}")
+        except Exception:
+            self.logger.exception(f"Error parsing time {time_str}")
             return 0

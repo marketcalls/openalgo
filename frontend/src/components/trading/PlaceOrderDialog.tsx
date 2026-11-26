@@ -263,7 +263,9 @@ export function PlaceOrderDialog({
 
   const isValid = useCallback(() => {
     if (!symbol || !exchange_) return false
-    if (!apiKey) return false
+    // A caller's own route (the chart's trade feed) carries its own key, so
+    // only the bare API post needs the one in the auth store.
+    if (!place && !apiKey) return false
     if (formQuantity <= 0) return false
     if (needsPrice && formPrice <= 0) return false
     if (needsTrigger && formTriggerPrice <= 0) return false
@@ -271,6 +273,7 @@ export function PlaceOrderDialog({
   }, [
     symbol,
     exchange_,
+    place,
     apiKey,
     formQuantity,
     needsPrice,
@@ -286,7 +289,7 @@ export function PlaceOrderDialog({
       return
     }
 
-    if (!apiKey) {
+    if (!place && !apiKey) {
       showToast.error('API key not found. Please set up your API key.')
       onError?.('API key not found')
       return
@@ -318,6 +321,7 @@ export function PlaceOrderDialog({
         return
       }
 
+      if (!apiKey) throw new Error('API key not found. Please set up your API key.')
       const response = await tradingApi.placeOrder({ apikey: apiKey, strategy, ...order })
 
       // Response structure: { status: "success", orderid: "..." } or { status: "error", message: "..." }

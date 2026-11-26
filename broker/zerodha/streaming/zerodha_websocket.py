@@ -719,8 +719,10 @@ class ZerodhaWebSocket:
 
             if len(packet) == 8:
                 mode = self.MODE_LTP
-            elif len(packet) == 44:
+            elif len(packet) in (28, 44):
                 mode = self.MODE_QUOTE
+            elif len(packet) == 32:
+                mode = self.MODE_FULL
             elif len(packet) >= 184:
                 mode = self.MODE_FULL
             else:
@@ -740,6 +742,29 @@ class ZerodhaWebSocket:
 
             if exchange:
                 tick["source_exchange"] = exchange
+
+            if len(packet) in (28, 32):
+                # Index packet (Kite docs "Index packet structure"): token, ltp,
+                # high, low, open, close, change; full mode adds the exchange
+                # timestamp. The field order differs from the 44/184-byte
+                # packets, so it must not go through the quote/full parser.
+                fields = struct.unpack(">7i", packet[0:28])
+                tick.update({
+                    "open_price": fields[4] / 100.0,
+                    "high_price": fields[2] / 100.0,
+                    "low_price": fields[3] / 100.0,
+                    "close_price": fields[5] / 100.0,
+                    "price_change": fields[6] / 100.0,
+                })
+                tick["ohlc"] = {
+                    "open": fields[4] / 100.0,
+                    "high": fields[2] / 100.0,
+                    "low": fields[3] / 100.0,
+                    "close": fields[5] / 100.0,
+                }
+                if len(packet) == 32:
+                    tick["exchange_timestamp"] = struct.unpack(">I", packet[28:32])[0]
+                return tick
 
             if len(packet) >= 44:
                 try:
@@ -772,7 +797,16 @@ class ZerodhaWebSocket:
 
             if len(packet) >= 184:
                 try:
-                    tick["price_change"] = struct.unpack(">i", packet[44:48])[0] / 100.0
+                    # Kite full packet (zerodha-api-docs/10-websocket.md): bytes
+                    # 44-64 are last traded time, OI, OI day high, OI day low and
+                    # the exchange timestamp. There is no price change field.
+                    (
+                        tick["last_trade_time"],
+                        tick["open_interest"],
+                        tick["oi_day_high"],
+                        tick["oi_day_low"],
+                        tick["exchange_timestamp"],
+                    ) = struct.unpack(">5I", packet[44:64])
 
                     depth_offset = 64
                     buy_depth = []
@@ -795,15 +829,6 @@ class ZerodhaWebSocket:
                             sell_depth.append({"quantity": qty, "price": price, "orders": orders})
 
                     tick["depth"] = {"buy": buy_depth, "sell": sell_depth}
-
-                    if len(packet) >= 184:
-                        try:
-                            tick["exchange_timestamp"] = struct.unpack(">I", packet[60:64])[0]
-                            oi_offset = 184 - 4
-                            if oi_offset + 4 <= len(packet):
-                                tick["open_interest"] = struct.unpack(">I", packet[oi_offset:oi_offset + 4])[0]
-                        except struct.error:
-                            pass
 
                 except struct.error as e:
                     self.logger.debug(f"Could not parse full mode data: {e}")

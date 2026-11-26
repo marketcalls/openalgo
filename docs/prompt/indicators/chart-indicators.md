@@ -8,7 +8,7 @@ They are not the same set as the Python `openalgo.ta` indicators, which compute
 VALUES and answer questions like "what is the RSI now". A name in one list is
 not necessarily in the other.
 
-112 indicators.
+113 indicators.
 
 ## Momentum
 
@@ -71,6 +71,7 @@ not necessarily in the other.
 - `mcginley-dynamic` McGinley Dynamic (on the price)
 - `median` Median (on the price)
 - `parabolic-sar` Parabolic SAR (on the price)
+- `pivot-points` Pivot Points Standard (on the price)
 - `seasonality` Seasonality (own pane)
 - `sma` SMA (on the price)
 - `smma` Smoothed Moving Average (on the price)

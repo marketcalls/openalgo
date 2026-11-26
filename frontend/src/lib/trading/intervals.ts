@@ -4,6 +4,9 @@
  * broker's supported intervals for the timeframe dropdown.
  */
 
+import { intervalParts } from 'openalgo-charts'
+import { ensureInterval } from '@/lib/chart/intervalRegistry'
+
 /** History lookback (days) for an interval token — deeper for coarser frames. */
 export function lookbackDays(interval: string): number {
   const m = /^(\d+)([smh])$/.exec(interval)
@@ -16,6 +19,12 @@ export function lookbackDays(interval: string): number {
   if (interval === 'D') return 3 * 365
   if (interval === 'W') return 5 * 365
   if (interval === 'M') return 10 * 365
+  const parts = ensureInterval(interval) ? intervalParts(interval) : null
+  // Coarse custom charts need multiple periods on first load; bound the date
+  // span so a very large user-entered count cannot create an unlimited backfill.
+  if (parts?.unit === 'M') return Math.min(30 * 365, Math.max(10 * 365, parts.multiplier * 31 * 40))
+  if (parts?.unit === 'D') return Math.min(30 * 365, 3 * 365 * parts.multiplier)
+  if (parts?.unit === 'W') return Math.min(30 * 365, 5 * 365 * parts.multiplier)
   return 30
 }
 

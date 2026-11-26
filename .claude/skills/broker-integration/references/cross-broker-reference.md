@@ -1,4 +1,4 @@
-# Cross-broker reference — how the 36 existing plugins actually behave
+# Cross-broker reference — how the 39 existing plugins actually behave
 
 Measured from the tree, not from any broker's documentation. Use these as
 calibration when deciding what is normal, what is a broker quirk, and what a
@@ -30,8 +30,8 @@ sibling in the tree instead — a Noren white-label behaves essentially like
 
 | Broker | Batch size | Note |
 | --- | --- | --- |
-| dhan | 1000 | |
-| zerodha, upstox | 500 | matches Zerodha's documented `/quote` cap |
+| dhan, rupeezy | 1000 | rupeezy uses `_MAX_QUOTES_PER_REQUEST` |
+| zerodha, upstox, indmoney, mstock | 500 | matches Zerodha's documented `/quote` cap |
 | aliceblue, arrow | 100 | arrow uses `_MULTIQUOTE_MAX_PER_REQUEST` |
 | angel, fyers, compositedge, groww | 50 | fyers and groww comments cite the API limit |
 | definedge | 20 | |
@@ -78,7 +78,7 @@ broker module.
 ## Depth capability is loosely declared
 
 `get_supported_depth_levels()` exists in the adapter design but is implemented
-by only a couple of plugins — grepping all 36 finds `[1]` and `[5]` and little
+by only a couple of plugins — grepping all 39 finds `[1]` and `[5]` and little
 else. The mechanism that actually runs is:
 
 ```python
@@ -103,8 +103,9 @@ concluding a broker "can't" do something, and before designing around a gap:
 - **Bracket / cover style orders** — Dhan documents "super orders" and several
   brokers have an equivalent. OpenAlgo has no common contract for them.
 - **GTT / OCO** — documented by Dhan (forever orders), Flattrade and others,
-  but only `broker/dhan/` and `broker/zerodha/` ship an `api/gtt_api.py`. The
-  capability gate returns **501** for every other broker.
+  and seven plugins ship an `api/gtt_api.py` (angel, dhan, fyers, pocketful,
+  rupeezy, upstox, zerodha). The capability gate returns **501** for every
+  other broker.
 - **20-level full market depth** — Dhan documents it; OpenAlgo's common
   contract tops out per the depth mechanism above.
 - **Expired-options and option-chain endpoints** — Dhan exposes both; OpenAlgo

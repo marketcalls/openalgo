@@ -6,6 +6,30 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _log_unavailable_book(response, book):
+    """Log a Flattrade book read that returned no rows, at the level it deserves.
+
+    PiConnect answers an empty order, trade or position book with
+    {"stat": "Not_Ok", "emsg": "no data"}. That is the normal answer on a flat
+    account, and the order-update poller reads the order book every
+    ORDER_POLL_INTERVAL seconds (5 by default), so it is logged at debug. Any
+    other Not_Ok, such as "Session Expired :  Invalid Session Key", is a failed
+    read and is logged as a warning carrying the broker's message.
+
+    Args:
+        response: The raw PiConnect response, a dict or None.
+        book: The book's name for the log line, e.g. "order book".
+    """
+    if response is None:
+        logger.warning(f"Flattrade returned no response for the {book}.")
+        return
+    emsg = str(response.get("emsg", "")).strip()
+    if "no data" in emsg.lower():
+        logger.debug(f"Flattrade {book} is empty ({emsg}).")
+        return
+    logger.warning(f"Flattrade could not read the {book}: {emsg or response}")
+
+
 # Flattrade (Noren) order statuses arrive with underscores ("TRIGGER_PENDING")
 # and inconsistent casing ("Open" / "OPEN", "REJECT" / "REJECTED"), so normalize
 # the separator and case before matching.
@@ -53,9 +77,8 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     # Check if 'data' is None
-    if order_data is None or (isinstance(order_data, dict) and (order_data["stat"] == "Not_Ok")):
-        # Handle the case where there is no data
-        logger.warning("No data available.")
+    if order_data is None or (isinstance(order_data, dict) and order_data.get("stat") == "Not_Ok"):
+        _log_unavailable_book(order_data, "order book")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data
@@ -252,11 +275,8 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     # Check if 'data' is None
-    if trade_data is None or (isinstance(trade_data, dict) and (trade_data["stat"] == "Not_Ok")):
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.warning("No data available.")
+    if trade_data is None or (isinstance(trade_data, dict) and trade_data.get("stat") == "Not_Ok"):
+        _log_unavailable_book(trade_data, "trade book")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data
@@ -296,11 +316,24 @@ def map_trade_data(trade_data):
 
 
 def transform_tradebook_data(tradebook_data):
+    """Map PiConnect TradeBook rows to OpenAlgo's tradebook format.
+
+    PiConnect returns one row per fill, not per order. Each row carries the
+    order's quantity in "qty" and the order's running average in "avgprc", and
+    that fill's own quantity and price in "flqty" and "flprc". An order filled
+    in two parts therefore comes back as two rows that both say qty 120, so
+    reading "qty" counted it twice (#2464). Each row is mapped from its fill
+    fields; "qty" and "avgprc" are read only when a row has no fill field.
+    """
     transformed_data = []
     for trade in tradebook_data:
+        fill_qty = trade.get("flqty")
+        fill_price = trade.get("flprc")
+        quantity = _int_or_zero(trade.get("qty") if fill_qty is None else fill_qty)
         # Format numeric values to 2 decimal places for tradebook only
-        avg_price = round(float(trade.get("avgprc", 0)), 2)
-        quantity = int(trade.get("qty", 0))
+        avg_price = round(
+            _float_or_zero(trade.get("avgprc") if fill_price is None else fill_price), 2
+        )
         trade_value = round(avg_price * quantity, 2)
 
         transformed_trade = {
@@ -329,10 +362,9 @@ def map_position_data(position_data):
     - The modified position_data with updated 'tradingsymbol' and 'product' fields.
     """
     if position_data is None or (
-        isinstance(position_data, dict) and (position_data["stat"] == "Not_Ok")
+        isinstance(position_data, dict) and position_data.get("stat") == "Not_Ok"
     ):
-        # Handle the case where there is no data
-        logger.warning("No data available.")
+        _log_unavailable_book(position_data, "position book")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data

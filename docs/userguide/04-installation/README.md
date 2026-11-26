@@ -4,6 +4,12 @@
 
 This guide walks you through installing OpenAlgo on your system. We'll cover Windows, Ubuntu, and macOS installations.
 
+## Desktop and Companion Apps
+
+The public `/download` page on an OpenAlgo instance lists current downloads and installation explainers for **OpenAlgo Desktop**, **FastScalper Desktop**, the **Chrome Plugin** and the **Excel Add-in**. OpenAlgo Desktop runs the platform locally. The other three connect to an OpenAlgo instance you already run, using its host URL and OpenAlgo API key; follow the page's connection and setup requirements.
+
+Use that page for current platform builds, checksums where offered, and app-specific installation steps. An Excel order formula can send an order when recalculated, so follow the add-in's calculation instructions before enabling live orders.
+
 ## Quick Install (All Platforms)
 
 If you're comfortable with command line, here's the fastest way:
@@ -16,12 +22,19 @@ cd openalgo
 # 2. Install UV package manager
 pip install uv
 
-# 3. Create configuration
-cp .sample.env .env
-
-# 4. Run OpenAlgo
+# 3. Run OpenAlgo
 uv run app.py
 ```
+
+On the first start OpenAlgo creates `.env` from `.sample.env` with new security
+keys (`APP_KEY`, `API_KEY_PEPPER`, `FERNET_SALT`) and no broker, and the file is
+readable only by your user. Sign in, then add your broker keys on the **Broker
+Configuration** page. Copying `.sample.env` to `.env` yourself works the same way: its
+placeholder keys are replaced with fresh ones on the first start, and its
+`<broker>` placeholder means no broker is set in `.env`. To keep the broker in
+`.env`, fill in the broker lines before the first start. Back up `.env`: its keys
+protect your saved passwords and broker keys. If a database already exists,
+OpenAlgo does not create a new `.env`; restore the one you had.
 
 > **Why `--filter=blob:none`?** It makes a [partial clone](https://git-scm.com/docs/partial-clone):
 > git downloads the full history of commits but only the file contents the
@@ -222,13 +235,15 @@ ZMQ_PORT='5555'
 git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 
-# Create environment file
-cp .sample.env .env
-# Edit .env with the Docker settings above
-
-# Build and start
-docker-compose up --build
+# Build and start. When .env is missing, docker-build.sh creates it with new
+# security keys, no broker, and FLASK_HOST_IP / WEBSOCKET_HOST set to 0.0.0.0.
+./docker-build.sh
 ```
+
+No broker goes into `.env`: once OpenAlgo is running, sign in, open
+**Broker Configuration**, choose your broker and add its keys. The redirect URL to register in your broker's developer console is
+`https://<your-domain>/<broker>/callback` (for example `/zerodha/callback`);
+Broker Configuration shows it when you choose the broker.
 
 Access at `http://localhost:5000`
 
@@ -323,37 +338,30 @@ openalgo/
 ├── frontend/           # React frontend
 ├── database/           # Database models
 ├── db/                 # Database files (created on first run)
-├── logs/               # Log files
+├── log/                # Log files
 └── ...
 ```
 
 ## Configuration Overview
 
-The `.env` file contains all your settings. Key sections:
+The `.env` file contains application configuration. Broker keys can also be saved in Broker Configuration. Selected settings:
 
 ```ini
 # Application Settings
-FLASK_HOST=127.0.0.1
+FLASK_HOST_IP=127.0.0.1
 FLASK_PORT=5000
 
-# Security (CHANGE THESE!)
-APP_KEY=your-secret-key-here
-API_KEY_PEPPER=your-pepper-here
+# Security: generated uniquely by the installer or first startup.
+# Keep your existing APP_KEY, API_KEY_PEPPER and FERNET_SALT private and backed up.
 
-# Broker Selection
-BROKER=zerodha
-
-# Broker Credentials
-BROKER_API_KEY=your-api-key
-BROKER_API_SECRET=your-api-secret
+# Broker: leave these empty and add your broker in Broker Configuration after
+# signing in. A broker set here is used first.
+BROKER_API_KEY=''
+BROKER_API_SECRET=''
+REDIRECT_URL=''
 ```
 
-**Important**: Generate new APP_KEY and API_KEY_PEPPER:
-```bash
-uv run python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Run this twice - once for APP_KEY, once for API_KEY_PEPPER.
+The installers and first startup generate unique keys. Do not replace `API_KEY_PEPPER` or `FERNET_SALT` on a populated installation without the dedicated migration: stored credentials depend on them. Follow any startup migration warning. See [First-Time Setup](../05-first-time-setup/README.md).
 
 ## Running OpenAlgo
 
@@ -411,12 +419,12 @@ For production use, deploy OpenAlgo on an Ubuntu server using the automated `ins
    - Go to SSL/TLS section
    - Set encryption mode to "Full (strict)"
 
-#### Broker Setup (Required)
+#### Broker Setup (After Installation)
 
-Prepare your broker credentials:
-- API Key
-- API Secret
-- Redirection URL based on your domain and broker:
+The installer does not ask for your broker. After installation, sign in to
+OpenAlgo, open **Broker Configuration**, choose your broker and add its API key and
+secret. The redirect URL to register in your broker's developer console follows
+your domain and broker (Broker Configuration shows it when you choose the broker):
 
 ```
 # Example: domain is yourdomain.com, broker is zerodha
@@ -453,8 +461,12 @@ sudo ./install.sh
 
 The script will prompt you for:
 - Your domain name (supports both root domains and subdomains)
-- Broker selection
-- Broker API credentials
+- Whether to enable Remote MCP (optional)
+- Whether to set up fail2ban (optional, default No)
+
+The installer no longer asks for your broker. After installation, sign in to OpenAlgo, open **Broker Configuration**, choose your broker and add its keys. Register `https://<your-domain>/<broker>/callback` in your broker's developer console; Broker Configuration shows it when you choose the broker.
+
+If OpenAlgo is already installed, the installer asks whether to back up the existing folder. On yes it stops the running service, moves the folder to `/var/python/openalgo_backup_<date>`, and copies its `.env` (security keys, broker settings), `db/` (your data), `strategies/` (your scripts, their settings, indicators and OpenScript files) and `keys/` unchanged into the new installation; files that ship with OpenAlgo come from the new copy, and logs stay in the backup folder. On no it warns that the folder's `.env` and `db/` are deleted with it and cannot be recovered, and deletes it only if you type `DELETE`; anything else stops the installation without changing anything.
 
 ### Multi-Domain Deployment
 
@@ -464,12 +476,10 @@ The installation script supports deploying multiple instances on the same server
 # First deployment
 sudo ./install.sh
 # Enter domain: trading1.yourdomain.com
-# Enter broker: fyers
 
 # Second deployment
 sudo ./install.sh
 # Enter domain: trading2.yourdomain.com
-# Enter broker: zerodha
 ```
 
 Each deployment gets:
@@ -662,9 +672,10 @@ chmod +x install-docker.sh
 
 The script will prompt you for:
 - Domain name
-- Broker selection
-- API credentials
 - Email for SSL notifications
+- Whether to enable Remote MCP and fail2ban (both optional)
+
+It does not ask for your broker: add it in **Broker Configuration** after you sign in.
 
 ### What the Script Does
 
@@ -836,20 +847,17 @@ sudo sh get-docker.sh
 ```bash
 git clone --filter=blob:none https://github.com/marketcalls/openalgo
 cd openalgo
-cp .sample.env .env
-# Edit .env with your broker credentials
-docker build -t openalgo:latest .
-docker-compose up -d
+# Creates .env (new security keys, no broker) when it is missing, then builds and starts
+./docker-build.sh
 ```
+
+Then sign in, open **Broker Configuration**, choose your broker and add its keys.
 
 ### Securing Your Raspberry Pi
 
-**Install fail2ban:**
-```bash
-sudo apt-get install fail2ban
-sudo systemctl enable fail2ban
-sudo systemctl start fail2ban
-```
+**fail2ban:** with Option 1, `install.sh` offers to set it up for SSH logins; answer `y`
+at that question (see `install/README.md`, Security Notes). With the Docker-based setup,
+`sudo apt-get install fail2ban` turns on its default SSH protection.
 
 **Configure Firewall:**
 ```bash

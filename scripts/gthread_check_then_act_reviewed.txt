@@ -16,6 +16,7 @@ broker/tradesmart/api/data.py::_websocket_cls::TradeSmartWebSocket  # benign: bi
 
 # --- Warn-once and log-once flags ----------------------------------------
 # A race costs at most one repeated log line.
+broker/pocketful/api/data.py::_book_price::_rupee_book_noted  # benign: log-once flag
 services/agent/catalog.py::_litellm::_import_failed  # benign: records a failed optional import; a repeat only repeats the log line
 services/agent/stream.py::_estimate_cost_usd::_cost_lookup_warned  # benign: warn-once flag
 services/agent/tools/base.py::OpenAlgoToolkit._write_audit::_audit_sink_warned  # benign: warn-once flag

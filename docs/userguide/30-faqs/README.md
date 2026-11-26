@@ -12,7 +12,7 @@ Yes. OpenAlgo is released under the AGPL v3.0 license. Broker API access, market
 
 ### Which brokers are supported?
 
-The current repository contains 36 plugin directories: 35 securities integrations and Delta Exchange for crypto derivatives. See [Broker Connection](../06-broker-connection/README.md) for the authoritative plugin identifiers. Supported exchanges and features vary by plugin.
+The current repository contains 38 plugin directories: 37 securities integrations and Delta Exchange for crypto derivatives. See [Broker Connection](../06-broker-connection/README.md) for the authoritative plugin identifiers. Supported exchanges and features vary by plugin.
 
 ### Can I use live trading?
 
@@ -50,7 +50,7 @@ Broker authentication lifetimes are controlled by the adapter and broker. If a b
 
 ### Can one instance use multiple brokers at once?
 
-No. One instance has one configured broker. Run isolated instances with separate configuration, ports, databases, and service definitions for concurrent brokers.
+One instance can save several brokers' keys but is connected to one broker at a time. Switch from Select Broker after stopping relevant live automation; a failed login leaves the old connection intact. Run isolated instances with separate configuration, ports, databases and service definitions for concurrent brokers. See [Broker Connection](../06-broker-connection/README.md).
 
 ### Why does broker login fail?
 
@@ -68,7 +68,7 @@ Analyzer Mode routes supported order workflows to the sandbox database instead o
 
 ### Does OpenAlgo provide backtesting?
 
-Historify stores historical data and OpenAlgo supports live or walk-forward strategy execution. Use a dedicated backtesting engine or the testing tools in your charting platform for portfolio backtests.
+Yes. [Tools](../31-tools/README.md) includes Portfolio and SIP backtesters, and [OpenScript](../../openscript.md#backtesting-on-the-chart) strategies can be backtested from the charting terminal. Historify provides downloaded local history where supported. Analyzer Mode is a separate execution sandbox; it is not a historical backtest.
 
 ### What happens if OpenAlgo stops while a position is open?
 
@@ -82,7 +82,7 @@ Use the maintained [REST API documentation](../../api/README.md). Interactive Sw
 
 ### How do I get an API key?
 
-Sign in, open the API Key page, and generate or regenerate the instance key. Store it as a secret. The database keeps a hash rather than the raw value.
+Sign in, open the API Key page, and generate or regenerate the instance key. Store it as a secret. The database keeps a verification hash and an encrypted copy for authenticated display and integrations; see [API Key Management](../09-api-key-management/README.md).
 
 ### What are the rate limits?
 

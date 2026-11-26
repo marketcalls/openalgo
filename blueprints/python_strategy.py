@@ -50,7 +50,7 @@ from database.market_calendar_db import (
 from utils import runtime, stream_registry
 from utils.constants import CRYPTO_EXCHANGES
 from utils.db_sessions import releases_scoped_sessions
-from utils.session import check_session_validity
+from utils.session import check_session_validity, is_session_expiry_disabled
 from utils.shutdown import register_shutdown_hook
 
 # Setup logging
@@ -1480,7 +1480,7 @@ def is_trading_day(exchange: str = DEFAULT_STRATEGY_EXCHANGE) -> bool:
 
         if exch in CRYPTO_EXCHANGES:
             return True
-        if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
+        if is_session_expiry_disabled():
             return True
 
         today = datetime.now(IST).date()
@@ -1540,7 +1540,7 @@ def get_market_status(exchange: str = DEFAULT_STRATEGY_EXCHANGE) -> dict:
                 "exchange": exch,
             }
 
-        if os.getenv("DISABLE_SESSION_EXPIRY", "false").lower() == "true":
+        if is_session_expiry_disabled():
             return {
                 "is_open": True,
                 "is_trading": True,

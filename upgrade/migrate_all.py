@@ -92,7 +92,12 @@ MIGRATIONS = [
     ("migrate_agent_voice.py", "Agent Voice Surface Settings"),
     ("migrate_agent_voice_phrase_removal.py", "Agent Voice Approval Phrase Removal"),
     ("migrate_alert_log.py", "Chart Alert Log (/trading alerts history)"),
-    ("migrate_qty_freeze_oct_2026.py", "NSE Index Freeze Limits (5 October 2026)"),
+    ("migrate_qty_freeze_nov_2026.py", "NSE Index Freeze Limits (2 November 2026)"),
+    ("migrate_muhurat_2026.py", "Diwali Muhurat 2026 Published Timings"),
+    ("migrate_broker_keys.py", "Broker Keys, Session Sign-out and Broker Login State"),
+    ("migrate_alert_channels.py", "Alert Channels (/alerts, Slack and Discord webhooks)"),
+    ("migrate_password_reset_grants.py", "Password Reset Grants (single-use, expiring resets)"),
+    ("migrate_sandbox_charges.py", "Sandbox Brokerage and Statutory Charges"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,
@@ -100,7 +105,18 @@ MIGRATIONS = [
 # required schema migrations are listed explicitly: their failure must reach
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
-REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
+REQUIRED_MIGRATIONS = frozenset(
+    {
+        "migrate_strategy_module.py",
+        "migrate_strategy_universe_tab.py",
+        # Without its table the /alerts page and the settings it saves fail.
+        "migrate_alert_channels.py",
+        # Without its table every password reset is refused.
+        "migrate_password_reset_grants.py",
+        # Without its funds columns every sandbox order is refused.
+        "migrate_sandbox_charges.py",
+    }
+)
 
 
 def run_migration(script_name, description):

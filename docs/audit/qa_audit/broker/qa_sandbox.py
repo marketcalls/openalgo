@@ -168,23 +168,78 @@ def sec_master(run: Runner) -> None:
     def index_norm():
         """MC-07 - the headline index of each exchange must be present under
         its own exchange. Keyed per exchange: BANKNIFTY is NSE_INDEX, SENSEX
-        is BSE_INDEX. Checking one flat list against both is meaningless."""
+        is BSE_INDEX. Checking one flat list against both is meaningless.
+
+        Two outcomes are kept apart, because only one is OpenAlgo's to fix:
+          * FAIL - the broker lists the index but the master stores it under
+            a non-canonical name ('NIFTY NEXT 50') or leaves it on the cash
+            exchange instead of the *_INDEX one. That is a normalisation bug.
+          * WARN - the broker's own scrip master does not list the index at
+            all (TradeSmart's NSE file carries only NIFTY, BANKNIFTY,
+            FINNIFTY and INDIAVIX). Nothing to normalise; it is recorded by
+            name, and flagged where the index has derivatives but no spot row
+            (option chain and Greeks need the spot quote).
+        """
         headline = {
             "NSE_INDEX": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "INDIAVIX"],
             "BSE_INDEX": ["SENSEX", "BANKEX", "SENSEX50"],
             "MCX_INDEX": ["MCXBULLDEX", "MCXCOMDEX"],
         }
-        missing = []
+        # Broker display names an index is known to arrive under, compared
+        # after normalise() (case, spaces and punctuation folded).
+        aliases = {
+            "NIFTY": ["NIFTY 50", "NIFTY INDEX"],
+            "BANKNIFTY": ["NIFTY BANK"],
+            "FINNIFTY": ["NIFTY FIN SERVICE", "NIFTY FINANCIAL SERVICES", "NIFTY FIN SERVICES"],
+            "MIDCPNIFTY": ["NIFTY MID SELECT", "NIFTY MIDCAP SELECT"],
+            "NIFTYNXT50": ["NIFTY NEXT 50"],
+            "INDIAVIX": ["INDIA VIX"],
+            "SENSEX": ["BSE SENSEX", "S&P BSE SENSEX"],
+            "BANKEX": ["BSE BANKEX", "S&P BSE BANKEX"],
+            "SENSEX50": ["SENSEX 50", "SNSX50", "BSE SENSEX 50", "S&P BSE SENSEX 50"],
+            "MCXBULLDEX": ["BULLDEX", "MCX BULLDEX"],
+            "MCXCOMDEX": ["COMDEX", "MCX COMDEX"],
+        }
+        parent = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE", "MCX_INDEX": "MCX"}
+        deriv = {"NSE_INDEX": ("NFO",), "BSE_INDEX": ("BFO",), "MCX_INDEX": ("MCX",)}
+        misnamed, absent = [], []
         with run.db() as c:
             for ex, syms in headline.items():
                 if ex not in ex_list:
                     continue
                 have = {r[0] for r in c.execute(
                     "select symbol from symtoken where exchange=?", (ex,))}
-                missing += [f"{s}@{ex}" for s in syms if s not in have]
-        if missing:
-            run.note_quirk("Missing headline index symbols", ", ".join(missing))
-            raise AssertionError(f"missing index symbols: {missing}")
+                # symbol/brsymbol/name on the index exchange; symbol/brsymbol
+                # on the cash exchange (an index row never moved off it)
+                seen = {}
+                for s, b, n in c.execute(
+                        "select symbol, brsymbol, name from symtoken where exchange=?", (ex,)):
+                    for v in (s, b, n):
+                        seen.setdefault(normalise(v), f"{s}@{ex}")
+                for s, b in c.execute(
+                        "select symbol, brsymbol from symtoken where exchange=? "
+                        "and instrumenttype in ('EQ','INDEX','')", (parent[ex],)):
+                    for v in (s, b):
+                        seen.setdefault(normalise(v), f"{s}@{parent[ex]}")
+                for s in syms:
+                    if s in have:
+                        continue
+                    hit = next((seen[normalise(a)] for a in aliases.get(s, [])
+                                if normalise(a) in seen), None)
+                    if hit:
+                        misnamed.append(f"{s}@{ex} stored as {hit}")
+                        continue
+                    q = ",".join("?" * len(deriv[ex]))
+                    n_der = c.execute(
+                        f"select count(*) from symtoken where name=? and exchange in ({q}) "
+                        "and instrumenttype in ('FUT','CE','PE')", (s, *deriv[ex])).fetchone()[0]
+                    absent.append(f"{s}@{ex}"
+                                  + (f" ({n_der} derivative rows, no spot)" if n_der else ""))
+        if absent:
+            run.note_quirk("Headline index not in the broker's scrip master", ", ".join(absent))
+        need(not misnamed, f"index present under a non-canonical name or exchange: {misnamed}")
+        if absent:
+            raise Warn(f"broker's scrip master does not list: {absent}")
 
     run.check("MC-07", index_norm, endpoint="symtoken", expected="headline index per exchange")
 
@@ -414,11 +469,21 @@ def sec_master(run: Runner) -> None:
                         "limit 3", (ex, it)):
                         if not rx.match(s):
                             bad.append(f"{s}@{ex} ({it})")
-                for (s,) in c.execute(
-                    "select symbol from symtoken where exchange=? and instrumenttype in ('EQ','') "
-                    "limit 3", (ex,)):
-                    if re.search(r"\d{2}[A-Z]{3}\d{2}", s):
-                        bad.append(f"{s}@{ex} (EQ carries an expiry block)")
+                # A cash row is wrong only when it is really a derivative typed
+                # EQ: it carries an expiry, or its symbol is a full FUT/CE/PE
+                # shape. A date-like run inside the symbol is not enough -
+                # exchange debt scrip IDs carry one legitimately (BSE group F
+                # 0360OAM27, G-secs GS23DEC43, NSE N*/Y*/GS series).
+                for s, exp in c.execute(
+                    "select symbol, expiry from symtoken where exchange=? "
+                    "and instrumenttype in ('EQ','') "
+                    "and ((expiry is not null and expiry != '') "
+                    "or symbol like '%FUT' or symbol like '%CE' or symbol like '%PE')",
+                    (ex,)):
+                    if exp:
+                        bad.append(f"{s}@{ex} (EQ carries an expiry {exp})")
+                    elif any(rx.match(s) for rx in pat.values()):
+                        bad.append(f"{s}@{ex} (EQ symbol has a derivative shape)")
         need(not bad, f"symbols not in OpenAlgo format: {bad[:6]}")
 
     run.check("MC-06", mc_symbol_construction, endpoint="symtoken",
@@ -731,7 +796,7 @@ def sec_symbols(run: Runner) -> None:
     run.section("3. Symbol services")
     m = run.matrix
 
-    def sym_lookup(slot, itype=None):
+    def sym_lookup(slot, itype=None, index=False):
         if slot not in m:
             raise Skip(f"{slot} unresolved")
         s, ex = m[slot]
@@ -739,7 +804,14 @@ def sec_symbols(run: Runner) -> None:
         need_keys(d, ["symbol", "brsymbol", "exchange", "brexchange", "token",
                       "lotsize", "tick_size"], f"symbol {s}")
         need(d["symbol"] == s, f"echoed symbol {d['symbol']} != {s}")
-        need_nonzero(d["tick_size"], f"{s}.tick_size")
+        if index:
+            # Index spot rows are quote-only and never ordered, so a 0 or null
+            # tick is what brokers send (Kite included) and is correct - the
+            # same exemption MC-11 makes. What SYM-04 asserts is that the row
+            # resolves on, and echoes, the index exchange.
+            need(d["exchange"] == ex, f"{s}: exchange echoed {d['exchange']!r}, expected {ex}")
+        else:
+            need_nonzero(d["tick_size"], f"{s}.tick_size")
         if itype:
             need(d.get("instrumenttype") == itype, f"{s}: instrumenttype {d.get('instrumenttype')}")
         return d
@@ -747,7 +819,10 @@ def sec_symbols(run: Runner) -> None:
     run.check("SYM-01", lambda: sym_lookup("EQ_LIQUID"), endpoint="symbol", expected="full field set")
     run.check("SYM-03", lambda: sym_lookup("OPT_DECIMAL_STRIKE"),
               endpoint="symbol", expected="decimal strike preserved")
-    run.check("SYM-04", lambda: sym_lookup("IDX_NSE"), endpoint="symbol", expected="index resolves")
+    for cid, slot in (("SYM-04.NSE", "IDX_NSE"), ("SYM-04.BSE", "IDX_BSE")):
+        run.check(cid, lambda s=slot: sym_lookup(s, index=True), endpoint="symbol",
+                  symbol=str(m.get(slot, "")),
+                  expected="index resolves, exchange echoed as the index exchange")
     run.check("SYM-05", lambda: sym_lookup("EQ_SPECIAL"), endpoint="symbol",
               expected="special char intact")
     run.check("SYM-06", lambda: run.expect_error(
@@ -3554,9 +3629,46 @@ def sec_books(run: Runner) -> None:
               expected="ltp non-zero and matches /quotes")
 
     def pb_pnl():
+        """PB-05 - pnl arithmetic.
+
+        positionbook.md allows `pnl` to include the day's realized P&L, and
+        brokers (and the sandbox) report it that way: a symbol traded and
+        closed earlier in the day carries that result into the open row. So a
+        row passes when pnl matches either the open position's mark-to-market,
+        (ltp - average_price) x quantity, or the day's P&L for that symbol and
+        product, (sell value - buy value) + quantity x ltp over today's trades.
+        The second form does not depend on how the broker averages, and is
+        only used when today's trades account for the whole open quantity.
+        """
         d = book("positionbook")
         if not d:
             raise Warn("positionbook empty")
+        trades = run.ok(run.client.tradebook(), "tradebook").get("data") or []
+
+        def _pnl_tolerance(v):
+            return max(1.0, abs(v) * 0.02)
+
+        def day_pnl(p, q, lt):
+            rows = [t for t in trades
+                    if t.get("symbol") == p["symbol"] and t.get("exchange") == p.get("exchange")
+                    and t.get("product") == p.get("product")]
+            if not rows:
+                return None
+            net = cash = 0.0
+            for t in rows:
+                tq = as_num(t["quantity"], "trade quantity")
+                val = (as_num(t["trade_value"], "trade_value") if t.get("trade_value") not in (None, "")
+                       else tq * as_num(t["average_price"], "trade average_price"))
+                if str(t.get("action")).upper() == "BUY":
+                    net += tq
+                    cash -= val
+                else:
+                    net -= tq
+                    cash += val
+            if abs(net - q) > 1e-9:
+                return None   # part of the position predates today's trades
+            return cash + q * lt
+
         checked = 0
         for p in d:
             q = as_num(p["quantity"], "quantity")
@@ -3566,8 +3678,14 @@ def sec_books(run: Runner) -> None:
             lt = as_num(p["ltp"], "ltp")
             pnl = as_num(p["pnl"], "pnl")
             exp = (lt - ap) * q
-            need(abs(pnl - exp) <= max(1.0, abs(exp) * 0.02),
-                 f"{p['symbol']}: pnl {pnl} vs (ltp {lt} - avg {ap}) x qty {q} = {exp:.2f}")
+            if abs(pnl - exp) > _pnl_tolerance(exp):
+                day = day_pnl(p, q, lt)
+                need(day is not None and abs(pnl - day) <= _pnl_tolerance(day),
+                     f"{p['symbol']}: pnl {pnl} vs (ltp {lt} - avg {ap}) x qty {q} = {exp:.2f}"
+                     + (f", and vs the day's P&L from today's trades = {day:.2f}"
+                        if day is not None else ""))
+                run.note_limit(f"pnl includes day's realized ({p['symbol']})",
+                               f"pnl {pnl} = day P&L {day:.2f}; open MTM alone {exp:.2f}")
             checked += 1
         if not checked:
             raise Skip("could not open a position to check pnl arithmetic"
@@ -3696,6 +3814,30 @@ def sec_gtt(run: Runner) -> None:
             run.blocked(cid, "EQ_CHEAP unresolved", endpoint="gtt")
         return
     sym, ex = m["EQ_CHEAP"]
+
+    # Does the broker provide GTT at all? The services decide that by whether
+    # broker/<name>/api/gtt_api.py exists, but only in live mode: in analyzer
+    # mode every GTT endpoint is answered by OpenAlgo's sandbox before that
+    # gate is reached, so the endpoint probe below can never see "not
+    # supported" and GT-02..GT-23 would only be testing the sandbox. Check the
+    # broker module itself and stop here when there is none.
+    broker = run.env["broker"]
+    gtt_module = Path(__file__).resolve().parents[4] / "broker" / broker / "api" / "gtt_api.py"
+    if not gtt_module.is_file():
+        reason = (f"GTT is not provided by broker '{broker}' "
+                  f"(no broker/{broker}/api/gtt_api.py)")
+
+        def not_provided():
+            raise Warn(f"{reason}; live GTT calls return 501. In analyzer mode the "
+                       "sandbox still answers them, so GT-02..GT-23 are skipped "
+                       "rather than reported as the broker's")
+
+        run.check("GT-01", not_provided, endpoint="gtt",
+                  expected="broker provides GTT, or the gap is reported")
+        for cid in GT_IDS[1:]:
+            run.record(cid, SKIP, reason, endpoint="gtt")
+        return
+
     ltp = as_num(run.ok(run.client.quotes(symbol=sym, exchange=ex), "q")["data"]["ltp"], "ltp")
 
     probe = run.client.gttorderbook()
