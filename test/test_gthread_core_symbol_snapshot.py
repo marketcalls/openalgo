@@ -417,7 +417,9 @@ def test_cold_readers_load_the_freeze_table_once(monkeypatch):
     assert answers == [1800] * 8
 
 
-def test_a_failed_freeze_load_leaves_the_cache_empty_as_before(monkeypatch):
+def test_a_failed_freeze_reload_keeps_the_published_limits(monkeypatch):
+    """A failed RE-load keeps the last limits (was: wiped to "no limit" while
+    still marked loaded, until restart). See test_qty_freeze_reload_failure."""
     class Broken:
         def all(self):
             raise RuntimeError("database unavailable")
@@ -426,4 +428,4 @@ def test_a_failed_freeze_load_leaves_the_cache_empty_as_before(monkeypatch):
     monkeypatch.setattr(qf, "_cache_loaded", True)
     monkeypatch.setattr(qf.QtyFreeze, "query", Broken())
     assert qf.load_freeze_qty_cache() is False
-    assert qf.get_freeze_qty("NIFTY", "NFO") == 0
+    assert qf.get_freeze_qty("NIFTY", "NFO") == 1800
