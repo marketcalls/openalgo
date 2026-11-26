@@ -218,7 +218,7 @@ def place_order_api(data, auth):
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
-    logger.info(f"Place Order Data: {newdata}")
+    logger.debug(f"Place Order Data: {newdata}")
     # Get the shared httpx client
     client = get_httpx_client()
 
@@ -278,8 +278,8 @@ def place_smartorder_api(data, auth):
         except BrokerBusyError as busy:
             return busy_response(str(busy))
 
-        logger.info(f"Smart Order position_size : {position_size}")
-        logger.info(f"Smart Order Open Position : {current_position}")
+        logger.debug(f"Smart Order position_size : {position_size}")
+        logger.debug(f"Smart Order Open Position : {current_position}")
 
         # Determine action based on position_size and current_position
         action = None
@@ -342,8 +342,8 @@ def place_smartorder_api(data, auth):
             res, response, orderid = place_order_api(order_data, auth)
             _invalidate_position_cache(AUTH_TOKEN)
             # logger.debug(f"{res}")
-            logger.info(f"Smart Order Response: {response}")
-            logger.info(f"Smart Order orderid: {orderid}")
+            logger.debug(f"Smart Order Response: {response}")
+            logger.debug(f"Smart Order orderid: {orderid}")
 
             return res, response, orderid
 
@@ -387,7 +387,7 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.info(f"Close All Positions Payload: {place_order_payload}")
+            logger.debug(f"Close All Positions Payload: {place_order_payload}")
 
             # Place the order to close the position
             res, response, orderid = place_order_api(place_order_payload, auth)
@@ -471,7 +471,8 @@ def modify_order(data, auth):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
-    logger.info(f"Modify Order Data: {transformed_data}")
+    safe_log = {k: v for k, v in transformed_data.items() if k != "uid"}
+    logger.info(f"Modify Order Data: {safe_log}")
 
     # Get the shared httpx client
     client = get_httpx_client()
@@ -488,7 +489,7 @@ def modify_order(data, auth):
     clamp_from_response(response, ORDER_LIMITER)  # clamp only, never retry an order
 
     logger.info(f"Modify Order Response: {response}")
-    logger.info(f"Modify Order Status Code: {res.status_code}")
+    logger.debug(f"Modify Order Status Code: {res.status_code}")
 
     if response.get("stat") == "Ok":
         return {"status": "success", "orderid": data["orderid"]}, 200

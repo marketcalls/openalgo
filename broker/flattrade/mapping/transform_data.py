@@ -139,7 +139,7 @@ def transform_data(data, token, auth_token=None):
     # Apply Market Price Protection for MARKET orders, priced off the LTP.
     if data["pricetype"] == "MARKET":
         original_type = data["pricetype"]
-        logger.info(
+        logger.debug(
             f"MPP: {original_type} order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={action}"
         )
         try:
@@ -149,7 +149,7 @@ def transform_data(data, token, auth_token=None):
 
                 # Fetch quotes for the symbol (includes tick_size from API)
                 quote_data = broker_data.get_quotes(data["symbol"], data["exchange"])
-                logger.info(
+                logger.debug(
                     f"MPP Quote Response: Symbol={data['symbol']}, Exchange={data['exchange']}, "
                     f"LTP={quote_data.get('ltp')}, Bid={quote_data.get('bid')}, Ask={quote_data.get('ask')}, "
                     f"TickSize={quote_data.get('tick_size')}"
@@ -160,7 +160,7 @@ def transform_data(data, token, auth_token=None):
 
                 # Get tick_size from quote response
                 tick_size = quote_data.get("tick_size")
-                logger.info(
+                logger.debug(
                     f"MPP Symbol Info: InstrumentType={instrument_type}, TickSize={tick_size}"
                 )
 
