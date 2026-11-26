@@ -60,6 +60,7 @@ import {
   maxBatchQuantityFor,
   maxQtyFor,
   type OptionType,
+  type PremiumComparison,
   type Product,
   productHintForLegs,
   type QtyMode,
@@ -296,6 +297,14 @@ function LegCard({
                   option_type: segment === 'options' ? (leg.option_type ?? 'CE') : null,
                   strike_mode: strikeMode,
                   atm_offset: strikeMode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
+                  straddle_premium_percent:
+                    strikeMode === 'straddle_premium'
+                      ? (leg.straddle_premium_percent ?? 50)
+                      : null,
+                  premium_comparison:
+                    strikeMode === 'straddle_premium'
+                      ? (leg.premium_comparison ?? 'closest')
+                      : null,
                   strike: strikeMode === 'strike' ? (leg.strike ?? null) : null,
                 })
               }}
@@ -409,30 +418,31 @@ function LegCard({
 
             <div className="space-y-1.5">
               <Label className="text-xs uppercase">Strike mode</Label>
-              <div className="flex h-9 overflow-hidden rounded-md border border-input">
-                {(['atm', 'strike'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() =>
-                      onChange({
-                        ...leg,
-                        strike_mode: mode,
-                        atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
-                        strike: mode === 'strike' ? (leg.strike ?? null) : null,
-                      })
-                    }
-                    className={cn(
-                      'flex-1 text-sm font-medium transition-colors',
-                      leg.strike_mode === mode
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-background hover:bg-muted'
-                    )}
-                  >
-                    {mode === 'atm' ? 'ATM-relative' : 'Direct strike'}
-                  </button>
-                ))}
-              </div>
+              <select
+                value={leg.strike_mode ?? 'atm'}
+                onChange={(event) => {
+                  const mode = event.target.value as 'atm' | 'straddle_premium' | 'strike'
+                  onChange({
+                    ...leg,
+                    strike_mode: mode,
+                    atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
+                    straddle_premium_percent:
+                      mode === 'straddle_premium'
+                        ? (leg.straddle_premium_percent ?? 50)
+                        : null,
+                    premium_comparison:
+                      mode === 'straddle_premium'
+                        ? (leg.premium_comparison ?? 'closest')
+                        : null,
+                    strike: mode === 'strike' ? (leg.strike ?? null) : null,
+                  })
+                }}
+                className={SELECT_CLASS_SM}
+              >
+                <option value="atm">ATM-relative</option>
+                <option value="straddle_premium">Straddle premium</option>
+                <option value="strike">Direct strike</option>
+              </select>
             </div>
 
             {leg.strike_mode === 'atm' ? (
@@ -449,6 +459,33 @@ function LegCard({
                     </option>
                   ))}
                 </select>
+              </div>
+            ) : leg.strike_mode === 'straddle_premium' ? (
+              <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+                <select
+                  value={leg.premium_comparison ?? 'closest'}
+                  onChange={(event) =>
+                    update('premium_comparison', event.target.value as PremiumComparison)
+                  }
+                  className={SELECT_CLASS_SM}
+                >
+                  <option value="closest">Close to</option>
+                  <option value="higher">Higher than</option>
+                  <option value="lower">Lower than</option>
+                </select>
+                <Input
+                  type="number"
+                  min={0.01}
+                  step={1}
+                  value={leg.straddle_premium_percent ?? ''}
+                  onChange={(event) =>
+                    update(
+                      'straddle_premium_percent',
+                      event.target.value === '' ? null : Number(event.target.value)
+                    )
+                  }
+                  className="h-9 font-mono"
+                />
               </div>
             ) : (
               <div className="space-y-1.5 sm:col-span-2">
@@ -1352,6 +1389,15 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
         if (leg.strike == null || leg.strike <= 0) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
         }
+      }
+      if (
+        leg.segment === 'options' &&
+        leg.strike_mode === 'straddle_premium' &&
+        (leg.straddle_premium_percent == null ||
+          !Number.isFinite(leg.straddle_premium_percent) ||
+          leg.straddle_premium_percent <= 0)
+      ) {
+        return `Leg ${leg.id}: straddle premium percentage must be greater than zero`
       }
       // Shares on cash, lots on a derivative. They are not the same number.
       const cap = maxBatchQuantityFor(leg.segment)

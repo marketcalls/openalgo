@@ -60,7 +60,8 @@ EXPIRY_RANKS = ("weekly", "next_week", "monthly", "next_month", "current", "next
 SEGMENTS = ("cash", "futures", "options")
 
 #: How an option leg names its strike.
-STRIKE_MODES = ("atm", "strike")
+STRIKE_MODES = ("atm", "straddle_premium", "strike")
+PREMIUM_COMPARISONS = ("closest", "higher", "lower")
 
 #: Offsets from the money, in strike steps. Bounded at five because a basket
 #: that reaches further than that is nearly always a typo, and an unbounded
@@ -841,6 +842,82 @@ def _resolve_atm_strike(
     return atm_strike, target, None, None
 
 
+def _resolve_straddle_premium_strike(
+    base_symbol: str,
+    option_exchange: str,
+    expiry_symbol: str,
+    option_type: str,
+    percent: float,
+    comparison: str,
+    ltp: float,
+    api_key: str | None,
+) -> tuple[float | None, float | None, float | None, str | None, str | None]:
+    strikes = option_symbol_service.get_available_strikes(
+        base_symbol, expiry_symbol, option_type, option_exchange
+    )
+    if not strikes:
+        return None, None, None, "No listed strikes were found.", "no_strikes"
+    atm = option_symbol_service.find_atm_strike_from_actual(ltp, strikes)
+    if atm is None:
+        return None, None, None, "Could not derive ATM.", "no_atm_strike"
+    symbols = [
+        {
+            "symbol": option_symbol_service.construct_option_symbol(
+                base_symbol, expiry_symbol, atm, side
+            ),
+            "exchange": option_exchange,
+        }
+        for side in ("CE", "PE")
+    ]
+    success, response, _status = quotes_service.get_multiquotes(symbols=symbols, api_key=api_key)
+    if not success:
+        return atm, None, None, "Could not fetch ATM straddle premiums.", "straddle_quotes_failed"
+    premiums: dict[str, float] = {}
+    for result in (response or {}).get("results", []):
+        data = result.get("data", result)
+        premium = data.get("ltp") if isinstance(data, Mapping) else None
+        if result.get("symbol") and _is_positive_number(premium):
+            premiums[result["symbol"]] = float(premium)
+    if any(item["symbol"] not in premiums for item in symbols):
+        return atm, None, None, "Both ATM CE and PE premiums are required.", "straddle_premium_missing"
+    total = sum(premiums[item["symbol"]] for item in symbols)
+    target_premium = total * percent / 100
+    chain_symbols = [
+        {
+            "symbol": option_symbol_service.construct_option_symbol(
+                base_symbol, expiry_symbol, strike, option_type
+            ),
+            "exchange": option_exchange,
+        }
+        for strike in strikes
+    ]
+    success, response, _status = quotes_service.get_multiquotes(
+        symbols=chain_symbols, api_key=api_key
+    )
+    if not success:
+        return atm, None, total, "Could not fetch option premiums.", "premium_quotes_failed"
+    chain_prices: dict[str, float] = {}
+    for result in (response or {}).get("results", []):
+        data = result.get("data", result)
+        premium = data.get("ltp") if isinstance(data, Mapping) else None
+        if result.get("symbol") and _is_positive_number(premium):
+            chain_prices[result["symbol"]] = float(premium)
+    candidates = []
+    for strike, item in zip(strikes, chain_symbols, strict=True):
+        premium = chain_prices.get(item["symbol"])
+        if premium is None:
+            continue
+        if comparison == "higher" and premium <= target_premium:
+            continue
+        if comparison == "lower" and premium >= target_premium:
+            continue
+        candidates.append((float(strike), premium))
+    if not candidates:
+        return atm, None, total, "No strike matched the calculated premium.", "no_matching_premium"
+    target, _selected = min(candidates, key=lambda item: (abs(item[1] - target_premium), item[0]))
+    return atm, target, total, None, None
+
+
 def resolve_leg(
     leg: Mapping[str, Any],
     underlying: str,
@@ -1132,7 +1209,7 @@ def _resolve_options_leg(
         # float(), never int(): VEDL25APR24292.5CE is a real contract, and
         # truncating its strike names one that does not exist.
         target_strike = float(declared)
-    else:
+    elif strike_mode == "atm":
         offset_raw = _leg_value(leg, "atm_offset", "atmOffset", "offset") or "ATM"
         offset = str(offset_raw).strip().upper()
         if not ATM_OFFSET_PATTERN.match(offset):
@@ -1193,6 +1270,38 @@ def _resolve_options_leg(
                 atm_strike=atm_strike,
                 **context,
             )
+    else:
+        percent_raw = _leg_value(leg, "straddle_premium_percent", "straddlePremiumPercent")
+        if isinstance(percent_raw, bool):
+            percent_raw = None
+        try:
+            percent = float(percent_raw)
+        except (TypeError, ValueError):
+            return _fail_leg("invalid_straddle_premium_percent", "Percentage must be a number.", **context)
+        if not math.isfinite(percent) or percent <= 0:
+            return _fail_leg("invalid_straddle_premium_percent", "Percentage must be positive.", **context)
+        comparison = str(_leg_value(leg, "premium_comparison", "premiumComparison") or "closest").lower()
+        if comparison not in PREMIUM_COMPARISONS:
+            return _fail_leg("invalid_premium_comparison", "Unknown premium comparison.", **context)
+        detail["straddle_premium_percent"] = percent
+        detail["premium_comparison"] = comparison
+        if underlying_ltp is None:
+            quote = resolve_underlying_ltp(base_symbol, underlying_exchange, api_key)
+            if not quote.ok:
+                return _fail_leg(quote.code or "no_ltp", quote.error or "", **context)
+            ltp = quote.ltp
+            detail["quote_symbol"] = quote.symbol
+            detail["quote_exchange"] = quote.exchange
+        elif _is_positive_number(underlying_ltp):
+            ltp = float(underlying_ltp)
+        else:
+            return _fail_leg("no_ltp", "Unusable underlying price.", **context)
+        atm_strike, target_strike, total, error, code = _resolve_straddle_premium_strike(
+            base_symbol, exchange, expiry.expiry_symbol, option_type, percent, comparison, ltp, api_key
+        )
+        detail["straddle_premium"] = total
+        if target_strike is None:
+            return _fail_leg(code or "no_strikes", error or "", **context)
 
     symbol = option_symbol_service.construct_option_symbol(
         base_symbol, expiry.expiry_symbol, target_strike, option_type
