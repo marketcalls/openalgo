@@ -297,6 +297,8 @@ function LegCard({
                   strike_mode: strikeMode,
                   atm_offset: strikeMode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
                   strike: strikeMode === 'strike' ? (leg.strike ?? null) : null,
+                  underlying_percent:
+                    strikeMode === 'underlying_percent' ? (leg.underlying_percent ?? null) : null,
                 })
               }}
               className={SELECT_CLASS_SM}
@@ -409,30 +411,25 @@ function LegCard({
 
             <div className="space-y-1.5">
               <Label className="text-xs uppercase">Strike mode</Label>
-              <div className="flex h-9 overflow-hidden rounded-md border border-input">
-                {(['atm', 'strike'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() =>
-                      onChange({
-                        ...leg,
-                        strike_mode: mode,
-                        atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
-                        strike: mode === 'strike' ? (leg.strike ?? null) : null,
-                      })
-                    }
-                    className={cn(
-                      'flex-1 text-sm font-medium transition-colors',
-                      leg.strike_mode === mode
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-background hover:bg-muted'
-                    )}
-                  >
-                    {mode === 'atm' ? 'ATM-relative' : 'Direct strike'}
-                  </button>
-                ))}
-              </div>
+              <select
+                value={leg.strike_mode ?? 'atm'}
+                onChange={(event) => {
+                  const mode = event.target.value as NonNullable<typeof leg.strike_mode>
+                  onChange({
+                    ...leg,
+                    strike_mode: mode,
+                    atm_offset: mode === 'atm' ? (leg.atm_offset ?? 'ATM') : null,
+                    strike: mode === 'strike' ? (leg.strike ?? null) : null,
+                    underlying_percent:
+                      mode === 'underlying_percent' ? (leg.underlying_percent ?? null) : null,
+                  })
+                }}
+                className={SELECT_CLASS_SM}
+              >
+                <option value="atm">ATM-relative</option>
+                <option value="underlying_percent">Underlying %</option>
+                <option value="strike">Direct strike</option>
+              </select>
             </div>
 
             {leg.strike_mode === 'atm' ? (
@@ -450,7 +447,7 @@ function LegCard({
                   ))}
                 </select>
               </div>
-            ) : (
+            ) : leg.strike_mode === 'strike' ? (
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs uppercase">Strike value</Label>
                 <div className="flex gap-2">
@@ -468,6 +465,29 @@ function LegCard({
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Filtered by underlying + resolved expiry rank ({leg.expiry}).
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5 sm:col-span-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">Underlying percentage</Label>
+                  <Input
+                    type="number"
+                    min={0.01}
+                    step={0.1}
+                    value={leg.underlying_percent ?? ''}
+                    onChange={(event) =>
+                      update(
+                        'underlying_percent',
+                        event.target.value === '' ? null : Number(event.target.value)
+                      )
+                    }
+                    className="h-9 font-mono"
+                    placeholder="e.g. 1"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Selects the strike whose live premium is closest to this percentage of spot.
                 </p>
               </div>
             )}
@@ -1351,6 +1371,11 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       if (leg.segment === 'options' && leg.strike_mode === 'strike') {
         if (leg.strike == null || leg.strike <= 0) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
+        }
+      }
+      if (leg.segment === 'options' && leg.strike_mode === 'underlying_percent') {
+        if (leg.underlying_percent == null || leg.underlying_percent <= 0) {
+          return `Leg ${leg.id}: enter an underlying percentage greater than zero`
         }
       }
       // Shares on cash, lots on a derivative. They are not the same number.
