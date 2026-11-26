@@ -30,7 +30,7 @@ import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
 import { priceDecimals } from '@/lib/scalpingPrice'
 import { buildPositionRows } from '@/lib/scalpingRows'
-import { mergeTick, type TickView } from '@/lib/scalpingTick'
+import { mergeTick, needsQuotePoll, type TickView } from '@/lib/scalpingTick'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type {
@@ -609,22 +609,31 @@ export default function Scalping() {
     mode: 'Quote',
     enabled: symbols.length > 0,
   })
+  // Latest live data, read by the quote poll and the (stable) order handler.
+  const marketDataRef = useRef(marketData)
+  marketDataRef.current = marketData
 
-  // After-hours MultiQuotes fallback (mirrors /positions' useLivePrice): when the
-  // WebSocket feed is idle (market closed), poll the REST multiquotes every 30s so
-  // the tickers AND the position book keep fresh LTP/OHLC/MTM. The WS feed stays the
-  // live source during market hours; this only kicks in when ticks go stale.
+  // After-hours MultiQuotes fallback (mirrors /positions' useLivePrice): fetch when
+  // the symbols change (it supplies prev_close and fields the feed omits), then every
+  // 30s fetch again while that first answer is missing or some symbol lacks a fresh
+  // full tick (market closed or feed idle), so the tickers AND the position book keep
+  // fresh LTP/OHLC/MTM. While the feed covers every symbol the poll is skipped. A tick
+  // from the feed's own REST fallback counts as fresh, so once the first answer is in
+  // the page does not poll on top of that fallback.
   const symbolsKey = useMemo(
     () => symbols.map((s) => `${s.exchange}:${s.symbol}`).join(','),
     [symbols]
   )
   const [mqMap, setMqMap] = useState<Map<string, QuotesData>>(new Map())
+  const [mqAt, setMqAt] = useState<number | undefined>(undefined)
   // biome-ignore lint/correctness/useExhaustiveDependencies: symbolsKey tracks symbols content
   useEffect(() => {
     if (!apiKey || symbols.length === 0) return
     let cancelled = false
+    let answered = false // a successful answer for this symbol set has arrived
     const fetchMq = () => {
       if (document.hidden) return // visibility-aware (don't poll a hidden tab)
+      const askedAt = Date.now() // the quote reflects the server near the request
       tradingApi
         .getMultiQuotes(apiKey, symbols)
         .then((resp) => {
@@ -633,12 +642,18 @@ export default function Scalping() {
           for (const r of resp.results) {
             if (r.data) next.set(`${r.exchange}:${r.symbol}`, r.data)
           }
+          answered = true
           setMqMap(next)
+          setMqAt(askedAt)
         })
         .catch(() => {})
     }
     fetchMq()
-    const id = window.setInterval(fetchMq, 30_000)
+    const id = window.setInterval(() => {
+      if (answered && !needsQuotePoll(symbols, marketDataRef.current, Date.now(), TICK_STALE_MS))
+        return
+      fetchMq()
+    }, 30_000)
     return () => {
       cancelled = true
       window.clearInterval(id)
@@ -656,10 +671,11 @@ export default function Scalping() {
         entry?.lastUpdate,
         mqMap.get(key),
         Date.now(),
-        TICK_STALE_MS
+        TICK_STALE_MS,
+        mqAt
       )
     },
-    [marketData, mqMap]
+    [marketData, mqMap, mqAt]
   )
 
   const underlyingTick = getTick(underlyingSym, underlyingExch)
@@ -673,9 +689,7 @@ export default function Scalping() {
     [getTick]
   )
 
-  // Latest live data + predefined config for the (stable) order handler.
-  const marketDataRef = useRef(marketData)
-  marketDataRef.current = marketData
+  // Predefined config for the (stable) order handler.
   const predefRef = useRef({
     slOn: predefSlOn,
     slValue: predefSlValue,
