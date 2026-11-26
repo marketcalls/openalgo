@@ -144,7 +144,7 @@ describe('ManualLegBuilder listed contracts', () => {
       />
     )
 
-    expect(await screen.findAllByText('₹140.00')).toHaveLength(2)
+    expect(await screen.findByText('₹140.00')).toBeVisible()
     expect(screen.getByText('NIFTY13AUG2624600CE')).toBeVisible()
     expect(resolveContract).toHaveBeenCalledTimes(1)
 
