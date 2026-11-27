@@ -58,6 +58,24 @@ def delete_symtoken_table():
 
 def copy_from_dataframe(df):
     logger.info("Performing Bulk Insert")
+
+    # Drop rows missing a NOT NULL column (symbol / brsymbol). The Groww
+    # instruments CSV can contain a malformed row — e.g. an index with an empty
+    # trading_symbol (which becomes the OpenAlgo `symbol`) — and without this
+    # guard a single such row raises "NOT NULL constraint failed: symtoken.symbol"
+    # mid-insert, whose rollback discards EVERY batch and leaves symtoken empty
+    # (breaking all symbol->token lookups, hence quotes). Filtering them keeps the
+    # rest of the master contract intact.
+    before = len(df)
+    df = df.dropna(subset=["symbol", "brsymbol"])
+    df = df[
+        (df["symbol"].astype(str).str.strip() != "")
+        & (df["brsymbol"].astype(str).str.strip() != "")
+    ]
+    dropped = before - len(df)
+    if dropped:
+        logger.warning(f"Skipped {dropped} instrument(s) with empty symbol/brsymbol")
+
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
 
