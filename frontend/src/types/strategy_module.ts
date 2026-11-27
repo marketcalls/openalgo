@@ -690,9 +690,56 @@ export const MAX_SIGNAL_QTY = 1_000_000
 /** Cap on a signal leg's quantity when it is counted in lots. */
 export const MAX_SIGNAL_LOTS = 10_000
 
-/** The cap on a batch leg's count: shares on cash, lots on a derivative. */
-export function maxBatchQuantityFor(segment: Segment): number {
-  return segment === 'cash' ? MAX_CASH_QUANTITY : MAX_LOTS
+/**
+ * The cap on a batch leg's count: shares on cash, lots on a derivative.
+ *
+ * `lotCap` is the freeze-aware ceiling for the strategy's underlying - see
+ * `batchLotLimit` - and defaults to the flat MAX_LOTS the server falls back to
+ * when no freeze quantity is known.
+ */
+export function maxBatchQuantityFor(segment: Segment, lotCap: number = MAX_LOTS): number {
+  return segment === 'cash' ? MAX_CASH_QUANTITY : lotCap
+}
+
+/**
+ * The effective per-leg lot ceiling for a batch strategy's underlying, and the
+ * freeze inputs it came from.
+ *
+ * Every leg's entry and exit is dispatched as a single order, so the exchange
+ * freeze quantity - the largest single-order size it accepts - is the real
+ * ceiling in lots: `floor(freeze_qty / lot_size)`. The flat MAX_LOTS predates
+ * the freeze table and sits above it for three indices, which let a 48-50 lot
+ * leg through the editor only to be refused at the exchange.
+ *
+ * `freezeQty`/`lotSize` come back null whenever the cap is the fallback, so a
+ * caller can tell "27 because the freeze allows it" from "50 because we cannot
+ * say" and show the reason only in the first case. Mirrors
+ * `_derivative_lot_cap` in blueprints/strategy_module.py.
+ */
+export interface BatchLotLimit {
+  /** Effective per-leg lot ceiling on a derivative segment. */
+  max: number
+  /** The freeze inputs behind `max`, or null when MAX_LOTS applies. */
+  freezeQty: number | null
+  lotSize: number | null
+}
+
+export function batchLotLimit(
+  freezeQty: number | null | undefined,
+  lotSize: number | null | undefined
+): BatchLotLimit {
+  const fallback: BatchLotLimit = { max: MAX_LOTS, freezeQty: null, lotSize: null }
+  if (typeof freezeQty !== 'number' || !Number.isFinite(freezeQty) || freezeQty <= 0) {
+    return fallback
+  }
+  if (typeof lotSize !== 'number' || !Number.isFinite(lotSize) || lotSize <= 0) {
+    return fallback
+  }
+  const max = Math.floor(freezeQty / lotSize)
+  // A freeze smaller than one lot cannot be expressed as a lot count; the
+  // flat cap stands and the exchange's own rejection is the honest answer.
+  if (max < 1) return fallback
+  return { max, freezeQty, lotSize }
 }
 
 /** What a batch leg's count is measured in, for a label the operator reads. */
