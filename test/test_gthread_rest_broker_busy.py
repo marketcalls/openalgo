@@ -326,7 +326,11 @@ def test_ticker_history_refused_as_busy_is_a_429(monkeypatch, fmt):
 
     from restx_api import ticker
 
-    monkeypatch.setattr(ticker, "get_auth_token_broker", lambda key: ("tok", "zerodha"))
+    monkeypatch.setattr(
+        ticker,
+        "get_auth_token_broker",
+        lambda key, include_feed_token=False: ("tok", None, "zerodha"),
+    )
     monkeypatch.setattr(
         ticker, "import_broker_module", lambda b: _data_module(get_history=_raise_busy)
     )
