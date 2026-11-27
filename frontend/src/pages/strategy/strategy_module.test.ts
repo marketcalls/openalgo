@@ -4,12 +4,14 @@ import {
   collapseToUnderlyings,
   derivePositions,
   deriveTrades,
+  freezeQtyFromRows,
   lotSizeFromRows,
   reconcileBrokerOrders,
   reconcileBrokerTrades,
 } from '@/api/strategy_module'
 import {
   allowedProductsForLegs,
+  batchLotLimit,
   batchQuantityLabelFor,
   convertLegKind,
   DIRECTION_ACCEPTS,
@@ -1433,11 +1435,91 @@ describe('lotSizeFromRows', () => {
   })
 })
 
+describe('freezeQtyFromRows', () => {
+  const rows = [
+    {
+      symbol: 'NIFTY25AUG2625000CE',
+      name: 'NIFTY',
+      exchange: 'NFO',
+      instrumenttype: 'CE',
+      lotsize: 65,
+      freeze_qty: 1800,
+    },
+    {
+      symbol: 'NIFTY25AUG26FUT',
+      name: 'NIFTY',
+      exchange: 'NFO',
+      instrumenttype: 'FUT',
+      lotsize: 65,
+      freeze_qty: 1800,
+    },
+    {
+      symbol: 'BANKNIFTY25AUG26FUT',
+      name: 'BANKNIFTY',
+      exchange: 'NFO',
+      instrumenttype: 'FUT',
+      lotsize: 30,
+      freeze_qty: 900,
+    },
+  ]
+
+  it('reads the freeze quantity for the root that was asked for', () => {
+    expect(freezeQtyFromRows(rows, 'NIFTY')).toBe(1800)
+    expect(freezeQtyFromRows(rows, 'BANKNIFTY')).toBe(900)
+  })
+
+  it('does not answer with a different underlying that merely matched the search', () => {
+    expect(freezeQtyFromRows(rows, 'FINNIFTY')).toBeNull()
+  })
+
+  it('returns null rather than a guess when no row carries a usable freeze', () => {
+    expect(
+      freezeQtyFromRows(
+        [{ symbol: 'X', name: 'X', exchange: 'NFO', instrumenttype: 'FUT', freeze_qty: 0 }],
+        'X'
+      )
+    ).toBeNull()
+    expect(freezeQtyFromRows([], 'NIFTY')).toBeNull()
+  })
+})
+
 describe('cash and derivative quantities are not the same number', () => {
   it('caps a batch cash leg at the share ceiling, not the lot one', () => {
     expect(maxBatchQuantityFor('cash')).toBe(MAX_CASH_QUANTITY)
     expect(maxBatchQuantityFor('futures')).toBe(MAX_LOTS)
     expect(maxBatchQuantityFor('options')).toBe(MAX_LOTS)
+  })
+
+  it('takes the freeze-aware lot ceiling on a derivative when one is known', () => {
+    // NIFTY: freeze 1,800 units ÷ lot size 65 = 27 lots, below the flat 50.
+    const limit = batchLotLimit(1800, 65)
+    expect(limit).toEqual({ max: 27, freezeQty: 1800, lotSize: 65 })
+    expect(maxBatchQuantityFor('futures', limit.max)).toBe(27)
+    expect(maxBatchQuantityFor('options', limit.max)).toBe(27)
+    // Cash is never capped in lots, whatever the freeze says.
+    expect(maxBatchQuantityFor('cash', limit.max)).toBe(MAX_CASH_QUANTITY)
+  })
+
+  it('lifts the cap to the freeze limit when it sits above the flat 50', () => {
+    // RELIANCE: freeze 25,000 ÷ lot size 250 = 100 lots.
+    expect(batchLotLimit(25000, 250).max).toBe(100)
+  })
+
+  it('falls back to the flat cap when the freeze or the lot size is unknown', () => {
+    for (const limit of [
+      batchLotLimit(null, 65),
+      batchLotLimit(undefined, 65),
+      batchLotLimit(0, 65),
+      batchLotLimit(1800, null),
+      batchLotLimit(1800, 0),
+      batchLotLimit(1800, undefined),
+    ]) {
+      expect(limit).toEqual({ max: MAX_LOTS, freezeQty: null, lotSize: null })
+    }
+  })
+
+  it('falls back when the freeze is smaller than one lot', () => {
+    expect(batchLotLimit(50, 65)).toEqual({ max: MAX_LOTS, freezeQty: null, lotSize: null })
   })
 
   it('labels a cash count as shares, because a lot size of 1 is what makes it one', () => {

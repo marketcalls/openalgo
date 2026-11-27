@@ -33,7 +33,9 @@ import { cn } from '@/lib/utils'
 import {
   ATM_OFFSETS,
   allowedProductsForLegs,
+  batchLotLimit,
   batchQuantityLabelFor,
+  type BatchLotLimit,
   convertLegKind,
   DIRECTION_ACCEPTS,
   defaultProductForLegs,
@@ -243,6 +245,8 @@ interface LegCardProps {
   tab: UniverseTab
   index: number
   expiry: LegExpiryState
+  /** The freeze-aware lot ceiling for the strategy's underlying. */
+  lotLimit: BatchLotLimit
   onChange: (next: Leg) => void
   onRemove: () => void
   onOpenStrikePicker: () => void
@@ -254,6 +258,7 @@ function LegCard({
   tab,
   index,
   expiry,
+  lotLimit,
   onChange,
   onRemove,
   onOpenStrikePicker,
@@ -261,6 +266,10 @@ function LegCard({
 }: LegCardProps) {
   const segments = TAB_SEGMENTS[tab]
   const expiries = expiriesFor(tab, leg.segment)
+  // Shares on cash, lots on a derivative - and on a derivative the ceiling is
+  // the freeze-aware one the strategy's underlying resolves to, not the flat
+  // fallback, so the box stops where the server will.
+  const quantityCap = maxBatchQuantityFor(leg.segment, lotLimit.max)
 
   const update = <K extends keyof Leg>(key: K, value: Leg[K]) => {
     onChange({ ...leg, [key]: value })
@@ -344,21 +353,30 @@ function LegCard({
             <Input
               type="number"
               min={1}
-              max={maxBatchQuantityFor(leg.segment)}
+              max={quantityCap}
               value={leg.lots ?? 1}
               onChange={(event) =>
                 update(
                   'lots',
                   Math.min(
-                    maxBatchQuantityFor(leg.segment),
+                    quantityCap,
                     Math.max(1, Number.parseInt(event.target.value || '1', 10))
                   )
                 )
               }
               className="h-9"
             />
-            {leg.segment === 'cash' && (
+            {leg.segment === 'cash' ? (
               <p className="text-[10px] text-muted-foreground">Shares, sent as-is.</p>
+            ) : (
+              // The cap is a real exchange limit, not a formality: say where it
+              // comes from so a low number reads as information, not a bug.
+              <p className="text-[10px] text-muted-foreground">
+                Up to {quantityCap.toLocaleString('en-IN')} lots
+                {lotLimit.freezeQty != null && lotLimit.lotSize != null
+                  ? ` — freeze limit ${lotLimit.freezeQty.toLocaleString('en-IN')} ÷ lot size ${lotLimit.lotSize}`
+                  : ''}
+              </p>
             )}
           </div>
 
@@ -1173,6 +1191,17 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
     return chosenExchange ?? seeded ?? TAB_DEFAULT_EXCHANGE[tab]
   }, [underlying, seededUnderlyings, tab, chosenExchange, closedUniverse])
 
+  // Batch legs share the strategy's underlying, so the lot ceiling is one
+  // lookup for the whole form, searched on the derivatives venue the same way
+  // the expiry resolution below searches it. Signal legs name their own
+  // instruments and carry their own caps, so the lookup stays off there.
+  const batchQuantity = useLotSize(
+    underlying,
+    derivativeExchangeFor(underlyingExchange),
+    !isSignal
+  )
+  const lotLimit = batchLotLimit(batchQuantity.freezeQty, batchQuantity.lotSize)
+
   const exchangeChoices = TAB_UNDERLYING_EXCHANGES[tab]
 
   // Expiry lists are per (underlying, instrument), not per leg: ten legs on one
@@ -1353,8 +1382,10 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
         }
       }
-      // Shares on cash, lots on a derivative. They are not the same number.
-      const cap = maxBatchQuantityFor(leg.segment)
+      // Shares on cash, lots on a derivative. They are not the same number -
+      // and on a derivative the ceiling is the freeze-aware one the server
+      // will enforce, not the flat fallback.
+      const cap = maxBatchQuantityFor(leg.segment, lotLimit.max)
       if ((leg.lots ?? 1) > cap) {
         const counted = leg.segment === 'cash' ? 'quantity' : 'lots'
         return `Leg ${leg.id}: ${counted} cannot be more than ${cap.toLocaleString('en-IN')}`
@@ -1759,6 +1790,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
                 tab={tab}
                 index={index}
                 expiry={expiryStateFor(leg)}
+                lotLimit={lotLimit}
                 onChange={(next) => updateLeg(index, next)}
                 onRemove={() => removeLeg(index)}
                 onOpenStrikePicker={() => setStrikePickerLegIndex(index)}

@@ -1617,6 +1617,7 @@ interface SearchRow {
   exchange: string
   instrumenttype: string
   lotsize?: number
+  freeze_qty?: number
 }
 
 export interface UnderlyingSearchResult {
@@ -1732,11 +1733,11 @@ export function collapseToUnderlyings(rows: SearchRow[], term: string): Underlyi
 }
 
 /**
- * The lot size for a contract family, for display beside a lots-mode quantity.
+ * The lot size and exchange freeze quantity for a contract family.
  *
- * Read off `POST /api/v1/search`, which already carries `lotsize` on every row
- * and is the client this module uses for the symbol picker, so the lookup adds
- * no new endpoint and no second HTTP client.
+ * Read off `POST /api/v1/search`, which already carries `lotsize` and
+ * `freeze_qty` on every row and is the client this module uses for the symbol
+ * picker, so the lookup adds no new endpoint and no second HTTP client.
  *
  * The obvious candidate, `/api/v1/optionsymbol`, is option-shaped: it wants an
  * expiry and an option type in order to resolve a strike, neither of which a
@@ -1752,7 +1753,7 @@ export function useLotSize(
   symbol: string | null | undefined,
   exchange: string | null | undefined,
   enabled = true
-): { lotSize: number | null; isLoading: boolean; error: string | null } {
+): { lotSize: number | null; freezeQty: number | null; isLoading: boolean; error: string | null } {
   const { apiKey } = useAuthStore()
   const root = (symbol ?? '').trim().toUpperCase()
   const venue = (exchange ?? '').trim().toUpperCase()
@@ -1768,6 +1769,7 @@ export function useLotSize(
 
   return {
     lotSize: lotSizeFromRows(query.data ?? [], root),
+    freezeQty: freezeQtyFromRows(query.data ?? [], root),
     isLoading: active && query.isLoading,
     error: query.isError
       ? errorMessage(
@@ -1795,4 +1797,25 @@ export function lotSizeFromRows(rows: SearchRow[], root: string): number | null 
   if (futures) return futures.lotsize as number
   const any = mine.find(usable)
   return any ? (any.lotsize as number) : null
+}
+
+/**
+ * The exchange freeze quantity for a root symbol, out of a page of search rows.
+ *
+ * The freeze limit is per underlying, not per contract, so every row for the
+ * root reports the same number - but rows are contracts and a contract whose
+ * name does not resolve carries none. Futures rows are preferred for the same
+ * reason `lotSizeFromRows` prefers them, then anything with a usable value.
+ * A null answer means "cannot say", and the caller falls back to the flat cap.
+ */
+export function freezeQtyFromRows(rows: SearchRow[], root: string): number | null {
+  const needle = root.trim().toUpperCase()
+  const mine = rows.filter((row) => underlyingOf(row) === needle)
+  const usable = (row: SearchRow) => typeof row.freeze_qty === 'number' && row.freeze_qty > 0
+  const futures = mine.find(
+    (row) => (row.instrumenttype || '').toUpperCase() === 'FUT' && usable(row)
+  )
+  if (futures) return futures.freeze_qty as number
+  const any = mine.find(usable)
+  return any ? (any.freeze_qty as number) : null
 }

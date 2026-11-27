@@ -613,7 +613,7 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
     return clean
 
 
-def _validate_leg(raw: Any, index: int) -> dict:
+def _validate_leg(raw: Any, index: int, lot_cap: int = MAX_LOTS) -> dict:
     label = f"legs[{index}]"
     leg = _mapping(raw, label)
     _reject_unknown(leg, LEG_FIELDS, label)
@@ -639,7 +639,7 @@ def _validate_leg(raw: Any, index: int) -> dict:
             _required(leg, "lots", label),
             f"{label}.lots",
             minimum=1,
-            maximum=MAX_CASH_QUANTITY if segment == "cash" else MAX_LOTS,
+            maximum=MAX_CASH_QUANTITY if segment == "cash" else lot_cap,
         ),
     }
 
@@ -704,15 +704,58 @@ def _validate_leg(raw: Any, index: int) -> dict:
     return clean
 
 
-def _validate_legs(raw: Any, kind: str = "batch") -> list[dict]:
+def _derivative_lot_cap(kind: str, underlying: str, underlying_exchange: str) -> int:
+    """The lot ceiling a batch leg on this underlying may reach.
+
+    Every leg's entry and exit is dispatched as a single order, so the
+    exchange's freeze quantity - the largest single-order size it accepts -
+    is the real ceiling: ``floor(freeze_qty / lot_size)`` lots. The flat
+    MAX_LOTS predates the freeze table and sits above it for three indices,
+    which let a 48-50 lot leg validate here and be refused at the exchange.
+
+    An unknown freeze quantity or lot size keeps MAX_LOTS: "cannot say" is
+    not a reason to refuse a configuration, and the engine resolves the real
+    contract again at entry.
+    """
+    if kind != "batch":
+        return MAX_LOTS
+    try:
+        from database.qty_freeze_db import get_freeze_qty
+        from services.strategy_module.symbol_resolver import (
+            derivatives_exchange,
+            lot_size_for,
+        )
+
+        venue = derivatives_exchange(underlying_exchange)
+        freeze_qty = get_freeze_qty(underlying, venue)
+        lot_size = lot_size_for(underlying, venue)
+    except Exception:
+        logger.exception(
+            "Lot cap lookup failed for %s on %s; using %s",
+            underlying,
+            underlying_exchange,
+            MAX_LOTS,
+        )
+        return MAX_LOTS
+    if not freeze_qty or not lot_size or lot_size <= 0:
+        return MAX_LOTS
+    cap = freeze_qty // lot_size
+    # A freeze smaller than one lot cannot be expressed as a lot count; the
+    # flat cap stands and the exchange's own rejection is the honest answer.
+    return cap if cap >= 1 else MAX_LOTS
+
+
+def _validate_legs(raw: Any, kind: str = "batch", lot_cap: int = MAX_LOTS) -> list[dict]:
     if not isinstance(raw, list):
         raise ValidationError("legs must be a list")
     if len(raw) < MIN_LEGS:
         raise ValidationError(f"A strategy needs at least {MIN_LEGS} leg")
     if len(raw) > MAX_LEGS:
         raise ValidationError(f"A strategy takes at most {MAX_LEGS} legs, got {len(raw)}")
-    validate = _validate_signal_leg if kind == "signal" else _validate_leg
-    legs = [validate(leg, index) for index, leg in enumerate(raw)]
+    legs = [
+        _validate_signal_leg(leg, index) if kind == "signal" else _validate_leg(leg, index, lot_cap)
+        for index, leg in enumerate(raw)
+    ]
 
     ids = [leg["id"] for leg in legs]
     if len(set(ids)) != len(ids):
@@ -867,13 +910,25 @@ def _validate_strategy_config(payload: Any) -> dict:
     raw = _mapping(payload, "The request body")
     _reject_unknown(raw, CONFIG_FIELDS, "The request")
 
-    # Legs first, because the universe tab is derived from them when the caller
-    # names none, and that derivation has to read the segment a leg will
-    # actually carry. Reading the raw payload saw no segment on a signal leg
-    # that relied on the default, derived a tab for a derivative universe, and
-    # then refused the very cash leg the default had just produced.
+    # The underlying is read before the legs because the freeze-aware lot cap
+    # is per underlying and every batch leg shares it. The legs are still
+    # validated before the universe tab is derived from them below: that
+    # derivation has to read the segment a leg will actually carry. Reading
+    # the raw payload saw no segment on a signal leg that relied on the
+    # default, derived a tab for a derivative universe, and then refused the
+    # very cash leg the default had just produced.
     kind = _choice(raw.get("strategy_kind") or "batch", store.STRATEGY_KINDS, "strategy_kind")
-    legs = _validate_legs(_required(raw, "legs"), kind)
+    underlying = _text(
+        _required(raw, "underlying"), "underlying", max_length=MAX_UNDERLYING_LENGTH
+    ).upper()
+    underlying_exchange = _choice(
+        _required(raw, "underlying_exchange"), UNDERLYING_EXCHANGES, "underlying_exchange"
+    )
+    legs = _validate_legs(
+        _required(raw, "legs"),
+        kind,
+        _derivative_lot_cap(kind, underlying, underlying_exchange),
+    )
 
     config: dict[str, Any] = {
         "name": _text(_required(raw, "name"), "name", max_length=MAX_NAME_LENGTH),
@@ -888,12 +943,8 @@ def _validate_strategy_config(payload: Any) -> dict:
         "universe_tab": _choice(
             raw.get("universe_tab") or _tab_for_legs(raw, legs), UNIVERSE_TABS, "universe_tab"
         ),
-        "underlying": _text(
-            _required(raw, "underlying"), "underlying", max_length=MAX_UNDERLYING_LENGTH
-        ).upper(),
-        "underlying_exchange": _choice(
-            _required(raw, "underlying_exchange"), UNDERLYING_EXCHANGES, "underlying_exchange"
-        ),
+        "underlying": underlying,
+        "underlying_exchange": underlying_exchange,
         "strategy_type": _choice(
             raw.get("strategy_type") or "intraday", store.STRATEGY_TYPES, "strategy_type"
         ),

@@ -31,10 +31,12 @@ from flask import Flask
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import database.qty_freeze_db as qty_freeze_db  # noqa: E402
 from blueprints import strategy_module  # noqa: E402
 from database import strategy_module_db as store  # noqa: E402
 from database.engine_factory import create_db_engine  # noqa: E402
 from limiter import limiter  # noqa: E402
+from services.strategy_module import symbol_resolver  # noqa: E402
 
 USER = "tester"
 OTHER = "somebody-else"
@@ -993,3 +995,121 @@ class TestTheValidatorEntryPoint:
 
         assert error is None
         assert again["legs"] == once["legs"]
+
+
+# ------------------------------------------------------- freeze-aware lot cap
+
+
+@pytest.fixture
+def freeze_and_lot_sizes(monkeypatch):
+    """The freeze table and master-contract lot sizes the cap reads.
+
+    Seeded in memory the same way test_qty_freeze_unknown_default.py seeds the
+    cache: a handful of NFO rows as a real install carries, and a lot-size map
+    standing in for SymToken lookups. MYSTERY has a freeze row but no lot size,
+    the "known freeze, unknown lot" branch.
+    """
+    monkeypatch.setattr(qty_freeze_db, "_cache_loaded", True)
+    monkeypatch.setattr(
+        qty_freeze_db,
+        "_freeze_qty_cache",
+        {
+            "NFO:NIFTY": 1800,
+            "NFO:BANKNIFTY": 900,
+            "NFO:RELIANCE": 25000,
+            "NFO:MYSTERY": 5000,
+        },
+    )
+    sizes = {"NIFTY": 65, "BANKNIFTY": 30, "RELIANCE": 250}
+    monkeypatch.setattr(
+        symbol_resolver,
+        "lot_size_for",
+        lambda symbol, exchange: sizes.get(str(symbol).upper()),
+    )
+
+
+class TestFreezeAwareLotCap:
+    """A batch leg's lot ceiling is the exchange freeze limit when one is known.
+
+    MAX_LOTS predates the freeze table and sits above it for three indices, so
+    a 48-50 lot BANKNIFTY leg validated here and was refused at the exchange as
+    one oversized order. The cap is floor(freeze_qty / lot_size) for the
+    strategy's underlying; an unknown freeze or lot size keeps 50.
+    """
+
+    def test_a_known_freeze_caps_the_leg_at_whole_lots(self, client, freeze_and_lot_sizes):
+        # NIFTY: 1,800 units ÷ 65 = 27 lots; 28 lots is 1,820 units, over the
+        # freeze, so the leg must stop at 27.
+        create(client, legs=[leg(lots=27), leg(option_type="PE", lots=27)])
+        response = client.post("/strategy/api/strategies", json=payload(legs=[leg(lots=28)]))
+        assert response.status_code == 400
+        assert "lots" in response.get_json()["message"]
+
+    def test_the_cap_tracks_each_underlying(self, client, freeze_and_lot_sizes):
+        # BANKNIFTY: 900 ÷ 30 = 30 lots - one of the sub-50 indices the issue
+        # names, where 48-50 lots used to validate and die at the exchange.
+        create(client, underlying="BANKNIFTY", legs=[leg(lots=30)])
+        response = client.post(
+            "/strategy/api/strategies",
+            json=payload(underlying="BANKNIFTY", legs=[leg(lots=31)]),
+        )
+        assert response.status_code == 400
+
+    def test_a_freeze_above_fifty_lifts_the_cap_to_the_exchange_limit(
+        self, client, freeze_and_lot_sizes
+    ):
+        # RELIANCE: 25,000 ÷ 250 = 100 lots, above the old flat 50.
+        create(
+            client,
+            underlying="RELIANCE",
+            underlying_exchange="NSE",
+            legs=[leg(lots=80)],
+        )
+        response = client.post(
+            "/strategy/api/strategies",
+            json=payload(
+                underlying="RELIANCE",
+                underlying_exchange="NSE",
+                legs=[leg(lots=101)],
+            ),
+        )
+        assert response.status_code == 400
+
+    def test_an_unknown_freeze_keeps_the_fifty_lot_cap(self, client, freeze_and_lot_sizes):
+        create(client, underlying="NOSUCHINDEX", legs=[leg(lots=50)])
+        response = client.post(
+            "/strategy/api/strategies",
+            json=payload(underlying="NOSUCHINDEX", legs=[leg(lots=51)]),
+        )
+        assert response.status_code == 400
+
+    def test_a_known_freeze_without_a_lot_size_keeps_the_fifty_lot_cap(
+        self, client, freeze_and_lot_sizes
+    ):
+        # MYSTERY has a freeze row but the master contract cannot say its lot
+        # size, so floor(freeze / lot) cannot be computed and 50 stands.
+        create(client, underlying="MYSTERY", legs=[leg(lots=50)])
+        response = client.post(
+            "/strategy/api/strategies",
+            json=payload(underlying="MYSTERY", legs=[leg(lots=51)]),
+        )
+        assert response.status_code == 400
+
+    def test_a_cash_leg_is_not_capped_in_lots(self, client, freeze_and_lot_sizes):
+        # Cash legs count shares against MAX_CASH_QUANTITY, never the freeze
+        # lot cap, even on an underlying whose freeze is known.
+        cash_leg = leg(
+            segment="cash",
+            position="B",
+            lots=100_000,
+            option_type=None,
+            strike_mode=None,
+            atm_offset=None,
+            expiry=None,
+        )
+        create(
+            client,
+            underlying="RELIANCE",
+            underlying_exchange="NSE",
+            legs=[cash_leg],
+        )
