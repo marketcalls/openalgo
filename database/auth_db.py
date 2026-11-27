@@ -222,6 +222,10 @@ else:
     engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+# Plain sessions for a single short operation, closed by their ``with`` block,
+# for code that also runs outside a request (the streaming process's threads),
+# where nothing would remove a scoped session. See read_market_data_token.
+_ShortSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 Base.query = db_session.query_property()
 
@@ -1270,6 +1274,83 @@ def get_feed_token(name):
         _fill(feed_token_cache, cache_key, record, generation)
         return decrypt_token(record.feed_token) if record.feed_token else None
     return None
+
+
+# A row not signed out. is_revoked is nullable, and the rest of this module
+# reads NULL as not revoked (``not auth_obj.is_revoked``): so does this.
+_SIGNED_IN = Auth.is_revoked.is_(False) | Auth.is_revoked.is_(None)
+
+
+def read_market_data_token(broker):
+    """The market-data (feed) token stored for ``broker``, read from the
+    database itself, never from a cache.
+
+    For brokers whose market-data session allows one live token per app key
+    (the Symphony XTS family): the REST data path and the streaming process
+    share this one stored token, and each reads it fresh because the other
+    may have replaced it. A short-lived session of its own is used, so a
+    call from the streaming process's threads leaves nothing open and a call
+    inside a request leaves the request's session alone.
+
+    Returns:
+        ``(stored, plaintext)``: the stored ciphertext exactly as it is in the
+        row (``None`` when the column is empty), and its decrypted value
+        (``None`` when there is no usable token). ``(None, None)`` when there
+        is no signed-in row for the broker. Never raises.
+    """
+    try:
+        with _ShortSession() as session:
+            row = (
+                session.query(Auth.feed_token)
+                .filter(Auth.broker == broker, _SIGNED_IN)
+                .first()
+            )
+        if row is None:
+            return None, None
+        stored = row[0] or None
+        plaintext = decrypt_token(stored) if stored else None
+        return stored, (plaintext or None)
+    except Exception:
+        logger.exception("Could not read the stored market data token")
+        return None, None
+
+
+def replace_market_data_token(broker, expected_stored, new_token):
+    """Store ``new_token`` as ``broker``'s market-data token, only if the row
+    still holds ``expected_stored`` and is still signed in.
+
+    The comparison is on the stored ciphertext read earlier by
+    :func:`read_market_data_token`, so it is exact although Fernet output is
+    not deterministic. It deliberately bypasses :func:`upsert_auth`: a renewed
+    feed token is not a new broker session, and upsert_auth's teardown of the
+    shared feed must not run for it (CLAUDE.md, multi-session login). A row
+    signed out meanwhile is never written to, so this cannot undo a sign-out.
+
+    Returns:
+        True when this call stored the token; False when the row changed or
+        went away first (the caller should read the stored token again), or on
+        an error. Never raises.
+    """
+    if not new_token:
+        return False
+    try:
+        with _ShortSession() as session:
+            query = session.query(Auth).filter(Auth.broker == broker, _SIGNED_IN)
+            if expected_stored is None:
+                query = query.filter((Auth.feed_token.is_(None)) | (Auth.feed_token == ""))
+            else:
+                query = query.filter(Auth.feed_token == expected_stored)
+            changed = query.update(
+                {Auth.feed_token: encrypt_token(new_token)}, synchronize_session=False
+            )
+            session.commit()
+        # Clearing bumps the cache generation, so a read that loaded the old
+        # token before this commit cannot store it back afterwards.
+        feed_token_cache.clear()
+        return changed > 0
+    except Exception:
+        logger.exception("Could not store the renewed market data token")
+        return False
 
 
 def get_feed_token_dbquery(name):
