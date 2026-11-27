@@ -623,6 +623,22 @@ apt-get install -y \
     python3-pip
 check_status "Package installation failed"
 
+# HTTP/2 syntax for the generated vhosts. nginx 1.25.1 replaced the "http2" parameter of
+# "listen" with a separate "http2 on;" directive and warns about the old form on every
+# "nginx -t" (1.25.1+ warns, older releases such as Ubuntu 24.04's 1.24 reject the new
+# directive outright), so the vhosts are written for the nginx version actually installed.
+#   HTTP2_LISTEN     appended to "listen 443 ssl"  (" http2" on old nginx, empty on new)
+#   HTTP2_DIRECTIVE  its own line in the server block ("http2 on;" on new nginx)
+NGINX_VERSION=$(nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9][0-9.]*\).*#\1#p')
+if [ -n "$NGINX_VERSION" ] && [ "$(printf '%s\n' "1.25.1" "$NGINX_VERSION" | sort -V | head -n1)" = "1.25.1" ]; then
+    HTTP2_LISTEN=""
+    HTTP2_DIRECTIVE="http2 on;"
+else
+    HTTP2_LISTEN=" http2"
+    HTTP2_DIRECTIVE="# http2 is set on the listen line (nginx older than 1.25.1)"
+fi
+log "nginx ${NGINX_VERSION:-unknown}: HTTP/2 written as '${HTTP2_DIRECTIVE}'${HTTP2_LISTEN:+ + listen parameter}" "$YELLOW"
+
 # Host Timezone Check
 log "Checking Host Timezone..." "$YELLOW"
 CURRENT_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || cat /etc/timezone)
@@ -1125,7 +1141,8 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
+    listen 443 ssl${HTTP2_LISTEN};
+    ${HTTP2_DIRECTIVE}
     server_name $PORTAINER_DOMAIN;
 
     ssl_certificate $P_SSL_DIR/fullchain.pem;
@@ -1409,7 +1426,8 @@ server {
 }
 
 server {
-    listen 443 ssl http2;
+    listen 443 ssl${HTTP2_LISTEN};
+    ${HTTP2_DIRECTIVE}
     server_name $DOMAIN;
 
     # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
