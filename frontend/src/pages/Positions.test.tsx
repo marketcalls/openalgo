@@ -172,3 +172,54 @@ describe('Positions close button', () => {
     expect(screen.getByRole('button', { name: /Close All/ })).toBeDisabled()
   })
 })
+
+describe('Positions P&L % (#2261)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  // Symbol, exchange, product, quantity, avg, LTP, P&L, P&L % - the eighth cell.
+  async function pnlPercentCell(position: Position) {
+    await renderPositions([position])
+    const row = screen.getByText(position.symbol).closest('tr') as HTMLElement
+    return within(row).getAllByRole('cell')[7]
+  }
+
+  it('shows the broker percentage for a closed position, red for a loss', async () => {
+    const cell = await pnlPercentCell({ ...CLOSED_POSITION, pnlpercent: -2.5 } as Position)
+
+    expect(cell).toHaveTextContent('-2.50%')
+    expect(cell.className).toContain('text-red-600')
+  })
+
+  it('THE DEFECT: never shows a closed loss as a green +0.00%', async () => {
+    const cell = await pnlPercentCell(CLOSED_POSITION)
+
+    expect(cell).not.toHaveTextContent('0.00%')
+    expect(cell).toHaveTextContent(/^-$/)
+    expect(cell.className).toContain('text-red-600')
+    expect(cell.className).not.toContain('text-green-600')
+  })
+
+  it('shows "-" for a closed row reported with average price 0, as Zerodha sends it', async () => {
+    const cell = await pnlPercentCell({ ...CLOSED_POSITION, average_price: 0 } as Position)
+
+    expect(cell).toHaveTextContent(/^-$/)
+    expect(cell.className).toContain('text-red-600')
+  })
+
+  it('colours a closed profit without a base green', async () => {
+    const cell = await pnlPercentCell({ ...CLOSED_POSITION, pnl: 1957.5 } as Position)
+
+    expect(cell.className).toContain('text-green-600')
+  })
+
+  it('keeps the open position percentage on its investment', async () => {
+    // 1668.75 / (120.5 x 75) = 18.46%
+    const cell = await pnlPercentCell(OPEN_POSITION)
+
+    expect(cell).toHaveTextContent('+18.46%')
+    expect(cell.className).toContain('text-green-600')
+  })
+})
