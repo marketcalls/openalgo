@@ -537,6 +537,70 @@ class TestMarginReconciliation:
         assert has_discrepancy is False, f"discrepancy {amount} after cancelling a GTT"
 
 
+def _resting_order(fm, orderid, status="open", qty=195, price=221.5):
+    """An SL BUY resting unfilled with its margin blocked, as the order manager leaves it."""
+    from database.sandbox_db import SandboxOrders, db_session
+
+    margin = Decimal(str(qty * price)).quantize(Decimal("0.01"))
+    assert fm.block_margin(margin, "resting SL BUY")[0]
+    db_session.add(
+        SandboxOrders(
+            orderid=orderid,
+            user_id=GTT_TEST_USER,
+            strategy="test",
+            symbol="NIFTY27OCT2622750PE",
+            exchange="NFO",
+            action="BUY",
+            quantity=qty,
+            price=Decimal(str(price)),
+            trigger_price=Decimal("221"),
+            price_type="SL",
+            product="NRML",
+            order_status=status,
+            filled_quantity=0,
+            pending_quantity=qty,
+            margin_blocked=margin,
+        )
+    )
+    db_session.commit()
+    return margin
+
+
+class TestRestingOrderMarginReconciliation:
+    """A resting order must not look like leaked margin either.
+
+    The post-fill consistency check auto-reconciled used_margin against open
+    positions and active GTTs only, so the first fill of any other order
+    released a resting order's reservation as "stuck", and cancelling that
+    order later failed with "Cannot release X: only Y is reserved".
+    """
+
+    def test_resting_order_margin_is_neither_flagged_nor_released(self, clean_gtt_user):
+        from sandbox.fund_manager import reconcile_margin, validate_margin_consistency
+
+        margin = _resting_order(clean_gtt_user, "RESTING1")
+        assert validate_margin_consistency(GTT_TEST_USER)[0] is True
+        has_discrepancy, amount, message = reconcile_margin(GTT_TEST_USER, auto_fix=True)
+        assert has_discrepancy is False, f"resting order margin flagged as {amount}: {message}"
+        assert _used_margin(clean_gtt_user) == margin
+        ok, msg = clean_gtt_user.release_margin(margin, 0, "cancel resting order")
+        assert ok, msg
+
+    def test_trigger_pending_orders_count_and_cancelled_orders_do_not(self, clean_gtt_user):
+        from database.sandbox_db import SandboxOrders, db_session
+        from sandbox.fund_manager import reconcile_margin
+
+        _resting_order(clean_gtt_user, "RESTING2", status="trigger pending")
+        assert reconcile_margin(GTT_TEST_USER, auto_fix=False)[0] is False
+        order = SandboxOrders.query.filter_by(orderid="RESTING2").first()
+        order.order_status = "cancelled"
+        order.pending_quantity = 0
+        order.margin_blocked = Decimal("0")
+        db_session.commit()
+        # A cancelled order holds nothing: margin still in used_margin is a real leak.
+        assert reconcile_margin(GTT_TEST_USER, auto_fix=False)[0] is True
+
+
 class TestMaintenanceThread:
     """The upkeep that neither execution engine performs."""
 
