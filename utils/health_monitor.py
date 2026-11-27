@@ -402,63 +402,77 @@ def get_database_metrics():
         return {"total": 0, "connections": {}, "status": "unknown"}
 
 
+def read_websocket_connections():
+    """Broker feed connections and subscribed symbols, read without side effects.
+
+    Shared by the health collector and the status API. Raises nothing for a
+    missing proxy: the counts are simply zero.
+
+    Returns:
+        tuple: ``(connections, total_connections, total_symbols)``
+    """
+    connections = {}
+    total_connections = 0
+    total_symbols = 0
+
+    # Try to import and check WebSocket proxy connection pools
+    try:
+        from websocket_proxy.broker_factory import get_pool_stats
+
+        pool_stats = get_pool_stats()
+
+        for pool_key, stats in pool_stats.items():
+            conn_count = stats.get("active_connections", 0)
+            symbols_count = stats.get("total_subscriptions", 0)
+            broker_name = stats.get("broker") or pool_key
+
+            connections[pool_key] = {
+                "broker": broker_name,
+                "count": conn_count,
+                "symbols": symbols_count,
+            }
+            total_connections += conn_count
+            total_symbols += symbols_count
+
+    except ImportError:
+        pass  # WebSocket proxy not available
+    except Exception:
+        pass  # Error checking WebSocket connections
+
+    # Cross-process fallback: the WS proxy runs in its own process, so
+    # the in-process pools above are always empty under the current
+    # architecture. The proxy writes a snapshot file every ~10s
+    # (websocket_proxy/server.py _stats_file_writer, GitHub issue #1301).
+    if total_connections == 0 and total_symbols == 0:
+        try:
+            import json as _json
+
+            stats_path = os.getenv(
+                "WS_PROXY_STATS_FILE", os.path.join("log", "ws_proxy_stats.json")
+            )
+            with open(stats_path) as f:
+                snapshot = _json.load(f)
+            # Ignore stale snapshots (proxy stopped or file left behind).
+            if time.time() - float(snapshot.get("timestamp", 0)) < 60:
+                total_connections = int(snapshot.get("total_connections", 0))
+                total_symbols = int(snapshot.get("total_symbols", 0))
+                broker_counts: dict = {}
+                for b in snapshot.get("brokers", []):
+                    broker_counts[b] = broker_counts.get(b, 0) + 1
+                for b, n in broker_counts.items():
+                    connections[b] = {"broker": b, "count": n, "symbols": total_symbols}
+        except FileNotFoundError:
+            pass  # Proxy not started yet / never wrote a snapshot
+        except Exception:
+            pass  # Malformed snapshot — keep zeros rather than crash
+
+    return connections, total_connections, total_symbols
+
+
 def get_websocket_metrics():
     """Get WebSocket connection metrics (minimal overhead)"""
     try:
-        connections = {}
-        total_connections = 0
-        total_symbols = 0
-
-        # Try to import and check WebSocket proxy connection pools
-        try:
-            from websocket_proxy.broker_factory import get_pool_stats
-
-            pool_stats = get_pool_stats()
-
-            for pool_key, stats in pool_stats.items():
-                conn_count = stats.get("active_connections", 0)
-                symbols_count = stats.get("total_subscriptions", 0)
-                broker_name = stats.get("broker") or pool_key
-
-                connections[pool_key] = {
-                    "broker": broker_name,
-                    "count": conn_count,
-                    "symbols": symbols_count,
-                }
-                total_connections += conn_count
-                total_symbols += symbols_count
-
-        except ImportError:
-            pass  # WebSocket proxy not available
-        except Exception:
-            pass  # Error checking WebSocket connections
-
-        # Cross-process fallback: the WS proxy runs in its own process, so
-        # the in-process pools above are always empty under the current
-        # architecture. The proxy writes a snapshot file every ~10s
-        # (websocket_proxy/server.py _stats_file_writer, GitHub issue #1301).
-        if total_connections == 0 and total_symbols == 0:
-            try:
-                import json as _json
-
-                stats_path = os.getenv(
-                    "WS_PROXY_STATS_FILE", os.path.join("log", "ws_proxy_stats.json")
-                )
-                with open(stats_path) as f:
-                    snapshot = _json.load(f)
-                # Ignore stale snapshots (proxy stopped or file left behind).
-                if time.time() - float(snapshot.get("timestamp", 0)) < 60:
-                    total_connections = int(snapshot.get("total_connections", 0))
-                    total_symbols = int(snapshot.get("total_symbols", 0))
-                    broker_counts: dict = {}
-                    for b in snapshot.get("brokers", []):
-                        broker_counts[b] = broker_counts.get(b, 0) + 1
-                    for b, n in broker_counts.items():
-                        connections[b] = {"broker": b, "count": n, "symbols": total_symbols}
-            except FileNotFoundError:
-                pass  # Proxy not started yet / never wrote a snapshot
-            except Exception:
-                pass  # Malformed snapshot — keep zeros rather than crash
+        connections, total_connections, total_symbols = read_websocket_connections()
 
         # Determine status
         if total_connections >= WS_CRITICAL_THRESHOLD:

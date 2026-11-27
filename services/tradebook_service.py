@@ -3,6 +3,7 @@ from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from services.broker_busy import BrokerBusyError, broker_busy_result
+from utils import request_counter
 from utils.logging import get_logger
 
 # Initialize logger
@@ -83,6 +84,7 @@ def get_tradebook_with_auth(
         - Response data (dict)
         - HTTP status code (int)
     """
+    request_counter.record("tradebook")
     # If in analyze mode AND we have original_data (API call), route to sandbox
     # If original_data is None (internal call), use live broker
     from database.settings_db import get_analyze_mode
