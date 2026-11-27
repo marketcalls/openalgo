@@ -35,6 +35,22 @@ logger = get_logger(__name__)
 _t1_settlement_lock = threading.Lock()
 
 
+def _reserved_for(position):
+    """The margin a CNC buy reserved, which is what T+1 moves to holdings.
+
+    Not quantity times the fill average: the order reserves at the quote when
+    it is placed and fills at its own price. Moving the fill value lets the
+    transfers run past the reserve, the last one is refused, and its margin
+    stays in used_margin with nothing behind it, which the reconcile after the
+    next fill then credits to available cash. Rows without a recorded margin
+    fall back to the fill value.
+    """
+    reserved = Decimal(str(position.margin_blocked or 0))
+    if reserved > 0:
+        return reserved
+    return abs(position.quantity) * position.average_price
+
+
 class HoldingsManager:
     """Manages holdings and T+1 settlement"""
 
@@ -215,7 +231,7 @@ class HoldingsManager:
                         )
 
                         # Transfer margin from used_margin to holdings (don't credit available_balance)
-                        margin_amount = abs(position.quantity) * position.average_price
+                        margin_amount = _reserved_for(position)
                         fund_manager.stage_transfer_margin_to_holdings(
                             margin_amount, f"T+1 settlement: {position.symbol} BUY → Holdings"
                         )
@@ -261,7 +277,7 @@ class HoldingsManager:
                     db_session.add(holding)
 
                     # Transfer margin from used_margin to holdings (don't credit available_balance)
-                    margin_amount = abs(position.quantity) * position.average_price
+                    margin_amount = _reserved_for(position)
                     fund_manager.stage_transfer_margin_to_holdings(
                         margin_amount, f"T+1 settlement: {position.symbol} → Holdings"
                     )
