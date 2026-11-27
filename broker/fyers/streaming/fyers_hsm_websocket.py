@@ -503,6 +503,37 @@ class FyersHSMWebSocket:
 
         return offset
 
+    def _parse_snapshot_tail(self, data: bytearray, offset: int, out: dict) -> tuple[int, bool]:
+        """Read the tail every snapshot carries after its fields.
+
+        Two skipped bytes, the multiplier (``>H``), the precision (``B``) and three
+        length-prefixed strings (exchange, exchange token, symbol). Scrip, index and depth
+        snapshots all end this way, so one reader keeps the offset aligned for the next
+        snapshot in the frame. Returns the new offset and whether the multiplier and
+        precision were present.
+        """
+        offset += 2
+
+        if offset + 3 > len(data):
+            return offset, False
+
+        out["multiplier"] = struct.unpack(">H", data[offset : offset + 2])[0]
+        offset += 2
+        out["precision"] = struct.unpack("B", data[offset : offset + 1])[0]
+        offset += 1
+
+        for field in ("exchange", "exchange_token", "symbol"):
+            if offset + 1 > len(data):
+                break
+            string_len = struct.unpack("B", data[offset : offset + 1])[0]
+            offset += 1
+            if offset + string_len > len(data):
+                break
+            out[field] = data[offset : offset + string_len].decode("utf-8", errors="ignore")
+            offset += string_len
+
+        return offset, True
+
     def _parse_scrip_snapshot(
         self, data: bytearray, offset: int, topic_id: int, topic_name: str
     ) -> int:
@@ -527,36 +558,9 @@ class FyersHSMWebSocket:
                 if value != -2147483648 and index < len(self.DATA_FIELDS):
                     scrip_data[self.DATA_FIELDS[index]] = value
 
-            # Skip 2 bytes
-            offset += 2
-
-            if offset + 3 > len(data):
+            offset, has_tail = self._parse_snapshot_tail(data, offset, scrip_data)
+            if not has_tail:
                 return offset
-
-            # Get multiplier and precision
-            multiplier = struct.unpack(">H", data[offset : offset + 2])[0]
-            scrip_data["multiplier"] = multiplier
-            offset += 2
-
-            precision = struct.unpack("B", data[offset : offset + 1])[0]
-            scrip_data["precision"] = precision
-            offset += 1
-
-            # Parse exchange, token, symbol strings
-            string_fields = ["exchange", "exchange_token", "symbol"]
-            for field in string_fields:
-                if offset + 1 > len(data):
-                    break
-
-                string_len = struct.unpack("B", data[offset : offset + 1])[0]
-                offset += 1
-
-                if offset + string_len > len(data):
-                    break
-
-                string_data = data[offset : offset + string_len].decode("utf-8", errors="ignore")
-                scrip_data[field] = string_data
-                offset += string_len
 
             # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
@@ -618,6 +622,10 @@ class FyersHSMWebSocket:
                 if value != -2147483648 and index < len(self.INDEX_FIELDS):
                     index_data[self.INDEX_FIELDS[index]] = value
 
+            # The same tail as a scrip snapshot follows the fields. Left unread, the next
+            # scrip in the frame is read from inside it and the rest of the frame is lost.
+            offset, _ = self._parse_snapshot_tail(data, offset, index_data)
+
             # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
                 index_data["original_symbol"] = self.symbol_mappings[topic_name]
@@ -661,36 +669,9 @@ class FyersHSMWebSocket:
                 if value != -2147483648 and index < len(self.DEPTH_FIELDS):
                     depth_data[self.DEPTH_FIELDS[index]] = value
 
-            # Skip 2 bytes (similar to scrip snapshot)
-            offset += 2
-
-            if offset + 3 > len(data):
+            offset, has_tail = self._parse_snapshot_tail(data, offset, depth_data)
+            if not has_tail:
                 return offset
-
-            # Get multiplier and precision (depth data also has these)
-            multiplier = struct.unpack(">H", data[offset : offset + 2])[0]
-            depth_data["multiplier"] = multiplier
-            offset += 2
-
-            precision = struct.unpack("B", data[offset : offset + 1])[0]
-            depth_data["precision"] = precision
-            offset += 1
-
-            # Parse exchange, token, symbol strings (same as scrip)
-            string_fields = ["exchange", "exchange_token", "symbol"]
-            for field in string_fields:
-                if offset + 1 > len(data):
-                    break
-
-                string_len = struct.unpack("B", data[offset : offset + 1])[0]
-                offset += 1
-
-                if offset + string_len > len(data):
-                    break
-
-                string_data = data[offset : offset + string_len].decode("utf-8", errors="ignore")
-                depth_data[field] = string_data
-                offset += string_len
 
             # Add original symbol mapping and HSM token
             if topic_name in self.symbol_mappings:
@@ -707,7 +688,6 @@ class FyersHSMWebSocket:
             self.logger.debug(
                 f"Depth fields: bid_price1={depth_data.get('bid_price1', 'N/A')}, ask_price1={depth_data.get('ask_price1', 'N/A')}"
             )
-            # self.logger.info(f"Multiplier={multiplier}, Precision={precision}")
 
             # Send to callback
             if self.on_message_callback:
