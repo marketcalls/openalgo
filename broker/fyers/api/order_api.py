@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import threading
@@ -173,6 +174,30 @@ def _invalidate_position_cache(auth):
 
 
 
+def _invalidate_funds_cache(auth):
+    """Mark the cached funds stale after an order call. Never raises."""
+    try:
+        from broker.fyers.api.funds import invalidate_funds_cache
+
+        invalidate_funds_cache(auth)
+    except Exception:
+        logger.exception("Could not invalidate the Fyers funds cache")
+
+
+def _invalidates_funds(func):
+    """Mark the funds cache stale on every exit of an order call (auth is the last arg)."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        auth = kwargs["auth"] if "auth" in kwargs else args[-1]
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _invalidate_funds_cache(auth)
+
+    return wrapper
+
+
 def get_open_position(tradingsymbol, exchange, product, auth):
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
@@ -190,6 +215,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
     return net_qty
 
 
+@_invalidates_funds
 def place_order_api(data, auth):
     """
     Place a new order using the Fyers API with shared connection pooling.
@@ -350,6 +376,7 @@ def place_smartorder_api(data, auth):
             return res, response, orderid
 
 
+@_invalidates_funds
 def close_all_positions(current_api_key, auth):
     """
     Close all open positions using the Fyers API with shared connection pooling.
@@ -400,6 +427,7 @@ def close_all_positions(current_api_key, auth):
         return {"status": "error", "message": f"General error: {e}"}, 500
 
 
+@_invalidates_funds
 def cancel_order(orderid, auth):
     """
     Cancel an order using the Fyers API with shared connection pooling.
@@ -450,6 +478,7 @@ def cancel_order(orderid, auth):
         return {"status": "error", "message": f"General error: {e}"}, 500
 
 
+@_invalidates_funds
 def modify_order(data, auth):
     """
     Modify an existing order using the Fyers API with shared connection pooling.

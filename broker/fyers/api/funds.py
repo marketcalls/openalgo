@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from broker.fyers.api.order_api import get_positions
+from broker.fyers.api.order_api import _position_book_ok, get_positions
 from broker.fyers.mapping.order_data import map_position_data
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -18,11 +18,26 @@ logger = get_logger(__name__)
 # Per-user cache and rate limit state, keyed by auth_token
 _cache: dict[str, dict] = {}
 _rate_limit: dict[str, dict] = {}
+_generation: dict[str, int] = {}  # bumped by invalidate_funds_cache, keyed by auth_token
 _lock = threading.Lock()
 
 CACHE_TTL = 60  # seconds - serve cached data within this window
 INITIAL_BACKOFF = 30  # seconds - first backoff after 429
 MAX_BACKOFF = 120  # seconds - maximum backoff duration
+
+
+def invalidate_funds_cache(auth_token: str) -> None:
+    """Mark the cached funds for a token stale, so the next read goes to Fyers.
+
+    The entry keeps its data (timestamp 0) so a 429 backoff can still serve real
+    figures. The generation bump stops a fetch already in flight from writing its
+    older result back into the cache.
+    """
+    with _lock:
+        _generation[auth_token] = _generation.get(auth_token, 0) + 1
+        entry = _cache.get(auth_token)
+        if entry:
+            _cache[auth_token] = {"data": entry["data"], "timestamp": 0}
 
 
 def get_margin_data(auth_token: str) -> dict[str, str]:
@@ -35,7 +50,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
     Returns:
         dict: Processed margin data with standardized keys:
-            - availablecash: Total available balance
+            - availablecash: Clear Balance plus the day's realised P&L
             - collateral: Collateral value
             - m2munrealized: Unrealized M2M
             - m2mrealized: Realized M2M
@@ -55,6 +70,7 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
     with _lock:
         user_cache = _cache.get(auth_token, {"data": None, "timestamp": 0})
         user_rate_limit = _rate_limit.get(auth_token, {"backoff_until": 0, "backoff_seconds": 0})
+        generation = _generation.get(auth_token, 0)
 
     # If within cache TTL, return cached data
     if user_cache["data"] and (now - user_cache["timestamp"]) < CACHE_TTL:
@@ -107,14 +123,12 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
         # Calculate totals with proper error handling
         try:
-            # "availablecash" must be the actual settled cash balance, not
-            # total trading capacity. Fyers' "Available Balance" is the final
-            # ledger line (Clear Balance + Collaterals + Fund Transfer +
-            # Receivables + Adhoc Limit, per the fund_limit ledger order),
-            # so it folds collateral back in -- double-counting against the
-            # separately reported "collateral" field below, same class of
-            # bug as GitHub issue #1582. "Clear Balance" is the settled,
-            # collateral-free cash figure, so use that instead.
+            # "availablecash" starts from Clear Balance, the settled, collateral-free
+            # cash figure. Fyers' "Available Balance" folds collateral back in, which
+            # double-counts against the separate "collateral" field (GitHub issue
+            # #1582), so it is not used. Clear Balance is the start-of-day limit plus
+            # fund transfers and leaves out the day's realised P&L, so that is added
+            # below from the position book (GitHub issue #2275).
             balance = processed_funds.get("clear_balance", {})
             balance_equity = float(balance.get("equity_amount", 0))
             balance_commodity = float(balance.get("commodity_amount", 0))
@@ -143,6 +157,15 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
             logger.info(
                 f"Fyers position book raw response: {json.dumps(position_book_raw, indent=2)}"
             )
+            # A failed read maps to an empty book, so realised P&L counts as zero
+            # for this caller; the result is then cached stale so the next read
+            # retries instead of serving it for CACHE_TTL.
+            book_ok = _position_book_ok(position_book_raw)
+            if not book_ok:
+                logger.warning(
+                    "Fyers position book unavailable; availablecash leaves out the "
+                    "day's realised P&L for this read"
+                )
             position_book = map_position_data(position_book_raw)
             logger.info(f"Fyers position book mapped: {position_book}")
 
@@ -157,9 +180,12 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
             total_realised, total_unrealised = sum_realised_unrealised(position_book)
 
+            # Realised P&L from the position book joins the cash balance
+            available_cash = total_balance + total_realised
+
             # Format and return the response
             result = {
-                "availablecash": f"{total_balance:.2f}",
+                "availablecash": f"{available_cash:.2f}",
                 "collateral": f"{total_collateral:.2f}",
                 "m2munrealized": f"{total_unrealised:.2f}",
                 "m2mrealized": f"{total_realised:.2f}",
@@ -168,7 +194,10 @@ def get_margin_data(auth_token: str) -> dict[str, str]:
 
             # Cache successful response and reset backoff
             with _lock:
-                _cache[auth_token] = {"data": result, "timestamp": now}
+                # An order that landed during this fetch made the result stale:
+                # hand it to this caller but do not cache it.
+                if _generation.get(auth_token, 0) == generation:
+                    _cache[auth_token] = {"data": result, "timestamp": now if book_ok else 0}
                 _rate_limit[auth_token] = {"backoff_until": 0, "backoff_seconds": 0}
 
             return result
