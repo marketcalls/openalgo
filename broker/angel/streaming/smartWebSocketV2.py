@@ -183,17 +183,49 @@ class SmartWebSocketV2:
             self.on_open(wsapp)
 
     def _on_pong(self, wsapp, data):
-        if data == self.HEART_BEAT_MESSAGE:
-            timestamp = time.time()
-            formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
-            logger.info(f"In on pong function ==> {data}, Timestamp: {formatted_timestamp}")
-            self.last_pong_timestamp = timestamp
+        # `data` arrives as raw bytes off the wire (websocket-client does
+        # NOT utf-8-decode PING/PONG frame payloads -- only TEXT/BINARY data
+        # frames get that treatment). HEART_BEAT_MESSAGE is a plain str
+        # ("ping"), so comparing them directly (`data == self.HEART_BEAT_MESSAGE`)
+        # was ALWAYS False in Python 3 (b"ping" != "ping"), meaning this
+        # entire method body was silently dead code: every single pong Angel
+        # ever sent back (confirmed via the underlying WebSocketApp's own
+        # last_pong_tm bookkeeping ticking every HEART_BEAT_INTERVAL) was
+        # discarded without ever updating _last_message_time or logging.
+        # Decode before comparing, and treat receipt of ANY pong frame as
+        # proof of liveness regardless of payload -- the exact bytes echoed
+        # back are not something we control or need to gate correctness on.
+        payload = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+        timestamp = time.time()
+        formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
+        logger.info(f"In on pong function ==> {payload}, Timestamp: {formatted_timestamp}")
+        self.last_pong_timestamp = timestamp
+        # Treat a WebSocket pong as proof the connection is alive.
+        #
+        # Angel only pushes a tick on price change, so during a quiet or
+        # closed market _last_message_time would otherwise freeze and the
+        # data-stall watchdog (_health_check_loop) would force a needless
+        # reconnect every DATA_TIMEOUT seconds. The protocol ping/pong
+        # (HEART_BEAT_INTERVAL=10s, wired via ping_interval on
+        # run_forever) keeps the socket alive regardless of market
+        # activity, so we feed the liveness clock from it too — exactly
+        # as Zerodha's 1-byte heartbeat feeds its identical watchdog, and
+        # as Fyers/Upstox already do — making the watchdog fire only when
+        # the socket is genuinely dead (no data AND no pong).
+        self._last_message_time = timestamp
+        if payload != self.HEART_BEAT_MESSAGE:
+            logger.debug(
+                f"Pong payload {payload!r} != expected {self.HEART_BEAT_MESSAGE!r} "
+                "(still treated as valid liveness proof)"
+            )
 
     def _on_ping(self, wsapp, data):
         timestamp = time.time()
         formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
         logger.info(f"In on ping function ==> {data}, Timestamp: {formatted_timestamp}")
         self.last_ping_timestamp = timestamp
+        # A server-initiated ping also proves the socket is alive (see _on_pong).
+        self._last_message_time = timestamp
 
     def subscribe(self, correlation_id, mode, token_list):
         """
