@@ -74,6 +74,9 @@ def get_funds_with_auth(
         # Get funds data using broker's implementation
         funds = broker_module.get_margin_data(auth_token)
 
+        if broker == "zerodha" and not funds:
+            return False, {"status": "error", "message": "Kite margin balance unavailable"}, 502
+
         return True, {"status": "success", "data": funds}, 200
     except BrokerBusyError as e:
         return broker_busy_result(e, "Funds request")

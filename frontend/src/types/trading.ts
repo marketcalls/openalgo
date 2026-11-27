@@ -61,8 +61,8 @@ export type HoldingsStats = PortfolioStats
 export interface MarginData {
   availablecash: number
   collateral: number
-  m2munrealized: number
-  m2mrealized: number
+  m2munrealized: number | null
+  m2mrealized: number | null
   utiliseddebits: number
 }
 
