@@ -26,11 +26,20 @@ import {
   Shapes,
   Undo2,
 } from 'lucide-react'
-import type { DataFeed, IndicatorBarsProviderAccess } from 'openalgo-charts'
+import type { DataFeed, IndicatorBarSource, IndicatorBarsProviderAccess } from 'openalgo-charts'
 import { registeredIndicators } from 'openalgo-charts'
 import type { Widget } from 'openalgo-charts/widget'
 import { captureName } from 'openalgo-charts/widget'
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { ChartContextMenu, type ChartMenuAnchor } from '@/components/chart/ChartContextMenu'
 import { ChartReplayBar } from '@/components/chart/ChartReplayBar'
 import { OpenAlgoChart } from '@/components/chart/OpenAlgoChart'
@@ -40,6 +49,18 @@ import {
   IndicatorPickerDialog,
 } from '@/components/trading/IndicatorPickerDialog'
 import { TimeframeMenu } from '@/components/trading/TimeframeMenu'
+import {
+  applyIndicatorSettings,
+  buildIndicatorSettingsRequest,
+  indicatorDefaultsFor,
+} from '@/lib/trading/indicatorSettings'
+import type { IndicatorSettingsRequest } from '@/lib/trading/terminal'
+
+const IndicatorSettingsDialog = lazy(() =>
+  import('@/components/trading/IndicatorSettingsDialog').then((m) => ({
+    default: m.IndicatorSettingsDialog,
+  }))
+)
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -133,6 +154,8 @@ export function HistorifyChartPane({
   const [railVisible, setRailVisible] = useState(true)
   const [volumeVisible, setVolumeVisible] = useState(false)
   const [activeIndicators, setActiveIndicators] = useState<{ id: string; name: string }[]>([])
+  const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([])
 
   const selected = useMemo(
     () => symbols.find((s) => s.symbol === state.symbol && s.exchange === state.exchange) ?? null,
@@ -223,23 +246,83 @@ export function HistorifyChartPane({
     return () => window.clearInterval(timer)
   }, [widget])
 
-  const catalog = useMemo<CatalogEntry[]>(() => {
-    if (!indicatorsOpen) return []
-    return registeredIndicators().map((d) => ({
-      id: d.id,
-      name: d.name,
-      category: d.category ?? 'Other',
-    }))
+  useEffect(() => {
+    if (!indicatorsOpen) return
+    setCatalog(
+      registeredIndicators().map((d) => ({
+        id: d.id,
+        name: d.name,
+        category: d.category ?? 'Other',
+      }))
+    )
+    let cancelled = false
+    const load = async () => {
+      try {
+        await import('openalgo-charts/indicators')
+        const { loadCustomIndicators } = await import('@/lib/trading/customIndicators')
+        await loadCustomIndicators()
+        const { loadOpenScriptStudies } = await import('@/lib/trading/openscriptStudies')
+        await loadOpenScriptStudies()
+      } catch {
+        // Non-fatal
+      }
+      if (!cancelled) {
+        setCatalog(
+          registeredIndicators().map((d) => ({
+            id: d.id,
+            name: d.name,
+            category: d.category ?? 'Other',
+          }))
+        )
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
   }, [indicatorsOpen])
 
-  /** Open the engine's settings form for one indicator instance. */
-  const openIndicatorSettings = (instanceId: string) => {
+  /** Open the indicator settings form for one indicator instance. */
+  const openIndicatorSettings = useCallback(
+    async (instanceId: string) => {
+      if (!widget) return
+      const req = await buildIndicatorSettingsRequest(widget.chart, instanceId, intervals)
+      if (req) {
+        setIndSettings(req)
+      }
+    },
+    [widget, intervals]
+  )
+
+  useEffect(() => {
     if (!widget) return
-    const object = widget.objects
-      .list()
-      .find((o) => o.kind === 'indicator' && o.sourceId === instanceId)
-    widget.objects.openSettings(object?.id ?? instanceId)
-  }
+    const off = widget.chart.on('indicatorSettings', (payload) => {
+      const p = payload as { instanceId?: string }
+      if (p?.instanceId) {
+        void openIndicatorSettings(p.instanceId)
+      }
+    })
+    return () => {
+      off?.()
+    }
+  }, [widget, openIndicatorSettings])
+
+  const handleApplySettings = useCallback(
+    (instanceId: string, patch: Record<string, unknown>, barSource?: IndicatorBarSource) => {
+      if (!widget) return
+      applyIndicatorSettings(widget.chart, instanceId, patch, barSource)
+      setActiveIndicators(widget.chart.indicators().map((i) => ({ id: i.id, name: i.name })))
+    },
+    [widget]
+  )
+
+  const handleDefaults = useCallback(
+    async (instanceId: string): Promise<Record<string, unknown> | null> => {
+      if (!widget) return null
+      return indicatorDefaultsFor(widget.chart, instanceId)
+    },
+    [widget]
+  )
 
   useEffect(() => {
     const sync = () => setFullscreen(document.fullscreenElement === paneRef.current)
@@ -648,9 +731,24 @@ export function HistorifyChartPane({
         active={activeIndicators}
         onAdd={(indicatorId) => widget?.chart.addIndicator(indicatorId)}
         onRemove={(instanceId) => widget?.chart.removeIndicator(instanceId)}
-        onSettings={openIndicatorSettings}
+        onSettings={(instanceId) => {
+          setIndicatorsOpen(false)
+          void openIndicatorSettings(instanceId)
+        }}
         onClose={() => setIndicatorsOpen(false)}
       />
+
+      {indSettings && (
+        <Suspense fallback={null}>
+          <IndicatorSettingsDialog
+            req={indSettings}
+            chartInterval={state.interval}
+            onApply={handleApplySettings}
+            onDefaults={handleDefaults}
+            onClose={() => setIndSettings(null)}
+          />
+        </Suspense>
+      )}
       <span className="sr-only">{paneId}</span>
     </div>
   )
