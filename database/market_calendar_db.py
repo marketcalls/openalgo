@@ -33,6 +33,13 @@ logger = get_logger(__name__)
 _timings_cache = LockedTTLCache(maxsize=500, ttl=3600)
 _holidays_cache = LockedTTLCache(maxsize=50, ttl=3600)
 
+# The last answer each (date, exchange) resolved to from the database, closed
+# included. A lookup that then fails returns it rather than None, because None
+# means "closed today" to every caller: the strategy enforcer stopped a running
+# script with "NFO closed - Holiday" on a normal Thursday (29 Oct 2026, 11:04)
+# when one lookup raised.
+_last_session_window = LockedTTLCache(maxsize=500, ttl=86400)
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Conditionally create engine based on DB type
@@ -916,54 +923,75 @@ def get_effective_session_window(
             "is_special": False,
         }
 
+    key = (query_date, exch)
     try:
-        # 2. Special session
-        special = get_special_session(query_date, exch)
-        if special:
-            return {
-                "start_ms": special["start_ms"],
-                "end_ms": special["end_ms"],
-                "is_special": True,
-            }
-
-        # 3 & 4. Trading holiday with explicit open window or closed
-        holiday = (
-            Holiday.query.filter(Holiday.holiday_date == query_date)
-            .filter(Holiday.holiday_type == "TRADING_HOLIDAY")
-            .first()
+        window = _session_window_from_db(query_date, exch, midnight_ms)
+    except Exception:
+        # A failed read is not a closed market. Keep the session already known
+        # for this day; with none known, closed is still the safe answer.
+        try:
+            db_session.rollback()
+        except Exception:
+            pass
+        known = _last_session_window.get(key, MISSING)
+        logger.exception(
+            f"Market calendar lookup failed for {exch} on {query_date}; "
+            + ("no earlier answer, treating as closed" if known is MISSING else "keeping the session already known for that day")
         )
-        if holiday:
-            ex_row = HolidayExchange.query.filter(
-                HolidayExchange.holiday_id == holiday.id,
-                HolidayExchange.exchange_code == exch,
-            ).first()
-            if ex_row:
-                if not ex_row.is_open:
-                    return None
-                if ex_row.start_time is not None and ex_row.end_time is not None:
-                    return {
-                        "start_ms": int(ex_row.start_time),
-                        "end_ms": int(ex_row.end_time),
-                        "is_special": True,
-                    }
-            # Exchange not listed on this holiday row -> treat as open with default timings
+        return None if known is MISSING else known
 
-        # 5. Weekend with no special session
-        if query_date.weekday() >= 5:
-            return None
+    _last_session_window[key] = window
+    return window
 
-        # 6. Default timings
-        timings = _get_timing_offsets().get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
-        if not timings:
-            return None
+
+def _session_window_from_db(
+    query_date: date, exch: str, midnight_ms: int
+) -> dict[str, Any] | None:
+    """Steps 2-6 of get_effective_session_window. Raises when the database cannot be read."""
+    # 2. Special session
+    special = get_special_session(query_date, exch)
+    if special:
         return {
-            "start_ms": midnight_ms + timings["start_offset"],
-            "end_ms": midnight_ms + timings["end_offset"],
-            "is_special": False,
+            "start_ms": special["start_ms"],
+            "end_ms": special["end_ms"],
+            "is_special": True,
         }
-    except Exception as e:
-        logger.debug(f"get_effective_session_window failed for {query_date} {exch}: {e}")
+
+    # 3 & 4. Trading holiday with explicit open window or closed
+    holiday = (
+        Holiday.query.filter(Holiday.holiday_date == query_date)
+        .filter(Holiday.holiday_type == "TRADING_HOLIDAY")
+        .first()
+    )
+    if holiday:
+        ex_row = HolidayExchange.query.filter(
+            HolidayExchange.holiday_id == holiday.id,
+            HolidayExchange.exchange_code == exch,
+        ).first()
+        if ex_row:
+            if not ex_row.is_open:
+                return None
+            if ex_row.start_time is not None and ex_row.end_time is not None:
+                return {
+                    "start_ms": int(ex_row.start_time),
+                    "end_ms": int(ex_row.end_time),
+                    "is_special": True,
+                }
+        # Exchange not listed on this holiday row -> treat as open with default timings
+
+    # 5. Weekend with no special session
+    if query_date.weekday() >= 5:
         return None
+
+    # 6. Default timings
+    timings = _get_timing_offsets().get(exch, DEFAULT_MARKET_TIMINGS.get(exch, {}))
+    if not timings:
+        return None
+    return {
+        "start_ms": midnight_ms + timings["start_offset"],
+        "end_ms": midnight_ms + timings["end_offset"],
+        "is_special": False,
+    }
 
 
 def is_market_holiday(query_date: date, exchange: str = None) -> bool:
@@ -1020,6 +1048,7 @@ def clear_market_calendar_cache():
     """Clear all market calendar caches"""
     _timings_cache.clear()
     _holidays_cache.clear()
+    _last_session_window.clear()
     logger.info("Market calendar cache cleared")
 
 
