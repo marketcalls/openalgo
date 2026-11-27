@@ -45,9 +45,7 @@ def calendar_db():
         poolclass=StaticPool,
     )
     mc.engine = engine
-    mc.db_session = scoped_session(
-        sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    )
+    mc.db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
     mc.Base.query = mc.db_session.query_property()
     mc.Base.metadata.create_all(engine)
     mc.clear_market_calendar_cache()
@@ -459,9 +457,7 @@ def test_schedule_route_refuses_when_running(ps_module):
 
     app = Flask(__name__)
     with app.app_context():
-        is_owner, result = ps_module.verify_strategy_ownership(
-            "s", "alice", return_config=True
-        )
+        is_owner, result = ps_module.verify_strategy_ownership("s", "alice", return_config=True)
         assert is_owner is True
         # The route refuses if is_running is True
         assert result.get("is_running") is True
@@ -539,6 +535,9 @@ def test_stop_restored_psutil_process_does_not_call_wait(ps_module, monkeypatch)
         def terminate(self):
             self.terminated = True
 
+        def send_signal(self, sig):
+            self.terminate()
+
         def kill(self):
             self.killed = True
 
@@ -615,9 +614,7 @@ def test_cleanup_dead_processes_clears_restored_zombie(ps_module, monkeypatch):
     assert ps_module.STRATEGY_CONFIGS["zombie"]["pid"] is None
 
 
-def test_restore_adopts_live_strategy_when_contracts_not_ready(
-    ps_module, monkeypatch, tmp_path
-):
+def test_restore_adopts_live_strategy_when_contracts_not_ready(ps_module, monkeypatch, tmp_path):
     """A live strategy must not be marked stopped just because contracts are not ready.
 
     Otherwise the later master-contract hook can start a duplicate process.

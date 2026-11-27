@@ -130,6 +130,15 @@ DELETING_MESSAGE = "This strategy is being deleted, so it was not started"
 #: What an automatic start is told when the trader has stopped the strategy.
 MANUAL_STOP_REFUSAL = "Stopped by the trader, so it was not started automatically"
 
+RESTART_POLICY_RESUME = "resume"
+RESTART_POLICY_MANUAL = "manual"
+RESTART_POLICY_NEVER = "never"
+RESTART_POLICIES = {
+    RESTART_POLICY_RESUME,
+    RESTART_POLICY_MANUAL,
+    RESTART_POLICY_NEVER,
+}
+
 # Marks a config key that was absent, as distinct from one holding None.
 _NOT_SET = object()
 
@@ -759,7 +768,7 @@ def set_resource_limits():
         logger.warning(f"Could not set resource limits: {e}")
 
 
-def start_strategy_process(strategy_id):
+def start_strategy_process(strategy_id, *, resume: bool | None = None):
     """Start a strategy in a new process - cross-platform implementation"""
     # Refused once shutdown has begun, checked before the lock and again under
     # it: a scheduled start already running when cleanup takes its snapshot
@@ -790,6 +799,8 @@ def start_strategy_process(strategy_id):
         config = STRATEGY_CONFIGS.get(strategy_id)
         if not config:
             return False, "Strategy configuration not found"
+        if resume is None:
+            resume = bool(config.pop("_resume_requested", False))
 
         file_path = Path(config["file_path"])
         if not file_path.exists():
@@ -867,10 +878,19 @@ def start_strategy_process(strategy_id):
             # Inject documented strategy environment variables
             # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
             strategy_env = os.environ.copy()
+            run_id = config.get("run_id") if resume else None
+            if not run_id:
+                run_id = f"{strategy_id}-{ist_now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
             strategy_env["STRATEGY_ID"] = strategy_id
             strategy_env["STRATEGY_NAME"] = config.get("name", strategy_id)
             strategy_env["OPENALGO_STRATEGY_EXCHANGE"] = normalize_exchange(config.get("exchange"))
-            strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
+            strategy_env["OPENALGO_RUN_ID"] = run_id
+            strategy_env["OPENALGO_RESUME"] = "1" if resume else "0"
+            strategy_env.setdefault(
+                "OPENALGO_HOST",
+                os.environ.get("HOST_SERVER") or "http://127.0.0.1:5000",
+            )
             try:
                 from database.auth_db import get_api_key_for_tradingview
 
@@ -954,6 +974,19 @@ def start_strategy_process(strategy_id):
             STRATEGY_CONFIGS[strategy_id]["is_running"] = True
             STRATEGY_CONFIGS[strategy_id]["last_started"] = ist_now.isoformat()
             STRATEGY_CONFIGS[strategy_id]["pid"] = process.pid
+            STRATEGY_CONFIGS[strategy_id]["run_id"] = run_id
+            STRATEGY_CONFIGS[strategy_id]["lifecycle_state"] = "running"
+            STRATEGY_CONFIGS[strategy_id]["resumed"] = bool(resume)
+            if resume:
+                STRATEGY_CONFIGS[strategy_id]["last_resumed"] = ist_now.isoformat()
+                STRATEGY_CONFIGS[strategy_id]["resume_count"] = (
+                    int(STRATEGY_CONFIGS[strategy_id].get("resume_count") or 0) + 1
+                )
+            else:
+                STRATEGY_CONFIGS[strategy_id]["resume_count"] = 0
+            STRATEGY_CONFIGS[strategy_id].pop("recovery_required", None)
+            STRATEGY_CONFIGS[strategy_id].pop("recovery_reason", None)
+            STRATEGY_CONFIGS[strategy_id].pop("recovery_requested_at", None)
             # Clear any previous error state
             STRATEGY_CONFIGS[strategy_id].pop("is_error", None)
             STRATEGY_CONFIGS[strategy_id].pop("error_message", None)
@@ -1028,9 +1061,11 @@ def stop_strategy_process(strategy_id, keep_record=False):
 
     try:
         # --- Terminate and wait, outside the lock -----------------------------
+        graceful_signal = signal.SIGTERM if keep_record else signal.SIGINT
+
         if orphan_pid is not None:
             try:
-                terminate_process_cross_platform(orphan_pid)
+                terminate_process_cross_platform(orphan_pid, graceful_signal)
             except Exception as e:
                 logger.exception(f"Failed to stop orphaned strategy {strategy_id}: {e}")
                 return False, f"Failed to stop strategy: {str(e)}"
@@ -1049,6 +1084,8 @@ def stop_strategy_process(strategy_id, keep_record=False):
                         config["is_running"] = False
                         config["pid"] = None
                         config["last_stopped"] = get_ist_time().isoformat()
+                        config["lifecycle_state"] = "stopped"
+                        config["resumed"] = False
                         save_configs()
             return True, "Strategy stopped"
 
@@ -1057,7 +1094,13 @@ def stop_strategy_process(strategy_id, keep_record=False):
 
         try:
             if isinstance(process, subprocess.Popen):
-                stopped = terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2)
+                stopped = terminate_popen_safely(
+                    process,
+                    pid,
+                    terminate_timeout=5,
+                    kill_timeout=2,
+                    graceful_signal=graceful_signal,
+                )
             elif hasattr(process, "terminate"):
                 # Restored strategies are tracked as psutil.Process objects.
                 # Do not call psutil.Process.wait(timeout): under
@@ -1065,11 +1108,14 @@ def stop_strategy_process(strategy_id, keep_record=False):
                 # select.poll(), which eventlet removes from the patched
                 # select module.
                 stopped = terminate_psutil_process_safely(
-                    process, terminate_timeout=5, kill_timeout=2
+                    process,
+                    terminate_timeout=5,
+                    kill_timeout=2,
+                    graceful_signal=graceful_signal,
                 )
             else:
                 # Fallback: use PID directly
-                terminate_process_cross_platform(pid)
+                terminate_process_cross_platform(pid, graceful_signal)
                 stopped = not (pid and check_process_status(pid))
         except Exception as e:
             logger.exception(f"Failed to stop strategy {strategy_id}: {e}")
@@ -1094,6 +1140,8 @@ def stop_strategy_process(strategy_id, keep_record=False):
                 config["is_running"] = False
                 config["last_stopped"] = ist_now.isoformat()
                 config["pid"] = None
+                config["lifecycle_state"] = "stopped"
+                config["resumed"] = False
                 save_configs()
                 status, status_message = get_schedule_status(config)
 
@@ -1169,12 +1217,17 @@ def wait_for_psutil_process_exit(process, timeout):
     return psutil_process_has_exited(process)
 
 
-def terminate_psutil_process_safely(process, terminate_timeout=3, kill_timeout=2):
+def terminate_psutil_process_safely(
+    process, terminate_timeout=3, kill_timeout=2, graceful_signal=signal.SIGTERM
+):
     """Terminate a psutil.Process without using psutil's eventlet-unsafe wait path."""
     pid = getattr(process, "pid", "unknown")
 
     try:
-        process.terminate()
+        if IS_WINDOWS:
+            process.terminate()
+        else:
+            process.send_signal(graceful_signal)
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return True
     except psutil.AccessDenied:
@@ -1220,7 +1273,13 @@ def wait_for_popen_exit(process, timeout):
     return process.poll() is not None
 
 
-def terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2):
+def terminate_popen_safely(
+    process,
+    pid,
+    terminate_timeout=5,
+    kill_timeout=2,
+    graceful_signal=signal.SIGTERM,
+):
     """Terminate a subprocess.Popen without an eventlet-unsafe blocking wait.
 
     Escalates the same way the previous inline code did, graceful signal first
@@ -1254,10 +1313,10 @@ def terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2):
 
         # Unix-like: signal the process group so the strategy's own children go too.
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            os.killpg(os.getpgid(pid), graceful_signal)
         except OSError:
             # Not in a process group of its own; signal it directly.
-            process.terminate()
+            process.send_signal(graceful_signal)
 
         if wait_for_popen_exit(process, terminate_timeout):
             return True
@@ -1297,7 +1356,7 @@ def _strategy_may_still_be_running(strategy_id) -> bool:
     return bool(pid) and check_process_status(pid)
 
 
-def terminate_process_cross_platform(pid):
+def terminate_process_cross_platform(pid, graceful_signal=signal.SIGTERM):
     """Terminate a process in a cross-platform way"""
     try:
         process = psutil.Process(pid)
@@ -1306,12 +1365,18 @@ def terminate_process_cross_platform(pid):
         children = process.children(recursive=True)
         for child in children:
             try:
-                child.terminate()
+                if IS_WINDOWS:
+                    child.terminate()
+                else:
+                    child.send_signal(graceful_signal)
             except psutil.NoSuchProcess:
                 pass
 
         # Terminate main process
-        process.terminate()
+        if IS_WINDOWS:
+            process.terminate()
+        else:
+            process.send_signal(graceful_signal)
 
         # Wait up to 3s for graceful exit, then kill any survivors.
         # Manual polling — psutil.wait_procs calls select.poll(), which
@@ -1420,14 +1485,26 @@ def cleanup_dead_processes():
         for strategy_id in dead_strategies:
             del RUNNING_STRATEGIES[strategy_id]
             if strategy_id in STRATEGY_CONFIGS:
-                STRATEGY_CONFIGS[strategy_id]["is_running"] = False
-                STRATEGY_CONFIGS[strategy_id]["pid"] = None
+                config = STRATEGY_CONFIGS[strategy_id]
+                # Shutdown deliberately terminates the child while retaining
+                # its running intent for the next OpenAlgo process.  The
+                # periodic reaper can overlap that termination; clearing the
+                # record here makes recovery depend on thread timing and can
+                # leave already-open positions unmanaged after restart.
+                if config.get("lifecycle_state") != "recovery_pending":
+                    config["is_running"] = False
+                    config["pid"] = None
+                    config["lifecycle_state"] = "stopped"
+                    config["last_stopped"] = get_ist_time().isoformat()
+                    config["resumed"] = False
 
         # Also check STRATEGY_CONFIGS for stale is_running flags
         # (e.g., after app restart, RUNNING_STRATEGIES is empty but config has is_running=True)
         configs_to_fix = []
         for strategy_id, config in STRATEGY_CONFIGS.items():
             if config.get("is_running") and strategy_id not in RUNNING_STRATEGIES:
+                if config.get("lifecycle_state") == "recovery_pending":
+                    continue
                 # Config says running but not in memory - check if PID is alive
                 pid = config.get("pid")
                 if pid:
@@ -1442,8 +1519,12 @@ def cleanup_dead_processes():
                     logger.info(f"Cleaning up stale is_running flag for {strategy_id} (no PID)")
 
         for strategy_id in configs_to_fix:
-            STRATEGY_CONFIGS[strategy_id]["is_running"] = False
-            STRATEGY_CONFIGS[strategy_id]["pid"] = None
+            config = STRATEGY_CONFIGS[strategy_id]
+            config["is_running"] = False
+            config["pid"] = None
+            config["lifecycle_state"] = "stopped"
+            config["last_stopped"] = get_ist_time().isoformat()
+            config["resumed"] = False
 
         if configs_to_fix:
             save_configs()
@@ -1672,7 +1753,7 @@ def scheduled_start_strategy(strategy_id: str):
     _start_unless_stopped_by_trader(strategy_id)
 
 
-def _start_unless_stopped_by_trader(strategy_id: str):
+def _start_unless_stopped_by_trader(strategy_id: str, *, resume: bool = False):
     """Start a strategy on the platform's own initiative, unless the trader stopped it.
 
     The schedule, the market hours enforcer and the restore pass all read
@@ -1690,6 +1771,14 @@ def _start_unless_stopped_by_trader(strategy_id: str):
         if config is not None and config.get("manually_stopped"):
             logger.info(f"Strategy {strategy_id} was stopped by the trader - not starting it")
             return False, MANUAL_STOP_REFUSAL
+        if resume:
+            config["_resume_requested"] = True
+            try:
+                return start_strategy_process(strategy_id)
+            finally:
+                current = STRATEGY_CONFIGS.get(strategy_id)
+                if current is not None:
+                    current.pop("_resume_requested", None)
         return start_strategy_process(strategy_id)
 
 
@@ -3507,7 +3596,7 @@ def save_strategy(strategy_id):
 
 # Cleanup on shutdown
 def cleanup_on_exit():
-    """Clean up all running processes on application exit"""
+    """Stop children while preserving enough intent to recover them."""
     logger.info("Cleaning up running strategies...")
     # Snapshot under the lock, stop outside it: stop_strategy_process takes the
     # lock itself and waits for each process, so holding it across the loop
@@ -3516,13 +3605,19 @@ def cleanup_on_exit():
     with PROCESS_LOCK:
         _SHUTTING_DOWN.set()
         strategy_ids = list(RUNNING_STRATEGIES.keys())
-    keep_record = _SHUTDOWN_KEEPS_RECORDS.is_set()
+        keep_record = _SHUTDOWN_KEEPS_RECORDS.is_set()
+        if keep_record:
+            recovery_requested_at = get_ist_time().isoformat()
+            for strategy_id in strategy_ids:
+                config = STRATEGY_CONFIGS.get(strategy_id)
+                if config is not None:
+                    config["lifecycle_state"] = "recovery_pending"
+                    config["recovery_requested_at"] = recovery_requested_at
+            if strategy_ids:
+                save_configs()
     for strategy_id in strategy_ids:
         try:
-            if keep_record:
-                stop_strategy_process(strategy_id, keep_record=True)
-            else:
-                stop_strategy_process(strategy_id)
+            stop_strategy_process(strategy_id, keep_record=keep_record)
         except Exception:
             pass
     logger.info("Cleanup complete")
@@ -3559,6 +3654,14 @@ def begin_shutdown(budget_s: float = _SHUTDOWN_STOP_BUDGET_SECONDS) -> list[str]
         _SHUTTING_DOWN.set()
         _SHUTDOWN_KEEPS_RECORDS.set()
         running = {sid: dict(info) for sid, info in RUNNING_STRATEGIES.items()}
+        recovery_requested_at = get_ist_time().isoformat()
+        for strategy_id in running:
+            config = STRATEGY_CONFIGS.get(strategy_id)
+            if config is not None:
+                config["lifecycle_state"] = "recovery_pending"
+                config["recovery_requested_at"] = recovery_requested_at
+        if running:
+            save_configs()
 
     try:
         if SCHEDULER is not None and SCHEDULER.running:
@@ -3764,6 +3867,63 @@ def _mark_restart_failed(strategy_id: str, config: dict, error_message: str) -> 
     return True
 
 
+def _parse_config_datetime(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            return IST.localize(parsed)
+        return parsed.astimezone(IST)
+    except (TypeError, ValueError):
+        return None
+
+
+def restart_recovery_decision(strategy_id: str, config: dict, now=None) -> tuple[str, str]:
+    """Choose safe recovery for a recorded run whose process is gone."""
+    now = now or get_ist_time()
+    policy = str(config.get("restart_policy") or RESTART_POLICY_RESUME).lower()
+    if policy not in RESTART_POLICIES:
+        return "manual", f"Unknown restart policy: {policy}"
+    if policy == RESTART_POLICY_MANUAL:
+        return "manual", "Restart policy requires trader confirmation"
+    if policy == RESTART_POLICY_NEVER:
+        return "close", "Restart policy disables automatic recovery"
+
+    last_started = _parse_config_datetime(config.get("last_started"))
+    if last_started is None:
+        return "resume", "Legacy run without a start timestamp"
+    if last_started.date() != now.astimezone(IST).date():
+        return "close", "The recorded run belongs to an earlier trading date"
+    if config.get("manually_stopped"):
+        return "close", MANUAL_STOP_REFUSAL
+    if config.get("is_scheduled"):
+        day_names = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        schedule_days = {str(day).lower() for day in config.get("schedule_days") or []}
+        if schedule_days and day_names[now.astimezone(IST).weekday()] not in schedule_days:
+            return "close", "The strategy is not scheduled to run today"
+        if not is_within_schedule_time(strategy_id):
+            return "close", "The strategy is outside its current schedule or market session"
+    return "resume", "The interrupted run is eligible for same-day recovery"
+
+
+def _record_recovery_required(config: dict, reason: str) -> None:
+    config["is_running"] = False
+    config["pid"] = None
+    config["lifecycle_state"] = "recovery_required"
+    config["recovery_required"] = True
+    config["recovery_reason"] = reason
+    config["error_time"] = get_ist_time().isoformat()
+
+
+def _close_stale_runtime_record(config: dict, reason: str) -> None:
+    config["is_running"] = False
+    config["pid"] = None
+    config["lifecycle_state"] = "stopped"
+    config["resumed"] = False
+    config["recovery_reason"] = reason
+
+
 def restore_strategy_states():
     """Restore strategy states on startup - restart running strategies or mark as error
 
@@ -3786,6 +3946,7 @@ def _restore_strategy_states_locked():
     restored_count = 0
     error_count = 0
     stopped_by_trader = 0
+    closed_count = 0
 
     for strategy_id, config in snapshot_strategy_configs():
         if (
@@ -3832,9 +3993,24 @@ def _restore_strategy_states_locked():
 
             # If strategy wasn't restored, try to restart it automatically
             if not strategy_restored:
+                action, reason = restart_recovery_decision(strategy_id, config)
+                if action == "manual":
+                    with PROCESS_LOCK:
+                        if strategy_id not in RUNNING_STRATEGIES:
+                            _record_recovery_required(config, reason)
+                    error_count += 1
+                    logger.warning(f"Strategy {strategy_id} requires recovery: {reason}")
+                    continue
+                if action == "close":
+                    with PROCESS_LOCK:
+                        if strategy_id not in RUNNING_STRATEGIES:
+                            _close_stale_runtime_record(config, reason)
+                    closed_count += 1
+                    logger.info(f"Strategy {strategy_id} was not recovered: {reason}")
+                    continue
                 logger.info(f"Attempting to restart strategy {strategy_id}...")
                 try:
-                    success, message = _start_unless_stopped_by_trader(strategy_id)
+                    success, message = _start_unless_stopped_by_trader(strategy_id, resume=True)
                     if success:
                         logger.info(f"Successfully restarted strategy {strategy_id}")
                         restored_count += 1
@@ -3866,7 +4042,7 @@ def _restore_strategy_states_locked():
             # Keep error state until user manually clears it
             pass
 
-    if restored_count > 0 or error_count > 0 or stopped_by_trader > 0:
+    if restored_count > 0 or error_count > 0 or stopped_by_trader > 0 or closed_count > 0:
         save_configs()
         logger.info(
             f"State restoration complete: {restored_count} restored, {error_count} in error state"

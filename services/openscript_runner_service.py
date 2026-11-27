@@ -829,7 +829,10 @@ def _spawn_claimed(
     environment = os.environ.copy()
     environment["STRATEGY_ID"] = run_id
     environment["STRATEGY_NAME"] = script
-    environment.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
+    environment.setdefault(
+        "OPENALGO_HOST",
+        os.environ.get("HOST_SERVER") or "http://127.0.0.1:5000",
+    )
     if api_key:
         environment["OPENALGO_API_KEY"] = api_key
 
