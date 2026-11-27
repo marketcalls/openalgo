@@ -113,17 +113,18 @@ def map_gtt_book(gtt_data, include_history=False):
 
         legs = []
         for order in orders:
-            legs.append(
-                {
-                    "action": order.get("transaction_type", ""),
-                    "quantity": from_kite_quantity(
-                        order.get("quantity", 0), br_symbol, exchange
-                    ),
-                    "price": order.get("price", 0),
-                    "pricetype": order.get("order_type", "LIMIT"),
-                    "product": order.get("product", ""),
-                }
-            )
+            leg = {
+                "action": order.get("transaction_type", ""),
+                "quantity": from_kite_quantity(order.get("quantity", 0), br_symbol, exchange),
+                "price": order.get("price", 0),
+                "pricetype": order.get("order_type", "LIMIT"),
+                "product": order.get("product", ""),
+                "triggered_order_id": _child_order_id(order),
+            }
+            rejection_reason = _rejection_reason(order)
+            if rejection_reason:
+                leg["rejection_reason"] = rejection_reason
+            legs.append(leg)
 
         normalised.append(
             {
@@ -140,5 +141,31 @@ def map_gtt_book(gtt_data, include_history=False):
                 "expires_at": gtt.get("expires_at", ""),
             }
         )
-
     return normalised
+
+
+def _order_result(order):
+    """Kite's report of the order a fired GTT leg placed: ``orders[i].result.order_result``, or {}."""
+    result = (order or {}).get("result") or {}
+    return (result.get("order_result") or {}) if isinstance(result, dict) else {}
+
+
+def _child_order_id(order):
+    """The id of the order this leg placed when the GTT fired, so a caller can follow its fill.
+
+    Kite fills ``result`` only on the leg that fired; an order it could not place carries
+    ``status: failed`` and an empty id. Either way there is no order to follow: None.
+    """
+    order_result = _order_result(order)
+    order_id = str(order_result.get("order_id") or "")
+    if order_id and (order_result.get("status") or "success").lower() == "success":
+        return order_id
+    return None
+
+
+def _rejection_reason(order):
+    """Kite's reason when it could not place the order this leg triggered, else ""."""
+    order_result = _order_result(order)
+    if (order_result.get("status") or "").lower() != "failed":
+        return ""
+    return order_result.get("rejection_reason") or "The broker could not place this order."
