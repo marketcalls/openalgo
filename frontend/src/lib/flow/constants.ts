@@ -1556,6 +1556,7 @@ export const DEFAULT_NODE_DATA = {
     expiryDate: '',
     offset: 'ATM',
     optionType: 'CE' as const,
+    includeQuotes: false,
     outputVariable: '',
   },
   expiry: {
