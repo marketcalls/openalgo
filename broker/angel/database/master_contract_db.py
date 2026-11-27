@@ -82,18 +82,44 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def replace_symtoken_table(df):
+    """Swap the master contract in one transaction.
+
+    The delete and the insert commit together, so a failed insert rolls back
+    to the previous contract instead of leaving symtoken empty or half-filled.
+    Every row is inserted, as copy_from_dataframe did on the freshly emptied
+    table: the same token can appear on more than one exchange.
+    """
+    records = df.to_dict(orient="records")
+    try:
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f"Replaced symtoken table with {len(records)} records")
+    except Exception:
+        db_session.rollback()
+        raise
+
+
 def download_json_angel_data(url, output_path):
     """
     Downloads a JSON file from the specified URL and saves it to the specified path.
     """
     logger.info("Downloading JSON data")
-    response = requests.get(url, timeout=10)  # timeout after 10 seconds
-    if response.status_code == 200:  # Successful download
+    try:
+        response = requests.get(url, timeout=10)  # timeout after 10 seconds
+    except requests.RequestException as e:
+        logger.error(f"Failed to download data: {e}")
+        raise RuntimeError("Master contract download failed, keeping the existing symbols") from e
+    if response.status_code == 200 and response.content:  # Successful download
         with open(output_path, "wb") as f:
             f.write(response.content)
         logger.info("Download complete")
     else:
         logger.error(f"Failed to download data. Status code: {response.status_code}")
+        # Raise rather than fall through: the parse below would otherwise
+        # read a stale angel.json left in tmp/ from an earlier run.
+        raise RuntimeError("Master contract download failed, keeping the existing symbols")
 
 
 def reformat_symbol(row):
@@ -195,6 +221,11 @@ def process_angel_json(path):
 
     df["lotsize"] = df["lotsize"].astype(int)
     df["tick_size"] = df["tick_size"].astype(float) / 100  # Divide tick_size by 100
+    # CDS ticks come on the same scale as CDS option strikes, a further 100000
+    # up: 25000 is 0.0025 (the INR pairs and interest-rate contracts, as Kite
+    # lists them), 1000 is EURUSD/GBPUSD's 0.0001 and 100000 is USDJPY's 0.01.
+    # Divided by 100 alone they read 250, 10 and 1000 rupees.
+    df.loc[df["exchange"] == "CDS", "tick_size"] = df["tick_size"] / 100000
 
     # Futures Symbol Update in CDS and MCX Exchanges
     df.loc[(df["instrumenttype"] == "FUTCUR") & (df["exchange"] == "CDS"), "symbol"] = (
@@ -210,19 +241,19 @@ def process_angel_json(path):
     df.loc[(df["instrumenttype"] == "OPTCUR") & (df["exchange"] == "CDS"), "symbol"] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + df["symbol"].str[-2:]
     )
     df.loc[(df["instrumenttype"] == "OPTIRC") & (df["exchange"] == "CDS"), "symbol"] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + df["symbol"].str[-2:]
     )
     df.loc[(df["instrumenttype"] == "OPTFUT") & (df["exchange"] == "MCX"), "symbol"] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + df["symbol"].str[-2:]
     )
 
@@ -251,7 +282,7 @@ def process_angel_json(path):
     ] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + "CE"
     )
     df.loc[
@@ -262,7 +293,7 @@ def process_angel_json(path):
     ] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + "PE"
     )
 
@@ -277,7 +308,7 @@ def process_angel_json(path):
     ] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + "CE"
     )
     df.loc[
@@ -288,7 +319,7 @@ def process_angel_json(path):
     ] = (
         df["name"]
         + df["expiry"].str.replace("-", "", regex=False)
-        + df["strike"].astype(str).str.replace(r"\.0", "", regex=True)
+        + df["strike"].astype(str).str.replace(r"\.0$", "", regex=True)
         + "PE"
     )
 
@@ -416,20 +447,24 @@ def master_contract_download():
         download_json_angel_data(url, output_path)
         token_df = process_angel_json(output_path)
         delete_angel_temp_data(output_path)
-        # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
+        if token_df is None or token_df.empty:
+            raise Exception(
+                "The Angel instrument file had no usable rows. "
+                "Your existing symbols were kept; try the download again."
+            )
 
-        # token_df = token_df.drop_duplicates(subset='symbol', keep='first')
-
-        delete_symtoken_table()  # Consider the implications of this action
-        copy_from_dataframe(token_df)
+        # Delete and insert in one transaction: a failed insert rolls back
+        # to the existing symbols instead of leaving the table empty.
+        replace_symtoken_table(token_df)
 
         return socketio.emit(
             "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
         )
 
     except Exception as e:
-        logger.info(f"{str(e)}")
-        return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        logger.exception(f"{str(e)}")
+        socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        raise
 
 
 def search_symbols(symbol, exchange):
