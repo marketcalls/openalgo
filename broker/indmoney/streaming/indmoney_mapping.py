@@ -58,6 +58,10 @@ class IndmoneyModeMapper:
     MODE_MAP = {
         1: "ltp",  # LTP (Last Traded Price)
         2: "quote",  # Quote (Full quote data)
+        # INDmoney streams no order book. Depth subscribers (the option chain
+        # subscribes only in Depth) are served from the quote stream, without
+        # bid/ask levels, rather than rejected and left with no ticks at all.
+        3: "quote",
     }
 
     # Reverse mapping for mode validation
@@ -101,9 +105,9 @@ class IndmoneyCapabilityRegistry:
     # F&O only, with no commodity or currency segment.
     exchanges = ["NSE", "BSE", "NFO", "BFO", "NSE_INDEX", "BSE_INDEX"]
 
-    # INDmoney supports only 2 modes: ltp and quote
-    # Mode 1: LTP, Mode 2: Quote
-    subscription_modes = [1, 2]
+    # INDmoney streams 2 modes, ltp and quote. Mode 3 (Depth) is accepted and
+    # served from the quote stream (see IndmoneyModeMapper.MODE_MAP).
+    subscription_modes = [1, 2, 3]
 
     # INDmoney does not provide explicit market depth data
     # The quote mode provides best bid/ask but not full depth
