@@ -132,8 +132,7 @@ def test_the_download_names_both_cash_segments_before_copying(monkeypatch):
     applied = []
     monkeypatch.setattr(mcd, "download_csv_fyers_data", lambda path: (True, [], None))
     monkeypatch.setattr(mcd, "fetch_index_hsm_names", lambda: table)
-    monkeypatch.setattr(mcd, "delete_symtoken_table", lambda: None)
-    monkeypatch.setattr(mcd, "copy_from_dataframe", lambda df: None)
+    monkeypatch.setattr(mcd, "replace_symtoken_table", lambda frames: None)
     monkeypatch.setattr(mcd, "delete_fyers_temp_data", lambda path: None)
     monkeypatch.setattr(mcd.socketio, "emit", lambda *args, **kwargs: None)
     monkeypatch.setattr(mcd, "_apply_index_names", lambda df, names: applied.append(names))
@@ -145,7 +144,8 @@ def test_the_download_names_both_cash_segments_before_copying(monkeypatch):
         "process_fyers_cds_json",
         "process_fyers_mcx_json",
     ):
-        monkeypatch.setattr(mcd, name, lambda path: pd.DataFrame())
+        # one row per segment: a segment with no rows is refused before the swap
+        monkeypatch.setattr(mcd, name, lambda path: pd.DataFrame([{"token": "1"}]))
 
     mcd.master_contract_download()
 

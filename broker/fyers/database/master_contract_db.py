@@ -139,6 +139,36 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def replace_symtoken_table(frames):
+    """Swap the master contract in one transaction.
+
+    ``frames`` is the list of segment DataFrames. A row whose token was
+    already taken by an earlier segment is dropped, which is what the
+    per-segment copy_from_dataframe calls did. The delete and the insert
+    commit together, so any failure rolls back to the previous contract
+    instead of leaving the table empty or half-filled.
+    """
+    records = []
+    seen_tokens = set()
+    for df in frames:
+        rows = [row for row in df.to_dict(orient="records") if str(row["token"]) not in seen_tokens]
+        seen_tokens.update(str(row["token"]) for row in rows)
+        records.extend(rows)
+
+    try:
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f"Replaced symtoken table with {len(records)} records")
+    except Exception:
+        db_session.rollback()
+        raise
+
+
+# Names of the frames master_contract_download() builds, in the same order.
+SEGMENT_NAMES = ("NSE", "BSE", "BFO", "NFO", "CDS", "MCX")
+
+
 def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | None]:
     """
     Download Fyers master contract CSV files using a shared HTTPX client with connection pooling.
@@ -175,6 +205,8 @@ def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | No
             try:
                 response = client.get(url, timeout=30.0)
                 response.raise_for_status()  # Raises an exception for 4XX/5XX responses
+                if not response.content:
+                    raise ValueError("the file came back empty")
 
                 ext = ".json" if url.endswith(".json") else ".csv"
                 file_path = os.path.join(output_path, f"{key}{ext}")
@@ -279,7 +311,11 @@ def process_fyers_nse_csv(path):
 
     df["token"] = df["Fytoken"]
     df["name"] = df["Symbol Details"]
-    df["expiry"] = df["Expiry date"]
+    # Cash and index rows have no expiry. Fyers' file leaves the column empty
+    # for most of them but holds a single space for some older indices
+    # (NIFTY200, HANGSENG BEES-NAV, ...), which stored ' ' as an expiry (MC-05).
+    expiry = df["Expiry date"].str.strip()
+    df["expiry"] = expiry.mask(expiry == "")
     df["strike"] = df["Strike price"]
     df["lotsize"] = df["Minimum lot size"]
     df["tick_size"] = df["Tick size"]
@@ -372,7 +408,11 @@ def process_fyers_bse_csv(path):
 
     df["token"] = df["Fytoken"]
     df["name"] = df["Symbol Details"]
-    df["expiry"] = df["Expiry date"]
+    # Cash and index rows have no expiry. Fyers' file leaves the column empty
+    # for most of them but holds a single space for some older indices
+    # (NIFTY200, HANGSENG BEES-NAV, ...), which stored ' ' as an expiry (MC-05).
+    expiry = df["Expiry date"].str.strip()
+    df["expiry"] = expiry.mask(expiry == "")
     df["strike"] = df["Strike price"]
     df["lotsize"] = df["Minimum lot size"]
     df["tick_size"] = df["Tick size"]
@@ -790,32 +830,41 @@ def master_contract_download():
         # contract: nothing resolves until a later download happens to succeed.
         downloaded, _, download_error = download_csv_fyers_data(output_path)
         if not downloaded:
-            message = f"Master contract download failed, keeping the existing symbols: {download_error}"
-            logger.error(message)
-            return socketio.emit(
-                "master_contract_download", {"status": "error", "message": message}
+            # Raise, not return: the shared caller records success unless
+            # this function raises, so a returned error left the status page
+            # saying success while yesterday's symbols were still in use.
+            raise RuntimeError(
+                f"Master contract download failed, keeping the existing symbols: {download_error}"
             )
 
         index_names = fetch_index_hsm_names()
-        delete_symtoken_table()
-        token_df = process_fyers_nse_csv(output_path)
-        _apply_index_names(token_df, index_names)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_bse_csv(output_path)
-        _apply_index_names(token_df, index_names)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_bfo_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_nfo_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_cds_json(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_mcx_json(output_path)
-        copy_from_dataframe(token_df)
-        delete_fyers_temp_data(output_path)
-        # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
 
-        # token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+        # Parse every segment before touching symtoken, so a file that
+        # downloaded but cannot be read also leaves the existing symbols.
+        nse_df = process_fyers_nse_csv(output_path)
+        _apply_index_names(nse_df, index_names)
+        bse_df = process_fyers_bse_csv(output_path)
+        _apply_index_names(bse_df, index_names)
+        frames = [
+            nse_df,
+            bse_df,
+            process_fyers_bfo_csv(output_path),
+            process_fyers_nfo_csv(output_path),
+            process_fyers_cds_json(output_path),
+            process_fyers_mcx_json(output_path),
+        ]
+
+        empty = [name for name, df in zip(SEGMENT_NAMES, frames, strict=True) if df is None or df.empty]
+        if empty:
+            raise RuntimeError(
+                f"The Fyers symbol file for {', '.join(empty)} had no usable rows. "
+                "Your existing symbols were kept; try the download again."
+            )
+
+        # Delete and insert in one transaction: a failed insert rolls back to
+        # the existing symbols instead of leaving the table empty or partial.
+        replace_symtoken_table(frames)
+        delete_fyers_temp_data(output_path)
 
         return socketio.emit(
             "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
@@ -823,7 +872,8 @@ def master_contract_download():
 
     except Exception as e:
         logger.exception(f"{e}")
-        return socketio.emit("master_contract_download", {"status": "error", "message": f"{e}"})
+        socketio.emit("master_contract_download", {"status": "error", "message": f"{e}"})
+        raise
 
 
 def search_symbols(symbol, exchange):
