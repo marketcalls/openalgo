@@ -153,6 +153,9 @@ def transform_order_data(orders):
             "orderid": order.get("id", ""),
             "order_status": order_status,
             "timestamp": order.get("orderDateTime", ""),
+                        "filled_quantity": int(order.get("filledQty") or 0),
+            "pending_quantity": int(order.get("remainingQuantity") or 0),
+
         }
         transformed_orders.append(transformed_order)
 
