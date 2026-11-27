@@ -83,6 +83,25 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def replace_symtoken_table(df):
+    """Swap the master contract in one transaction.
+
+    The delete and the insert commit together, so a failed insert rolls back
+    to the previous contract instead of leaving symtoken empty or half-filled.
+    Every row is inserted, as copy_from_dataframe did on the freshly emptied
+    table: the same token can appear on more than one exchange.
+    """
+    records = df.to_dict(orient='records')
+    try:
+        SymToken.query.delete()
+        db_session.bulk_insert_mappings(SymToken, records)
+        db_session.commit()
+        logger.info(f'Replaced symtoken table with {len(records)} records')
+    except Exception:
+        db_session.rollback()
+        raise
+
+
 def download_csv_zerodha_data(output_path):
     """
     Downloads the CSV file from Zerodha using Auth Credentials, saves it to the specified path and convert.
@@ -474,19 +493,23 @@ def master_contract_download():
         download_csv_zerodha_data(output_path)
         token_df = process_zerodha_csv(output_path)
         delete_zerodha_temp_data(output_path)
-        #token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
+        if token_df is None or token_df.empty:
+            raise Exception(
+                'The Zerodha instrument file had no usable rows. '
+                'Your existing symbols were kept; try the download again.'
+            )
 
-        #token_df = token_df.drop_duplicates(subset='symbol', keep='first')
-
-        delete_symtoken_table()  # Consider the implications of this action
-        copy_from_dataframe(token_df)
+        # Delete and insert in one transaction: a failed insert rolls back
+        # to the existing symbols instead of leaving the table empty.
+        replace_symtoken_table(token_df)
 
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
 
     except Exception as e:
         logger.info(f"{str(e)}")
-        return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+        socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
+        raise
 
 
 def search_symbols(symbol, exchange):
