@@ -36,6 +36,7 @@ application, so a hosted install upgrades without a config migration.
 from flask import Blueprint, jsonify, request, session
 
 from database.alert_log_db import MAX_LOG_PAGE, clear_fires, list_fires, record_fire
+from services.alerts.native_sound import native_sound_manager
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -105,3 +106,56 @@ def clear_log():
         return jsonify({"status": "error", "message": "Sign in to clear your alerts"}), 401
     removed = clear_fires(user, request.args.get("alertId"))
     return jsonify({"status": "success", "removed": removed})
+
+
+@alerts_bp.route("/sound/start", methods=["POST"])
+@check_session_validity
+def start_sound():
+    """Start Windows native alert sound (persistent or one-shot)."""
+    user = _user()
+    if not user:
+        return jsonify({"status": "error", "message": "Sign in to trigger alert sounds"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    alert_id = str(payload.get("alertId") or "manual-alert")
+    title = str(payload.get("title") or "Alert")
+    sound_name = str(payload.get("soundName") or "chime")
+    duration = str(payload.get("duration") or "once")
+    volume = float(payload.get("volume", 0.8))
+
+    ok = native_sound_manager.start(
+        alert_id=alert_id,
+        title=title,
+        sound_name=sound_name,
+        duration=duration,
+        volume=volume,
+    )
+    return jsonify(
+        {"status": "success" if ok else "unsupported", "ringing": native_sound_manager.is_ringing()}
+    )
+
+
+@alerts_bp.route("/sound/stop", methods=["POST"])
+@check_session_validity
+def stop_sound():
+    """Stop Windows native alert sound immediately."""
+    user = _user()
+    if not user:
+        return jsonify({"status": "error", "message": "Sign in to manage alert sounds"}), 401
+
+    payload = request.get_json(silent=True) or {}
+    alert_id = payload.get("alertId")
+    native_sound_manager.stop(alert_id)
+    return jsonify({"status": "success", "ringing": False})
+
+
+@alerts_bp.route("/sound/status", methods=["GET"])
+@check_session_validity
+def sound_status():
+    """Check status of Windows native alert sound."""
+    user = _user()
+    if not user:
+        return jsonify({"status": "error", "message": "Sign in to view alert sound status"}), 401
+
+    return jsonify({"status": "success", "data": native_sound_manager.status()})
+

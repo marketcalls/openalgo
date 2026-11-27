@@ -20,7 +20,17 @@
  * never happened are different things and the panel has to tell them apart.
  */
 
-import { Bell, Eraser, Loader2, MoreHorizontal, Pause, Play, Settings2, Trash2 } from 'lucide-react'
+import {
+  Bell,
+  BellRing,
+  Eraser,
+  Loader2,
+  MoreHorizontal,
+  Pause,
+  Play,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
 import type { Alert } from 'openalgo-charts'
 import { useMemo, useState } from 'react'
 import {
@@ -30,6 +40,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { alertSoundManager } from '@/lib/trading/alertSoundManager'
 import type { AlertFire, AlertsView } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { PANEL_HEADER, PanelShell } from './panelShell'
@@ -304,6 +315,36 @@ export function AlertsPanel({ view, log, paneLabel, onEdit, onClearLog, revision
             way in that starts from no price at all: the form would open on the
             last close and the trader would type the number they could have
             pointed at. This panel is for what is already watching. */}
+        <button
+          type="button"
+          aria-label="Test Alert"
+          title="Test alert sound & persistent notification"
+          onClick={() => {
+            const notice = {
+              title: 'Test Alert: Chart Terminal',
+              body: 'Testing alert sound and Windows desktop notification.',
+              tag: `test-panel-alert-${Date.now()}`,
+            }
+            alertSoundManager.trigger({
+              id: notice.tag,
+              title: notice.title,
+              soundName: 'siren',
+              duration: 'untilDismissed',
+            })
+            if (typeof window !== 'undefined' && 'Notification' in window) {
+              if (Notification.permission === 'granted') {
+                try {
+                  new Notification(notice.title, { body: notice.body, tag: notice.tag })
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }}
+          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <BellRing className="h-4 w-4" strokeWidth={1.5} />
+        </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
